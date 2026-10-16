@@ -32,9 +32,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         let ty = TypeId {
             index:      self.nodes.len(),
             qualifiers: TypeQualifiers::empty(),
+            alignment:  0,
         };
         let variably_modified = match kind {
-            | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star) => true,
+            | TypeKind::Array(_, ArrayBound::Variable(_) | ArrayBound::Star) => true,
             // C11 §6.7.6p3: derived types retain variably modified state.
             | TypeKind::Array(next, _) | TypeKind::Pointer(next) | TypeKind::Atomic(next) =>
                 self.variably_modified[next.index],
@@ -49,12 +50,18 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             let element_tail = self.array_tails[element.index];
             ArrayTail {
                 incomplete: element_tail.incomplete || bound == ArrayBound::Incomplete,
+                alignment: if element.alignment == 0 {
+                    element_tail.alignment
+                } else {
+                    element.alignment
+                },
                 ..element_tail
             }
         } else {
             ArrayTail {
                 index:      ty.index,
                 incomplete: false,
+                alignment:  0,
             }
         };
         self.array_tails.push(tail);
@@ -62,6 +69,17 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         self.nodes.push(kind);
         _ = self.keys.insert(kind, ty);
         ty
+    }
+
+    /// Retains a distinct bound identity for each evaluated array derivation.
+    /// C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129.
+    pub(crate) fn variable_bound(
+        &mut self,
+        expression: &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
+    ) -> ArrayBound {
+        let index = self.runtime_bounds.len();
+        self.runtime_bounds.push(expression);
+        ArrayBound::Variable(index)
     }
 
     /// Compatibility and composite construction use an explicit postorder
@@ -75,6 +93,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     pub(crate) fn composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
         enum Work<'a> {
             Pair(TypeId, TypeId),
+            Alignment(u32),
             Pointer(TypeQualifiers),
             Array(ArrayBound, TypeQualifiers),
             Function(&'a [TypeId], bool, bool, TypeQualifiers),
@@ -86,6 +105,9 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         while let Some(item) = work.pop() {
             match item {
                 | Work::Pair(a, b) => {
+                    // GCC aligned changes layout, not C type compatibility.
+                    work.push(Work::Alignment(a.alignment.max(b.alignment)));
+                    let (a, b) = (a.with_alignment(0), b.with_alignment(0));
                     if a == b {
                         values.push(a);
                         continue;
@@ -203,6 +225,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                         | _ => return None,
                     }
                 },
+                | Work::Alignment(alignment) => {
+                    let ty = values.pop()?;
+                    values.push(ty.with_alignment(alignment));
+                },
                 | Work::Pointer(q) => {
                     let x = values.pop()?;
                     values.push(self.intern(TypeKind::Pointer(x)).qualified(q));
@@ -237,14 +263,26 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(&self.nodes, &self.tags, &self.target, ty)
+        layout(&self.nodes, &self.tags, &self.target, ty, false)
+    }
+
+    /// Canonical alignment for Microsoft record placement before storage
+    /// overrides. C99: §6.7.2.1p12, p. 103; PDF p. 115.
+    pub(crate) fn natural_alignment(&self, ty: TypeId) -> Option<u64> {
+        layout(&self.nodes, &self.tags, &self.target, ty, true).map(|layout| layout.align)
     }
 
     /// Array alignment depends on the element, regardless of its extent.
     /// C11: §6.5.3.4p3, p. 90; PDF p. 108 (an extension in C99).
     pub(crate) fn alignment(&self, ty: TypeId) -> Option<u64> {
+        let tail = self.array_tails[ty.index];
         let ty = TypeId {
-            index: self.array_tails[ty.index].index,
+            index: tail.index,
+            alignment: if ty.alignment == 0 {
+                tail.alignment
+            } else {
+                ty.alignment
+            },
             ..ty
         };
         self.layout(ty).map(|layout| layout.align)
@@ -257,12 +295,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     pub(crate) fn unqualified_array(&mut self, mut ty: TypeId) -> TypeId {
         let mut bounds = ArenaVec::new_in(self.scratch);
         while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
-            bounds.push(bound);
+            bounds.push((bound, ty.alignment));
             ty = element;
         }
         ty = ty.unqualified();
-        while let Some(bound) = bounds.pop() {
-            ty = self.intern(TypeKind::Array(ty, bound));
+        while let Some((bound, alignment)) = bounds.pop() {
+            ty = self
+                .intern(TypeKind::Array(ty, bound))
+                .with_alignment(alignment);
         }
         ty
     }
@@ -281,6 +321,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             #[cfg(test)]
             steps: Cell::new(0),
             nodes: ArenaVec::new_in(tu),
+            runtime_bounds: ArenaVec::new_in(tu),
             tags: ArenaVec::new_in(tu),
             keys: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified: ArenaVec::new_in(scratch),
@@ -295,9 +336,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     pub(crate) fn finish(self) -> Types<'tu> {
         Types {
-            nodes:  self.nodes.leak(),
-            tags:   self.tags.leak(),
-            target: self.target,
+            nodes:          self.nodes.leak(),
+            runtime_bounds: self.runtime_bounds.leak(),
+            tags:           self.tags.leak(),
+            target:         self.target,
         }
     }
 
@@ -372,16 +414,18 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 pub(crate) struct TypeInterner<'tu, 's> {
     /// Type nodes examined by completeness and recovery queries in tests.
     #[cfg(test)]
-    pub(super) steps:  Cell<usize>,
-    pub(crate) nodes:  ArenaVec<'tu, TypeKind<'tu>>,
-    pub(crate) tags:   ArenaVec<'tu, &'tu Tag<'tu>>,
-    keys:              ArenaMap<'s, TypeKind<'tu>, TypeId>,
+    pub(super) steps: Cell<usize>,
+    pub(super) runtime_bounds:
+        ArenaVec<'tu, &'tu crate::translation_phases::parsing::syntax::Expression<'tu>>,
+    pub(crate) nodes: ArenaVec<'tu, TypeKind<'tu>>,
+    pub(crate) tags: ArenaVec<'tu, &'tu Tag<'tu>>,
+    keys: ArenaMap<'s, TypeKind<'tu>, TypeId>,
     /// Variably modified nodes, decided once from immediate children.
     variably_modified: ArenaVec<'s, bool>,
-    array_tails:       ArenaVec<'s, ArrayTail>,
+    array_tails: ArenaVec<'s, ArrayTail>,
     pub(crate) target: TargetLayout,
-    pub(crate) tu:     &'tu Bump,
-    scratch:           &'s Bump,
+    pub(crate) tu: &'tu Bump,
+    scratch: &'s Bump,
 }
 
 /// Canonical unqualified type identity plus its compact qualifier set.
@@ -390,6 +434,10 @@ pub(crate) struct TypeInterner<'tu, 's> {
 pub(crate) struct TypeId {
     pub(crate) index:      usize,
     pub(crate) qualifiers: TypeQualifiers,
+    /// A GNU aligned typedef or a declaration's storage alignment, in the
+    /// existing padding of this handle. Zero uses the natural type alignment.
+    /// GNU extension: GCC Common Attributes, aligned.
+    pub(crate) alignment:  u32,
 }
 
 /// Hash-consing key. Child identities keep hashing bounded by immediate arity.
@@ -423,9 +471,11 @@ pub(crate) enum TypeKind<'tu> {
 /// Durable type graph, retained after semantic working storage is released.
 #[derive(Debug)]
 pub(crate) struct Types<'tu> {
-    pub(crate) nodes:  &'tu [TypeKind<'tu>],
-    pub(crate) tags:   &'tu [&'tu Tag<'tu>],
-    pub(crate) target: TargetLayout,
+    pub(crate) runtime_bounds:
+        &'tu [&'tu crate::translation_phases::parsing::syntax::Expression<'tu>],
+    pub(crate) nodes:          &'tu [TypeKind<'tu>],
+    pub(crate) tags:           &'tu [&'tu Tag<'tu>],
+    pub(crate) target:         TargetLayout,
 }
 
 /// Retained nominal type; completion mutates only its member/layout cells.
@@ -445,6 +495,9 @@ pub(crate) struct Tag<'tu> {
     /// completion.
     /// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
     pub(crate) compatible:        Cell<Scalar>,
+    /// GNU packed and aligned on the record definition.
+    pub(crate) packed:            Cell<bool>,
+    pub(crate) alignment:         Cell<u32>,
 }
 
 /// A record member including ABI byte/bit offset and source bit-field width.
@@ -454,16 +507,21 @@ pub(crate) struct Tag<'tu> {
 /// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Member {
-    pub(crate) name:           Option<super::Identifier>,
+    pub(crate) name:               Option<super::Identifier>,
     /// Declarator provenance, including unnamed bit-fields.
-    pub(crate) source_vectors: super::SourceVectors,
+    pub(crate) source_vectors:     super::SourceVectors,
     /// A rejected declarator must not produce dependent completion errors.
-    pub(crate) invalid:        bool,
-    pub(crate) ty:             TypeId,
-    pub(crate) offset:         u64,
-    pub(crate) bit_offset:     u32,
-    pub(crate) width:          Option<u32>,
-    pub(crate) anonymous:      bool,
+    pub(crate) invalid:            bool,
+    pub(crate) ty:                 TypeId,
+    pub(crate) offset:             u64,
+    pub(crate) bit_offset:         u32,
+    pub(crate) width:              Option<u32>,
+    pub(crate) anonymous:          bool,
+    /// GNU packed applies to this member without changing its C type.
+    pub(crate) packed:             bool,
+    /// Alignment requested by this member's own attributes or _Alignas.
+    /// Typedef alignment remains on `ty`; GCC packing only honors this fact.
+    pub(crate) explicit_alignment: u32,
 }
 
 /// One name in a record's member namespace, including the names an anonymous
@@ -502,6 +560,7 @@ pub(crate) struct Parameter {
     pub(crate) name:          Option<super::Identifier>,
     pub(crate) ty:            TypeId,
     pub(crate) array_minimum: Option<ArrayBound>,
+    pub(crate) original:      TypeId,
 }
 
 /// Array completeness and run-time extent; `Star` is prototype-scope `[*]`.
@@ -510,7 +569,7 @@ pub(crate) struct Parameter {
 pub(crate) enum ArrayBound {
     Incomplete,
     Constant(u64),
-    Variable,
+    Variable(usize),
     Star,
 }
 
@@ -530,6 +589,7 @@ pub(crate) enum TagKind {
 struct ArrayTail {
     index:      usize,
     incomplete: bool,
+    alignment:  u32,
 }
 
 /// Iteratively strips array derivations and multiplies their extents; the
@@ -540,9 +600,11 @@ fn layout(
     tags: &[&Tag<'_>],
     target: &TargetLayout,
     mut ty: TypeId,
+    natural: bool,
 ) -> Option<Layout> {
     let mut count = 1_u64;
     let mut atomic = false;
+    let mut alignment = ty.alignment;
     let layout = loop {
         match nodes[ty.index] {
             | TypeKind::Scalar(scalar) => break target.scalar(scalar)?,
@@ -568,6 +630,9 @@ fn layout(
             | TypeKind::Array(element, ArrayBound::Constant(n)) => {
                 count = count.checked_mul(n)?;
                 ty = element;
+                if alignment == 0 {
+                    alignment = ty.alignment;
+                }
             },
             | TypeKind::Atomic(value) => {
                 atomic = true;
@@ -586,8 +651,12 @@ fn layout(
         layout
     };
     Some(Layout {
-        size: layout.size.checked_mul(count)?,
-        ..layout
+        size:  layout.size.checked_mul(count)?,
+        align: if natural || alignment == 0 {
+            layout.align
+        } else {
+            u64::from(alignment)
+        },
     })
 }
 
@@ -596,6 +665,11 @@ pub(crate) fn align_up(value: u64, align: u64) -> Option<u64> {
 }
 
 impl TypeId {
+    /// GCC Common Attributes: alignment does not alter the underlying C type.
+    pub(crate) const fn with_alignment(self, alignment: u32) -> Self {
+        Self { alignment, ..self }
+    }
+
     /// C99: §6.7.3p9, p. 109; PDF p. 121.
     pub(crate) fn unqualified(self) -> Self {
         Self {
@@ -650,7 +724,53 @@ impl<'tu> FieldPath<'tu> {
 impl<'tu> Types<'tu> {
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(self.nodes, self.tags, &self.target, ty)
+        layout(self.nodes, self.tags, &self.target, ty, false)
+    }
+
+    /// Required object storage alignment, including declaration overrides on
+    /// variable array derivations whose size has no constant layout.
+    /// C11: §6.7.5p6, p. 127; PDF p. 145.
+    /// GNU typedef alignment can weaken the natural boundary and retains the
+    /// same outermost override precedence as fixed array layout.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    pub(crate) fn storage_alignment(&self, mut ty: TypeId) -> Option<u64> {
+        if let Some(layout) = self.layout(ty) {
+            return Some(layout.align);
+        }
+        let mut alignment = ty.alignment;
+        while let TypeKind::Array(element, _) = self.kind(ty) {
+            ty = element;
+            if alignment == 0 {
+                alignment = ty.alignment;
+            }
+        }
+        self.layout(ty).map(|layout| {
+            if alignment == 0 {
+                layout.align
+            } else {
+                u64::from(alignment)
+            }
+        })
+    }
+
+    /// Canonical alignment before typedef/declaration storage overrides.
+    /// Record packing remains part of the nominal record layout. System V
+    /// AMD64 ABI section 3.2.3 classifies unaligned fields using this boundary,
+    /// even when GNU `aligned` lowers the field's storage alignment.
+    /// C99: §6.7.2.1p12, p. 103; PDF p. 115 (implementation-defined alignment).
+    pub(crate) fn natural_alignment(&self, ty: TypeId) -> Option<u64> {
+        layout(self.nodes, self.tags, &self.target, ty, true).map(|layout| layout.align)
+    }
+
+    /// The nominal record's value layout, independent of alignment requested
+    /// by a typedef or an object's declaration. Argument passing classifies
+    /// the record itself; stronger storage alignment is not a value property.
+    /// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48 (nominal aggregate types).
+    pub(crate) fn aggregate_value_layout(&self, ty: TypeId) -> Option<Layout> {
+        self.tag(ty)
+            .filter(|tag| tag.kind != TagKind::Enum)?
+            .layout
+            .get()
     }
 
     /// The unqualified type constructor; qualifiers stay on the `TypeId`.

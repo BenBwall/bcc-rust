@@ -8,6 +8,7 @@ mod dominators;
 mod extensions;
 mod noundef;
 mod scalar_builtins;
+mod stack;
 mod text;
 mod verifier;
 

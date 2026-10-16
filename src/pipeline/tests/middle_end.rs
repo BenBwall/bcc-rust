@@ -16,6 +16,7 @@ use std::{
     thread,
 };
 
+mod aggregate_varargs;
 mod asm_labels;
 mod braced_strings;
 mod builtin_bindings;
@@ -24,7 +25,9 @@ mod declaration_initializers;
 mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;
+mod torture_sema;
 mod union_initializers;
+mod vla;
 
 use crate::{
     abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,

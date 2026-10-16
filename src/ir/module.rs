@@ -39,7 +39,7 @@ impl<'ir> Module<'ir> {
                 ..
             }
             | InstData::Unary {
-                opcode: Opcode::VaStart | Opcode::VaEnd,
+                opcode: Opcode::VaStart | Opcode::VaEnd | Opcode::StackRestore,
                 ..
             }
             | InstData::Nullary {
@@ -53,10 +53,8 @@ impl<'ir> Module<'ir> {
             | InstData::Switch { .. }
             | InstData::Return { .. }
             | InstData::Unreachable => None,
-            | InstData::Unary {
-                opcode: Opcode::DynAlloca,
-                ..
-            }
+            | InstData::DynAlloca { .. }
+            | InstData::VaArgAggregate { .. }
             | InstData::StackAddr { .. }
             | InstData::GlobalAddr { .. }
             | InstData::FuncAddr { .. } => Some(Type::Ptr),
@@ -94,6 +92,7 @@ impl<'ir> Module<'ir> {
             params,
             result,
             variadic,
+            variadic_fixed: None,
             aggregates: &[],
             extensions: &[],
             result_extension: None,
@@ -120,6 +119,7 @@ impl<'ir> Module<'ir> {
             params: arena.alloc_slice_copy(signature.params),
             result: signature.result,
             variadic: signature.variadic,
+            variadic_fixed: signature.variadic_fixed,
             aggregates,
             extensions: arena.alloc_slice_copy(signature.extensions),
             result_extension: signature.result_extension,
@@ -326,6 +326,9 @@ pub(crate) struct Signature<'ir> {
     pub(crate) params:           &'ir [Type],
     pub(crate) result:           Option<Type>,
     pub(crate) variadic:         bool,
+    /// Call-site descriptions may retain types and ABI facts after the
+    /// ellipsis. Only the prefix is part of the function type.
+    pub(crate) variadic_fixed:   Option<u32>,
     /// The parameters that stand for an aggregate, in increasing parameter
     /// order; empty when every parameter is a plain scalar or pointer.
     pub(crate) aggregates:       &'ir [AggregateParam<'ir>],
@@ -346,10 +349,18 @@ pub(crate) struct Signature<'ir> {
 }
 
 impl<'ir> Signature<'ir> {
+    pub(crate) fn fixed_count(&self) -> usize {
+        self.variadic_fixed
+            .map_or(self.params.len(), |n| n as usize)
+    }
+
     /// Whether passing poison at this argument position is immediate UB.
     /// Verified signatures keep the marked indices sorted, so lookups in
     /// per-parameter loops take logarithmic time rather than a full scan.
     pub(crate) fn param_noundef(&self, index: usize) -> bool {
+        if index >= self.fixed_count() && self.variadic_noundef {
+            return true;
+        }
         if index >= self.params.len() {
             self.variadic_noundef
         } else {

@@ -25,12 +25,17 @@
 //!   `expressions/` type expressions and conversions; `initializers.rs` walks
 //!   subobjects; `statements.rs` checks jumps and returns; `functions.rs`
 //!   checks definitions and completes the translation unit.
+//! - Control and lifetime facts: `facts/` records lexical/VM/block-expression
+//!   regions and resolved destinations on the same work stack, then finalizes
+//!   compact transitions using iterative heavy-light indexing.
 //! - Types and values: `types.rs` interns and compares types and computes
 //!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
 //!   floating values.
 //! - Language extensions: `generic.rs` selects C11 generic associations;
 //!   `type_generic.rs` checks GNU type selections and math calls; `vectors.rs`
-//!   constructs vector types and checks operators; `builtins.rs` and
+//!   constructs vector types and checks operators; `attributes.rs` retains
+//!   packing, alignment and scalar machine modes; `bound_sites.rs` retains
+//!   typeof operand execution at written type sites; `builtins.rs` and
 //!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
 //! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
 //!   extensions; `errors.rs` defines diagnostic kinds and renders them;
@@ -55,6 +60,7 @@ mod state;
 // Syntax traversal and constraints
 mod declarations;
 mod expressions;
+mod facts;
 mod functions;
 mod initializers;
 mod statements;
@@ -66,6 +72,8 @@ mod integer;
 mod types;
 
 // Language extensions and builtin calls
+mod attributes;
+mod bound_sites;
 mod builtins;
 mod generic;
 mod type_generic;
@@ -82,7 +90,8 @@ use std::cell::Cell;
 pub(crate) use builtins::{
     BitOperation,
     CommonBuiltin,
-    EffectSummaries,
+    ExpressionEffects,
+    FloatOperation,
     OverflowOperation,
     common_builtin,
     implemented_builtin,
@@ -110,10 +119,12 @@ pub(crate) use expressions::{
     selected_designator,
     statement_expression_tail,
 };
+pub(crate) use facts::*;
 pub(crate) use integer::Integer;
 pub(crate) use results::{
     Binding,
     BindingKind,
+    BoundSiteFacts,
     Definition,
     DefinitionKind,
     Duration,
@@ -225,6 +236,10 @@ pub(crate) fn analyze<'tu>(
     analyzer.check_builtin_designators();
     let index = analyzer.retain_expression_index();
     SemanticTranslationUnit {
+        binding_bounds:      analyzer.binding_bounds,
+        control:             analyzer.control.retain(analyzer.types.tu),
+        expression_effects:  analyzer.expression_effects.leak(),
+        expression_actions:  analyzer.expression_actions,
         declarators:         analyzer.declarators.leak(),
         spec_extensions:     analyzer.spec_extensions.leak(),
         expressions:         analyzer.expressions.leak(),
@@ -238,6 +253,9 @@ pub(crate) fn analyze<'tu>(
         functions:           analyzer.function_records.leak(),
         scopes:              analyzer.scopes.leak(),
         type_names:          analyzer.type_names.leak(),
+        declaration_sites:   analyzer.declaration_sites,
+        type_name_sites:     analyzer.type_name_sites,
+        size_query_sites:    analyzer.size_query_sites,
         parameters:          analyzer.parameter_lists.leak(),
         tag_declarations:    analyzer.tag_declarations.leak(),
         errors:              analyzer.error_diagnostics,
@@ -278,6 +296,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.values.push(self.types.unknown());
             },
             | Work::Declaration(d) => {
+                _ = self.declaration_sites.insert(
+                    std::ptr::from_ref(d).addr(),
+                    BoundSiteFacts {
+                        bounds:              &[],
+                        ty:                  self.types.unknown(),
+                        operand_evaluations: &[],
+                    },
+                );
                 if let Some(assertion) = d.assertion {
                     self.taint(assertion.recovered);
                     self.work.push(Work::RequireConstant(
@@ -296,23 +322,64 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::DeclarationBase(d) => {
                 let base = self.take_type();
+                if let Some(operand_evaluations) =
+                    self.spec_evaluations(d.declaration_specifiers.type_specifiers)
+                {
+                    _ = self.declaration_sites.insert(
+                        std::ptr::from_ref(d).addr(),
+                        BoundSiteFacts {
+                            bounds: self.spec_bounds(d.declaration_specifiers.type_specifiers),
+                            ty: base,
+                            operand_evaluations,
+                        },
+                    );
+                } else {
+                    _ = self.declaration_sites.remove(&std::ptr::from_ref(d).addr());
+                }
+                if d.init_declarators.is_empty()
+                    || matches!(
+                        d.declaration_specifiers.storage_class,
+                        Some(StorageClass::Typedef | StorageClass::Register)
+                    )
+                {
+                    self.reject_standard_alignment(d.declaration_specifiers.extensions);
+                }
                 for init in d.init_declarators.iter().rev() {
                     if let Some(initializer) = init.initializer {
                         self.work
                             .push(Work::InitializeDeclaration(init.declarator, initializer));
                     }
-                    self.work.push(Work::Bind(
+                    self.work.push(Work::DeclarationDeclarator(
                         init.declarator,
                         d.declaration_specifiers,
+                        base,
                         init.initializer.is_some(),
                     ));
-                    self.work
-                        .push(Work::Declarator(init.declarator, base, false));
                 }
             },
-            | Work::Bind(d, s, initialized) => {
+            | Work::DeclarationDeclarator(d, spec, base, initialized) => {
+                self.work.push(Work::Bind(
+                    d,
+                    spec,
+                    initialized,
+                    self.types.runtime_bounds.len(),
+                ));
+                self.work.push(Work::DeclaredAlignment(
+                    spec.extensions,
+                    base,
+                    spec.storage_class == Some(StorageClass::Typedef),
+                ));
+                self.work.push(Work::Declarator(d, base, false));
+            },
+            | Work::Bind(d, s, initialized, bound_start) => {
                 let ty = self.take_type();
+                let prior = self.bindings.len();
                 self.bind_declaration(d, s, ty, initialized);
+                if self.bindings.len() > prior {
+                    _ = self
+                        .binding_bounds
+                        .insert(self.bindings.len() - 1, self.bound_actions(ty, bound_start));
+                }
             },
             | Work::Function(f) => {
                 self.taint(f.recovered);
@@ -415,24 +482,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     },
                 }
             },
-            | Work::TypeofDone(operand, unqualified) => {
-                let ty = self.operand_type(operand);
-                // C23 §6.7.3.6p5: typeof preserves qualifiers; typeof_unqual
-                // yields the non-atomic, unqualified type.
-                let ty = if unqualified {
-                    self.types.unqualified_array(self.types.non_atomic(ty))
-                } else {
-                    ty
-                };
+            | Work::TypeofDone(syntax) => self.finish_typeof(syntax),
+            | Work::VectorAttributes(chain, storage_alignment) => {
+                self.work
+                    .push(Work::VectorAttributesDone(chain, storage_alignment));
+                self.attribute_chain_operands(chain);
+            },
+            | Work::VectorAttributesDone(chain, storage_alignment) => {
+                let base = self.take_type();
+                let ty = self.vector_attribute_chain(base, chain, storage_alignment);
                 self.values.push(ty);
             },
-            | Work::VectorAttributes(chain) => {
-                let base = self.take_type();
-                let ty = self.vector_attribute_chain(base, chain);
+            | Work::DeclaredAlignment(chain, base, can_weaken) => {
+                let ty = self.take_type();
+                let attributes = self.layout_attribute_chain(chain);
+                let ty = self.align_declared_type(ty, attributes.alignment);
+                let ty = self.minimum_declared_alignment(ty, base, can_weaken);
+                let ty = self.standard_alignment(ty, chain);
                 self.values.push(ty);
             },
             | Work::VectorDeclaratorAttributes(list) => {
                 let mut ty = self.take_type();
+                for direct in list {
+                    if let DirectDeclarator::Attributes(a) = direct {
+                        ty = self.mode_attribute(ty, a);
+                    }
+                }
                 for construction in [true, false] {
                     for direct in list {
                         if let DirectDeclarator::Attributes(a) = direct
@@ -441,14 +516,23 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             ty = if self.layout_attribute(a) {
                                 self.types.unknown()
                             } else {
-                                self.vector_attribute(ty, a)
+                                self.vector_attribute(ty, a, true)
                             };
                         }
                     }
                 }
                 self.values.push(ty);
             },
-            | Work::Spec(s, q, source, force) => self.resolve_spec(s, q, source, force),
+            | Work::Spec(s, q, source, force) => {
+                self.work.push(Work::SpecDone(s, q, source, force));
+                let attributes = match s {
+                    | TypeSpecifiers::StructOrUnion(record) => record.attributes,
+                    | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
+                    | _ => None,
+                };
+                self.attribute_chain_operands(attributes);
+            },
+            | Work::SpecDone(s, q, source, force) => self.resolve_spec(s, q, source, force),
             | Work::Atomic(source) => {
                 let value = self.take_type();
                 let ty = self.atomic_type(value, source, true);
@@ -471,7 +555,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 let mut arrays = ArenaVec::new_in(self.scratch);
                 while let TypeKind::Array(element, bound) = self.types.nodes[ty.index] {
-                    arrays.push(bound);
+                    arrays.push((bound, ty.alignment));
                     ty = element;
                 }
                 if matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) && !q.is_empty()
@@ -484,34 +568,71 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // element, which must itself admit restrict.
                     self.validate_qualifiers(ty, source);
                 }
-                while let Some(bound) = arrays.pop() {
-                    ty = self.types.intern(TypeKind::Array(ty, bound));
+                while let Some((bound, alignment)) = arrays.pop() {
+                    ty = self
+                        .types
+                        .intern(TypeKind::Array(ty, bound))
+                        .with_alignment(alignment);
                 }
                 self.values.push(ty);
             },
             | Work::TypeName(name) => {
-                if let Some(&ty) = self.resolved_type_names.get(&name.source_vectors) {
-                    self.values.push(ty);
+                if let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr()) {
+                    self.values.push(site.ty);
                     return;
                 }
-                self.work.push(Work::TypeNameDone(name.source_vectors));
                 self.work.push(Work::TypeNameBase(name));
                 self.spec(name.declaration_specifiers, false);
             },
             | Work::TypeNameBase(name) => {
                 let base = self.take_type();
+                self.work
+                    .push(Work::TypeNameDone(name, self.types.runtime_bounds.len()));
+                self.reject_standard_alignment(name.declaration_specifiers.extensions);
+                self.work.push(Work::DeclaredAlignment(
+                    name.declaration_specifiers.extensions,
+                    base,
+                    true,
+                ));
                 if let Some(d) = name.declarator {
                     self.work.push(Work::Declarator(d, base, false));
                 } else {
                     self.values.push(base);
                 }
             },
-            | Work::TypeNameDone(source) =>
+            | Work::TypeNameDone(name, bound_start) =>
                 if let Some(&ty) = self.values.last() {
-                    self.type_names.push((source, ty));
-                    _ = self.resolved_type_names.insert(source, ty);
+                    self.type_names.push((name.source_vectors, ty));
+                    _ = self.resolved_type_names.insert(name.source_vectors, ty);
+                    if let Some(operand_evaluations) =
+                        self.spec_evaluations(name.declaration_specifiers.type_specifiers)
+                    {
+                        _ = self.type_name_sites.insert(
+                            std::ptr::from_ref(name).addr(),
+                            BoundSiteFacts {
+                                bounds: self.site_bounds(
+                                    ty,
+                                    bound_start,
+                                    name.declaration_specifiers.type_specifiers,
+                                ),
+                                ty,
+                                operand_evaluations,
+                            },
+                        );
+                    }
                 },
-            | Work::Declarator(d, mut base, parameter) => {
+            | Work::Declarator(d, base, parameter) => {
+                self.work.push(Work::DeclaratorDone(d, base, parameter));
+                for level in d.pointer.levels {
+                    self.attribute_chain_operands(level.attributes);
+                }
+                for direct in d.kind {
+                    if let DirectDeclarator::Attributes(attribute) = direct {
+                        self.attribute_operands(attribute);
+                    }
+                }
+            },
+            | Work::DeclaratorDone(d, mut base, parameter) => {
                 if d.pointer
                     .levels
                     .iter()
@@ -550,7 +671,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let mut chain = level.attributes;
                     while let Some(item) = chain {
                         if let SpecifierExtensionKind::Attributes(attribute) = item.kind {
-                            base = self.vector_attribute(base, attribute);
+                            base = self.mode_attribute(base, attribute);
+                            base = self.vector_attribute(base, attribute, true);
                         }
                         chain = item.next;
                     }
@@ -619,11 +741,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             );
                         }
                     }
-                    value
-                        .to_u64()
-                        .map_or(ArrayBound::Variable, ArrayBound::Constant)
+                    value.to_u64().map_or_else(
+                        || self.types.variable_bound(expression),
+                        ArrayBound::Constant,
+                    )
                 } else {
-                    ArrayBound::Variable
+                    self.types.variable_bound(expression)
                 };
                 let ty = self
                     .types
@@ -642,8 +765,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         source,
                         identity,
                     ));
-                    self.work.push(Work::ParameterDone(p, params));
-                    self.work.push(Work::ParameterBase(p));
+                    self.work.push(Work::ParameterBase(
+                        p,
+                        params,
+                        std::ptr::from_ref(&list.as_slice()[index]).addr(),
+                    ));
                     self.spec(p.declaration_specifiers, false);
                 } else {
                     let scope = self.scope;
@@ -679,8 +805,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         variadic,
                     }));
                 },
-            | Work::ParameterBase(p) => {
+            | Work::ParameterBase(p, params, identity) => {
                 let base = self.take_type();
+                self.work.push(Work::ParameterDone(
+                    p,
+                    params,
+                    self.types.runtime_bounds.len(),
+                    identity,
+                ));
+                self.reject_standard_alignment(p.declaration_specifiers.extensions);
+                self.work.push(Work::DeclaredAlignment(
+                    p.declaration_specifiers.extensions,
+                    base,
+                    false,
+                ));
                 if let Some(d) = p.declarator {
                     self.validate_parameter_arrays(d);
                     self.work.push(Work::Declarator(d, base, true));
@@ -688,8 +826,25 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.values.push(base);
                 }
             },
-            | Work::ParameterDone(p, params) => {
+            | Work::ParameterDone(p, params, bound_start, identity) => {
                 let mut ty = self.take_type();
+                let original = ty;
+                if let Some(operand_evaluations) =
+                    self.spec_evaluations(p.declaration_specifiers.type_specifiers)
+                {
+                    _ = self.parameter_sites.insert(
+                        identity,
+                        BoundSiteFacts {
+                            ty: original,
+                            operand_evaluations,
+                            bounds: self.site_bounds(
+                                original,
+                                bound_start,
+                                p.declaration_specifiers.type_specifiers,
+                            ),
+                        },
+                    );
+                }
                 let array_minimum = if let TypeKind::Array(_, bound) = self.types.nodes[ty.index] {
                     p.declarator
                         .filter(|d| {
@@ -753,6 +908,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         name,
                         ty,
                         array_minimum,
+                        original,
                     },
                 );
             },
@@ -772,26 +928,44 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         return;
                     }
                     self.work.push(Work::RecordMemberBase(tag, member, members));
-                    self.work.push(Work::VectorAttributes(member.extensions));
+                    self.work
+                        .push(Work::VectorAttributes(member.extensions, false));
                     self.work.push(Work::Spec(
                         member.type_specifiers,
                         member.type_qualifiers,
                         member.source_vectors,
                         false,
                     ));
+                    let mut extension = member.extensions;
+                    while let Some(item) = extension {
+                        if let SpecifierExtensionKind::Alignment(operand) = item.kind {
+                            self.syntax_operand(operand);
+                        }
+                        extension = item.next;
+                    }
                 } else {
                     self.complete_record(tag, members.finish(self.types.tu, self.scratch));
                 }
             },
             | Work::RecordMemberBase(tag, member, members) => {
                 let base = self.take_type();
-                if member.struct_declarator_list.is_empty()
-                    && let Some(anonymous) = self.anonymous_member(tag, member, base)
-                {
-                    members.push(self.scratch, anonymous);
+                let attributes = self.layout_attribute_chain(member.extensions);
+                if member.struct_declarator_list.is_empty() {
+                    let anonymous_base = self.align_declared_type(base, attributes.alignment);
+                    let anonymous_base = self.standard_alignment(anonymous_base, member.extensions);
+                    if let Some(anonymous) = self.anonymous_member(tag, member, anonymous_base) {
+                        members.push(self.scratch, anonymous);
+                    }
                 }
                 for &d in member.struct_declarator_list.iter().rev() {
-                    self.work.push(Work::MemberBase(tag, d, base, members));
+                    self.work.push(Work::MemberBase(
+                        tag,
+                        d,
+                        base,
+                        member.extensions,
+                        attributes.packed,
+                        members,
+                    ));
                 }
                 if self.unmodeled_extension(member.extensions)
                     || member
@@ -802,20 +976,61 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.types.tags[tag].tainted.set(true);
                 }
             },
-            | Work::MemberBase(tag, d, base, members) => {
-                self.work
-                    .push(Work::MemberDone(tag, d, members, self.semantic_errors));
-                self.work.push(Work::VectorAttributes(d.attributes));
+            | Work::MemberBase(tag, d, base, extensions, spec_packed, members) => {
+                self.work.push(Work::MemberBaseDone(
+                    tag,
+                    d,
+                    base,
+                    extensions,
+                    spec_packed,
+                    members,
+                ));
+                self.attribute_chain_operands(d.attributes);
+            },
+            | Work::MemberBaseDone(tag, d, base, extensions, spec_packed, members) => {
+                let packed = spec_packed
+                    || self.layout_attribute_chain(d.attributes).packed
+                    || d.declarator
+                        .is_some_and(|decl| self.packed_declarator(decl));
+                self.work.push(Work::MemberDone(
+                    tag,
+                    d,
+                    members,
+                    self.semantic_errors,
+                    packed,
+                    extensions,
+                ));
+                if d.bitfield_width.is_some() {
+                    self.reject_standard_alignment(extensions);
+                }
+                self.work.push(Work::DeclaredAlignment(
+                    extensions,
+                    base,
+                    packed || self.types.tags[tag].packed.get(),
+                ));
+                self.work.push(Work::VectorAttributes(d.attributes, true));
                 if let Some(decl) = d.declarator {
                     self.work.push(Work::Declarator(decl, base, false));
                 } else {
                     self.values.push(base);
                 }
             },
-            | Work::MemberDone(tag, d, members, errors_before) => {
+            | Work::MemberDone(tag, d, members, errors_before, packed, extensions) => {
                 let ty = self.take_type();
-                self.work
-                    .push(Work::MemberWidth(tag, d, ty, members, errors_before));
+                let explicit_alignment = if self.semantic_errors == errors_before {
+                    self.explicit_member_alignment(extensions, d.attributes, d.declarator)
+                } else {
+                    0
+                };
+                self.work.push(Work::MemberWidth(
+                    tag,
+                    d,
+                    ty,
+                    members,
+                    errors_before,
+                    packed,
+                    explicit_alignment,
+                ));
                 if let Some(width) = d.bitfield_width {
                     self.work.push(Work::Eval(width.expression()));
                     self.work.push(Work::Expression(width.expression()));
@@ -823,7 +1038,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.integers.push(None);
                 }
             },
-            | Work::MemberWidth(tag, d, ty, members, errors_before) => {
+            | Work::MemberWidth(tag, d, ty, members, errors_before, packed, explicit_alignment) => {
                 let value = self.integers.pop().flatten();
                 // C99 §6.7.2.1p2-4: retain rejected members for recovery,
                 // without repeating their constraints during completion.
@@ -902,6 +1117,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         offset: 0,
                         bit_offset: 0,
                         anonymous: false,
+                        packed,
+                        explicit_alignment,
                     },
                 );
             },
@@ -930,9 +1147,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let tag = self.types.tags[tag];
                     tag.complete.set(true);
                     if !tag.tainted.get() {
-                        let compatible = compatible_enum_type(range, &self.types.target);
+                        let compatible =
+                            compatible_enum_type(range, &self.types.target, tag.packed.get());
                         tag.compatible.set(compatible);
-                        tag.layout.set(self.types.target.scalar(compatible));
+                        tag.layout
+                            .set(self.types.target.scalar(compatible).map(|layout| Layout {
+                                align: layout.align.max(u64::from(tag.alignment.get())),
+                                ..layout
+                            }));
                     }
                 }
             },
@@ -1197,10 +1419,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 // record/function types.
 #[derive(Clone, Copy)]
 enum Work<'tu, 's> {
+    DeclaredAlignment(Option<&'tu SpecifierExtension<'tu>>, TypeId, bool),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),
     DeclarationBase(&'tu Declaration<'tu>),
-    Bind(Declarator<'tu>, DeclarationSpecifiers<'tu>, bool),
+    DeclarationDeclarator(Declarator<'tu>, DeclarationSpecifiers<'tu>, TypeId, bool),
+    Bind(Declarator<'tu>, DeclarationSpecifiers<'tu>, bool, usize),
     Function(&'tu FunctionDefinition<'tu>),
     FunctionBase(&'tu FunctionDefinition<'tu>),
     FunctionBody(&'tu FunctionDefinition<'tu>),
@@ -1230,15 +1454,18 @@ enum Work<'tu, 's> {
     RuntimeBound(bool),
     OldSignature(&'tu FunctionDefinition<'tu>),
     DiscardType,
-    VectorAttributes(Option<&'tu SpecifierExtension<'tu>>),
+    VectorAttributes(Option<&'tu SpecifierExtension<'tu>>, bool),
+    VectorAttributesDone(Option<&'tu SpecifierExtension<'tu>>, bool),
     VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
     UnknownType,
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
+    SpecDone(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),
     TypeName(&'tu TypeName<'tu>),
     TypeNameBase(&'tu TypeName<'tu>),
-    TypeNameDone(SourceVectors),
+    TypeNameDone(&'tu TypeName<'tu>, usize),
     Declarator(Declarator<'tu>, TypeId, bool),
+    DeclaratorDone(Declarator<'tu>, TypeId, bool),
     Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool),
     ArrayDone(
         TypeId,
@@ -1256,8 +1483,17 @@ enum Work<'tu, 's> {
         SourceVectors,
         usize,
     ),
-    ParameterBase(ParameterDeclaration<'tu>),
-    ParameterDone(ParameterDeclaration<'tu>, &'s Collection<'s, Parameter>),
+    ParameterBase(
+        ParameterDeclaration<'tu>,
+        &'s Collection<'s, Parameter>,
+        usize,
+    ),
+    ParameterDone(
+        ParameterDeclaration<'tu>,
+        &'s Collection<'s, Parameter>,
+        usize,
+        usize,
+    ),
     RecordMembers(
         usize,
         ArenaList<'tu, StructDeclaration<'tu>>,
@@ -1269,6 +1505,16 @@ enum Work<'tu, 's> {
         usize,
         StructDeclarator<'tu>,
         TypeId,
+        Option<&'tu SpecifierExtension<'tu>>,
+        bool,
+        &'s Collection<'s, Member>,
+    ),
+    MemberBaseDone(
+        usize,
+        StructDeclarator<'tu>,
+        TypeId,
+        Option<&'tu SpecifierExtension<'tu>>,
+        bool,
         &'s Collection<'s, Member>,
     ),
     MemberDone(
@@ -1276,6 +1522,8 @@ enum Work<'tu, 's> {
         StructDeclarator<'tu>,
         &'s Collection<'s, Member>,
         usize,
+        bool,
+        Option<&'tu SpecifierExtension<'tu>>,
     ),
     MemberWidth(
         usize,
@@ -1283,6 +1531,8 @@ enum Work<'tu, 's> {
         TypeId,
         &'s Collection<'s, Member>,
         usize,
+        bool,
+        u32,
     ),
     EnumMembers(
         usize,
@@ -1301,7 +1551,7 @@ enum Work<'tu, 's> {
     ConvertInteger(u32, bool),
     SizeofDone(bool, SourceVectors),
     Atomic(SourceVectors),
-    TypeofDone(SyntaxOperand<'tu>, bool),
+    TypeofDone(&'tu ExtendedType<'tu>),
 }
 
 struct Analyzer<'a, 'tu, 's> {
@@ -1320,6 +1570,10 @@ struct Analyzer<'a, 'tu, 's> {
     function_records:    ArenaVec<'tu, FunctionRecord<'tu>>,
     scopes:              ArenaVec<'tu, Scope>,
     type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
+    declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    type_name_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    size_query_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    typeof_sites:        ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
     parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
     scope:               usize,
     entries:             ArenaVec<'s, Entry>,
@@ -1346,6 +1600,11 @@ struct Analyzer<'a, 'tu, 's> {
     resolved_type_names: ArenaMap<'s, SourceVectors, TypeId>,
     integer_models:      ArenaMap<'s, usize, Option<(u32, bool)>>,
     expressions:         ArenaVec<'tu, ExpressionInfo<'tu>>,
+    expression_effects:  ArenaVec<'tu, ExpressionEffects>,
+    expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    binding_bounds:      ArenaMap<'tu, usize, &'tu [usize]>,
+    parameter_sites:     ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
+    function_controls:   ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
     expression_indices:  ArenaMap<'s, usize, usize>,
     string_initializers: ArenaMap<'tu, usize, TypeId>,
     /// Conversion records in the order they were applied, grouped by
@@ -1356,7 +1615,8 @@ struct Analyzer<'a, 'tu, 's> {
     ice_operands:        ArenaMap<'s, (usize, bool), bool>,
     functions:           functions::State<'tu, 's>,
     va_list_type:        Option<TypeId>,
-    statements:          statements::State<'s>,
+    statements:          statements::State<'tu, 's>,
+    control:             builder::Builder<'tu, 's>,
     /// Tags whose member or enumerator list is open.
     defining:            ArenaMap<'s, usize, ()>,
     /// Least and greatest enumerator values of an open enumeration.

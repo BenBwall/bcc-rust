@@ -277,7 +277,11 @@ pub(super) fn lowered_signature<'s>(
         result,
         ResultPlan::Scalar | ResultPlan::VectorI128
     ));
+    let mut variadic_fixed = None;
     for ((index, &ty), plan) in signature.params.iter().enumerate().skip(first).zip(args) {
+        if signature.variadic_fixed.map(|n| n as usize) == Some(index) {
+            variadic_fixed = Some(parameter_count(params.len()).expect("planned count"));
+        }
         match *plan {
             | ArgPlan::Keep => {
                 if signature.param_noundef(index) {
@@ -334,6 +338,7 @@ pub(super) fn lowered_signature<'s>(
             signature.result
         },
         variadic:         signature.variadic,
+        variadic_fixed:   variadic_fixed.filter(|&n| n as usize != params.len()),
         aggregates:       scratch.alloc_slice_copy(&aggregates),
         extensions:       scratch.alloc_slice_copy(&extensions),
         result_extension: signature
@@ -341,7 +346,10 @@ pub(super) fn lowered_signature<'s>(
             .and_then(|extension| convention.extension(extension)),
         noundef:          scratch.alloc_slice_copy(&noundef),
         result_noundef:   signature.result_noundef,
-        variadic_noundef: signature.variadic_noundef,
+        // Typed tails have materialized pointer/scalar promises above. Their
+        // blanket promise must not reach aggregate register bytes (LLVM
+        // LangRef, noundef; System V AMD64 ABI §3.2.3).
+        variadic_noundef: signature.variadic_noundef && signature.variadic_fixed.is_none(),
     }
 }
 

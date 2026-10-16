@@ -5,7 +5,10 @@
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60;
 //! §6.5, pp. 67-94; PDF pp. 79-106.
 
-use std::num::NonZeroU32;
+use std::num::{
+    NonZeroU8,
+    NonZeroU32,
+};
 
 use rustc_hash::FxBuildHasher;
 
@@ -726,16 +729,54 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Self::expression_result(e, self.types.unknown());
         };
         let mut field_ty = field.ty;
+        // C99 §6.7.2.1p12, GNU packed: a member cannot promise more
+        // alignment than its containing object and byte offset guarantee.
+        let base_alignment = if indirect {
+            self.types.layout(ty).map_or(1, |layout| layout.align)
+        } else {
+            base.place_alignment().map_or_else(
+                || self.types.layout(ty).map_or(1, |layout| layout.align),
+                u64::from,
+            )
+        };
+        let offset_alignment = if field.offset == 0 {
+            base_alignment
+        } else {
+            1_u64 << field.offset.trailing_zeros()
+        };
+        let alignment = self
+            .types
+            .layout(field_ty)
+            .map_or(1, |layout| layout.align)
+            .min(base_alignment)
+            .min(offset_alignment);
         let mut arrays = ArenaVec::new_in(self.scratch);
         while let TypeKind::Array(element, bound) = self.types.nodes[field_ty.index] {
-            arrays.push(bound);
+            arrays.push((bound, field_ty.alignment));
             field_ty = element;
         }
         // Qualifiers of the record and of any anonymous members on the path
         // reach the member, and an array's element (§6.5.2.3p3, §6.7.3p8).
         field_ty = field_ty.qualified(ty.qualifiers | field.qualifiers);
-        while let Some(bound) = arrays.pop() {
-            field_ty = self.types.intern(TypeKind::Array(field_ty, bound));
+        if self
+            .types
+            .layout(field_ty)
+            .is_some_and(|layout| alignment < layout.align)
+        {
+            field_ty = field_ty.with_alignment(u32::try_from(alignment).unwrap_or(0));
+        }
+        while let Some((bound, array_alignment)) = arrays.pop() {
+            field_ty = self
+                .types
+                .intern(TypeKind::Array(field_ty, bound))
+                .with_alignment(array_alignment);
+        }
+        if self
+            .types
+            .layout(field_ty)
+            .is_some_and(|layout| alignment < layout.align)
+        {
+            field_ty = field_ty.with_alignment(u32::try_from(alignment).unwrap_or(0));
         }
         let mut info = Self::expression_result(e, field_ty);
         if indirect
@@ -746,6 +787,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.category = self.object_category(field_ty);
         }
+        info.place_alignment = u8::try_from(alignment.trailing_zeros() + 1)
+            .ok()
+            .and_then(NonZeroU8::new);
         info.bit_field = field.width;
         info.field = u32::try_from(index + 1).ok().and_then(NonZeroU32::new);
         info.register = !indirect && base.register;
@@ -765,12 +809,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         operand: ExpressionInfo<'tu>,
     ) -> ExpressionInfo<'tu> {
         let from = self.converted(operand);
-        if matches!(self.types.nodes[target.index], TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Union)
-        {
-            return Self::expression_result(e, self.types.unknown());
-        }
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return Self::expression_result(e, self.types.unknown());
+        }
+        if let TypeKind::Tag(id) = self.types.nodes[target.index]
+            && self.types.tags[id].kind == TagKind::Union
+        {
+            // GNU cast-to-union extension: the operand has the type of a
+            // member, and initializes that member in a union rvalue.
+            // <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
+            if let ExpressionType::Cast {
+                target_type: type_name,
+                ..
+            } = e.kind
+                && !matches!(type_name.declaration_specifiers.type_specifiers, super::super::super::parsing::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == super::super::super::parsing::declaration_syntax::StructOrUnion::Union)
+            {
+                self.context.report_extension(
+                    crate::configuration::Feature::UnionCasts,
+                    "cast to union",
+                    e.source_vectors,
+                );
+            }
+            let member = self.types.tags[id].members.get().iter().find(|member| {
+                self.types
+                    .composite(member.ty.unqualified(), from.unqualified())
+                    .is_some()
+            });
+            let Some(member) = member else {
+                return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
+            };
+            let member_ty = member.ty.unqualified();
+            self.convert(operand.expression, member_ty, ConversionKind::Assignment);
+            let mut info = Self::expression_result(e, target.unqualified());
+            info.operation_type = Some(member_ty);
+            return info;
         }
         if self.vector(target).is_some() || self.vector(from).is_some() {
             // C99 §6.5.4p2: a void target also permits discarding a GNU vector.
@@ -928,12 +1000,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info
     }
 
-    pub(super) fn retain_expression(&mut self, info: ExpressionInfo<'tu>) {
+    pub(super) fn retain_expression(&mut self, mut info: ExpressionInfo<'tu>) {
         let key = std::ptr::from_ref(info.expression).addr();
         if self.expression_indices.contains_key(&key) {
             return;
         }
         _ = self.expression_indices.insert(key, self.expressions.len());
+        let effects = self.summarize_effects(info);
+        if self
+            .expression_actions
+            .get(&key)
+            .is_some_and(|site| !site.operand_evaluations.is_empty() || !site.bounds.is_empty())
+            && !effects.value_pure
+        {
+            // Written type-site effects prohibit folding the enclosing value;
+            // an empty action list preserves its existing constant eligibility.
+            info.ice = false;
+            info.integer = None;
+            info.floating = None;
+            info.constant = ConstantClass::None;
+        }
+        self.expression_effects.push(effects);
         self.expressions.push(info);
     }
 
@@ -1003,6 +1090,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ExpressionInfo {
             expression: e,
             selected_expression: None,
+            place_alignment: None,
             ty,
             operation_type: None,
             category: ValueCategory::Rvalue,

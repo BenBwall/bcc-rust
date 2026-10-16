@@ -406,6 +406,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 .associations
                 .len()
                 .checked_add(frame.tokens.len())
+                .and_then(|count| count.checked_add(frame.arguments.len()))
                 .expect("ISO retained node count overflows"),
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)

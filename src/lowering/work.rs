@@ -40,6 +40,15 @@ pub(super) enum Task<'tu> {
     /// Keep statement effects and label targets without reading unused values.
     StatementEffects(&'tu Statement<'tu>),
     Declaration(&'tu Declaration<'tu>),
+    DeclareBinding(
+        usize,
+        Option<&'tu Initializer<'tu>>,
+        crate::translation_phases::SourceVectors,
+    ),
+    FinishBound(usize),
+    Sizeof(TypeId, TypeId, crate::translation_phases::SourceVectors),
+    CleanupNormal(&'tu Statement<'tu>),
+
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {
         block: Block,
@@ -51,15 +60,11 @@ pub(super) enum Task<'tu> {
         seal:  bool,
     },
     Seal(Block),
-    /// Push break and continue targets.
-    PushTargets(JumpTargets),
-    PopTargets,
     /// Pop the operand and return it.
-    Return,
+    Return(&'tu Statement<'tu>),
     /// Pop the switch's controlling value and dispatch on it.
     Switch {
         statement: &'tu Statement<'tu>,
-        body:      &'tu Statement<'tu>,
         exit:      Block,
     },
     /// Close a switch: jump to its exit and seal its case blocks.
@@ -98,6 +103,9 @@ pub(super) enum Task<'tu> {
         ty:          TypeId,
         initializer: &'tu Initializer<'tu>,
     },
+    /// Preserve/reuse the once-evaluated value of a GNU range initializer.
+    RememberInitializer(usize),
+    ReuseInitializer(usize),
     /// Push the compound literal in `slot`, now initialized, as a place.
     PushSlot {
         slot: StackSlot,
@@ -210,7 +218,9 @@ pub(super) enum Operand {
     Truth(Value),
     /// An lvalue or function designator.
     Place(Place),
-    /// A structure or union rvalue, by the address of an object holding it.
+    /// A structure or union rvalue names its backing place. The alignment
+    /// owner retains that place's guarantee; C conversions do not change it.
+    /// C99: §6.3.2.1p2, p. 46; PDF p. 58.
     Aggregate(Value),
 }
 

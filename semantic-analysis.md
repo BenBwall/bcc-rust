@@ -211,6 +211,41 @@ extension that GCC and Clang provide, take the type of their value, and are
 reported through the extension policy. A set of members that no 64-bit type
 holds is diagnosed.
 
+### Storage, natural and member-place alignment
+
+`Member::explicit_alignment` alone requests a new System V value-bit-field
+boundary. Typedef-inherited alignment affects record alignment without splitting
+adjacent fields. MinGW ignores inherited typedef alignment on bit-fields; MSVC
+and System V retain it, following bundled Clang. Packed placement and zero-width
+boundaries retain their separate target rules. C99 §6.7.2.1p10 (printed p. 102;
+PDF p. 114) leaves allocation-unit alignment unspecified; the GNU
+[aligned attribute](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
+supplies the extension contract.
+
+`Types::storage_alignment` is the retained query for a declaration's storage
+requirement, including variable array derivations. `Types::layout` supplies the
+same requirement for complete fixed objects; `Types::natural_alignment` ignores
+storage overrides through arrays and atomic derivations while preserving record
+packing. Variable arrays preserve the same outermost override precedence as fixed
+array layout, including GNU typedefs that lower alignment. ABI projection uses
+natural/value layout rather than declaration
+alignment to classify a value.
+
+Member typing retains `ExpressionInfo::place_alignment` from the containing
+place and resolved offset, including nested packed aggregates. Zero-width
+bit-fields apply explicit member alignment to the boundary: System V keeps the
+natural base-type minimum without raising the record alignment; MinGW honors
+explicit boundaries even without a preceding bit-field; MSVC requires a preceding
+value bit-field. Packed MSVC value-field placement remains distinct from an
+explicit zero-width boundary. These rules are checked against bundled Clang.
+
+Lowering owns allocated storage guarantees and refines them using the retained
+member facts. Conversions describe value types and cannot strengthen a backing
+place. See [Memory facts](middle-end.md#memory-facts) for the one alignment owner.
+C99 6.7.2.1p12, p. 103 (PDF p. 115); C11 6.7.5p6, p. 127 (PDF p. 145);
+GNU [aligned/packed attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
+and System V AMD64 ABI 3.2.3.
+
 ## Binding, scope, linkage and recovery
 
 Ordinary identifiers and tags have separate visible maps. An entry remembers its
@@ -512,6 +547,13 @@ binding keeps its declared type while the binding of the function holds the
 composite type with promoted parameter types, so lowering converts each
 argument on entry (§6.9.1p10, printed p. 142, PDF p. 154).
 
+The record retains original parameter types, source-ordered parameter-site typeof
+and new-bound actions, and prototype/body parameter binding pairs when replaying
+the definition's prototype scope. Runtime bounds use those prototype bindings;
+lowering aliases them to the initialized body parameters in work proportional
+to the definition's parameters. The 10,000-function regression bounds alias
+visits directly, independently of machine speed and unrelated bindings.
+
 Prototype definitions require named, complete adjusted parameters, with the sole
 unnamed `void` exception (§6.9.1p5 and §6.7.5.3p4, printed pp. 141 and 118,
 PDF pp. 153 and 130). C23 permits unnamed parameters. Earlier-mode pedantic
@@ -561,17 +603,59 @@ the translation unit has been walked. The parser retains ownership of the
 duplicate-default diagnostic, so it is emitted once. Case/default placement
 and case ICE requirements are checked semantically. Case values are converted
 to the promoted control type; GNU inclusive ranges use the same conversion.
-Cases are collected, then sorted once per switch. Duplicate values and overlaps
+Every case label is retained, including an empty GNU range for fallthrough. Only
+nonempty intervals receive dispatch transitions and enter the sorted case index.
+Duplicate values and overlaps
 are checked in O(n log n), and empty converted ranges produce a warning.
 
-A **variable scope path** is a persistent chain of declarations of variably
-modified identifiers, including typedefs and pointers to VLAs. Scope exit
-restores the previous chain. Labels, gotos and switch entry retain snapshots
-without borrowing a live scope stack. Iterative path comparison diagnoses jumps
-that enter a target declaration's scope (§6.8.6.1p1 and §6.8.4.2p2, printed
-pp. 137 and 134, PDF pp. 149 and 146). Forward labels are checked after their
-definitions are known. GNU nonlocal jumps through an enclosing local label are
-kept conservative rather than applying ordinary same-function VLA rules.
+#### Retained control and lifetime facts
+
+Semantic analysis owns one execution-region tree per function, separate from
+lexical name visibility. `FunctionRecord::control` identifies its function/root;
+`SemanticTranslationUnit::control` retains typed region, statement, label, jump,
+loop and switch identities. Regions distinguish lexical scopes, variably modified
+declarations and GNU statement expressions. Each region records its lexical owner,
+parent, function, provenance and preorder/subtree interval. VM typedefs and pointers
+protect entry without allocating storage; automatic VLA objects additionally carry
+cleanup obligations. Nearest VM, statement-expression and cleanup links are retained.
+
+The ordinary semantic work stack produces these facts while visiting signatures,
+bodies and all expression contexts: evaluated typeof operands and array bounds,
+runtime sizeof, initializers, conditions, arguments and nested statement expressions.
+There is no second syntax walk. Definition parameter expressions use their function's
+root during signature analysis. Nested definitions have independent roots. Loop and
+switch contexts apply only to their bodies; header jumps resolve to an enclosing
+body context, and invalid header jumps retain the existing diagnostics.
+
+Resolved labels carry identity and definition points. Goto, break, continue and
+return facts record source, resolved destination and compact left/entered region
+runs. Statements record normal-exit transitions. Switch records retain the promoted
+control type, source-ordered cases, inclusive converted endpoints, sorted case
+indices, default and no-match transitions. Cases are sorted once for overlap checks;
+lowering consumes those endpoints without converting them again.
+
+After traversal, iterative heavy-light indexing takes O(R) work/storage. Each
+transition/LCA and first-entered-VM query takes O(log R), with no ancestor scan
+per query and no recursion. Preorder containment checks are O(1). Forward labels
+resolve before goto diagnostics. Switch diagnostics retain their discovery order;
+their secondary VM labels are finalized to the outermost entered declaration.
+Entering statement expressions or VM scope reads this same graph, preserving text,
+order and secondary labels. GNU nonlocal jumps retain the existing conservative
+semantic handling and remain unsupported by lowering.
+
+GNU statement-expression tails consume their expression statement's converted
+value: arrays/functions decay, lvalues become values and bit-field identity does
+not escape. Empty blocks and other endings yield void. Aggregate results are copied
+before an exit releases VLA storage. Internal jumps preserve enclosing lifetimes;
+outward jumps release only the regions they leave. C99 §6.2.4p6, p. 32 (PDF p. 44),
+§6.8.4.2p2, p. 134 (PDF p. 146), §6.8.6.1p1, p. 137 (PDF p. 149),
+§6.8.6.2p1/§6.8.6.3p1, p. 138 (PDF p. 150); GNU extension:
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+
+Deep generated inputs count construction and query work rather than elapsed time.
+The M1 [validation receipt](docs/research/semantic-facts-m1.md) records retained
+bytes, native oracle limits and fresh matched corpus evidence. Superseded control
+and effect chronology is [archived](docs/research/semantic-control-pre-m1-history.md).
 
 #### Translation-unit definitions
 
@@ -1165,12 +1249,11 @@ signatures so replacing intrin0.h preserves the native C17 stdatomic.h path.
 The prefetch builtin checks its pointer and optional constant operands.
 
 Known boundaries: AVX-512, AMX, newer x86 instruction families, _Float16/bfloat
-vector typedefs and ext_vector_type are not shipped. Attribute arguments have
+vector typedefs and ext_vector_type are not shipped. `vector_size` arguments have
 an iterative integer-literal/enum/arithmetic reducer rather than general C ICE
-syntax (sizeof and casts in attribute arguments are not implemented).
-Alignment-only attributes on non-vector declared types, including vector-derived
-pointers and arrays, remain unanalyzed; they do not change the pointee or element
-vector.
+syntax (`sizeof` and casts in `vector_size` operands are not implemented).
+GNU alignment operands use semantic constant evaluation; declaration alignment
+on pointers and arrays does not change their pointee or element type.
 sizeof/alignof vectors and constant scalar lane initializers evaluate normally;
 vector arithmetic/shuffles/casts do not retain lane constants, so their results
 are not folded in static initializers or subsequent subscripting. This is a
@@ -1285,30 +1368,7 @@ contract already used for that target's C99 inline functions. See
 [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html) and C99 6.7.4p6
 (printed pp. 112-113, PDF pp. 124-125).
 
-Labels, gotos and switch contexts retain statement-expression ancestry.
-Semantic analysis rejects entering an expression from outside or from a
-sibling expression, with a primary jump/case diagnostic and a secondary label
-at the expression. Internal and outward jumps remain legal, including nested
-outward jumps. Function entry resets this state for nested functions.
-The constraint comes from [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html),
-extending C99 6.8.6.1p1 (printed p. 137, PDF p. 149) and 6.8.4.2p5
-(printed p. 134, PDF p. 146).
-
 ### PR #41 round-2 corrections (2026-10-13)
-
-Statement-expression ancestry uses preorder subtree intervals in the semantic
-scratch arena. Entering an expression assigns its index; its restore
-continuation records the first index outside its subtree. Open intervals have
-an unbounded end, so case/default checks during traversal use the same query
-as resolved gotos. Testing whether the destination encloses the source now
-costs O(1), without recursion or a cache whose cost depends on repeated pairs.
-Function-local jump filtering and expression-source diagnostic labels retain
-the round-1 contract. The generated regression checks both repeated deepest
-sources and distinct sources at each nesting level, up to 32,768 expressions.
-A test-only work counter replaces noisy timing assertions; the original walk
-failed at depth 128 with 8,384 checks against a bound of 256.
-The interval query performs exactly one check per goto: 32,768 checks for
-each depth-32,768 pattern. Existing rejected-entry and legal-jump tests pass.
 
 The scalar builtin execution table now covers conversion-changing operands
 for all 18 fixed-signature overflow builtins: signed/unsigned add, subtract
@@ -1336,52 +1396,6 @@ benchmarking-internals configurations with -D warnings, and git diff --check.
 The final all-target run includes the backward jump into a closed sibling
 expression regression. The plain CLI was rebuilt after feature-enabled checks.
 
-### PR #41 round-3 corrections (2026-10-13)
-
-A statement expression returns its tail expression statement's converted value:
-arrays and function designators decay, lvalues lose their qualifiers and value
-category, and bit-field identity does not escape. Struct/union results are values;
-empty blocks, void expressions and other endings remain void. The ordinary
-expression-statement visit already records these conversions, so result typing
-uses the shared conversion classifier without adding duplicate records. Lowering
-now evaluates the tail with those records. Enclosing `sizeof` does not suppress
-the conversions inside the block, and block effects still prohibit folding the
-construct to its tail constant. C99 6.3.2.1p2-4 (printed p. 46, PDF p. 58) and
-[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
-
-Loop jump context is installed by a body continuation and removed before a
-`do` condition; `while` and `for` headers likewise retain only outer contexts.
-Switch traversal already installs its context after its controlling expression,
-so it needs no change. Invalid header jumps use the existing break/continue
-constraint diagnostics and preserve following declarations. Tests cover every
-header, expression and declaration initializers, and valid jumps to outer loops
-or switches, including continue through a nested switch. C99 6.8.6.2p1 and
-6.8.6.3p1 (printed p. 138, PDF p. 150), extended by GCC Statement Exprs.
-
-The shared value and header-target fixtures run before/after bcc optimization
-and ABI lowering on Linux GNU and Windows GNU, and compare host native execution
-with bundled Clang at O0/O2. Semantic tests inspect categories and exact types;
-the header-jump diagnostic fixture pins complete rendered output. The previous
-positive test assigning to a statement-expression result was corrected to read
-its value, consistent with the independent Clang reference.
-
-Native-reference limitation: bundled Clang 23.1.1 crashes for outer-switch
-breaks from for initializers and a nested switch controlling expression. It
-also selects the inner loop for jumps from while/do conditions and for
-conditions/increments, even when an outer body exists; continue can loop
-forever. `CLANG_HEADER_REFERENCE` excludes those 15 cases from Clang alone,
-retaining the six for-initializer and switch-header jumps to an outer loop.
-All 21 cases execute in bcc against literal results and, when GCC is available,
-an independent GCC O0/O2 reference. The installed GCC passes all 21 at both
-levels. No compiler or LLVM-tree change was made for these upstream failures.
-
-Validation passed: `cargo test --all-targets`, the 26 feature-enabled allocation
-tests, nightly formatting, Clippy with warnings denied in debug, release and
-benchmarking-internals configurations, `git diff --check`, and
-`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`. The plain CLI was rebuilt
-last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
-and exits with status 1, without an internal lowering error. Shared LLVM trees
-were preserved; no staging or commits were performed.
 ### PR #41 round-5 constant-argument audit (2026-10-13)
 
 Object-size modes now convert their ICE value to the target's `int` before
@@ -1509,3 +1523,138 @@ fixtures returned zero with GCC and Clang at O0/O2. Linux native execution
 was unavailable because WSL returned access denied. Shared LLVM junctions
 were preserved, and nothing was staged or committed. The whole-file commit
 plan is `target/commit-plan.md`; check logs are under `target/round6/`.
+
+
+### Runtime array metadata consumed by lowering (2026-10-13)
+
+`ArrayBound::Variable` retains a unique bound index into `Types::runtime_bounds`,
+whose entries are typed expression references. Distinct array derivations keep
+distinct identities even when their element types match. `Parameter::original`
+and `FunctionRecord::parameter_types` preserve parameter array types before
+adjustment, allowing the middle end to execute bounds on function entry.
+Lowering evaluates each retained bound at its declaration, saves its extent,
+and implements dynamic storage, strides, runtime sizeof and lifetime cleanup.
+The retained control graph rejects jumps into VM declaration regions, including
+typedefs and pointers to VLAs; those protection regions have no stack cleanup.
+C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.9.1p10, p. 142;
+PDF p. 154; §6.8.6.1p1, p. 137; PDF p. 149.
+## 2026-10-13: Torture representation types and constant forms
+
+GNU `packed`, `aligned` and scalar `mode` now retain concrete types and layouts.
+Packed enums select the smallest compatible integer representation. Alignment
+belongs to the completed declarator, including arrays and pointers; aligned
+typedefs can weaken their alignment, while ordinary object declarations cannot.
+Record and member packing retain the original member types for ABI classification
+and lower the guaranteed alignment of member accesses and initializer stores.
+`_Alignas` operands are analyzed before declaration completion, with C11
+§6.7.5p2-6 constraints (printed p. 127; PDF p. 145). GNU forms continue to obey
+the existing extension policy, including `Deny` in GNU dialects.
+
+GNU union casts require an exactly compatible member type and produce a union
+rvalue. GNU range designators require ordered nonnegative integer constant
+endpoints within bounds, infer incomplete array bounds from the upper endpoint,
+and retain once-only expression evaluation. Existing `typeof`, type compatibility
+and `offsetof` queries consume these retained types without a separate feature
+implementation. Floating sign, infinity and sign-copy builtins retain signatures,
+operand constraints and constant results, preserving signed zero and NaN payloads.
+
+Decisions: use explicit arena-backed work stacks and retained type-handle
+alignment, existing scalar/memory IR, and the shared byte/relocation initializer
+representation. Do not add stack introspection, nonlocal jumps, argument replay,
+label relocation, inline assembly, vector or complex lowering here. The first
+four require backend/interpreter control or ABI subsystems; aggregate varargs
+and VLA lowering remain owned by the separate worktree. The dated corpus report
+in `docs/research/gcc-torture-execute-results.md` contains the exact inventory,
+counts, implementation references and validation evidence.
+
+### PR #42 round-1 layout and alignment repairs (2026-10-13)
+
+System V packed bit-fields honor explicit member alignment, including a
+one-byte request that starts a new byte. Packed union bit-fields occupy only
+the bytes their bits require. Microsoft allocation units remain unchanged;
+bundled Clang gives the aligned packed example size/alignment 4/4 on MinGW
+and 4/1 on MSVC, which ignores that member alignment. The Linux result is 8/4.
+These choices follow the [GCC packed and aligned attribute sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html)
+and C99 §6.7.2.1p10 (printed p. 102; PDF p. 114).
+
+Packed fields may straddle their declared storage slot. Lowering accesses
+exactly their occupied bytes and uses a sufficiently wide integer for their
+values; a 128-bit field reaching a seventeenth byte is assembled in value
+coordinates. Static initializers merge those bits without discarding neighboring
+fields, as required by C99 §6.7.8p19 (printed p. 127; PDF p. 139).
+
+Recognized `aligned` operands retain parsed expression syntax and use semantic
+ICE evaluation for `sizeof`, alignment queries, enum constants, casts and
+arithmetic (C99 §6.6p6, printed p. 95; PDF p. 107). Raw attribute tokens and
+provenance remain available; expression syntax and frame pools use arenas.
+`vector_size` keeps its existing token reducer. Multiple `_Alignas` specifiers
+combine into the strictest request before comparison with the original natural
+alignment. That comparison, and type operands, use size-independent array
+alignment for VLAs and VLA typedefs (C11 §6.7.5p4,p6, printed p. 127;
+PDF p. 145).
+
+Regressions in `src/lowering/tests/layout.rs` cover layout queries, interpreter
+execution on all four targets and native LLVM execution with and without its
+optimization passes. Semantic tests cover weakened VLA alignment, constraint
+diagnostics, following-declaration recovery and deeply nested alignment operands.
+Each reported finding was reproduced by a failing regression before its repair.
+Bundled Clang checked all four target triples. GCC 13.2 with
+`-mno-ms-bitfields` checked System V record rules at O0/O2 on the Windows host;
+Linux-native GCC execution was unavailable because WSL access was denied.
+
+## Type-site execution and aggregate alignment
+
+`Types::aggregate_value_layout` reads the completed nominal tag layout. Storage
+alignment retained on a declaration or aligned typedef does not change the
+aggregate argument's ABI layout, including variadic calls and `va_arg`.
+`Member::explicit_alignment` retains alignment written on the member's own
+attributes or `_Alignas`; inherited typedef alignment remains on its type.
+GNU packed layout uses only explicit member alignment to override packing.
+MSVC preserves Clang's inherited-alignment policy for ordinary packed members
+and its existing rule ignoring explicit alignment on packed bit-fields.
+
+`BoundSiteFacts` retains the base/resolved type and required `typeof` operand
+evaluations on each declaration and type-name syntax identity. The semantic
+`TypeofDone` continuation determines VM status from the canonical type graph,
+without array decay. Nested type operands compose already-retained site facts.
+Non-VM expression operands retain an empty evaluation list. Typedef uses have
+no original operand action: their extents are remembered, as required by
+C99 §6.7.5.2p5 (pp. 116-117; PDF pp. 128-129).
+
+Written sites retain only newly introduced runtime-bound identities, excluding
+inherited bounds from an evaluated typeof operand or typedef. Lowering executes
+the operand effects once before those new-bound actions. This preserves GCC's specifier-before-bound
+ordering even where Clang chooses the opposite order. `sizeof` type queries
+retain their evaluation mode separately: a constant `sizeof` suppresses type
+operand effects, including `typeof` of a pointer to VLA. Runtime VLA size queries
+execute the retained operand list.
+The new tables are arena-owned and keyed by syntax identity; provenance remains
+for diagnostics. Existing runtime-bound identities and extent SSA storage are
+unchanged. This is the minimal operand-evaluation part of the bound-site design,
+not the full proposed bound-action/formula migration.
+
+Address-taking uses `FunctionRecord::parameter_aliases` to share the memory
+requirement between prototype and body bindings before parameter storage is
+chosen (C99 §6.9.1p10, p. 142; PDF p. 154). Bound expressions and body
+expressions then address the same parameter object.
+
+## Shared expression effects and entry actions
+
+Semantic analysis produces one `ExpressionEffects` record per expression in
+child-before-parent order, with value-read and designation/effects-only purity.
+ICE eligibility remains separate from purity. Cast type-site actions are normalized
+into `expression_actions`; both the summary producer and value/effect-only lowering
+consume that same record. An evaluated VM typeof operand or new bound therefore
+prevents an overflow predicate from folding away its effects. Short-circuit and
+selected branches preserve conditional execution, and address-only operations keep
+their existing volatile distinctions. There are no per-query semantic purity caches
+or lowering-owned summary caches. Full sparse evaluation recipes remain M5 work.
+
+`FunctionRecord::parameter_sites` keeps entry actions in written order alongside
+original types and parameter aliases. Lowering initializes incoming parameters and
+aliases first, then runs each site's typeof operand evaluations and newly introduced
+bounds before the body. Prototype-only declarations do not execute entry actions.
+This is the required M2 slice; occurrence IDs and runtime-size formula graphs remain
+future work. C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
+[GCC Typeof](https://gcc.gnu.org/onlinedocs/gcc/Typeof.html) and
+[GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).

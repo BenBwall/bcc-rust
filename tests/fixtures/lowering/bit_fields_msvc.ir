@@ -13,7 +13,7 @@ block0(v0: ptr):
     v5 = iconst.i16 511
     v6 = and.i16 v4, v5
     v7 = trunc.i8 v6
-    store.i8 v7, v2, align 1
+    store.i8 v7, v2, align 4
     v8 = iconst.i16 8
     v9 = lshr.i16 v6, v8
     v10 = trunc.i8 v9
@@ -37,18 +37,18 @@ block0(v0: ptr):
     v27 = iconst.i8 -2
     v28 = iconst.i8 15
     v29 = and.i8 v27, v28
-    v30 = load.i8 v24, align 1
+    v30 = load.i8 v24, align 2
     v31 = freeze.i8 v30
     v32 = iconst.i8 -16
     v33 = and.i8 v31, v32
     v34 = or.i8 v33, v29
-    store.i8 v34, v24, align 1
+    store.i8 v34, v24, align 2
     v35 = iconst.i8 4
     v36 = shl.i8 v29, v35
     v37 = iconst.i8 4
     v38 = ashr.i8 v36, v37
     v39 = sext.i16 v38
-    v40 = load.i8 v0, align 1
+    v40 = load.i8 v0, align 4
     v41 = iconst.i8 5
     v42 = shl.i8 v40, v41
     v43 = iconst.i8 5
@@ -56,7 +56,7 @@ block0(v0: ptr):
     v45 = sext.i32 v44
     v46 = iconst.i64 4
     v47 = ptr_add inbounds v0, v46
-    v48 = load.i16 v47, align 2
+    v48 = load.i16 v47, align 4
     v49 = iconst.i16 7
     v50 = shl.i16 v48, v49
     v51 = iconst.i16 7
@@ -65,7 +65,7 @@ block0(v0: ptr):
     v54 = iadd.i32 nsw v45, v53
     v55 = iconst.i64 8
     v56 = ptr_add inbounds v0, v55
-    v57 = load.i8 v56, align 1
+    v57 = load.i8 v56, align 4
     v58 = iconst.i8 6
     v59 = shl.i8 v57, v58
     v60 = iconst.i8 6
@@ -74,7 +74,7 @@ block0(v0: ptr):
     v63 = iadd.i32 nsw v54, v62
     v64 = iconst.i64 10
     v65 = ptr_add inbounds v0, v64
-    v66 = load.i8 v65, align 1
+    v66 = load.i8 v65, align 2
     v67 = iconst.i8 4
     v68 = shl.i8 v66, v67
     v69 = iconst.i8 4

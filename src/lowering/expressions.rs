@@ -264,7 +264,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     otherwise,
                 });
             },
-            | E::SizeofType(_) | E::SizeofExpr(_) | E::AlignofType(_) | E::AlignofExpr(_) =>
+            | E::SizeofType(_) => {
+                let site = self.unit.sema.size_query_site(expression).ok_or_else(|| {
+                    LoweringError::missing("sizeof type-site facts are not retained", source)
+                })?;
+                let object = site.ty;
+                self.tasks.push(Task::Sizeof(object, info.ty, source));
+                let mut tasks = ArenaVec::new_in(self.scratch);
+                Self::prepare_site_tasks(site, &mut tasks);
+                self.prepare_bound_tasks(site.bounds, &mut tasks);
+                self.push_all(&tasks);
+            },
+            | E::SizeofExpr(operand) => {
+                let object = self.info(operand)?.ty;
+                self.tasks.push(Task::Sizeof(object, info.ty, source));
+                self.tasks.push(Task::Discard);
+                self.tasks.push(Task::EvaluateRaw(operand));
+            },
+            | E::AlignofType(_) | E::AlignofExpr(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::VariableLengthArray,
                     source,
@@ -285,13 +302,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::EvaluateRaw(c.condition_expression));
             },
             | E::StatementExpression(statement) =>
-                self.statement_expression(statement, info.ty, super::StatementMode::Value),
+                self.statement_expression(statement, info.ty, super::StatementMode::Value)?,
             | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
                 )),
         }
+        self.prepare_expression_actions(expression)?;
         Ok(())
     }
 
@@ -356,6 +374,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => self.call(function_expression, arguments.len(), info, source)?,
             | E::DirectMember { .. } | E::IndirectMember { .. } => {
                 let base = self.pop();
+                let base_ty = base.ty;
                 let field = self.unit.sema.selected_field(expression).ok_or_else(|| {
                     LoweringError::missing("a member access has no field", source)
                 })?;
@@ -369,27 +388,61 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             source,
                         )),
                 };
+                let guaranteed = info.place_alignment().ok_or_else(|| {
+                    LoweringError::missing("a member access has no place alignment", source)
+                })?;
+                self.member_base(base, base_ty, source)?;
+                let address = self.offset_address(base, field.offset);
+                let align = self.place_alignment(
+                    address,
+                    Align::from_bytes(u64::from(guaranteed)).unwrap_or(Align::BYTE),
+                );
+                self.retain_alignment(address, align);
+                let access_ty = info.ty;
                 let place = if let Some(width) = field.width {
                     let bits = BitFieldBits {
                         bit_offset: field.bit_offset,
                         width,
                     };
-                    let bit_field = self.bit_field(field.ty, field.offset, bits, source)?;
-                    Place::BitField(self.offset_address(base, field.offset), bit_field)
+                    let bit_field = self.bit_field(access_ty, field.offset, bits, source)?;
+                    Place::BitField(address, bit_field)
                 } else {
-                    Place::Memory(self.offset_address(base, field.offset))
+                    Place::Memory(address)
                 };
                 if rvalue {
                     // A member of a structure rvalue is not an lvalue
                     // (§6.5.2.3p3), so it is read at once.
-                    let item = self.read(place, info.ty, info.ty.unqualified(), source)?;
+                    let item = self.read(place, access_ty, info.ty.unqualified(), source)?;
                     self.operands.push(item);
                 } else {
-                    self.push_item(Operand::Place(place), info.ty);
+                    self.push_item(Operand::Place(place), access_ty);
                 }
             },
             | E::Cast { .. } => {
                 let item = self.pop();
+                if let Some(member) = info.operation_type {
+                    let layout = types::layout(&self.unit.sema.types, info.ty)
+                        .map_err(|kind| at(kind, source))?;
+                    let address = self.fresh_object(
+                        layout.size,
+                        super::alignment::storage_alignment(&self.unit.sema.types, info.ty)
+                            .map_err(|kind| at(kind, source))?,
+                        source,
+                    )?;
+                    // GCC Cast-to-Union: this place is backed by the union
+                    // temporary, whose guarantee may be weaker than the
+                    // member's. <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
+                    _ = self.write(
+                        Item {
+                            operand: Operand::Place(Place::Memory(address)),
+                            ty:      member,
+                        },
+                        item,
+                        source,
+                    )?;
+                    self.push_item(Operand::Aggregate(address), info.ty);
+                    return Ok(());
+                }
                 let operand = if repr(&self.unit.sema.types, info.ty)
                     .map_err(|kind| at(kind, source))?
                     == Repr::Void
@@ -766,7 +819,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Some(&param)
                 if self.draft.value_type(param) == Type::Ptr
                     && repr(&self.unit.sema.types, ty) == Ok(Repr::Aggregate) =>
-                Operand::Aggregate(param),
+            // Control joins may select storage with different guarantees.
+            {
+                self.retain_alignment(param, Align::BYTE);
+                Operand::Aggregate(param)
+            },
             | Some(&param) => Operand::Value(param),
         };
         self.push_item(operand, ty);
@@ -869,9 +926,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let b = self.value(right, source)?;
                 let b = self.convert(Opcode::Ptrtoint, Type::I64, b);
                 let mut difference = self.binary_inst(Opcode::Isub, InstFlags::empty(), a, b);
-                let size = self.element_size(left.ty, source)?;
-                if size != 1 {
-                    let size = self.iconst(Type::I64, i128::from(size));
+                if self.static_element_size(left.ty) != Some(1) {
+                    let size = self.element_size(left.ty, source)?;
                     difference = self.binary_inst(Opcode::Sdiv, InstFlags::EXACT, difference, size);
                 }
                 let result_ty = self.value_type(ty, source)?;
@@ -1069,15 +1125,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(self.binary_inst(Opcode::Xor, InstFlags::empty(), value, one))
             },
             | Repr::Pointer => {
-                let size = self.element_size(item.ty, source)?;
-                let offset = self.iconst(
-                    Type::I64,
+                let offset = if let Some(size) = self.static_element_size(item.ty) {
+                    self.iconst(
+                        Type::I64,
+                        if increment {
+                            i128::from(size)
+                        } else {
+                            -i128::from(size)
+                        },
+                    )
+                } else {
+                    let size = self.element_size(item.ty, source)?;
                     if increment {
-                        i128::from(size)
+                        size
                     } else {
-                        -i128::from(size)
-                    },
-                );
+                        let zero = self.iconst(Type::I64, 0);
+                        self.binary_inst(Opcode::Isub, InstFlags::empty(), zero, size)
+                    }
+                };
                 Operand::Value(self.ptr_add(value, offset))
             },
             | Repr::Float { ty } => {
@@ -1131,7 +1196,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let source = expression.source_vectors;
         let item = self.pop();
         let operand = if self.repr(item.ty, source)? == Repr::Aggregate {
-            Operand::Aggregate(self.copy_argument(item, source)?)
+            self.copy_argument(item, source)?
         } else {
             item.operand
         };
@@ -1195,23 +1260,27 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             items.len()
         };
         let variadic = open_external || (prototype && variadic);
-        for item in &items[fixed..] {
-            if self.repr(item.ty, source)? == Repr::Aggregate {
-                return Err(LoweringError::unsupported(
-                    Construct::VariadicAggregate,
-                    source,
-                ));
-            }
-        }
-        let signature = self
+        let described = items[fixed..]
+            .iter()
+            .any(|item| repr(&self.unit.sema.types, item.ty) == Ok(Repr::Aggregate));
+        let mut signature = self
             .unit
             .signature_of(
-                items[..fixed].iter().map(|item| item.ty),
+                items[..if described { items.len() } else { fixed }]
+                    .iter()
+                    .map(|item| item.ty),
                 result,
                 variadic,
                 self.scratch,
             )
             .map_err(|kind| at(kind, source))?;
+        if described {
+            signature.variadic_fixed = Some(
+                u32::try_from(fixed + usize::from(signature.result_param().is_some()))
+                    .map_err(|_| LoweringError::missing("too many call arguments", source))?,
+            );
+            signature.variadic_noundef = false;
+        }
         let sig = self.unit.module.intern(signature);
         let mut args = ArenaVec::with_capacity_in(count + 1, self.scratch);
         let mut result_object = None;
@@ -1261,44 +1330,36 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// A copy of the structure or union argument `item` in a fresh slot,
     /// which the callee receives as its parameter object.
     /// C99: §6.9.1 paragraph 10, p. 142; PDF p. 154.
-    fn copy_argument(&mut self, item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
-        let (Operand::Aggregate(from) | Operand::Place(Place::Memory(from)) | Operand::Value(from)) =
-            item.operand
-        else {
-            return Err(LoweringError::missing(
-                "a structure argument has no address",
-                source,
-            ));
-        };
+    fn copy_argument(
+        &mut self,
+        item: Item,
+        source: SourceVectors,
+    ) -> Result<Operand, LoweringError> {
         let layout =
             types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;
-        let align = types::align(layout);
+        let align = super::alignment::storage_alignment(&self.unit.sema.types, item.ty)
+            .map_err(|kind| at(kind, source))?;
+        let (from, source_align) = match item.operand {
+            | Operand::Aggregate(from) => (from, self.place_alignment(from, Align::BYTE)),
+            | Operand::Place(Place::Memory(from)) | Operand::Value(from) => (from, align),
+            | _ =>
+                return Err(LoweringError::missing(
+                    "a structure argument has no address",
+                    source,
+                )),
+        };
         let copy = self.fresh_object(layout.size, align, source)?;
         let size = self.iconst(Type::I64, i128::from(layout.size));
         _ = self.draft.push(
-            Op::Inst(InstData::MemoryRange {
+            self.memory_op(InstData::MemoryRange {
                 opcode: Opcode::Copy,
-                flags: InstFlags::empty(),
-                align,
-                args: [copy, from, size],
+                flags:  InstFlags::empty(),
+                align:  source_align,
+                args:   [copy, from, size],
             }),
             None,
         );
-        Ok(copy)
-    }
-
-    /// The address of a fresh stack slot of `size` bytes.
-    pub(super) fn fresh_object(
-        &mut self,
-        size: u64,
-        align: Align,
-        source: SourceVectors,
-    ) -> Result<Value, LoweringError> {
-        let size = u32::try_from(size).map_err(|_| {
-            LoweringError::missing("an automatic object is larger than 4 GiB", source)
-        })?;
-        let slot = self.draft.create_slot(size, align);
-        Ok(self.inst(InstData::StackAddr { slot }, Type::Ptr))
+        Ok(Operand::Aggregate(copy))
     }
 
     /// The function binding a callee names directly, if it is an
@@ -1368,37 +1429,50 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
         let base = self.value(pointer, source)?;
-        let size = i128::from(self.element_size(pointer.ty, source)?);
         let signed = self.repr(index.ty, source)?.signed();
         let index = self.value(index, source)?;
-        let offset = if let Some(constant) = self.draft.constant(index) {
-            let constant =
-                self.cast_constant(constant, self.draft.value_type(index), signed, Type::I64);
-            let scaled = if subtract {
-                -constant * size
+        if let Some(size) = self.static_element_size(pointer.ty) {
+            let stride = size;
+            let size = i128::from(size);
+            let offset = if let Some(constant) = self.draft.constant(index) {
+                let constant =
+                    self.cast_constant(constant, self.draft.value_type(index), signed, Type::I64);
+                let scaled = if subtract {
+                    -constant * size
+                } else {
+                    constant * size
+                };
+                if scaled == 0 {
+                    return Ok(base);
+                }
+                self.iconst(Type::I64, scaled)
             } else {
-                constant * size
+                let wide = self.extend(index, signed, Type::I64);
+                let scaled = if size == 1 {
+                    wide
+                } else {
+                    let size = self.iconst(Type::I64, size);
+                    self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size)
+                };
+                if subtract {
+                    let zero = self.iconst(Type::I64, 0);
+                    self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
+                } else {
+                    scaled
+                }
             };
-            if scaled == 0 {
-                return Ok(base);
-            }
-            self.iconst(Type::I64, scaled)
+            return self.indexed_address(base, offset, pointer.ty, Some(stride), source);
+        }
+        let size = self.element_size(pointer.ty, source)?;
+        let wide = self.extend(index, signed, Type::I64);
+        let scaled = self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size);
+        let offset = if subtract {
+            let zero = self.iconst(Type::I64, 0);
+            self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
         } else {
-            let wide = self.extend(index, signed, Type::I64);
-            let scaled = if size == 1 {
-                wide
-            } else {
-                let size = self.iconst(Type::I64, size);
-                self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size)
-            };
-            if subtract {
-                let zero = self.iconst(Type::I64, 0);
-                self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
-            } else {
-                scaled
-            }
+            scaled
         };
-        Ok(self.ptr_add(base, offset))
+        self.indexed_address(base, offset, pointer.ty, None, source)
     }
 
     /// A pointer comparison operand: a pointer, or an integer (in practice
@@ -1426,13 +1500,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// The size of the element a pointer or array type designates.
-    fn element_size(&self, pointer: TypeId, source: SourceVectors) -> Result<u64, LoweringError> {
-        let types = &self.unit.sema.types;
-        let element = types::target_type(types, pointer)
+    fn static_element_size(&self, pointer: TypeId) -> Option<u64> {
+        let element = types::target_type(&self.unit.sema.types, pointer)?;
+        self.unit
+            .sema
+            .types
+            .layout(element)
+            .map(|layout| layout.size)
+    }
+
+    /// The saved runtime stride for a variably modified pointer or array.
+    fn element_size(
+        &mut self,
+        pointer: TypeId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let element = types::target_type(&self.unit.sema.types, pointer)
             .ok_or_else(|| LoweringError::missing("pointer arithmetic on a non-pointer", source))?;
-        Ok(types::layout(types, element)
-            .map_err(|kind| at(kind, source))?
-            .size)
+        self.runtime_size(element, source)
     }
 
     fn merge_params(

@@ -31,7 +31,7 @@ block0(v0: i32):
     v11 = stack_addr slot2
     v12 = iconst.i8 0
     v13 = iconst.i64 4
-    fill v11, v12, v13, align 1
+    fill v11, v12, v13, align 4
     v14 = stack_addr slot2
     v15 = iconst.i64 4
     v16 = ptr_add inbounds v14, v15

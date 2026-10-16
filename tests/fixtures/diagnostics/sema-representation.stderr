@@ -1,0 +1,41 @@
+error: invalid alignment attribute
+ --> sema-representation.c:1:7
+  |
+1 | int a __attribute__((aligned(3)));
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^ alignment must be a power-of-two constant
+  |
+  = note: GCC aligned requires a positive integer constant power of two representable by the target
+
+error: invalid mode attribute
+ --> sema-representation.c:2:19
+  |
+2 | typedef float bad __attribute__((mode(QI)));
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^ invalid scalar machine mode
+  |
+  = note: GCC mode requires an eligible scalar type and a supported scalar machine mode
+
+error: invalid alignment specifier
+ --> sema-representation.c:3:1
+  |
+3 | _Alignas(1) int b;
+  | ^^^^^^^^^^^ invalid alignment specifier
+  |
+  = note: C11 §6.7.5p2-6: alignment requires an eligible object declaration and must be zero or a valid alignment that does not weaken its natural alignment
+
+error: invalid operand or target type for cast
+ --> sema-representation.c:5:20
+  |
+5 | void f(void) { U u=(U)1.0; }
+  |                    ^^^ invalid conversion
+  |
+  = note: C99 §6.5.4p2-4: casts require scalar operands and targets except conversion to void; floating and pointer types cannot be interconverted
+
+error: designator does not identify an available subobject
+ --> sema-representation.c:6:18
+  |
+6 | int ranges[2] = {[2 ... 1]=1};
+  |                  ^^^^^^^^^^ no such subobject
+  |
+  = note: C99 §6.7.8p6-7: array indices are nonnegative integer constants within bounds and field designators name record members
+
+5 errors generated.

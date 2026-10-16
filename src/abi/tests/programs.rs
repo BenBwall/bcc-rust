@@ -37,6 +37,20 @@ use crate::{
 /// structures too large for registers.
 pub(crate) const PROGRAMS: &[Program] = &[
     Program {
+        name: "aggregate_varargs",
+        source: "struct S { int x; }; struct M { int i; double d; }; struct D { double a,b; }; struct B { int a[6]; }; union U { int i; double d; };
+static int take(int n, ...) { __builtin_va_list ap, cp; __builtin_va_start(ap,n);
+ for(int i=0;i<n;i++) { (void)__builtin_va_arg(ap,long long); (void)__builtin_va_arg(ap,double); }
+ __builtin_va_copy(cp,ap);
+ struct S s=__builtin_va_arg(ap,struct S); struct M m=__builtin_va_arg(ap,struct M); struct D d=__builtin_va_arg(ap,struct D); struct B b=__builtin_va_arg(ap,struct B); union U u=__builtin_va_arg(ap,union U); int end=__builtin_va_arg(ap,int);
+ struct S c=__builtin_va_arg(cp,struct S); __builtin_va_end(cp); __builtin_va_end(ap);
+ return s.x!=3 || c.x!=3 || m.i!=4 || m.d!=5.5 || d.a!=6.5 || d.b!=7.5 || b.a[0]!=8 || b.a[5]!=13 || u.d!=14.5 || end!=99;
+}
+int main(void) { struct S s={3}; struct M m={4,5.5}; struct D d={6.5,7.5}; struct B b={{8,9,10,11,12,13}}; union U u; u.d=14.5;
+ int (*p)(int,...)=take; return take(0,s,m,d,b,u,99) || p(8,1LL,1.,2LL,2.,3LL,3.,4LL,4.,5LL,5.,6LL,6.,7LL,7.,8LL,8.,s,m,d,b,u,99); }",
+        expected: 0,
+    },
+    Program {
         name: "aggregate_argument_snapshot",
         source: "struct S { int x; }; static struct S s; static int evaluations;
 static int mutate(void) { s.x = 2; return 0; }

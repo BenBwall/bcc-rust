@@ -66,6 +66,18 @@ impl Machine<'_, '_, '_> {
                     | _ => float_binary(opcode, ty, a, b)?,
                 }
             },
+            | InstData::DynAlloca { size, align, .. } => {
+                let RuntimeValue::Int(size) = self.value(size) else {
+                    return Err(Fault::Ub(UbKind::PoisonAddress));
+                };
+                let pointer = self.memory.allocate(
+                    super::memory::ObjectKind::Stack,
+                    truncate_u64(size),
+                    align,
+                )?;
+                self.dynamic_slots.push(pointer);
+                RuntimeValue::Ptr(pointer)
+            },
             | InstData::Unary { opcode, ty, arg } => {
                 let value = self.value(arg);
                 match opcode {
@@ -74,17 +86,25 @@ impl Machine<'_, '_, '_> {
                             .map_or(RuntimeValue::Poison, |bits| RuntimeValue::int(ty, bits)),
                         | _ => RuntimeValue::Poison,
                     },
-                    | Opcode::DynAlloca => {
-                        let RuntimeValue::Int(size) = value else {
-                            return Err(Fault::Ub(UbKind::PoisonAddress));
+                    | Opcode::StackRestore => {
+                        let RuntimeValue::Ptr(mark) = value else {
+                            return Err(UbKind::PoisonAddress.into());
                         };
-                        let pointer = self.memory.allocate(
-                            super::memory::ObjectKind::Stack,
-                            truncate_u64(size),
-                            crate::ir::Align::from_bytes(16).expect("default stack alignment"),
-                        )?;
-                        self.slots.push(pointer);
-                        RuntimeValue::Ptr(pointer)
+                        let position = usize::try_from(mark.address & u64::from(u32::MAX))
+                            .map_err(|_| UbKind::PoisonAddress)?;
+                        let frame = self.frame();
+                        if mark.address >> 32 != frame.activation
+                            || position < frame.dynamic_slots
+                            || position > self.dynamic_slots.len()
+                        {
+                            return Err(UbKind::PoisonAddress.into());
+                        }
+                        for &pointer in &self.dynamic_slots[position..] {
+                            self.memory
+                                .free(pointer.provenance.expect("stack allocation"));
+                        }
+                        self.dynamic_slots.truncate(position);
+                        return Ok(None);
                     },
                     | Opcode::Fneg => float_negate(ty, value)?,
                     | Opcode::Freeze if value.is_poison() => RuntimeValue::zero(ty),
@@ -138,6 +158,13 @@ impl Machine<'_, '_, '_> {
                 }
             },
             | InstData::Nullary {
+                opcode: Opcode::StackSave,
+                ..
+            } => RuntimeValue::Ptr(super::value::Pointer {
+                address:    (self.frame().activation << 32) | self.dynamic_slots.len() as u64,
+                provenance: None,
+            }),
+            | InstData::Nullary {
                 opcode: Opcode::Trap,
                 ..
             } => return Ok(Some(Termination::Aborted)),
@@ -181,8 +208,24 @@ impl Machine<'_, '_, '_> {
                 }
                 return Ok(None);
             },
+            | InstData::VaArgAggregate { sig, list } => {
+                let layout = self
+                    .module
+                    .signature(sig)
+                    .param_abi(0)
+                    .and_then(crate::ir::ParamAbi::layout)
+                    .expect("verified descriptor");
+                self.va_arg_aggregate(layout, self.value(list))?
+            },
             | InstData::Call { func, args } =>
-                return self.call(body, func, body.value_list(args), result, host),
+                return self.call(
+                    body,
+                    func,
+                    body.value_list(args),
+                    result,
+                    host,
+                    self.module.function_signature(func),
+                ),
             | InstData::CallIndirect { sig, args } => {
                 let (&callee, args) = body
                     .value_list(args)
@@ -222,7 +265,11 @@ impl Machine<'_, '_, '_> {
                         .iter()
                         .zip(args)
                         .all(|(&param, &arg)| param == body.value_type(arg));
-                if actual != expected && !open_host && !compatible_open_call {
+                if actual != expected
+                    && !variadic_match(actual, expected)
+                    && !open_host
+                    && !compatible_open_call
+                {
                     return Err(UbKind::SignatureMismatch.into());
                 }
                 for (index, &arg) in args.iter().enumerate() {
@@ -230,7 +277,7 @@ impl Machine<'_, '_, '_> {
                         return Err(UbKind::Noundef.into());
                     }
                 }
-                return self.call(body, func, args, result, host);
+                return self.call(body, func, args, result, host, expected);
             },
             | InstData::Jump { dest } => {
                 self.branch(body, dest);
@@ -271,4 +318,38 @@ impl Machine<'_, '_, '_> {
         }
         Ok(None)
     }
+}
+
+/// Call-site ABI descriptions after the ellipsis do not alter its function
+/// type.
+fn variadic_match(actual: crate::ir::Signature<'_>, expected: crate::ir::Signature<'_>) -> bool {
+    let fixed = actual.fixed_count();
+    actual.variadic
+        && expected.variadic
+        && fixed == expected.fixed_count()
+        && actual.params[..fixed] == expected.params[..fixed]
+        && actual.result == expected.result
+        && actual.result_extension == expected.result_extension
+        && actual.result_noundef == expected.result_noundef
+        && actual
+            .aggregates
+            .iter()
+            .filter(|p| (p.index as usize) < fixed)
+            .eq(expected
+                .aggregates
+                .iter()
+                .filter(|p| (p.index as usize) < fixed))
+        && actual
+            .extensions
+            .iter()
+            .filter(|p| (p.index as usize) < fixed)
+            .eq(expected
+                .extensions
+                .iter()
+                .filter(|p| (p.index as usize) < fixed))
+        && actual
+            .noundef
+            .iter()
+            .filter(|&&p| (p as usize) < fixed)
+            .eq(expected.noundef.iter().filter(|&&p| (p as usize) < fixed))
 }

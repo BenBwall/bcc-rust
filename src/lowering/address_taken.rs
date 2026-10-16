@@ -102,5 +102,16 @@ pub(super) fn find<'a>(
             _ = taken.insert(binding);
         }
     }
+    // Prototype bound expressions and body uses designate the same parameter
+    // object. Propagate the storage requirement before constructing any local.
+    // C99: §6.9.1p10, p. 142; PDF p. 154.
+    for function in sema.functions {
+        for &(prototype, body) in function.parameter_aliases {
+            if taken.contains(&prototype) || taken.contains(&body) {
+                _ = taken.insert(prototype);
+                _ = taken.insert(body);
+            }
+        }
+    }
     taken
 }

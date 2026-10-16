@@ -284,6 +284,10 @@ impl<'s> Draft<'s> {
         block
     }
 
+    pub(super) fn current(&self) -> Block {
+        self.current
+    }
+
     pub(super) fn switch_to(&mut self, block: Block) {
         self.current = block;
     }

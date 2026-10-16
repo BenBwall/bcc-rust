@@ -63,6 +63,7 @@ pub(super) struct Frame {
     pub(super) values:          usize,
     /// Where this frame's slot objects start in the slot stack.
     pub(super) slots:           usize,
+    pub(super) dynamic_slots:   usize,
     /// Where this frame's variadic arguments start, and how many there are.
     pub(super) varargs:         usize,
     pub(super) varargs_len:     usize,
@@ -110,7 +111,8 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             func,
             inst: body.block_insts(Block::new(0))[0],
         };
-        self.push_frame(func, None)
+        self.check_arguments(signature)
+            .and_then(|()| self.push_frame(func, None))
             .map_err(|fault| self.trap(fault, location))
     }
 
@@ -145,16 +147,28 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         args: &[Value],
         result: Option<Value>,
         host: &mut dyn Host,
+        signature: Signature<'ir>,
     ) -> Result<Option<Termination>, Fault> {
         self.arguments.clear();
         self.argument_types.clear();
-        for &arg in args {
+        self.argument_abis.clear();
+        for (index, &arg) in args.iter().enumerate() {
+            self.argument_abis.push(signature.param_abi(index));
             let value = self.value(arg);
             self.arguments.push(value);
             self.argument_types.push(body.value_type(arg));
         }
-        self.check_arguments(self.module.function_signature(func))?;
+        self.check_arguments(signature)?;
         let callee = self.module.function(func);
+        // Fixed parameter contracts also apply to an open call resolved to
+        // a prototype. Variadic contracts belong to the call site, whose
+        // aggregate register parts may legitimately contain padding poison.
+        let actual = self.module.function_signature(func);
+        for (index, &arg) in self.arguments.iter().take(actual.params.len()).enumerate() {
+            if actual.param_noundef(index) && arg.is_poison() {
+                return Err(UbKind::Noundef.into());
+            }
+        }
         if callee.body.is_some() {
             self.push_frame(func, result)?;
             return Ok(None);
@@ -211,7 +225,6 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
     /// copies. C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83 (parameter
     /// assignment).
     fn push_frame(&mut self, func: FuncId, caller_value: Option<Value>) -> Result<(), Fault> {
-        self.check_arguments(self.module.function_signature(func))?;
         if self.frames.len() >= self.limits.stack_depth {
             return Err(Fault::StackDepthLimit);
         }
@@ -228,7 +241,15 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             extra_types
                 .iter()
                 .copied()
-                .zip(extra_values.iter().copied()),
+                .zip(extra_values.iter().copied())
+                .enumerate()
+                .map(|(index, (ty, value))| {
+                    (
+                        ty,
+                        value,
+                        self.argument_abis.get(fixed + index).copied().flatten(),
+                    )
+                }),
         );
         let slots = self.slots.len();
         for (_, data) in body.stack_slots() {
@@ -276,6 +297,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             next: 0,
             values,
             slots,
+            dynamic_slots: self.dynamic_slots.len(),
             varargs,
             varargs_len: self.varargs.len() - varargs,
             va_backing: None,
@@ -346,6 +368,11 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 .free(slot.provenance.expect("slots have provenance"));
         }
         self.slots.truncate(frame.slots);
+        for &pointer in &self.dynamic_slots[frame.dynamic_slots..] {
+            self.memory
+                .free(pointer.provenance.expect("stack allocation"));
+        }
+        self.dynamic_slots.truncate(frame.dynamic_slots);
         self.values.truncate(frame.values);
         self.varargs.truncate(frame.varargs);
         if self.frames.is_empty() {
@@ -488,7 +515,9 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             frames: ArenaVec::new_in(arena),
             values: ArenaVec::new_in(arena),
             slots: ArenaVec::new_in(arena),
+            dynamic_slots: ArenaVec::new_in(arena),
             varargs: ArenaVec::new_in(arena),
+            argument_abis: ArenaVec::new_in(arena),
             arguments: ArenaVec::new_in(arena),
             argument_types: ArenaVec::new_in(arena),
             functions,

@@ -39,7 +39,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         mut ty: TypeId,
         chain: Option<&'tu super::SpecifierExtension<'tu>>,
+        storage_alignment: bool,
     ) -> TypeId {
+        let mut current = chain;
+        while let Some(item) = current {
+            if let super::SpecifierExtensionKind::Attributes(a) = item.kind {
+                ty = self.mode_attribute(ty, a);
+            }
+            current = item.next;
+        }
         for construction in [true, false] {
             let mut current = chain;
             while let Some(item) = current {
@@ -49,7 +57,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ty = if self.layout_attribute(a) {
                         self.types.unknown()
                     } else {
-                        self.vector_attribute(ty, a)
+                        self.vector_attribute(ty, a, storage_alignment)
                     };
                 }
                 current = item.next;
@@ -260,8 +268,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         mut ty: TypeId,
         a: &AttributeSpecifier<'tu>,
+        storage_alignment: bool,
     ) -> TypeId {
-        let tokens = a.tokens.as_slice();
+        let tokens = a.tokens;
         let mut bytes = None;
         let mut alignment = None;
         for (i, name) in attribute_names(a, self.context) {
@@ -273,10 +282,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .trim_end_matches('\0')
                         == "("
                 }) {
-                    // The parser retains attribute arguments as tokens. Resolve
-                    // integer literals and enum constants with a bounded
-                    // reducer.
-                    self.vector_attribute_integer(&tokens[i + 2..])
+                    if name == "aligned" {
+                        self.attribute_alignment(a, i)
+                    } else {
+                        // vector_size retains its bounded token reducer;
+                        // aligned shares semantic ICE evaluation.
+                        self.vector_attribute_integer(&tokens[i + 2..])
+                    }
                 } else if name == "aligned" {
                     Some(16)
                 } else {
@@ -379,9 +391,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     align,
                 })
                 .qualified(ty.qualifiers);
-        } else if alignment.is_some() {
-            // Non-vector alignment remains an explicitly unanalyzed layout.
-            return self.types.unknown();
+        } else if alignment.is_some() && storage_alignment {
+            let attributes = self.layout_attributes(a);
+            ty = self.align_declared_type(ty, attributes.alignment);
         }
         while let Some((kind, q)) = derived.pop() {
             let kind = match kind {
@@ -410,7 +422,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU extension: GCC manual, "Attribute Syntax".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
     /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
-    fn vector_attribute_integer(
+    pub(super) fn vector_attribute_integer(
         &self,
         tokens: &[super::super::preprocessing::Token],
     ) -> Option<u64> {
@@ -733,7 +745,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
 /// GNU extension: GCC manual, "Attribute Syntax".
 /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-fn attribute_names<'a>(
+pub(super) fn attribute_names<'a>(
     a: &'a AttributeSpecifier<'_>,
     context: &'a super::Context<'_>,
 ) -> impl Iterator<Item = (usize, &'a str)> {
@@ -761,7 +773,30 @@ fn attribute_names<'a>(
                 depth = depth.saturating_sub(1);
                 None
             },
-            | _ if depth == level => Some((i, spelling.trim_matches('_'))),
+            | _ if depth == level => {
+                let tokens = a.tokens;
+                let colon = |index: usize| {
+                    tokens
+                        .get(index)
+                        .is_some_and(|token| context.string_cache.at(token.contents) == ":")
+                };
+                // A namespace is not an attribute name. Unknown vendor
+                // attributes do not acquire GNU representation semantics.
+                if colon(i + 1)
+                    || i >= 3
+                        && colon(i - 1)
+                        && colon(i - 2)
+                        && context
+                            .string_cache
+                            .at(tokens[i - 3].contents)
+                            .trim_matches('_')
+                            != "gnu"
+                {
+                    None
+                } else {
+                    Some((i, spelling.trim_matches('_')))
+                }
+            },
             | _ => None,
         }
     })
@@ -777,7 +812,7 @@ pub(super) fn declared_type_attribute(
     a: &AttributeSpecifier<'_>,
     context: &super::Context<'_>,
 ) -> bool {
-    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned"))
+    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned" | "mode"))
 }
 
 pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Context<'_>) -> bool {

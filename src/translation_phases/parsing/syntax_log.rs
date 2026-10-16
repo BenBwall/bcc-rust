@@ -33,6 +33,7 @@ use super::{
             OffsetMember,
         },
         modern::{
+            AttributeArgument,
             AttributeSpecifier,
             ExtendedType,
             GenericAssociation,
@@ -117,6 +118,7 @@ pub(super) struct SyntaxLog<'tu> {
     extended_types:        Vec<&'tu ExtendedType<'tu>>,
     specifier_extensions:  Vec<&'tu SpecifierExtension<'tu>>,
     attributes:            Vec<&'tu AttributeSpecifier<'tu>>,
+    attribute_arguments:   Vec<&'tu AttributeArgument<'tu>>,
     generics:              Vec<&'tu GenericSelection<'tu>>,
     associations:          Vec<&'tu GenericAssociation<'tu>>,
     assertions:            Vec<&'tu StaticAssertion<'tu>>,
@@ -183,6 +185,7 @@ tree_nodes! {
     ExtendedType => extended_types,
     SpecifierExtension => specifier_extensions,
     AttributeSpecifier => attributes,
+    AttributeArgument => attribute_arguments,
     GenericSelection => generics,
     GenericAssociation => associations,
     StaticAssertion => assertions,

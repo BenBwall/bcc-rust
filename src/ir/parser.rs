@@ -391,14 +391,14 @@ impl Definitions {
             .position(|token| matches!(token.kind, TokenKind::RBrace | TokenKind::End))
             .map_or(cursor.tokens.len(), |offset| cursor.pos + offset);
         let tokens = &cursor.tokens[cursor.pos..end];
-        let definition = |index: usize| -> Option<(usize, u32)> {
+        let definition = |index: usize, header: bool| -> Option<(usize, u32)> {
             let token = tokens[index];
             let next = tokens.get(index + 1).map(|next| next.kind);
             match token.kind {
                 | TokenKind::Block(number) if token.line_start => Some((0, number)),
                 | TokenKind::Value(number)
                     if (token.line_start && next == Some(TokenKind::Equals))
-                        || next == Some(TokenKind::Colon) =>
+                        || (header && next == Some(TokenKind::Colon)) =>
                     Some((1, number)),
                 | TokenKind::Slot(number) if token.line_start && next == Some(TokenKind::Equals) =>
                     Some((2, number)),
@@ -406,8 +406,20 @@ impl Definitions {
             }
         };
         let mut counts = [0_usize; 3];
-        for index in 0..tokens.len() {
-            if let Some((kind, _)) = definition(index) {
+        let mut header = false;
+        for (index, token) in tokens.iter().enumerate() {
+            // A parameter list may span lines; only its closing delimiter
+            // (or the colon of a parameterless header) ends the header.
+            if token.line_start && matches!(token.kind, TokenKind::Block(_)) {
+                header = true;
+            } else if token.kind == TokenKind::RParen
+                || (token.kind == TokenKind::Colon
+                    && index > 0
+                    && matches!(tokens[index - 1].kind, TokenKind::Block(_)))
+            {
+                header = false;
+            }
+            if let Some((kind, _)) = definition(index, header) {
                 counts[kind] += 1;
             }
         }
@@ -416,8 +428,20 @@ impl Definitions {
             seen.resize(count, false);
             seen
         });
+        let mut header = false;
         for (index, &token) in tokens.iter().enumerate() {
-            let Some((kind, number)) = definition(index) else {
+            // A parameter list may span lines; only its closing delimiter
+            // (or the colon of a parameterless header) ends the header.
+            if token.line_start && matches!(token.kind, TokenKind::Block(_)) {
+                header = true;
+            } else if token.kind == TokenKind::RParen
+                || (token.kind == TokenKind::Colon
+                    && index > 0
+                    && matches!(tokens[index - 1].kind, TokenKind::Block(_)))
+            {
+                header = false;
+            }
+            let Some((kind, number)) = definition(index, header) else {
                 continue;
             };
             let slot = seen[kind]
@@ -504,16 +528,37 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             },
             | _ if opcode.is_conversion()
                 || opcode.is_bit_unary()
-                || opcode == Opcode::DynAlloca
                 || matches!(
                     opcode,
-                    Opcode::Fneg | Opcode::Freeze | Opcode::VaArg | Opcode::VaStart | Opcode::VaEnd
+                    Opcode::Fneg
+                        | Opcode::Freeze
+                        | Opcode::VaArg
+                        | Opcode::VaStart
+                        | Opcode::VaEnd
+                        | Opcode::StackRestore
                 ) =>
                 InstData::Unary {
                     opcode,
                     ty,
                     arg: self.value()?,
                 },
+            | Opcode::DynAlloca => {
+                let size = self.value()?;
+                let align = if self.cursor.eat(TokenKind::Comma) {
+                    self.cursor.align()?
+                } else {
+                    // Preserve legacy text's default stack alignment.
+                    Align::from_bytes(16).unwrap()
+                };
+                InstData::DynAlloca { ty, size, align }
+            },
+            | Opcode::VaArgAggregate => {
+                let list = self.value()?;
+                self.cursor.expect(TokenKind::Colon, "`:`")?;
+                let signature = self.cursor.signature(self.scratch)?;
+                let sig = self.builder.intern(signature);
+                InstData::VaArgAggregate { sig, list }
+            },
             | Opcode::Icmp => {
                 let token = self.cursor.next();
                 let cond = match token.kind {
@@ -559,7 +604,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 self.builder.constant(opcode, ty, bits)
             },
             | Opcode::Poison => InstData::Nullary { opcode, ty },
-            | Opcode::Null | Opcode::Trap => InstData::Nullary {
+            | Opcode::Null | Opcode::Trap | Opcode::StackSave => InstData::Nullary {
                 opcode,
                 ty: Type::Ptr,
             },
@@ -717,6 +762,9 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
         let TokenKind::Slot(number) = token.kind else {
             unreachable!("the caller saw a slot");
         };
+        if number as usize >= self.counts.slots {
+            return Err(token.error(ParseErrorKind::NotDense(token.text)));
+        }
         self.cursor.expect(TokenKind::Equals, "`=`")?;
         self.cursor
             .expect(TokenKind::Ident("stack_slot"), "`stack_slot`")?;
@@ -740,6 +788,9 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
         if !token.line_start {
             return Err(token.expected("a block header at the start of a line"));
         }
+        if number as usize >= self.counts.blocks {
+            return Err(token.error(ParseErrorKind::NotDense(token.text)));
+        }
         let block = Block::new(number as usize);
         if self.cursor.eat(TokenKind::LParen) {
             let mut first = true;
@@ -759,11 +810,13 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
         Ok(())
     }
 
-    /// The value a definition names; the scan guarantees it is in range.
+    /// Checks definition indices again at the untrusted-text boundary.
     fn defined_value(&mut self) -> Result<Value, ParseError<'t>> {
         let token = self.cursor.next();
         match token.kind {
-            | TokenKind::Value(number) => Ok(Value::new(number as usize)),
+            | TokenKind::Value(number) if (number as usize) < self.counts.values =>
+                Ok(Value::new(number as usize)),
+            | TokenKind::Value(_) => Err(token.error(ParseErrorKind::NotDense(token.text))),
             | _ => Err(token.expected("a value")),
         }
     }
@@ -996,17 +1049,22 @@ impl<'t> Cursor<'_, 't> {
         let mut aggregates = ArenaVec::new_in(scratch);
         let mut extensions = ArenaVec::new_in(scratch);
         let mut variadic = false;
+        let mut variadic_fixed = None;
         let mut noundef = ArenaVec::new_in(scratch);
         let mut variadic_noundef = false;
         while !self.eat(TokenKind::RParen) {
-            if variadic {
-                return Err(self.peek().expected("`)` after `...`"));
-            }
-            if !params.is_empty() {
+            if !params.is_empty() || variadic {
                 self.expect(TokenKind::Comma, "`,` or `)`")?;
             }
             if self.eat(TokenKind::Ellipsis) {
+                if variadic {
+                    return Err(self.peek().expected("one ellipsis"));
+                }
                 variadic = true;
+                variadic_fixed = Some(
+                    u32::try_from(params.len())
+                        .map_err(|_| self.peek().error(ParseErrorKind::NumberTooLarge))?,
+                );
                 variadic_noundef = self.eat(TokenKind::Ident("noundef"));
             } else {
                 params.push(self.ty()?);
@@ -1039,6 +1097,7 @@ impl<'t> Cursor<'_, 't> {
             params: scratch.alloc_slice_copy(&params),
             result,
             variadic,
+            variadic_fixed: variadic_fixed.filter(|&n| n as usize != params.len()),
             aggregates: scratch.alloc_slice_copy(&aggregates),
             extensions: scratch.alloc_slice_copy(&extensions),
             result_extension,

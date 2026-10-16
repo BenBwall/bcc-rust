@@ -40,6 +40,46 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn aggregate_fetch_abi_refusal_has_owner_and_source_location() {
+        let source = "struct Huge { char bytes[4294967296ULL]; };\nint fetch(int last, ...) \
+                      {\n__builtin_va_list ap; \
+                      __builtin_va_start(ap,last);\n__builtin_va_arg(ap,struct Huge); \
+                      __builtin_va_end(ap); return 0;\n}\n";
+        for (source, owner, line) in [
+            (source.to_owned(), "fetch", 2),
+            (
+                source.replace(
+                    "int fetch(int last, ...) {",
+                    "int fetch(int last, ...) __asm__(\"alias\");\nint fetch(int last, ...) {",
+                ),
+                "alias",
+                3,
+            ),
+        ] {
+            for target in [
+                "x86_64-unknown-linux-gnu",
+                "x86_64-w64-windows-gnu",
+                "x86_64-pc-windows-msvc",
+            ] {
+                for optimize in ["--opt=none", "--opt=bcc"] {
+                    let output = bcc(
+                        &source,
+                        &[&format!("--target={target}"), optimize, "--emit=ir-abi"],
+                    );
+                    let stderr = text(&output.stderr);
+                    assert_eq!(output.status.code(), Some(1), "{stderr}");
+                    assert!(
+                        stderr.contains(&format!("@{owner}: aggregate size 4294967296")),
+                        "{stderr}"
+                    );
+                    assert!(stderr.contains(&format!("<input>:{line}:5")), "{stderr}");
+                    assert_eq!(output.stdout.as_slice(), b"");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn inline_modes_emit_bodies_and_run_in_both_back_ends() {
         let Some(target) = host() else {
             return;
@@ -538,7 +578,7 @@ mod tests {
                 false,
             ),
             (
-                "int main(void){int n=2;int a[n];return 0;}",
+                "int main(void){__asm__(\"nop\");return 0;}",
                 vec!["--emit=ir"],
                 1,
                 false,
@@ -803,24 +843,24 @@ mod tests {
 
     #[test]
     fn unsupported_constructs_and_errors_fail_code_generation_only() {
-        let vla = "int main(void) {\n  int n = 3;\n  int a[n];\n  a[0] = 1;\n  return a[0];\n}\n";
+        let source = "int main(void) {\n  __asm__(\"nop\");\n  return 0;\n}\n";
         for flags in [
             &["--interpret"][..],
             &["--emit=ir"][..],
             &["--emit=llvm"][..],
         ] {
-            let output = bcc(vla, flags);
+            let output = bcc(source, flags);
             assert_eq!(output.status.code(), Some(1), "{flags:?}");
             assert!(output.stdout.is_empty(), "{flags:?}");
             let stderr = text(&output.stderr);
             assert!(
-                stderr.contains("error: not yet supported by lowering: variable length arrays"),
+                stderr.contains("error: not yet supported by lowering: inline assembly"),
                 "{stderr}"
             );
             assert!(stderr.contains("1 error generated."), "{stderr}");
         }
         // Without a back end, the program is valid C and nothing is lowered.
-        let output = bcc(vla, &[]);
+        let output = bcc(source, &[]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
 

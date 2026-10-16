@@ -495,7 +495,9 @@ impl<'b, 's> Draft<'b, 's> {
                 | InstData::Store { args, .. } => args.into_iter().for_each(operand),
                 | InstData::Select { args, .. } | InstData::MemoryRange { args, .. } =>
                     args.into_iter().for_each(operand),
-                | InstData::Unary { arg, .. } => operand(arg),
+                | InstData::Unary { arg, .. }
+                | InstData::VaArgAggregate { list: arg, .. }
+                | InstData::DynAlloca { size: arg, .. } => operand(arg),
                 | InstData::Load { addr, .. } => operand(addr),
                 | InstData::Call { args, .. } | InstData::CallIndirect { args, .. } => self
                     .call_operands(inst, args)

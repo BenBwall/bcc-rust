@@ -201,12 +201,16 @@ struct Machine<'m, 'ir, 'a> {
     frames:         ArenaVec<'a, machine::Frame>,
     /// Every frame's values, indexed from the frame's base by `Value`.
     values:         ArenaVec<'a, RuntimeValue>,
+    /// Dynamic objects released by stack restoration or return.
+    dynamic_slots:  ArenaVec<'a, Pointer>,
     /// Every frame's stack-slot objects, from the frame's base.
     slots:          ArenaVec<'a, Pointer>,
     /// Every frame's variadic arguments with their types.
-    varargs:        ArenaVec<'a, (Type, RuntimeValue)>,
+    varargs:        ArenaVec<'a, (Type, RuntimeValue, Option<crate::ir::ParamAbi<'ir>>)>,
     /// The arguments of the call or edge being made.
     arguments:      ArenaVec<'a, RuntimeValue>,
+    /// The ABI descriptions of a call's variadic objects.
+    argument_abis:  ArenaVec<'a, Option<crate::ir::ParamAbi<'ir>>>,
     /// The types of a call's arguments, for its variadic ones.
     argument_types: ArenaVec<'a, Type>,
     /// The address of each function, by `FuncId`.

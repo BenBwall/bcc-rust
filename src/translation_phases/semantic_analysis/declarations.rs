@@ -110,12 +110,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => None,
         };
         self.work.push(Work::Qualify(q, source));
-        if let S::Extended(super::ExtendedType::Typeof {
-            operand,
-            unqualified,
-        }) = spec
-        {
-            self.work.push(Work::TypeofDone(*operand, *unqualified));
+        if let S::Extended(syntax @ super::ExtendedType::Typeof { operand, .. }) = spec {
+            self.work.push(Work::TypeofDone(syntax));
             self.syntax_operand(*operand);
             return;
         }
@@ -173,6 +169,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 let ty = self.types.intern(TypeKind::Tag(tag));
                 self.values.push(ty);
+                if define {
+                    let attributes = self.layout_attribute_chain(s.attributes);
+                    self.types.tags[tag].packed.set(attributes.packed);
+                    self.types.tags[tag].alignment.set(attributes.alignment);
+                }
                 if define && self.unmodeled_extension(s.attributes) {
                     self.types.tags[tag].tainted.set(true);
                 }
@@ -193,6 +194,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 let ty = self.types.intern(TypeKind::Tag(tag));
                 self.values.push(ty);
+                if define {
+                    let attributes = self.layout_attribute_chain(s.attributes);
+                    self.types.tags[tag].packed.set(attributes.packed);
+                    self.types.tags[tag].alignment.set(attributes.alignment);
+                }
                 if define && let Some(list) = s.enumeration_list {
                     _ = self.defining.insert(tag, ());
                     self.work.push(Work::EnumMembers(tag, list, 0, None));
@@ -233,7 +239,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.taint(true);
             self.work.push(Work::UnknownType);
         }
-        self.work.push(Work::VectorAttributes(spec.extensions));
+        self.work
+            .push(Work::VectorAttributes(spec.extensions, false));
         self.work.push(Work::Spec(
             spec.type_specifiers,
             spec.type_qualifiers,
@@ -365,6 +372,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         name:          Some(name),
                         ty:            int,
                         array_minimum: None,
+                        original:      int,
                     });
                 }
                 _ = self
@@ -375,7 +383,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let ty = if self.layout_attribute(attribute) {
                     self.types.unknown()
                 } else {
-                    self.vector_attribute(base, attribute)
+                    let base = self.mode_attribute(base, attribute);
+                    self.vector_attribute(base, attribute, true)
                 };
                 self.values.push(ty);
             },
@@ -408,6 +417,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 self.types.unknown()
             };
+            // Adjustment must not discard a definition's evaluated outer
+            // array bound. C99: §6.9.1p10, p. 142; PDF p. 154.
+            if let Some(current) = self.functions.current.as_ref() {
+                _ = self.functions.old_types.insert((current.id, name.name), ty);
+            }
             let ty = match self.types.nodes[ty.index] {
                 | TypeKind::Array(element, _) => self.types.intern(TypeKind::Pointer(element)),
                 | TypeKind::Function { .. } => self.types.intern(TypeKind::Pointer(ty)),
@@ -758,7 +772,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 self.types.layout(member.ty)
             };
-            let Some(layout) = layout else {
+            let Some(mut layout) = layout else {
                 if !self.types.unanalyzed(member.ty) && !self.variably_modified(member.ty) {
                     self.error(
                         SemanticErrorKind::InvalidMember,
@@ -771,6 +785,49 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 output.push(member);
                 continue;
             };
+            // GCC Common Attributes, packed/aligned: packing permits bit
+            // allocation, but explicit member alignment still places the
+            // field on that byte boundary. Clang's MSVC packed bit-fields
+            // ignore member alignment; MinGW retains it.
+            // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
+            let packed = tag.packed.get() || member.packed;
+            // MinGW's Microsoft bit-field layout ignores typedef alignment,
+            // but retains alignment written on the member. GCC Common Type
+            // Attributes (aligned); C99 §6.7.2.1p10, p. 102; PDF p. 114.
+            if member.width.is_some()
+                && self.context.configuration.target() == crate::target::Target::WindowsGnu
+            {
+                layout.align = self
+                    .types
+                    .natural_alignment(member.ty)
+                    .unwrap_or(1)
+                    .max(u64::from(member.explicit_alignment));
+            }
+            let ignore_alignment = packed
+                && member.width.is_some()
+                && self.context.configuration.target() == crate::target::Target::WindowsMsvc;
+            if packed {
+                layout.align = if ignore_alignment {
+                    1
+                } else {
+                    u64::from(
+                        if self.context.configuration.target() == crate::target::Target::WindowsMsvc
+                        {
+                            member.ty.alignment.max(1)
+                        } else {
+                            member.explicit_alignment.max(1)
+                        },
+                    )
+                };
+            }
+            // Microsoft x64 record placement retains the canonical boundary
+            // when a typedef reduces alignment; explicit packing may lower it.
+            // C99 §6.7.2.1p12: member alignment is implementation-defined.
+            if ms && !packed {
+                layout.align = layout
+                    .align
+                    .max(self.types.natural_alignment(member.ty).unwrap_or(1));
+            }
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
             let unnamed_bit_field = member.name.is_none() && member.width.is_some();
@@ -778,11 +835,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 alignment = alignment.max(layout.align);
             }
             let mut resolved = member;
+            if ignore_alignment {
+                resolved.ty = resolved.ty.with_alignment(1);
+            }
             if tag.kind == TagKind::Union {
                 bytes = bytes.max(match member.width {
                     | Some(0) if ms => 0,
                     | Some(_) if ms => layout.size,
-                    | Some(width) if unnamed_bit_field => u64::from(width).div_ceil(8),
+                    // GCC packed union fields occupy their bits, including
+                    // named fields. Microsoft allocation still reserves the
+                    // declared unit (handled above).
+                    | Some(width) if unnamed_bit_field || packed => u64::from(width).div_ceil(8),
                     | _ => layout.size,
                 });
             } else if let Some(width) = member.width {
@@ -792,9 +855,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // same size and the unit has room.
                     let bits = layout.size * 8;
                     if width == 0 {
-                        if ms_unit.take().is_some() {
-                            alignment = alignment.max(layout.align);
-                            bytes = align_up(bytes, layout.align).unwrap_or(bytes);
+                        let unit = ms_unit.take();
+                        let msvc = self.context.configuration.target()
+                            == crate::target::Target::WindowsMsvc;
+                        if unit.is_some() || !msvc && member.explicit_alignment != 0 {
+                            // C99 §6.7.2.1p12, p. 103; PDF p. 115: target
+                            // placement. MSVC needs a preceding value field;
+                            // MinGW also honors an explicit inactive boundary.
+                            let boundary = if !msvc && unit.is_some() {
+                                self.types.natural_alignment(member.ty).unwrap_or(1)
+                            } else {
+                                layout.align
+                            };
+                            let boundary = boundary.max(u64::from(member.explicit_alignment));
+                            if !msvc && let Some((_, start, used)) = unit {
+                                bytes = start + used.div_ceil(8);
+                            }
+                            alignment = alignment.max(boundary);
+                            bytes = align_up(bytes, boundary).unwrap_or(bytes);
                         }
                         resolved.offset = bytes;
                     } else {
@@ -820,7 +898,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let bits = layout.size.checked_mul(8)?;
                         let width = u64::from(width);
                         let start = if width == 0 {
-                            align_up(bit_end, bits)?
+                            align_up(
+                                bit_end,
+                                bits.max(u64::from(member.explicit_alignment).checked_mul(8)?),
+                            )?
+                        } else if member.explicit_alignment != 0 {
+                            align_up(bit_end, layout.align.checked_mul(8)?)?
+                        } else if packed {
+                            bit_end
                         } else {
                             let remaining = bits - bit_end.checked_rem(bits)?;
                             if width > remaining {
@@ -887,7 +972,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 fields.push(Field {
                     name,
                     path: self.types.tu.alloc(FieldPath::new(index, None)),
-                    ty: member.ty,
+                    ty: member
+                        .ty
+                        .with_alignment(if tag.packed.get() || member.packed {
+                            if self.context.configuration.target()
+                                == crate::target::Target::WindowsMsvc
+                            {
+                                member.ty.alignment.max(1)
+                            } else {
+                                member.explicit_alignment.max(1)
+                            }
+                        } else {
+                            member.ty.alignment
+                        }),
                     qualifiers: TypeQualifiers::empty(),
                     offset: member.offset,
                     bit_offset: member.bit_offset,
@@ -911,6 +1008,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             _ = self.member_indices.insert((id, field.name.name), index);
         }
         tag.complete.set(true);
+        alignment = alignment.max(u64::from(tag.alignment.get()));
         if !tag.tainted.get() {
             tag.layout
                 .set(align_up(bytes, alignment).map(|size| Layout {
@@ -921,7 +1019,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Specifier extensions whose meaning this phase does not model:
-    /// alignment, thread or constexpr storage, MSVC pointer modifiers and
+    /// thread or constexpr storage, MSVC pointer modifiers and unmodeled
     /// layout attributes. Other attributes, `__extension__` and x86-64
     /// calling conventions leave the declared type unchanged.
     /// C99: §4 paragraph 6, p. 7; PDF p. 19.
@@ -932,10 +1030,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use super::SpecifierExtensionKind as K;
         while let Some(item) = chain {
             if match item.kind {
-                | K::ExtensionMarker => false,
+                | K::ExtensionMarker | K::Alignment(_) => false,
                 | K::Attributes(attribute) => self.layout_attribute(attribute),
                 | K::MsModifier(keyword) => !calling_convention(keyword),
-                | K::Alignment(_) | K::ThreadLocal | K::Constexpr => true,
+                | K::ThreadLocal | K::Constexpr => true,
             } {
                 return true;
             }
@@ -945,22 +1043,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// GNU, standard-syntax vendor and MSVC attributes that change size,
-    /// alignment or representation. Their arguments are not interpreted, so
-    /// any such name, or an attribute that failed to parse, is conservative.
+    /// alignment or representation that this analyzer still cannot model.
+    /// Names inside arguments never determine attribute semantics.
     /// GNU extension: GCC manual, "Attribute Syntax".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
     /// MSVC extension: Microsoft Learn, "declspec".
     /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
     pub(super) fn layout_attribute(&self, attribute: &super::AttributeSpecifier<'tu>) -> bool {
         attribute.recovered
-            || attribute.tokens.iter().any(|token| {
-                let name = self.context.string_cache.at(token.contents);
-                let name = name
-                    .strip_prefix("__")
-                    .and_then(|n| n.strip_suffix("__"))
-                    .unwrap_or(name);
-                matches!(name, "align" | "packed" | "mode" | "ext_vector_type")
-            })
+            || super::vectors::attribute_names(attribute, self.context)
+                .any(|(_, name)| matches!(name, "align" | "ext_vector_type"))
     }
 
     /// Discover core type names inside opaque later-standard operands.
@@ -1055,6 +1147,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             tainted: Cell::new(false),
             contains_flexible: Cell::new(false),
             compatible: Cell::new(Scalar::Int),
+            packed: Cell::new(false),
+            alignment: Cell::new(0),
         });
         self.types.tags.push(tag);
         index
@@ -1214,14 +1308,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         Some(Member {
-            name:           None,
-            source_vectors: member.source_vectors,
-            invalid:        false,
-            ty:             base,
-            width:          None,
-            offset:         0,
-            bit_offset:     0,
-            anonymous:      true,
+            name:               None,
+            source_vectors:     member.source_vectors,
+            invalid:            false,
+            ty:                 base,
+            width:              None,
+            offset:             0,
+            bit_offset:         0,
+            anonymous:          true,
+            packed:             self.layout_attribute_chain(member.extensions).packed,
+            explicit_alignment: self.explicit_member_alignment(member.extensions, None, None),
         })
     }
 
@@ -1282,9 +1378,41 @@ fn ms_integer(width: u8, signedness: Option<bool>) -> Scalar {
 pub(super) fn compatible_enum_type(
     (low, high): (i128, i128),
     target: &crate::target::TargetLayout,
+    packed: bool,
 ) -> Scalar {
     if let Some(scalar) = target.fixed_enum_type {
         return scalar;
+    }
+    // GNU packed selects the smallest integer representation that contains
+    // every enumerator, retaining signedness for negative ranges.
+    // <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    if packed {
+        for scalar in if low >= 0 {
+            [
+                Scalar::UnsignedChar,
+                Scalar::UnsignedShort,
+                Scalar::UnsignedInt,
+                target.uintmax_t,
+            ]
+        } else {
+            [
+                Scalar::SignedChar,
+                Scalar::Short,
+                Scalar::Int,
+                target.intmax_t,
+            ]
+        } {
+            if let Some((bits, signed)) = target.integer(scalar) {
+                let (minimum, maximum) = if signed {
+                    (-(1_i128 << (bits - 1)), (1_i128 << (bits - 1)) - 1)
+                } else {
+                    (0, (1_i128 << bits) - 1)
+                };
+                if low >= minimum && high <= maximum {
+                    return scalar;
+                }
+            }
+        }
     }
     if low >= 0 {
         if high <= i128::from(u32::MAX) {

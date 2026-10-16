@@ -107,8 +107,9 @@ function pointers, parameters, members and typedefs use the existing balanced
 attribute parser. `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
 `restrict`, `deprecated(...)`, `noinline`, `naked`, `allocate(...)`, `uuid(...)`
 and ABI annotations such as `__ms_abi__` are accepted without backend effects.
-`align(...)` and `aligned(...)` continue to mark the affected type/layout as
-unanalyzed rather than assume its natural alignment. Clang itself ignores
+MSVC `align(...)` remains unanalyzed. GNU `aligned(...)` retains the requested
+declaration/type alignment; GNU `packed` and scalar `mode` retain their layouts
+and representation types. Clang itself ignores
 some of these macro-expanded attributes with warnings; bcc's current attribute
 pass preserves their syntax without applicability warnings.
 
@@ -376,7 +377,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | Func | - | - | Y | Y | Y | Y | Y | extension | parser |
 | StaticAssert | - | - | - | Y | Y | Y | Y | extension | parser |
 | Generic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
-| Alignas | - | - | - | Y | Y | Y | Y | extension | parser |
+| Alignas | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering |
 | Alignof | - | - | - | Y | Y | Y | Y | extension | parser |
 | Noreturn | - | - | - | Y | Y | Y | Y | extension | parser |
 | ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser |
@@ -398,7 +399,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; vector_size/aligned sema |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode sema and lowering; vector_size sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -419,8 +420,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | AlignofExpression | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | VoidExpressionReturn | - | - | - | - | - | - | - | GNU only | semantic analysis |
 | RealImag | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
-| GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
+| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ExtraSemicolons | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -1119,3 +1120,31 @@ extern-inline mode follows the MSVC body's existing target rule unless an
 explicit `gnu_inline` attribute requests GNU omission. Semantic diagnostics
 now enforce the GCC prohibition on entering statement expressions while
 preserving internal and outward jumps.
+
+## 2026-10-13: GNU representations and initializer support
+
+`packed`, `aligned`, scalar `mode`, union casts and range designators now have
+semantic and lowering support under the existing GNU extension policy. `_Alignas`
+has C11 constraints and completed-declarator storage alignment. Retained layouts
+also support existing `typeof`, `__builtin_types_compatible_p`, `__builtin_offsetof`
+and expression-alignment queries. `__builtin_signbit[f/l]`, `__builtin_isinf[f/l]`,
+`__builtin_copysign[f/l]` and `__builtin_snprintf` are binding-aware builtins.
+
+GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html),
+[union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html),
+[designated initializers](https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html),
+and [other builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html).
+ISO constraints and arithmetic/address constant classification remain those of
+C99 §6.6 and §6.7.8; standard alignment follows C11 §6.7.5. GNU range expressions
+execute once for the entire selected range. Vector and complex execution, inline
+assembly, nested functions and label relocations remain outside this change.
+
+PR #42 round-1 repairs complete explicit alignment of packed System V
+bit-fields, occupied-bit sizing of packed unions and lowering/static packing
+of fields spanning more than their declared slot. Microsoft bit-field units
+follow bundled Clang, including its MinGW/MSVC alignment difference.
+GNU `aligned` uses semantic integer constant evaluation; `vector_size` retains
+its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
+checking natural alignment, including runtime-sized arrays and VLA typedefs.
+See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
+and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).

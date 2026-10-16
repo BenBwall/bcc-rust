@@ -15,6 +15,33 @@ pub(crate) struct Program {
 
 pub(crate) const PROGRAMS: &[Program] = &[
     Program {
+        name:     "vla_extents_and_typedefs",
+        source:   "static int f(int n, int (*p)[n]) { return p[1][2] + (int)sizeof *p; }
+int main(void) { int n=3, m=2; typedef int Row[n++]; Row a[m++]; a[1][2]=7;
+ if(n!=4 || m!=3 || sizeof a!=24 || sizeof a[0]!=12) return 1;
+ if(f(3,a)!=19 || &a[1]-&a[0]!=1) return 2;
+ int (*p)[3]=a; p++; if((*p)[2]!=7) return 3;
+ int size=sizeof(int[n++]); return size!=16 || n!=5; }",
+        expected: 0,
+    },
+    Program {
+        name:     "vla_block_lifetime",
+        source:   "int main(void) { int n=8192, total=0;
+ for(int i=0;i<1000;i++) { int a[n]; a[0]=i; a[n-1]=i+1; total+=a[n-1]-a[0]; if(i%2) continue; { \
+                   int b[n]; b[0]=1; if(i==998) break; } }
+ { int a[n]; a[0]=2; total+=a[0]; goto done; }
+ done: return total!=1001; }",
+        expected: 0,
+    },
+    Program {
+        name:     "vla_parameter_bounds",
+        source:   "static int f(int n, int a[n++]) { return n; }
+static int g(int n, int (*a)[n++]) { return n + (int)sizeof *a; }
+static int old(n,a) int n; int a[n++]; { return n; }
+int main(void) { int a[3][3]; return f(3,a[0])!=4 || g(3,a)!=16 || old(3,a[0])!=4; }",
+        expected: 0,
+    },
+    Program {
         name:     "sum_to_ten",
         source:   "int main(void) { int s = 0; for (int i = 1; i <= 10; i++) s += i; return s; }",
         expected: 55,

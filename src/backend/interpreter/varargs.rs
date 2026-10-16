@@ -115,7 +115,7 @@ impl Machine<'_, '_, '_> {
         if position >= frame.varargs_len {
             return Err(UbKind::VaArgPastEnd.into());
         }
-        let (arg_ty, value) = self.varargs[frame.varargs + position];
+        let (arg_ty, value, _) = self.varargs[frame.varargs + position];
         if arg_ty != ty {
             return Err(UbKind::VaArgTypeMismatch.into());
         }
@@ -219,6 +219,35 @@ impl Machine<'_, '_, '_> {
         }
     }
 
+    /// C99: §7.15.1.1, pp. 249-250; PDF pp. 261-262.
+    pub(super) fn va_arg_aggregate(
+        &mut self,
+        layout: crate::ir::AggregateLayout<'_>,
+        list: RuntimeValue,
+    ) -> Result<RuntimeValue, Fault> {
+        let (cursor_ref, mut cursor) = self.cursor(list)?;
+        let frame = self.frames[cursor.depth as usize];
+        let position = cursor.position as usize;
+        if position >= frame.varargs_len {
+            return Err(UbKind::VaArgPastEnd.into());
+        }
+        let (_, value, abi) = self.varargs[frame.varargs + position];
+        if !matches!(abi, Some(crate::ir::ParamAbi::Aggregate(actual)) if actual == layout) {
+            return Err(UbKind::VaArgTypeMismatch.into());
+        }
+        cursor.position += 1;
+        self.memory.set_cursor(cursor_ref, cursor);
+        let pointer = self.frame_object(layout.size, layout.align)?;
+        self.memory.copy(
+            RuntimeValue::Ptr(pointer),
+            value,
+            RuntimeValue::Int(u128::from(layout.size)),
+            layout.align,
+            false,
+        )?;
+        Ok(RuntimeValue::Ptr(pointer))
+    }
+
     /// Materializes the target's incoming variadic argument areas once.
     /// C99: §7.15.1.4p3, p. 251; PDF p. 263 (restarts reuse incoming
     /// arguments).
@@ -233,19 +262,42 @@ impl Machine<'_, '_, '_> {
                 let fixed = ArgumentRegisters::after_fixed(signature);
                 let mut scan = fixed;
                 let mut overflow_size = 0_u64;
+                let mut overflow_align = Align::from_bytes(16).unwrap();
                 for index in start..end {
-                    let ty = self.varargs[index].0;
-                    if !scan.take_scalar(ty) {
+                    let (ty, _, abi) = self.varargs[index];
+                    if let Some(crate::ir::ParamAbi::ByVal(layout)) = abi {
+                        // Offsets alone cannot align arguments whose backing
+                        // object's base has a weaker alignment.
+                        if layout.align.bytes() > overflow_align.bytes() {
+                            overflow_align = layout.align;
+                        }
+                        overflow_size = overflow_size.next_multiple_of(layout.align.bytes().max(8))
+                            + layout.size.next_multiple_of(8);
+                    } else if !scan.take_scalar(ty) {
                         overflow_size =
                             overflow_size.next_multiple_of(slot_align(ty)) + slot_size(ty);
                     }
                 }
-                let save = self.frame_object(va_list::SAVE_AREA_SIZE)?;
-                let overflow = self.frame_object(overflow_size)?;
+                let save =
+                    self.frame_object(va_list::SAVE_AREA_SIZE, Align::from_bytes(16).unwrap())?;
+                let overflow = self.frame_object(overflow_size, overflow_align)?;
                 let mut used = fixed;
                 let mut overflow_offset = 0_u64;
                 for index in start..end {
-                    let (ty, value) = self.varargs[index];
+                    let (ty, value, abi) = self.varargs[index];
+                    if let Some(crate::ir::ParamAbi::ByVal(layout)) = abi {
+                        overflow_offset =
+                            overflow_offset.next_multiple_of(layout.align.bytes().max(8));
+                        self.memory.copy(
+                            RuntimeValue::Ptr(offset(overflow, overflow_offset)),
+                            value,
+                            RuntimeValue::Int(u128::from(layout.size)),
+                            layout.align,
+                            false,
+                        )?;
+                        overflow_offset += layout.size.next_multiple_of(8);
+                        continue;
+                    }
                     let before = used;
                     let address = if used.take_scalar(ty) {
                         if used.gp > before.gp {
@@ -266,9 +318,10 @@ impl Machine<'_, '_, '_> {
             },
             | Convention::Win64 => {
                 // Microsoft x64, "Varargs": one 8-byte slot per argument.
-                let slots = self.frame_object(8 * frame.varargs_len as u64)?;
+                let slots =
+                    self.frame_object(8 * frame.varargs_len as u64, Align::from_bytes(8).unwrap())?;
                 for (slot, index) in (start..end).enumerate() {
-                    let (ty, value) = self.varargs[index];
+                    let (ty, value, _) = self.varargs[index];
                     if ty.bytes() > 8 {
                         return Err(Fault::Unsupported(Unsupported::WideVariadic));
                     }
@@ -292,14 +345,12 @@ impl Machine<'_, '_, '_> {
             .ok_or(Fault::Unsupported(Unsupported::VaListTarget))
     }
 
-    /// A zero-filled object of `size` bytes, aligned to 16, that lives
-    /// until the executing frame returns.
-    fn frame_object(&mut self, size: u64) -> Result<Pointer, Fault> {
-        let pointer = self.memory.allocate(
-            ObjectKind::Stack,
-            size,
-            Align::from_bytes(16).expect("16 is a power of two"),
-        )?;
+    /// A zero-filled object retaining the required argument alignment, alive
+    /// until the executing frame returns. Win64 indirect arguments already
+    /// point to aligned caller copies; only their pointer slots need eight.
+    /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
+    fn frame_object(&mut self, size: u64, align: Align) -> Result<Pointer, Fault> {
+        let pointer = self.memory.allocate(ObjectKind::Stack, size, align)?;
         self.memory.initialize(pointer, &[]);
         self.slots.push(pointer);
         Ok(pointer)

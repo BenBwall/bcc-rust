@@ -314,6 +314,9 @@ pub(crate) enum SemanticErrorKind {
     /// Vectors".
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#vectors-and-extended-vectors>
     InvalidVectorAttribute,
+    InvalidAlignmentAttribute,
+    InvalidStandardAlignment,
+    InvalidModeAttribute,
     /// GCC Vector Extensions: compatible lanes and safe scalar splats.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -334,6 +337,9 @@ impl SemanticErrorKind {
         match self {
             | Self::UnsupportedFloat128 => "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
+            | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
+            | Self::InvalidStandardAlignment => "invalid alignment specifier",
+            | Self::InvalidModeAttribute => "invalid scalar machine mode",
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
@@ -515,6 +521,18 @@ impl SemanticErrorKind {
                 "invalid vector attribute",
                 "GCC Vector Extensions: vector_size requires an integer or real floating element \
                  and a positive multiple of its size",
+            ),
+            | Self::InvalidAlignmentAttribute => (
+                "invalid alignment attribute",
+                "GCC aligned requires a positive integer constant power of two representable by the target",
+            ),
+            | Self::InvalidStandardAlignment => (
+                "invalid alignment specifier",
+                "C11 §6.7.5p2-6: alignment requires an eligible object declaration and must be zero or a valid alignment that does not weaken its natural alignment",
+            ),
+            | Self::InvalidModeAttribute => (
+                "invalid mode attribute",
+                "GCC mode requires an eligible scalar type and a supported scalar machine mode",
             ),
             | Self::InvalidVectorOperand => (
                 "invalid vector operation",

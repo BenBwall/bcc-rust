@@ -95,39 +95,46 @@ use crate::{
 
 /// Translation-unit state shared by every function's lowering.
 pub(super) struct Unit<'a, 'tu, 'ir> {
-    pub(super) context:       &'a Context<'tu>,
-    pub(super) sema:          &'a SemanticTranslationUnit<'tu>,
-    pub(super) module:        Module<'ir>,
-    pub(super) tables:        &'a Bump,
-    pub(super) target:        Target,
-    pub(super) names:         SymbolNames<'a>,
+    /// Work spent associating retained parameter bindings (scaling regression).
+    #[cfg(test)]
+    pub(super) parameter_alias_visits: usize,
+    pub(super) context: &'a Context<'tu>,
+    pub(super) sema: &'a SemanticTranslationUnit<'tu>,
+    pub(super) module: Module<'ir>,
+    pub(super) tables: &'a Bump,
+    pub(super) target: Target,
+    pub(super) names: SymbolNames<'a>,
     /// Each binding by its declared identifier, so a declarator finds its
     /// binding without a search.
-    declarators:              ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
-    definitions:              ArenaMap<'a, usize, DefinitionKind>,
+    declarators: ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
+    definitions: ArenaMap<'a, usize, DefinitionKind>,
     /// Completed types of linked object definitions, including tentative ones,
     /// indexed by emitted symbol name after applying GNU assembler labels.
     /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
     /// p. 143; PDF p. 155.
-    defined_objects:          ArenaMap<'a, &'a str, usize>,
+    defined_objects: ArenaMap<'a, &'a str, usize>,
     /// Definitions share their linked name across separate semantic bindings.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42.
-    defined_functions:        ArenaSet<'a, StringCacheId>,
+    defined_functions: ArenaSet<'a, StringCacheId>,
     /// Bindings whose address is taken, which therefore live in memory.
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
-    statics:                  ArenaMap<'a, usize, GlobalId>,
-    strings:                  ArenaMap<'a, (LiteralId, bool), GlobalId>,
+    statics: ArenaMap<'a, usize, GlobalId>,
+    strings: ArenaMap<'a, (LiteralId, bool), GlobalId>,
+    /// One static object per file-scope compound literal syntax node. New
+    /// initializers join the explicit queue, never recursively lower syntax.
+    compound_literals: ArenaMap<'a, usize, GlobalId>,
+    static_initializers: ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>)>,
     /// Next candidate for a string literal's internal symbol.
-    next_string_suffix:       u64,
+    next_string_suffix: u64,
     /// User names reserved before generating internal storage.
-    reserved_names:           ArenaSet<'a, &'a str>,
+    reserved_names: ArenaSet<'a, &'a str>,
     /// Internal storage cannot be reused by a linked object declaration.
-    generated_globals:        ArenaSet<'a, GlobalId>,
+    generated_globals: ArenaSet<'a, GlobalId>,
     /// Conflicting definitions are isolated while later functions are checked.
-    conflicting_names:        ArenaSet<'a, &'a str>,
+    conflicting_names: ArenaSet<'a, &'a str>,
     /// Each generated base probes a suffix at most once.
-    next_name_suffix:         ArenaMap<'a, &'a str, u64>,
+    next_name_suffix: ArenaMap<'a, &'a str, u64>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -425,6 +432,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             params: scratch.alloc_slice_copy(&params),
             result,
             variadic,
+            variadic_fixed: None,
             aggregates: scratch.alloc_slice_copy(&aggregates),
             extensions: scratch.alloc_slice_copy(&extensions),
             result_extension: result_representation.extension(),
@@ -523,17 +531,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         match initializer {
             | None => self.module.define_global(global, GlobalInit::Zero),
             | Some(initializer) => {
-                let size = self.module.global(global).size;
-                let (bytes, relocations) = self.static_bytes(data.ty, size, initializer)?;
-                let init = if relocations.is_empty() && bytes.iter().all(|&byte| byte == 0) {
-                    GlobalInit::Zero
-                } else {
-                    GlobalInit::Bytes {
-                        bytes:       &bytes,
-                        relocations: &relocations,
-                    }
-                };
-                self.module.define_global(global, init);
+                self.static_initializers
+                    .push((global, data.ty, initializer));
+                self.define_static_initializers()?;
             },
         }
         Ok(global)
@@ -551,12 +551,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Err(LoweringErrorKind::UnanalyzedType);
         }
         let (size, align) = match types.layout(data.ty) {
-            | Some(layout) => (layout.size, types::align(layout)),
+            | Some(layout) => (
+                layout.size,
+                super::alignment::storage_alignment(types, data.ty)?,
+            ),
             | None => {
                 let element =
                     types::target_type(types, data.ty).and_then(|element| types.layout(element));
                 match element {
-                    | Some(layout) => (0, types::align(layout)),
+                    | Some(_) => (0, super::alignment::storage_alignment(types, data.ty)?),
                     | None =>
                         return Err(types::layout(types, data.ty).err().unwrap_or(
                             LoweringErrorKind::MissingFact("an object type has no layout"),
@@ -658,9 +661,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         &self,
         expression: &'tu Expression<'tu>,
     ) -> Result<(ArenaVec<'a, u8>, Align), LoweringError> {
+        let info = self.sema.expression_info(peel(expression)).ok_or_else(|| {
+            LoweringError::missing(
+                "a string literal has no semantic type",
+                expression.source_vectors,
+            )
+        })?;
+        let align = super::alignment::storage_alignment(&self.sema.types, info.ty)
+            .map_err(|kind| at(kind, expression.source_vectors))?;
         match peel(expression).kind {
             | ExpressionType::StringLiteral(StringTokenType::String(id)) =>
-                Ok((self.string_bytes(id), Align::BYTE)),
+                Ok((self.string_bytes(id), align)),
             | ExpressionType::StringLiteral(StringTokenType::WideString(id)) => {
                 let layout = self.target.layout();
                 let character = layout
@@ -671,10 +682,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 for unit in self.context.wide_literal_units(id).chain([0]) {
                     bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
                 }
-                Ok((
-                    bytes,
-                    Align::from_bytes(character.align).expect("wchar_t alignment"),
-                ))
+                Ok((bytes, align))
             },
             | _ => Err(LoweringError::unsupported(
                 Construct::EncodedString,
@@ -760,6 +768,57 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
 // Static initializers
 
 impl<'a, 'tu> Unit<'a, 'tu, '_> {
+    /// Materialize pending static objects iteratively. Address constants may
+    /// declare nested compound literals while their containing object emits.
+    /// C99: §6.5.2.5p5-6, pp. 75-76; PDF pp. 87-88; §6.6p9, p. 96; PDF p. 108.
+    fn define_static_initializers(&mut self) -> Result<(), LoweringError> {
+        while let Some((global, ty, initializer)) = self.static_initializers.pop() {
+            let size = self.module.global(global).size;
+            let (bytes, relocations) = self.static_bytes(ty, size, initializer)?;
+            let init = if relocations.is_empty() && bytes.iter().all(|&byte| byte == 0) {
+                GlobalInit::Zero
+            } else {
+                GlobalInit::Bytes {
+                    bytes:       &bytes,
+                    relocations: &relocations,
+                }
+            };
+            self.module.define_global(global, init);
+        }
+        Ok(())
+    }
+
+    /// File-scope compound literals designate distinct unnamed static objects.
+    /// C99: §6.5.2.5p5-6, pp. 75-76; PDF pp. 87-88.
+    fn static_compound_literal(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        initializer: &'tu Initializer<'tu>,
+        ty: TypeId,
+    ) -> Result<GlobalId, LoweringError> {
+        let key = std::ptr::from_ref(expression).addr();
+        if let Some(&global) = self.compound_literals.get(&key) {
+            return Ok(global);
+        }
+        let layout = types::layout(&self.sema.types, ty)
+            .map_err(|kind| at(kind, expression.source_vectors))?;
+        let name = self.unique_name(".compound");
+        let global = self.module.declare_global(
+            name,
+            GlobalDecl {
+                linkage:  IrLinkage::Internal,
+                size:     layout.size,
+                align:    super::alignment::storage_alignment(&self.sema.types, ty)
+                    .map_err(|kind| at(kind, expression.source_vectors))?,
+                constant: constant_object(&self.sema.types, ty),
+            },
+        );
+        _ = self.compound_literals.insert(key, global);
+        _ = self.generated_globals.insert(global);
+        self.static_initializers.push((global, ty, initializer));
+        Ok(global)
+    }
+
     /// The bytes and relocations of a static object of type `ty` and `size`
     /// bytes initialized by `initializer`. Every leaf must be an integer
     /// constant or an address constant.
@@ -864,10 +923,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             relocation.offset + 8 <= offset || relocation.offset >= offset + written
         });
         let integer = info.integer.filter(|_| {
-            !matches!(
-                self.sema.types.kind(info.ty),
-                TypeKind::Pointer(_) | TypeKind::Array(..)
-            )
+            representation == Repr::Pointer
+                || !matches!(
+                    self.sema.types.kind(info.ty),
+                    TypeKind::Pointer(_) | TypeKind::Array(..)
+                )
         });
         if let Repr::Float { ty: float } = representation {
             let bits = match (info.floating, integer) {
@@ -954,7 +1014,22 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 .sema
                 .expression_info(expression)
                 .ok_or_else(unsupported)?;
+            if let Some(selected) = info.selected_expression {
+                expression = selected;
+                continue;
+            }
             match expression.kind {
+                | ExpressionType::CompoundLiteral { initializer, .. } => {
+                    let global = self.static_compound_literal(expression, initializer, info.ty)?;
+                    return Ok((Symbol::Global(global), addend));
+                },
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Indirection,
+                    operand_expression,
+                } if place => {
+                    expression = operand_expression;
+                    place = false;
+                },
                 | ExpressionType::Parenthesized { expression: inner }
                 | ExpressionType::Unary {
                     operator: UnaryOperator::Extension,
@@ -991,7 +1066,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     return Ok((Symbol::Global(self.string(expression)?), addend)),
                 | ExpressionType::DirectMember {
                     base_expression, ..
-                } if place => {
+                } if place || matches!(self.sema.types.kind(info.ty), TypeKind::Array(..)) => {
                     let field = self
                         .sema
                         .selected_field(expression)
@@ -999,8 +1074,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     if field.width.is_some() {
                         return Err(unsupported());
                     }
-                    addend += i64::try_from(field.offset).map_err(|_| unsupported())?;
+                    addend = addend
+                        .checked_add(i64::try_from(field.offset).map_err(|_| unsupported())?)
+                        .ok_or_else(unsupported)?;
                     expression = base_expression;
+                    place = true;
                 },
                 | ExpressionType::Binary {
                     operator:
@@ -1064,14 +1142,25 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
 /// the little-endian bytes from `start`, keeping the other bits. `None` if the
 /// field lies outside `bytes`.
 fn merge_bit_field(bytes: &mut [u8], start: usize, field: BitFieldBits, value: i128) -> Option<()> {
+    if field.width == 0 || field.width > 128 || field.bit_offset >= 8 {
+        return None;
+    }
     let span = usize::try_from((field.bit_offset + field.width).div_ceil(8)).ok()?;
     let target = bytes.get_mut(start..start + span)?;
-    let mut word = [0_u8; 16];
-    word.get_mut(..span)?.copy_from_slice(target);
-    let mut word = u128::from_le_bytes(word);
-    let mask = (u128::MAX >> (128 - field.width)) << field.bit_offset;
-    word = (word & !mask) | ((value as u128) << field.bit_offset & mask);
-    target.copy_from_slice(&word.to_le_bytes()[..span]);
+    // GNU packed fields can touch seventeen bytes even though their value
+    // fits in 128 bits. Merge in value coordinates, retaining neighbor bits.
+    // C99: §6.7.8p19, p. 127; PDF p. 139.
+    // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html> (packed).
+    for bit in 0..field.width {
+        let position = usize::try_from(field.bit_offset + bit).ok()?;
+        let mask = 1_u8 << (position % 8);
+        let byte = &mut target[position / 8];
+        if (value as u128) & (1_u128 << bit) == 0 {
+            *byte &= !mask;
+        } else {
+            *byte |= mask;
+        }
+    }
     Some(())
 }
 
@@ -1161,6 +1250,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
         }
         Self {
+            #[cfg(test)]
+            parameter_alias_visits: 0,
             context,
             sema,
             module,
@@ -1174,6 +1265,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             address_taken: address_taken::find(sema, context, tables),
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            compound_literals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            static_initializers: ArenaVec::new_in(tables),
             next_string_suffix: 1,
             reserved_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             generated_globals: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),

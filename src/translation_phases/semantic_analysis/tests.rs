@@ -12,6 +12,9 @@ use super::{
 use crate::translation_phases::TranslationError;
 
 mod atomics;
+mod attributes;
+mod bit_field_alignment;
+mod control_facts;
 mod float128;
 mod int128;
 mod library_modes;
@@ -563,7 +566,7 @@ fn unsigned_constant_multiplication_wraps_at_target_width() {
 }
 
 #[test]
-fn aggregate_attributes_do_not_fabricate_compatibility_or_layout() {
+fn packed_enum_attributes_retain_the_selected_compatible_type() {
     with_source(
         "enum __attribute__((packed)) E {A}; extern enum E x; extern unsigned char x;",
         |context, s| {
@@ -573,7 +576,11 @@ fn aggregate_attributes_do_not_fabricate_compatibility_or_layout() {
                     .iter()
                     .any(|e| matches!(e, TranslationError::Semantic(_)))
             );
-            assert!(s.types.tags[0].layout.get().is_none());
+            assert_eq!(s.types.tags[0].compatible.get(), Scalar::UnsignedChar);
+            assert_eq!(
+                s.types.tags[0].layout.get(),
+                Some(Layout { size: 1, align: 1 })
+            );
         },
     );
 }

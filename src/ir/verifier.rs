@@ -111,6 +111,13 @@ fn verify_function_into<'m, 's>(
             kind,
         });
     });
+    if signature.variadic_fixed.is_some() {
+        errors.push(VerifierError {
+            item:     function.name,
+            location: Location::Item,
+            kind:     VerifierErrorKind::VariadicDescription,
+        });
+    }
     let Some(body) = &function.body else {
         return;
     };
@@ -154,6 +161,12 @@ fn verify_signature(
     mut report: impl FnMut(VerifierErrorKind),
 ) {
     verify_extensions(signature, profile, &mut report);
+    if signature
+        .variadic_fixed
+        .is_some_and(|n| !signature.variadic || n as usize >= signature.params.len())
+    {
+        report(VerifierErrorKind::VariadicDescription);
+    }
     // A noundef check must not scan every aggregate for each marked index.
     // Preserve the existing diagnostics for malformed, unordered attributes;
     // verified signatures use one order check followed by binary searches.
@@ -298,7 +311,10 @@ pub(crate) enum Profile {
 impl Profile {
     /// Whether `opcode` may appear in this profile.
     pub(crate) const fn allows(self, opcode: Opcode) -> bool {
-        !matches!((self, opcode), (Self::PostAbi, Opcode::VaArg))
+        !matches!(
+            (self, opcode),
+            (Self::PostAbi, Opcode::VaArg | Opcode::VaArgAggregate)
+        )
     }
 }
 
@@ -493,6 +509,30 @@ impl Verifier<'_, '_, '_, '_> {
                 };
                 checker.operands(&args, &operands);
             },
+            | InstData::DynAlloca { ty, size, .. } => {
+                checker.require(ty == Type::I64, ty);
+                checker.operand(0, size, Type::I64);
+            },
+            | InstData::VaArgAggregate { sig, list } => {
+                checker.operand(0, list, Type::Ptr);
+                if let Some(signature) = checker.verifier.module.get_signature(sig) {
+                    verify_signature(signature, checker.verifier.profile, |kind| {
+                        checker.report(kind);
+                    });
+                    checker.require(
+                        signature.params == [Type::Ptr]
+                            && !signature.variadic
+                            && signature.result.is_none()
+                            && matches!(signature.param_abi(0), Some(ParamAbi::Aggregate(_))),
+                        Type::Ptr,
+                    );
+                } else {
+                    checker.report(VerifierErrorKind::InvalidReference(
+                        EntityKind::Signature,
+                        sig.as_u32(),
+                    ));
+                }
+            },
             | InstData::Unary { ty, arg, .. } => match opcode {
                 | _ if opcode.is_bit_unary() => {
                     checker.require(
@@ -503,16 +543,12 @@ impl Verifier<'_, '_, '_, '_> {
                     );
                     checker.operand(0, arg, ty);
                 },
-                | Opcode::DynAlloca => {
-                    checker.require(ty == Type::I64, ty);
-                    checker.operand(0, arg, Type::I64);
-                },
                 | Opcode::Fneg => {
                     checker.require(ty.is_float(), ty);
                     checker.operand(0, arg, ty);
                 },
                 | Opcode::Freeze => checker.operand(0, arg, ty),
-                | Opcode::VaArg | Opcode::VaStart | Opcode::VaEnd =>
+                | Opcode::VaArg | Opcode::VaStart | Opcode::VaEnd | Opcode::StackRestore =>
                     checker.operand(0, arg, Type::Ptr),
                 | _ if opcode.is_conversion() => {
                     if let Some(from) = checker.value_type(arg)
@@ -560,6 +596,7 @@ impl Verifier<'_, '_, '_, '_> {
             },
             | InstData::Nullary { ty, .. } => checker.require(
                 opcode == Opcode::Trap
+                    || (opcode == Opcode::StackSave && ty == Type::Ptr)
                     || opcode == Opcode::Poison
                     || (opcode == Opcode::Null && ty == Type::Ptr),
                 ty,
@@ -957,6 +994,7 @@ pub(crate) enum Location {
 /// What the verifier found wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum VerifierErrorKind {
+    VariadicDescription,
     /// A defined-value contract describes a position that does not exist.
     Noundef(&'static str),
     /// LLVM and the native symbol interfaces require NUL-free names.
@@ -1131,6 +1169,8 @@ impl fmt::Display for VerifierErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let optional = |ty: Option<Type>| ty.map_or("nothing", Type::name);
         match *self {
+            | Self::VariadicDescription =>
+                f.write_str("invalid trailing variadic argument descriptions"),
             | Self::Noundef(problem) => write!(f, "invalid noundef: {problem}"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
             | Self::NoBlocks => f.write_str("a defined function has no blocks"),

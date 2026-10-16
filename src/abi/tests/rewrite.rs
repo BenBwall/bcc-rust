@@ -176,6 +176,20 @@ block0(v0: ptr):
 }
 
 #[test]
+fn aggregate_fetch_refusals_name_the_owning_function() {
+    let text = "function @fetch(ptr) external {\nblock0(v0: ptr):\nv1 = va_arg_aggregate v0 : \
+                (ptr aggregate(size 4294967296, align 1, []))\nreturn\n}\n";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        assert_refused_without_mutation(
+            text,
+            target,
+            "fetch",
+            AbiErrorKind::AggregateTooLarge(4_294_967_296),
+        );
+    }
+}
+
+#[test]
 fn classification_refusal_does_not_intern_earlier_signatures() {
     let text = "\
 function @small(ptr aggregate(size 8, align 8, [0: i64])) external

@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[test]
-fn aligned_vector_derived_types_stay_unanalyzed() {
+fn aligned_vector_derived_types_keep_their_pointee_and_layout() {
     with_source(
         "typedef int V __attribute__((vector_size(16))); typedef V *P \
          __attribute__((aligned(1))); typedef V VA[2] __attribute__((aligned(1))); typedef int *Q \
@@ -24,11 +24,8 @@ fn aligned_vector_derived_types_stay_unanalyzed() {
                     .iter()
                     .find(|b| context.string_cache.at(b.name.name) == name)
                     .unwrap();
-                assert_eq!(
-                    sema.types.nodes[binding.ty.index],
-                    TypeKind::Unknown,
-                    "{name}"
-                );
+                assert!(!sema.types.unanalyzed(binding.ty), "{name}");
+                assert_eq!(sema.types.layout(binding.ty).unwrap().align, 1, "{name}");
             }
             let vector = sema
                 .bindings

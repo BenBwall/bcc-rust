@@ -353,6 +353,15 @@ fn map_operands(
             flags,
             args: [map(a)?, map(b)?],
         },
+        | InstData::VaArgAggregate { sig, list } => InstData::VaArgAggregate {
+            sig,
+            list: map(list)?,
+        },
+        | InstData::DynAlloca { ty, size, align } => InstData::DynAlloca {
+            ty,
+            size: map(size)?,
+            align,
+        },
         | InstData::Unary { opcode, ty, arg } => InstData::Unary {
             opcode,
             ty,

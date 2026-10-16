@@ -22,6 +22,15 @@ fn golden(name: &str, source: &str) {
 }
 
 #[test]
+fn variable_arrays_save_extents_and_restore_stack() {
+    golden(
+        "vla",
+        "int f(int n) { typedef int Row[n++]; int result=0; { Row a; a[n-2]=7; result=sizeof \
+         a+a[n-2]; } return result; }",
+    );
+}
+
+#[test]
 fn integer_arithmetic_marks_signed_overflow() {
     golden(
         "arithmetic",

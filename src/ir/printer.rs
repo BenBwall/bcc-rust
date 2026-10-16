@@ -133,6 +133,10 @@ impl<'ir> Module<'ir> {
             match *data {
                 | InstData::Binary { args: [a, b], .. } => write!(f, " {a}, {b}"),
                 | InstData::Unary { arg, .. } => write!(f, " {arg}"),
+                | InstData::DynAlloca { size, align, .. } =>
+                    write!(f, " {size}, align {}", align.bytes()),
+                | InstData::VaArgAggregate { sig, list } =>
+                    write!(f, " {list} : {}", self.display_signature(sig)),
                 | InstData::IntCompare {
                     cond, args: [a, b], ..
                 } => write!(f, " {cond} {a}, {b}"),
@@ -351,7 +355,19 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
     fmt::from_fn(move |f| {
         f.write_char('(')?;
         for (index, ty) in signature.params.iter().enumerate() {
-            let separator = if index == 0 { "" } else { ", " };
+            if signature.variadic_fixed.map(|n| n as usize) == Some(index) {
+                f.write_str(if index == 0 { "..." } else { ", ..." })?;
+                if signature.variadic_noundef {
+                    f.write_str(" noundef")?;
+                }
+                f.write_str(", ")?;
+            }
+            let separator =
+                if index == 0 || signature.variadic_fixed.map(|n| n as usize) == Some(index) {
+                    ""
+                } else {
+                    ", "
+                };
             write!(f, "{separator}{ty}")?;
             if let Some(abi) = signature.param_abi(index) {
                 write!(f, " {}", display_param_abi(abi))?;
@@ -363,7 +379,7 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
                 f.write_str(" noundef")?;
             }
         }
-        if signature.variadic {
+        if signature.variadic && signature.variadic_fixed.is_none() {
             f.write_str(if signature.params.is_empty() {
                 "..."
             } else {
