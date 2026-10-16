@@ -27,7 +27,6 @@ use super::{
     },
 };
 use crate::{
-    configuration::CStandard,
     translation_phases::{
         SourceVectors,
         parsing::{
@@ -178,9 +177,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.statements.loops,
             self.statements.switch,
             self.functions.sizeof,
+            self.statements.statement_expression,
         )));
         self.enter(ScopeKind::Function);
         self.statements.vm = None;
+        self.statements.statement_expression = None;
         self.functions.sizeof = None;
         self.statements.loops = 0;
         self.statements.switch = None;
@@ -346,12 +347,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     pub(super) fn function_work(&mut self, work: FunctionWork<'tu>) {
         match work {
-            | FunctionWork::Finish(previous, loops, switch, sizeof) => {
+            | FunctionWork::Finish(previous, loops, switch, sizeof, statement_expression) => {
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
                 self.statements.loops = loops;
                 self.statements.switch = switch;
+                self.statements.statement_expression = statement_expression;
             },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
         }
@@ -863,8 +865,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && self.has_gnu_inline(spec, declarator);
                 entity.can_redefine = spec.function_specifiers.is_inline
                     && spec.storage_class == Some(StorageClass::Extern)
-                    && (entity.gnu_inline
-                        || self.context.configuration.standard() == CStandard::C89);
+                    && (entity.gnu_inline || self.context.configuration.gnu89_inline());
                 entity.non_inline |= !spec.function_specifiers.is_inline
                     || spec.storage_class == Some(StorageClass::Extern);
             } else if binding.kind == BindingKind::Object {
@@ -968,7 +969,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 || !f.declaration_specifiers.function_specifiers.is_inline
                 || f.declaration_specifiers.storage_class == Some(StorageClass::Extern)
                 || entity.gnu_inline
-                || self.context.configuration.standard() == CStandard::C89)
+                || self.context.configuration.gnu89_inline())
         {
             entity.definition = entity.function_body.map(|body| match body {
                 | FunctionBody::Replaceable(source) | FunctionBody::Unique(source) => source,
@@ -976,9 +977,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             entity.non_inline = true;
         }
         _ = self.functions.entities.insert(b.name.name, entity);
+        // GNU extension: GCC manual, "Inline": extern inline supplies no
+        // external definition, even after an ordinary declaration. C99
+        // §6.7.4p6-7 instead considers all file-scope declarations.
+        // MSVC's existing target rule keeps bodies for mode-selected GNU89
+        // inline too; explicit gnu_inline still requests GNU body omission.
         self.definitions.push(Definition {
             binding: index,
-            kind:    DefinitionKind::Function,
+            kind:    if entity.can_redefine
+                && b.linkage == Linkage::External
+                && (entity.gnu_inline
+                    || self.context.configuration.target().c99_inline_definitions())
+            {
+                DefinitionKind::Inline
+            } else {
+                DefinitionKind::Function
+            },
         });
     }
 
@@ -1033,9 +1047,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .entities
                 .get(&self.bindings[binding].name.name)
                 .is_some_and(|e| {
-                    !e.non_inline
-                        && !e.gnu_inline
-                        && self.context.configuration.standard() != CStandard::C89
+                    !e.non_inline && !e.gnu_inline && !self.context.configuration.gnu89_inline()
                 })
     }
 
@@ -1116,6 +1128,7 @@ pub(super) enum FunctionWork<'tu> {
     Finish(
         Option<FunctionContext<'tu>>,
         usize,
+        Option<usize>,
         Option<usize>,
         Option<usize>,
     ),

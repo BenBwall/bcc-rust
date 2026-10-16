@@ -41,6 +41,8 @@ pub(crate) use results::{
     Conversion,
     ConversionKind,
     ValueCategory,
+    selected_designator,
+    statement_expression_tail,
 };
 
 use super::{
@@ -315,11 +317,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 // C99 §6.5.1p5: parentheses preserve the callee designation.
                 // GNU vector builtins retain constraints through parentheses.
-                let mut vector_callee = function_expression;
-                while let ExpressionType::Parenthesized { expression } = vector_callee.kind {
-                    vector_callee = expression;
-                }
-                info = if let ExpressionType::Identifier(name) = vector_callee.kind
+                let vector_callee =
+                    selected_designator(function_expression, |e| Some(self.expression_info(e)));
+                let intrinsic = self
+                    .expression_info(vector_callee)
+                    .binding
+                    .is_some_and(|id| self.bindings[id].builtin);
+                info = if !intrinsic {
+                    self.type_call(e, self.expression_info(function_expression), arguments)
+                } else if let ExpressionType::Identifier(name) = vector_callee.kind
                     && super::vectors::named_builtin(self.context.string_cache.at(name.name))
                 {
                     self.context.report_extension(
@@ -330,14 +336,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.shuffle_vector_builtin(e, arguments)
                 } else if let Some(info) = self.vector_overload(e, vector_callee, arguments) {
                     info
-                } else if let Some(info) = self.atomic_call(e, function_expression, arguments) {
+                } else if let Some(info) = self.atomic_call(e, vector_callee, arguments) {
                     info
-                } else if self.classify_type_callee(function_expression) {
+                } else if self.classify_type_callee(vector_callee) {
                     self.classify_type(e, &arguments)
-                } else if let Some(info) = self.math128_builtin(e, function_expression, &arguments)
-                {
+                } else if let Some(info) = self.math128_builtin(e, vector_callee, &arguments) {
                     info
-                } else if let Some(info) = self.constant_p(e, function_expression, arguments) {
+                } else if let Some(info) = self.common_builtin_call(e, vector_callee, arguments) {
                     info
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)
@@ -372,6 +377,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 info.category = self.object_category(info.ty);
                 info.static_address = self.scope == 0;
+            },
+            | E::StatementExpression(statement) => {
+                if let Some((_, tail)) = statement_expression_tail(statement) {
+                    // GNU extension: GCC "Statement Exprs" returns the value
+                    // of the final expression statement. Its ValueExpression
+                    // work already recorded C99 §6.3.2.1p2-4 conversions
+                    // (p. 46; PDF p. 58), even under an enclosing sizeof.
+                    // Reuse their type without recording them twice. The
+                    // result is a value, without the tail's lvalue/bit-field
+                    // identity; block effects prevent constant folding.
+                    // <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+                    let tail = self.expression_info(tail);
+                    let (ty, _) = self.value_conversion(tail);
+                    info = Self::expression_result(e, ty);
+                    info.unfolded_binary128 = tail.unfolded_binary128;
+                } else {
+                    info = Self::expression_result(e, self.types.scalar(Scalar::Void));
+                }
             },
             // Unmodeled extensions retain unknown results and suppress constraints.
             | _ => {},

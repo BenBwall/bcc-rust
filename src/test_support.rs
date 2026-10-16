@@ -5,6 +5,19 @@
 #[path = "../tests/support/native.rs"]
 pub(crate) mod native;
 
+std::thread_local! {
+    /// Counts expression visits in overflow operand effect analysis, scoped
+    /// to the compiling test thread so parallel tests cannot affect the bound.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::missing_const_for_thread_local,
+            reason = "The const initializer still trips the lint in the Windows std expansion."
+        )
+    )]
+    pub(crate) static OVERFLOW_EFFECT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 use std::{
     path::{
         Path,
@@ -19,6 +32,90 @@ use std::{
         UNIX_EPOCH,
     },
 };
+
+/// GCC scalar/library names remain ordinary calls when a local pointer binds
+/// them. Spellings come from the documented families, independently of the
+/// compiler classifier. The unbound clz call protects intrinsic recognition.
+pub(crate) fn builtin_binding_program() -> String {
+    use std::fmt::Write;
+    let mut names = Vec::new();
+    for family in ["clz", "ctz", "popcount", "parity", "ffs", "clrsb"] {
+        for suffix in ["", "l", "ll"] {
+            names.push(format!("__builtin_{family}{suffix}"));
+        }
+    }
+    for operation in ["add", "sub", "mul"] {
+        names.push(format!("__builtin_{operation}_overflow"));
+        names.push(format!("__builtin_{operation}_overflow_p"));
+        for sign in ["s", "u"] {
+            for suffix in ["", "l", "ll"] {
+                names.push(format!("__builtin_{sign}{operation}{suffix}_overflow"));
+            }
+        }
+    }
+    for name in [
+        "bswap16",
+        "bswap32",
+        "bswap64",
+        "expect",
+        "expect_with_probability",
+        "assume_aligned",
+        "prefetch",
+        "constant_p",
+        "object_size",
+        "dynamic_object_size",
+        "trap",
+        "unreachable",
+        "alloca",
+        "va_start",
+        "va_end",
+        "va_copy",
+        "abort",
+        "exit",
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "memcpy",
+        "memmove",
+        "memset",
+        "memcmp",
+        "strlen",
+        "strcmp",
+        "strncmp",
+        "strcpy",
+        "strncpy",
+        "memchr",
+        "strchr",
+        "strrchr",
+        "printf",
+        "sprintf",
+        "puts",
+        "putchar",
+        "abs",
+        "fabs",
+        "floor",
+    ] {
+        names.push(format!("__builtin_{name}"));
+    }
+    names.extend([
+        "alloca".into(),
+        "__sync_fetch_and_add".into(),
+        "__atomic_load_n".into(),
+    ]);
+    let mut source = "int f(unsigned x){return 7;} int main(void){if(__builtin_clz(1u)!=31)return \
+                      1;"
+    .to_string();
+    for name in names {
+        write!(
+            source,
+            "{{int (*{name})(unsigned)=f;if(({name})(1)!=7)return 2;}}"
+        )
+        .unwrap();
+    }
+    source.push_str("return 0;}");
+    source
+}
 
 /// Compares `actual` with the snapshot at `relative`, a path from the crate
 /// root. With `BLESS=1` in the environment the snapshot is rewritten instead.

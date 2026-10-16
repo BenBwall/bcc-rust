@@ -58,7 +58,10 @@ mod module_items;
 
 // Function bodies
 mod bit_fields;
+mod builtin_effects;
+mod builtins;
 mod expressions;
+mod gnu;
 mod initializers;
 mod places;
 mod statements;
@@ -89,6 +92,7 @@ use work::{
     Local,
     Operand,
     Place,
+    StatementMode,
     Task,
 };
 
@@ -208,7 +212,10 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// Performs one task, pushing any that follow from it.
     fn step(&mut self, task: Task<'tu>) -> Result<(), LoweringError> {
         match task {
-            | Task::Statement(statement) => self.statement(statement),
+            | Task::Statement(statement) => self.statement(statement, StatementMode::Discard),
+            | Task::StatementValue(statement) => self.statement(statement, StatementMode::Value),
+            | Task::StatementEffects(statement) =>
+                self.statement(statement, StatementMode::Effects),
             | Task::Declaration(declaration) => self.declaration(declaration),
             | Task::Enter { block, seal } => {
                 if seal {
@@ -292,9 +299,18 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.evaluate_raw(expression)
             },
             | Task::EvaluateRaw(expression) => self.evaluate_raw(expression),
+            | Task::BuiltinEffects(expression, read) => self.builtin_effects(expression, read),
             | Task::SnapshotArgument(expression) => self.snapshot_argument(expression),
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
+            | Task::FinishBuiltin(expression, builtin) => self.finish_builtin(expression, builtin),
+            | Task::FinishKeyword(expression, builtin) => self.finish_keyword(expression, builtin),
+            | Task::OmittedConditional {
+                expression,
+                conditional,
+                otherwise,
+                merge,
+            } => self.omitted_conditional(expression, conditional, otherwise, merge),
             | Task::ReadForUpdate(expression) => {
                 let place = *self.operands.last().expect("the place is on the stack");
                 self.operands.push(place);
@@ -332,27 +348,29 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
 
 /// The state of lowering one function body.
 struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
-    unit:          &'u mut Unit<'a, 'tu, 'ir>,
-    record:        &'tu FunctionRecord<'tu>,
+    unit:             &'u mut Unit<'a, 'tu, 'ir>,
+    record:           &'tu FunctionRecord<'tu>,
     /// The function's name, for naming its static locals.
-    name:          &'a str,
-    draft:         Draft<'s>,
-    scratch:       &'s Bump,
-    tasks:         ArenaVec<'s, Task<'tu>>,
-    operands:      ArenaVec<'s, Item>,
+    name:             &'a str,
+    draft:            Draft<'s>,
+    scratch:          &'s Bump,
+    /// Cached type-operand effects, reused across short-circuit scheduling.
+    effect_summaries: crate::translation_phases::semantic_analysis::EffectSummaries<'s>,
+    tasks:            ArenaVec<'s, Task<'tu>>,
+    operands:         ArenaVec<'s, Item>,
     /// The storage of each automatic object, by binding.
-    locals:        ArenaMap<'s, usize, Local>,
+    locals:           ArenaMap<'s, usize, Local>,
     /// The block of each label, created at its first `goto` or definition.
-    labels:        ArenaMap<'s, StringCacheId, Block>,
+    labels:           ArenaMap<'s, StringCacheId, Block>,
     /// The block of each `case` or `default` statement, by its address.
-    cases:         ArenaMap<'s, usize, Block>,
-    jumps:         ArenaVec<'s, JumpTargets>,
+    cases:            ArenaMap<'s, usize, Block>,
+    jumps:            ArenaVec<'s, JumpTargets>,
     /// The case blocks of the open switches, sealed when each ends.
-    switch_blocks: ArenaVec<'s, Block>,
+    switch_blocks:    ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
-    switch_starts: ArenaVec<'s, usize>,
+    switch_starts:    ArenaVec<'s, usize>,
     /// The unqualified result type that `return` converts to.
-    result:        TypeId,
+    result:           TypeId,
 }
 
 // Tests

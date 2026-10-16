@@ -2,8 +2,9 @@
 """Survey existing GCC execute sources through bcc's interpreter and native arms.
 
 No downloads or source rewrites. This is an exploratory single-file survey,
-not DejaGnu: target skips, dg-options and additional-source directives are
-recorded but not applied. Run after `cargo build --release`.
+not DejaGnu: supported unconditional dg-options/dg-additional-options are
+applied; target selectors and additional-source directives remain recorded.
+Run after `cargo build --release`.
 """
 
 import argparse
@@ -17,6 +18,7 @@ from pathlib import Path
 import platform
 import re
 import signal
+import shlex
 import subprocess
 import time
 
@@ -41,6 +43,99 @@ CLASSES = ("pass", "frontend-error", "lowering-unsupported", "abi-unsupported",
 LOWERING = re.compile(r"not yet supported by lowering: (.*)")
 TRAP = re.compile(r"the interpreter stopped the program: (.*)")
 PANIC = re.compile(r"panicked at|stack overflow|fatal runtime error")
+DG_OPTIONS = re.compile(r'\{\s*dg-(options|additional-options)\s+"((?:\\.|[^"\\])*)"')
+STANDARDS = set("c89 c90 iso9899:1990 iso9899:199409 c99 c9x iso9899:1999 "
+                "iso9899:199x c11 c1x iso9899:2011 c17 c18 iso9899:2017 "
+                "iso9899:2018 c23 c2x iso9899:2024 c2y gnu89 gnu90 gnu99 "
+                "gnu9x gnu11 gnu1x gnu17 gnu18 gnu23 gnu2x gnu2y".split())
+LANGUAGE_FLAGS = {"-fgnu89-inline", "-fno-gnu89-inline", "-w", "--suppress-warnings",
+                  "-pedantic", "-Wpedantic", "-pedantic-errors", "-ffreestanding", "-fhosted",
+                  "-nostdinc", "-nostdlibinc", "-nobuiltininc",
+                  "--nostdinc", "--nostdlibinc", "--nobuiltininc",
+                  "--no-repeated-specifier-warnings"}
+MSVC_GROUPS = "extensions declspec int-types calling-conventions type-qualifiers inline seh asm pragma anonymous-structs va-args".split()
+LANGUAGE_FLAGS.update(f"-{prefix}{group}" for prefix in ("fms-", "fno-ms-") for group in MSVC_GROUPS)
+VALUE_FLAGS = {"-D", "-U", "-I", "-include", "-iquote", "-isystem", "-idirafter", "--sysroot",
+               "--iquote", "--isystem", "--idirafter", "--include-directory", "--source-date-epoch"}
+
+
+def source_options(source):
+    """Apply bcc front-end flags, retaining unsupported tokens and selectors.
+
+    dg-options replaces the base list; dg-additional-options appends to it.
+    DejaGnu target/effective-target expressions are deliberately not evaluated.
+    Back-end/output options cannot override the four survey arms.
+    """
+    base, additional, directives = [], [], []
+    for match in DG_OPTIONS.finditer(source):
+        # Find the closing outer brace without confusing quoted strings or
+        # nested target selector braces for the end of the directive.
+        depth, quoted, escaped, end = 1, False, False, match.end()
+        while end < len(source) and depth:
+            char = source[end]
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = not quoted
+            elif not quoted:
+                depth += (char == "{") - (char == "}")
+            end += 1
+        selector = source[match.end():end - 1].strip()
+        record = {"directive": match[1], "text": match[2], "selector": selector,
+                  "applied_options": [], "unsupported_options": []}
+        directives.append(record)
+        if depth or selector:
+            record["deferred_reason"] = "unterminated directive" if depth else "target selector not evaluated"
+            continue
+        try:
+            tokens = shlex.split(match[2])
+        except ValueError:
+            record["deferred_reason"] = "malformed option quoting"
+            continue
+        applied, unsupported = supported_options(tokens)
+        record.update(applied_options=applied, unsupported_options=unsupported)
+        if match[1] == "options":
+            base = applied
+        else:
+            additional.extend(applied)
+    return {"applied_options": base + additional,
+            "unsupported_options": [flag for item in directives for flag in item["unsupported_options"]],
+            "option_directives": directives}
+
+
+def supported_options(tokens):
+    """Whitelist spellings/values accepted by cli/{arguments,search}.rs."""
+    applied, unsupported = [], []
+    index = 0
+    while index < len(tokens):
+        flag = tokens[index]
+        index += 1
+        if flag in LANGUAGE_FLAGS:
+            applied.append(flag)
+        elif flag in {"-std", "--std"} or flag in VALUE_FLAGS:
+            if index == len(tokens):
+                unsupported.append(flag)
+                continue
+            value = tokens[index]
+            index += 1
+            if flag in {"-std", "--std"} and value not in STANDARDS:
+                unsupported.extend([flag, value])
+            else:
+                applied.extend([flag, value])
+        elif flag.startswith(("-std=", "--std=")):
+            (applied if flag.split("=", 1)[1] in STANDARDS else unsupported).append(flag)
+        elif flag.startswith(("-D", "-U", "-I")) and len(flag) > 2:
+            applied.append(flag)
+        elif any(flag.startswith(prefix + "=") for prefix in VALUE_FLAGS if prefix.startswith("--")):
+            applied.append(flag)
+        elif any(flag.startswith(prefix) and len(flag) > len(prefix)
+                 for prefix in ("-iquote", "-isystem", "-idirafter")):
+            applied.append(flag)
+        else:
+            unsupported.append(flag)
+    return applied, unsupported
 
 
 def main():
@@ -109,6 +204,10 @@ def main():
     rows.sort(key=lambda row: row["file"])
     metadata["elapsed_seconds"] = round(time.perf_counter() - started, 3)
     totals = summary(rows)
+    metadata["source_options"] = {row["file"]: {key: row[key] for key in
+                                  ("applied_options", "unsupported_options", "option_directives")}
+                                  for row in rows}
+    (args.output / "manifest.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     (args.output / "results.json").write_text(
         json.dumps({"metadata": metadata, "summary": totals, "files": rows}, indent=2) + "\n", encoding="utf-8")
     (args.output / "summary.md").write_text(markdown_summary(totals, metadata), encoding="utf-8")
@@ -162,13 +261,13 @@ def survey_file(path, execute, args, environment):
     relative = path.relative_to(execute).as_posix()
     source = path.read_text(encoding="utf-8", errors="replace")
     row = {"file": relative, "source_sha512": sha512(path),
-           "dg_directives": re.findall(r"\{ dg-[^\n]*", source), "arms": {}}
+           "dg_directives": re.findall(r"\{ dg-[^\n]*", source), **source_options(source), "arms": {}}
     for arm, flags in ARMS.items():
         work = args.output / "work" / relative / arm
         work.mkdir(parents=True)
         env = {**environment, "TMP": str(work), "TEMP": str(work), "TMPDIR": str(work)}
         exe = work / "test.exe"
-        command = [str(args.bcc), str(path), f"--target={TARGET}", *flags]
+        command = [str(args.bcc), str(path), f"--target={TARGET}", *row["applied_options"], *flags]
         phase = "interpret" if arm.startswith("interpret") else "compile"
         if phase == "compile":
             command += ["-o", str(exe)]

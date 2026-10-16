@@ -348,8 +348,8 @@ fn compare_bytes(
 }
 
 impl DefaultHost<'_> {
-    /// `printf` with the conversions `d i u x X c s p %`, the flags `-` and
-    /// `0`, a field width, and the length modifiers `hh h l ll z j`.
+    /// `printf` with the conversions `d i u o x X c s p %`, the flags `-`,
+    /// `0` and `#`, a field width, and the length modifiers `hh h l ll z j`.
     ///
     /// C99: §7.19.6.1 paragraphs 4-8, pp. 275-280; PDF pp. 287-292.
     fn printf(
@@ -370,9 +370,11 @@ impl DefaultHost<'_> {
                 continue;
             }
             let mut spec = Spec::default();
-            while let Some(&flag @ (b'-' | b'0')) = self.scratch.get(position) {
+            while let Some(&flag @ (b'-' | b'0' | b'#')) = self.scratch.get(position) {
                 if flag == b'-' {
                     spec.left = true;
+                } else if flag == b'#' {
+                    spec.alternate = true;
                 } else {
                     spec.zero = true;
                 }
@@ -423,14 +425,19 @@ impl DefaultHost<'_> {
                     "{}",
                     integer(arg)? & width_type(length).mask()
                 )),
-                | b'x' => digits.format(format_args!(
-                    "{:x}",
-                    integer(arg)? & width_type(length).mask()
-                )),
-                | b'X' => digits.format(format_args!(
-                    "{:X}",
-                    integer(arg)? & width_type(length).mask()
-                )),
+                | b'o' | b'x' | b'X' => {
+                    let value = integer(arg)? & width_type(length).mask();
+                    // C99 §7.19.6.1p6: octal starts with zero;
+                    // hexadecimal has a base prefix only for nonzero values.
+                    match (conversion, spec.alternate && value != 0) {
+                        | (b'o', true) => digits.format(format_args!("0{value:o}")),
+                        | (b'o', false) => digits.format(format_args!("{value:o}")),
+                        | (b'x', true) => digits.format(format_args!("0x{value:x}")),
+                        | (b'x', false) => digits.format(format_args!("{value:x}")),
+                        | (_, true) => digits.format(format_args!("0X{value:X}")),
+                        | (_, false) => digits.format(format_args!("{value:X}")),
+                    }
+                },
                 | b'c' => {
                     spec.zero = false;
                     digits.bytes[0] = truncate_u8(integer(arg)?);
@@ -465,9 +472,10 @@ impl DefaultHost<'_> {
 /// A `printf` conversion's flags and field width.
 #[derive(Clone, Copy, Default)]
 struct Spec {
-    left:  bool,
-    zero:  bool,
-    width: usize,
+    left:      bool,
+    zero:      bool,
+    alternate: bool,
+    width:     usize,
 }
 
 /// Interpreter limit on padding for one conversion (one MiB). Precision
@@ -477,18 +485,23 @@ const MAX_FORMAT_WIDTH: usize = 1024 * 1024;
 
 impl Spec {
     /// Appends `body` to `output`, padded to the field width: with spaces
-    /// after it for `-`, with zeros after its sign for `0`, else with spaces
-    /// before it.
+    /// after it for `-`, with zeros after its sign or base prefix for `0`, else
+    /// with spaces before it.
+    /// C99: §7.19.6.1 paragraph 6, pp. 275-276; PDF pp. 287-288.
     fn pad(self, output: &mut ArenaVec<'_, u8>, body: &[u8]) {
         let padding = self.width.saturating_sub(body.len());
         if self.left {
             output.extend_from_slice(body);
             output.extend(std::iter::repeat_n(b' ', padding));
         } else if self.zero {
-            let sign = usize::from(body.first() == Some(&b'-'));
-            output.extend_from_slice(&body[..sign]);
+            let prefix = if body.starts_with(b"0x") || body.starts_with(b"0X") {
+                2
+            } else {
+                usize::from(body.first() == Some(&b'-'))
+            };
+            output.extend_from_slice(&body[..prefix]);
             output.extend(std::iter::repeat_n(b'0', padding));
-            output.extend_from_slice(&body[sign..]);
+            output.extend_from_slice(&body[prefix..]);
         } else {
             output.extend(std::iter::repeat_n(b' ', padding));
             output.extend_from_slice(body);

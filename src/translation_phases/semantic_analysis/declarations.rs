@@ -670,6 +670,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let index = self.bindings.len();
         self.bindings.push(Binding {
+            builtin: false,
             name,
             ty,
             scope: self.scope,

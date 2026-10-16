@@ -42,6 +42,10 @@ impl<'ir> Module<'ir> {
                 opcode: Opcode::VaStart | Opcode::VaEnd,
                 ..
             }
+            | InstData::Nullary {
+                opcode: Opcode::Trap,
+                ..
+            }
             | InstData::Store { .. }
             | InstData::MemoryRange { .. }
             | InstData::Jump { .. }
@@ -49,6 +53,14 @@ impl<'ir> Module<'ir> {
             | InstData::Switch { .. }
             | InstData::Return { .. }
             | InstData::Unreachable => None,
+            | InstData::Unary {
+                opcode: Opcode::DynAlloca,
+                ..
+            }
+            | InstData::StackAddr { .. }
+            | InstData::GlobalAddr { .. }
+            | InstData::FuncAddr { .. } => Some(Type::Ptr),
+            | InstData::Binary { opcode, .. } if opcode.is_overflow() => Some(Type::I1),
             | InstData::Binary { ty, .. }
             | InstData::Unary { ty, .. }
             | InstData::Select { ty, .. }
@@ -57,9 +69,7 @@ impl<'ir> Module<'ir> {
             | InstData::Nullary { ty, .. }
             | InstData::Load { ty, .. } => Some(ty),
             | InstData::IntCompare { .. } | InstData::FloatCompare { .. } => Some(Type::I1),
-            | InstData::StackAddr { .. }
-            | InstData::GlobalAddr { .. }
-            | InstData::FuncAddr { .. } => Some(Type::Ptr),
+
             | InstData::Call { func, .. } => self
                 .functions
                 .get(func)

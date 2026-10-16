@@ -314,7 +314,10 @@ impl<'s> CallGraph<'s> {
                                 unsafe_body |= returns_twice(module.function(func).name),
                             | _ => {},
                         }
-                        unsafe_body |= body.inst(inst).opcode() == Opcode::VaStart;
+                        unsafe_body |= matches!(
+                            body.inst(inst).opcode(),
+                            Opcode::VaStart | Opcode::DynAlloca
+                        );
                     }
                 }
             }

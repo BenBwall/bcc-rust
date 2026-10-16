@@ -164,7 +164,7 @@ pub(super) fn emit<'s>(
                 let value = value.map(|value| map(value, &values)).transpose()?;
                 builder.ret(value);
             },
-            | None => builder.unreachable(),
+            | Some(Terminator::Unreachable) | None => builder.unreachable(),
         }
     }
     builder.finish();

@@ -1153,7 +1153,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         info: ExpressionInfo<'tu>,
     ) -> TypeId {
-        let (ty, kind) = match self.types.nodes[info.ty.index] {
+        let (ty, kind) = self.value_conversion(info);
+        if let Some(kind) = kind {
+            self.convert(info.expression, ty, kind);
+        }
+        ty
+    }
+
+    /// Determines the value type without recording a second conversion for
+    /// an already-converted expression statement's tail.
+    /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58.
+    pub(super) fn value_conversion(
+        &mut self,
+        info: ExpressionInfo<'tu>,
+    ) -> (TypeId, Option<ConversionKind>) {
+        match self.types.nodes[info.ty.index] {
             | TypeKind::Array(element, _) => (
                 self.types.intern(TypeKind::Pointer(element)),
                 Some(ConversionKind::ArrayDecay),
@@ -1171,11 +1185,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(ConversionKind::Lvalue),
                 ),
             | _ => (info.ty.unqualified(), None),
-        };
-        if let Some(kind) = kind {
-            self.convert(info.expression, ty, kind);
         }
-        ty
     }
 
     /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55. Bit-field width can promote
@@ -1410,19 +1420,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C89 implicit function declarations are retained in GNU modes.
-    /// Strict C99 and later require a declaration.
+    /// Strict C99 and later require a declaration. Known library names use
+    /// their real prototypes, as Clang does, rather than C89 implicit int.
+    /// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84;
+    /// §7.1.4 paragraph 2, p. 167; PDF p. 179.
     /// C89: §3.3.2.2, p. 41; PDF p. 55.
     /// C99: §6.5.1 paragraph 2, p. 69; PDF p. 81.
     pub(in crate::translation_phases::semantic_analysis) fn implicit_function(
         &mut self,
-        mut e: &'tu Expression<'tu>,
+        e: &'tu Expression<'tu>,
     ) {
         if self.tainted {
             return;
         }
-        while let ExpressionType::Parenthesized { expression } = e.kind {
-            e = expression;
-        }
+        let e = super::selected_designator(e, |e| Some(self.expression_info(e)));
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
             && self.builtin_name(name)
@@ -1431,7 +1442,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
             let ty = if let Some(ty) = self
-                .library_builtin_type(name)
+                .common_builtin_type(name)
+                .or_else(|| self.library_builtin_type(name))
                 .or_else(|| self.x86_builtin_type(name))
             {
                 ty
@@ -1444,6 +1456,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     variadic: false,
                 })
             };
+            let index = self.bindings.len();
             self.bind(
                 name,
                 ty,
@@ -1452,6 +1465,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
+            self.bindings[index].builtin = true;
             return;
         }
         if let ExpressionType::Identifier(name) = e.kind
@@ -1462,12 +1476,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_native(crate::configuration::Feature::ImplicitFunctionDeclaration)
                 || self.context.configuration.gnu_extensions())
         {
-            let result = self.types.scalar(Scalar::Int);
-            let ty = self.types.intern(TypeKind::Function {
-                result,
-                parameters: &[],
-                prototype: false,
-                variadic: false,
+            let ty = self.implicit_library_type(name).unwrap_or_else(|| {
+                let result = self.types.scalar(Scalar::Int);
+                self.types.intern(TypeKind::Function {
+                    result,
+                    parameters: &[],
+                    prototype: false,
+                    variadic: false,
+                })
             });
             self.bind(
                 name,
@@ -1493,57 +1509,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &self,
         name: Identifier,
     ) -> bool {
-        super::atomics::modeled(self.context.string_cache.at(name.name))
+        (self.context.configuration.gnu_extensions()
+            && self.context.string_cache.at(name.name) == "alloca")
+            || super::atomics::modeled(self.context.string_cache.at(name.name))
             || self
                 .context
                 .string_cache
                 .at(name.name)
                 .starts_with("__builtin_")
-    }
-
-    /// GCC's `__builtin_constant_p` folds to whether its operand is an
-    /// arithmetic constant; it returns `int` and is valid where a constant
-    /// is required. GNU extension; C99: §6.6p10, p. 96; PDF p. 108.
-    /// GNU extension: GCC manual, "Other Builtins".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-    pub(super) fn constant_p(
-        &mut self,
-        e: &'tu Expression<'tu>,
-        function: &'tu Expression<'tu>,
-        arguments: ArenaList<'tu, &'tu Expression<'tu>>,
-    ) -> Option<ExpressionInfo<'tu>> {
-        let mut callee = function;
-        while let ExpressionType::Parenthesized { expression } = callee.kind {
-            callee = expression;
-        }
-        let ExpressionType::Identifier(name) = callee.kind else {
-            return None;
-        };
-        let &[argument] = arguments.as_slice() else {
-            return None;
-        };
-        // Undeclared builtins are bound as opaque functions; a user
-        // declaration with a known result type is an ordinary function.
-        if self.context.string_cache.at(name.name) != "__builtin_constant_p"
-            || self
-                .lookup(Namespace::Ordinary, name.name)
-                .is_some_and(|entry| {
-                    !matches!(
-                        self.types.nodes[self.bindings[entry.binding].ty.index],
-                        TypeKind::Function { result, .. } if result == self.types.unknown()
-                    )
-                })
-        {
-            return None;
-        }
-        let operand = self.expression_info(argument);
-        let constant = operand.constant == ConstantClass::Arithmetic
-            && (operand.integer.is_some() || operand.floating.is_some());
-        let mut info = Self::expression_result(e, self.types.scalar(Scalar::Int));
-        info.integer = Some(Integer::int(i128::from(constant)));
-        info.ice = true;
-        info.constant = ConstantClass::Arithmetic;
-        Some(info)
     }
 
     /// Checks integer switch expressions and scalar selection/iteration

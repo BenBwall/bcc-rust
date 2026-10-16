@@ -189,7 +189,7 @@ load  <ty> addr                  → ty      flags: volatile, align, access tag
 store <ty> value, addr                     flags: volatile, align, access tag
 copy  dst, src, size, align                flags: volatile, may_overlap
 fill  dst, byte, size, align               (memset)
-dyn_alloca size, align           → ptr     (VLAs; later)
+dyn_alloca.i64 size             → ptr     (function-lifetime, align 16)
 ```
 
 Calls: `call func(args)` and `call_indirect sig, callee(args)`, each with zero
@@ -449,6 +449,15 @@ category, resolved binding, bit-field information, operation type, folded
 constant), the conversion records applied to each operand in order, every
 binding with storage duration and linkage, and the type graph with target
 layouts and member offsets.
+
+Inline body emission is decided by semantic analysis and consumed by lowering:
+C99 inline-only bodies and GNU89 `extern inline` bodies remain external
+declarations in IR, so uninlined calls and addresses refer to the external
+symbol. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
+The interpreter and LLVM therefore share the same decision. See
+`language-standards.md` for mode overrides and the per-function `gnu_inline`
+attribute. C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125), §6.9p5 (p. 140;
+PDF p. 152), and [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
 
 ### Front-end prerequisites (stage 0)
 
@@ -881,3 +890,141 @@ itself. Windows inliner measurements and validation are recorded in
   LICM move code; measure before switching to linked lists.
 - The `returns_twice` rule for the in-house optimizer needs a test written from
   C99 §7.13 before it is trusted.
+
+
+## GCC scalar intrinsics and GNU block expressions (2026-10-12)
+
+The scalar intrinsic layer shares a name classifier between semantic analysis
+and lowering. Fixed signatures retain target-dependent `long` and `size_t`
+widths; bswap64 uses the target's uint64_t type (unsigned long on LP64,
+unsigned long long on LLP64). Overloaded overflow operands retain their
+individual integer types.
+The call checker validates counts, pointer destinations, bool/enum exclusion,
+read-only destinations, and constant control operands. All ordinary-call GNU
+intrinsics use `Feature::GnuBuiltins` and `Context::report_extension`.
+
+`clz`/`ctz` are unary integer instructions with a same-width count result and
+poison on zero. `clz_defined`/`ctz_defined` return the operand width on zero;
+`popcount` and `bswap` are total unary integer operations (`bswap` requires
+16/32/64/128 bits). These map to LLVM `ctlz`, `cttz`, `ctpop`, and `bswap`;
+parity, ffs, and redundant-sign counts use ordinary integer operations.
+`uadd_overflow` and `umul_overflow` take two same-width integers and return
+`i1`, using LLVM's unsigned overflow intrinsics. Generic and typed GCC
+add/sub/mul overflow lower through unsigned 128-bit magnitudes and explicit
+signs, preserving infinite-precision comparisons even for mixed signedness
+and 128-bit extremes. Stores retain the wrapped result on overflow.
+Predicate forms evaluate the third operand's effects and use its bit-field
+precision without promoting it. The effect-only schedule discards unused
+nonvolatile reads even beside calls/increments, retains volatile reads, and
+branches only when needed to select effects. Constant predicates are integer constant
+expressions when their evaluated operands are integer constant expressions.
+
+`expect` and alignment assumptions return their first argument; probability
+and alignment arguments are checked without introducing optimizer promises.
+Prefetch evaluates its arguments and emits no memory access. `constant_p`
+returns one only for a retained integer constant expression. Both object-size
+queries conservatively return `(size_t)-1` in modes 0/1 or zero in modes 2/3;
+no bound is inferred and no argument is evaluated. `trap` is a side-effecting
+nullary instruction mapping to LLVM `trap`, followed by `unreachable`;
+`unreachable` itself ends control flow and is undefined when executed.
+
+`dyn_alloca.i64 size` is deliberately smaller than a general VLA/lifetime IR.
+It creates a fresh uninitialized byte object of the unsigned size on every
+execution, including each loop iteration, with 16-byte alignment (the current
+x86-64 targets' ordinary stack alignment). Its result is a pointer and its
+storage remains live until this invocation returns. The interpreter adds the
+object to the current frame's stack allocations and releases it on return;
+LLVM emits `alloca i8, i64 size, align 16` at the point of execution. Poison
+size is undefined; allocation/resource exhaustion is an interpreter failure.
+Zero-size allocations produce an object whose bytes cannot be accessed.
+Dynamic allocations are effectful, are neither moved nor merged, and callees
+containing them are not inlined, preserving function lifetime. Fixed stack
+slots keep their existing representation and size bound. Scoped VLA lifetimes,
+stack-save/restore, and explicitly aligned alloca variants remain deferred.
+
+GNU omitted-middle conditionals test a saved first value before converting the
+selected result, and evaluate that value once. Case ranges compare unsigned
+`control - lower <= upper - lower`, so very wide ranges need constant space;
+ordinary switch labels remain switch entries. Statement expressions execute
+an explicit-stack block schedule and return the final expression statement's converted
+value, including array/function decay; other endings yield void. Constant choose-expr
+selections lower only their chosen operand. Scalar header varargs use existing
+IR `va_start`, `va_arg`, `va_copy`, and `va_end`; aggregate varargs remain
+explicitly unsupported.
+
+Contracts: [GCC bit operations](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html),
+[GCC overflow builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html),
+[GCC other builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html),
+[GCC object sizes](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html),
+[GCC stack allocation](https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html),
+[GCC statement expressions](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html),
+[GCC case ranges](https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html), and
+[GCC omitted operands](https://gcc.gnu.org/onlinedocs/gcc/Conditionals.html).
+C99 §6.5.2.2p2,7, pp. 71-72; PDF pp. 83-84 governs fixed call conversions;
+§6.5.15p4, p. 90; PDF p. 102 governs conditional sequencing; §7.15.1,
+pp. 249-251; PDF pp. 261-263 governs the header varargs contracts.
+
+### PR #41 round-1 lowering corrections (2026-10-13)
+
+Builtin dispatch and library-symbol aliasing consume semantic binding origin;
+user calls retain their declared types and assembler labels. All user `alloca`
+declarations use ordinary calls, including compatible unlabeled definitions.
+Clang substitutes compatible unlabeled definitions even in strict mode by
+default, so that particular native reference uses `-fno-builtin-alloca` to test
+the requested ordinary-call contract. Incompatible definitions and assembler
+labels compare against Clang's default behavior. Paired intrinsic/pointer
+shadow programs cover all scalar, overflow, hint, expression-only varargs and
+supported library name families through semantics, interpretation and native
+O0/O2 comparisons.
+
+Overflow predicate type operands now have cached effect summaries keyed by
+expression identity and whether its value is read. An explicit postorder
+stack computes child summaries once, and a function-local arena-backed cache
+reuses them during short-circuit scheduling. Volatile reads and address-only
+operands retain their previous distinctions. A 2,048-deep chain regression
+counts expression visits through the public pipeline: the pre-fix code visited
+6,298,625 expressions; the fixed code visits 20,479, within the regression's
+32,768-visit bound. Existing
+short-circuit, volatile, call and increment tests preserve effect behavior.
+The contract remains [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html)
+and C99 6.7.3p6 (printed p. 109, PDF p. 121).
+
+### PR #41 round-3 scalar and block-expression coverage (2026-10-13)
+
+GNU block tails now consume the expression statement's recorded conversions,
+matching their retained semantic value types. Loop header jumps use outer body
+targets, with semantic rejection when none exists; switch controlling-expression
+context already matched lowering. See the round-3 semantic record and
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+C99 6.3.2.1p2-4 (printed p. 46, PDF p. 58) and 6.8.6.2p1/6.8.6.3p1
+(printed p. 138, PDF p. 150) govern the underlying conversions and constraints.
+
+Textual IR now executes both `uadd_overflow` and `umul_overflow` at i8, i16,
+i32, i64 and i128. Each width has overflowing, adjacent non-overflowing and zero
+boundary cases, exercised as both parameterized instructions and constant
+instructions before/after the fold pass. LLVM emission must retain each width's
+intrinsic in the parameterized function; native O0/O2 executions compare with
+Clang-compiled C references. These checks passed without an overflow
+implementation change. The IR has no signed overflow predicate opcodes;
+separate C probes cover signed add/subtract/multiply destinations at 8, 16 and
+32 bits, with literal overflow and wrapped-result expectations, through the
+interpreter stages and native Clang comparisons. Contract:
+[GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+
+Native-reference limitation: bundled Clang 23.1.1 crashes for outer-switch
+breaks from for initializers and a nested switch controlling expression. It
+also selects the inner loop for jumps from while/do conditions and for
+conditions/increments, even when an outer body exists; continue can loop
+forever. `CLANG_HEADER_REFERENCE` excludes those 15 cases from Clang alone,
+retaining the six for-initializer and switch-header jumps to an outer loop.
+All 21 cases execute in bcc against literal results and, when GCC is available,
+an independent GCC O0/O2 reference. The installed GCC passes all 21 at both
+levels. No compiler or LLVM-tree change was made for these upstream failures.
+
+Validation passed: `cargo test --all-targets`, the 26 feature-enabled allocation
+tests, nightly formatting, Clippy with warnings denied in debug, release and
+benchmarking-internals configurations, `git diff --check`, and
+`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`. The plain CLI was rebuilt
+last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
+and exits with status 1, without an internal lowering error. Shared LLVM trees
+were preserved; no staging or commits were performed.

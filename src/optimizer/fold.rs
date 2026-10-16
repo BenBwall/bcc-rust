@@ -183,6 +183,18 @@ fn fold_binary(
         | Some(Constant::Int(_, bits)) => Some(bits),
         | _ => None,
     };
+    if opcode.is_overflow() {
+        return match (constant_a, constant_b) {
+            | (Some(Constant::Int(_, a)), Some(Constant::Int(_, b))) =>
+                Some(Outcome::Constant(Constant::Int(
+                    Type::I1,
+                    u128::from(crate::ir::unsigned_overflow(opcode, ty, a, b)),
+                ))),
+            | (Some(Constant::Poison(_)), _) | (_, Some(Constant::Poison(_))) =>
+                Some(Outcome::Constant(Constant::Poison(Type::I1))),
+            | _ => None,
+        };
+    }
     let poison = Outcome::Constant(Constant::Poison(ty));
     let from_folded = |folded: Folded| match folded {
         | Folded::Int(bits) => Outcome::Constant(Constant::Int(ty, bits)),
@@ -263,6 +275,12 @@ fn identity(
 fn fold_unary(draft: &Draft<'_, '_>, opcode: Opcode, ty: Type, arg: Value) -> Option<Outcome> {
     let constant = draft.constant(arg)?;
     match (opcode, constant) {
+        | (opcode, Constant::Int(_, bits)) if opcode.is_bit_unary() => Some(Outcome::Constant(
+            crate::ir::bit_unary(opcode, ty, bits)
+                .map_or(Constant::Poison(ty), |bits| Constant::Int(ty, bits)),
+        )),
+        | (opcode, Constant::Poison(_)) if opcode.is_bit_unary() =>
+            Some(Outcome::Constant(Constant::Poison(ty))),
         | (Opcode::Freeze, Constant::Int(..)) => Some(Outcome::Value(arg)),
         | (Opcode::Zext | Opcode::Sext | Opcode::Trunc, Constant::Poison(_)) if ty.is_int() =>
             Some(Outcome::Constant(Constant::Poison(ty))),

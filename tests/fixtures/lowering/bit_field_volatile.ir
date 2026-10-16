@@ -23,12 +23,12 @@ block0(v0: ptr):
     v11 = or.i8 v10, v6
     store.i8 volatile v11, v0, align 1
     v12 = zext.i32 v4
-    v13 = load.i16 volatile v0, align 2
-    v14 = iconst.i16 4
-    v15 = lshr.i16 v13, v14
-    v16 = zext.i32 v15
-    v17 = iconst.i32 1
-    v18 = iadd.i32 nsw v16, v17
+    v13 = iconst.i32 1
+    v14 = load.i16 volatile v0, align 2
+    v15 = iconst.i16 4
+    v16 = lshr.i16 v14, v15
+    v17 = zext.i32 v16
+    v18 = iadd.i32 nsw v17, v13
     v19 = trunc.i16 v18
     v20 = iconst.i16 4095
     v21 = and.i16 v19, v20

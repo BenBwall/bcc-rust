@@ -152,7 +152,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             };
             if let Some(name) = name {
                 _ = self.reserved_names.insert(name);
-                if self.names.linked(binding.name.name).is_none()
+                if binding.builtin
+                    && self.names.linked(binding.name.name).is_none()
                     && let Some(runtime) = library_builtin_name(name)
                 {
                     _ = self.reserved_names.insert(runtime);
@@ -242,8 +243,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     }
 
     /// Declares a function definition's symbol; `None` when its body is
-    /// not lowered, as for a C99 inline definition, which provides no
-    /// external definition (§6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125).
+    /// not lowered for a C99 inline-only or GNU extern-inline definition.
+    /// The semantic pass decides emission once for the interpreter and LLVM.
+    /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p5,
+    /// p. 140; PDF p. 152. GNU extension: GCC manual, "Inline":
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>.
     fn declare_definition(
         &mut self,
         record: &FunctionRecord<'tu>,
@@ -276,10 +280,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let name = self.symbol_name(binding);
         // Builtin aliases describe the C binding, never the exact assembler
         // label chosen by the user (GNU extension to C99 §6.2.2p2).
-        let runtime = self
-            .names
-            .linked(data.name.name)
-            .is_none()
+        let runtime = (data.builtin && self.names.linked(data.name.name).is_none())
             .then(|| library_builtin_name(self.context.string_cache.at(data.name.name)))
             .flatten();
         let name = runtime.unwrap_or(name);
@@ -1170,7 +1171,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             definitions,
             defined_functions,
             defined_objects,
-            address_taken: address_taken::find(sema, tables),
+            address_taken: address_taken::find(sema, context, tables),
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_string_suffix: 1,

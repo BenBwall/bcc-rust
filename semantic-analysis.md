@@ -338,9 +338,17 @@ members, including array elements, prevent modification; bit-fields retain enoug
 information for promotion and address/sizeof constraints. Parentheses preserve
 the underlying category. Ordinary identifiers resolve through the declaration
 binding model. A function's `__func__` is modeled as a static const character array.
-Calls to undeclared names create an unprototyped int-returning function only in
-C89/C95 and GNU modes, using shared removed-feature policy. Strict C99 and later
-diagnose undeclared identifiers. Undeclared reserved `__builtin_*` names are GCC
+Calls to undeclared names are accepted only in C89/C95 and GNU modes, using
+shared removed-feature policy. Known standard library names receive the complete
+prototype from the existing 24-entry library-alias table, with target `size_t`,
+const input pointees and ellipsis. They also warn once per implicit binding,
+naming the function and type, as bundled Clang does. Other names keep the
+unprototyped int-returning type. Explicit declarations keep their written types;
+this path neither replaces them nor adds builtin folding or attributes. Strict
+C99 and later diagnose undeclared identifiers. This compatibility extension
+avoids mismatched calls under C99 §6.5.2.2p6,p9 (pp. 71-72; PDF pp. 83-84);
+§7.1.4p2 (p. 167; PDF p. 179) permits library declarations without headers.
+The C89 implicit declaration rule remains §3.3.2.2 (p. 41; PDF p. 55). Undeclared reserved `__builtin_*` names are GCC
 builtins in every mode: they are bound as opaque functions without a
 diagnostic, and calls to them have unknown results, except that
 `__builtin_constant_p` folds to whether its operand is an arithmetic constant.
@@ -614,7 +622,7 @@ known calls. Opaque results suppress dependent return-conversion errors.
   available, but statement constraints do not provide an executable control-flow
   graph or computed-goto target set.
 - GNU statement-expression result types, intrinsic signatures, local-label
-  nonlocal-jump mechanics, GNU89 inline semantics, attributes and calling-convention
+  nonlocal-jump mechanics, other attributes and calling-convention
   effects remain conservative. The five requested GNU statement forms retain
   parser-owned extension policy; accepted opaque constructs are not certified.
 - The existing parameter-inspection metadata still uses source provenance;
@@ -1194,6 +1202,19 @@ permission. GNU inline bodies are excluded from the C99 inline-definition
 restrictions. This resolves MinGW's external `__cpuidex` followed by the
 resource `cpuid.h` static definition; Clang includes both definitions too.
 
+`CompilerConfiguration::gnu89_inline()` now owns the effective emission mode:
+GNU89 before C99, C99 from C99 on, overridden by `-f[no-]gnu89-inline`.
+GNU extern-inline bodies with external linkage are retained as
+`DefinitionKind::Inline` immediately, per body, so a later ordinary declaration
+cannot promote them to external definitions. Plain GNU inline bodies are
+`DefinitionKind::Function`. C99 inline-only classification still waits for all
+file-scope declarations; a declaration with `extern` or without `inline`
+provides the external body. The per-function `gnu_inline` attribute overrides
+the global mode. Lowering consumes these retained facts for both interpreter
+and LLVM emission; neither backend independently interprets syntax or flags.
+C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125) and §6.9p5 (p. 140;
+PDF p. 152); GNU extension: [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
+
 `gnu_inline` is retained only from a declaration that itself specifies inline
 and precedes a unique function body, matching Clang's ignored-attribute rules.
 A previously valid attribute can still be inherited by later declarations.
@@ -1218,3 +1239,273 @@ intrinsic headers in both modes. The remaining MinGW `tgmath.h` and combined
 standard-header failures require a resource header plus Clang overloadable
 function resolution. Promotion overloads, real/complex overload selection and
 an unavailable variadic fallback make this a separate feature; it is deferred.
+
+
+### Common GCC scalar builtin coverage (2026-10-12)
+
+`builtins/common.rs` owns the fixed GCC scalar signatures, target-dependent
+parameter widths and fixed-width type identities, overloaded overflow
+constraints, control-argument validation,
+and conservative constant/object-size queries. Lowering shares its name
+classifier. `GnuBuiltins` reports these GNU-only calls through the common
+extension policy; prefetch now belongs to this family rather than vector
+builtins. Statement expressions retain the final expression statement's converted
+value type but never discard the block's effects by folding its tail. New focused
+semantic tests exercise signatures, rejected arities and types, ICE overflow
+predicates, and denied-extension diagnostics. See the GCC intrinsic contract
+section in [middle-end.md](middle-end.md) for conservative decisions and IR
+semantics. Unmodeled names still retain opaque types and bounded refusal.
+
+### PR #41 round-1 corrections (2026-10-13)
+
+Intrinsic typing now uses the resolved binding's implementation-origin flag.
+Every user object, function, typedef or enumerator declaration suppresses named
+intrinsic dispatch; implementation-created intrinsic bindings remain distinct
+from C89 implicit ordinary function declarations. This also covers vector,
+atomic, binary128 and x86 immediate checks. Expression-only varargs spellings
+(`__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`) are ordinary
+identifier calls and share the header operand checker. `__builtin_va_arg`
+retains its reserved type-operand grammar, matching the bundled Clang probe.
+C99 6.2.1p4 (printed pp. 29-30, PDF pp. 41-42) governs shadowing.
+
+Unbound plain `alloca` is recognized only in GNU modes. Every user declaration
+of that name, including a compatible prototype, definition or assembler label,
+uses the ordinary-call path. The reserved `__builtin_alloca` remains available
+in strict modes when unshadowed. Hosted mode alone enables implicit ordinary
+library prototypes; explicit `__builtin_` library aliases keep their GCC
+contract in freestanding mode too. C99 5.1.2.1p1 (printed p. 11, PDF p. 23)
+and [GCC Library Builtins](https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html)
+bound these environment and naming choices.
+
+Mode-selected GNU89 extern-inline bodies use the existing target emission rule:
+MSVC retains them; Windows GNU and Linux omit them. Explicit `gnu_inline`
+still omits them on all three targets, as independently checked against Clang
+for GNU89 and C99 with `-fgnu89-inline`. The MSVC body uses the same IR emission
+contract already used for that target's C99 inline functions. See
+[GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html) and C99 6.7.4p6
+(printed pp. 112-113, PDF pp. 124-125).
+
+Labels, gotos and switch contexts retain statement-expression ancestry.
+Semantic analysis rejects entering an expression from outside or from a
+sibling expression, with a primary jump/case diagnostic and a secondary label
+at the expression. Internal and outward jumps remain legal, including nested
+outward jumps. Function entry resets this state for nested functions.
+The constraint comes from [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html),
+extending C99 6.8.6.1p1 (printed p. 137, PDF p. 149) and 6.8.4.2p5
+(printed p. 134, PDF p. 146).
+
+### PR #41 round-2 corrections (2026-10-13)
+
+Statement-expression ancestry uses preorder subtree intervals in the semantic
+scratch arena. Entering an expression assigns its index; its restore
+continuation records the first index outside its subtree. Open intervals have
+an unbounded end, so case/default checks during traversal use the same query
+as resolved gotos. Testing whether the destination encloses the source now
+costs O(1), without recursion or a cache whose cost depends on repeated pairs.
+Function-local jump filtering and expression-source diagnostic labels retain
+the round-1 contract. The generated regression checks both repeated deepest
+sources and distinct sources at each nesting level, up to 32,768 expressions.
+A test-only work counter replaces noisy timing assertions; the original walk
+failed at depth 128 with 8,384 checks against a bound of 256.
+The interval query performs exactly one check per goto: 32,768 checks for
+each depth-32,768 pattern. Existing rejected-entry and legal-jump tests pass.
+
+The scalar builtin execution table now covers conversion-changing operands
+for all 18 fixed-signature overflow builtins: signed/unsigned add, subtract
+and multiply at int, long and long-long widths. Volatile inputs keep runtime
+conversion paths observable, while a literal uadd case checks truncation of
+0x100000000ULL to unsigned int before adding one. Long-width probes adapt to
+LP64 and LLP64. Each assertion checks the overflow flag and stored value.
+The contract is [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+
+A mixed switch combines ordinary labels, an inclusive 10 ... 20 range and
+default, checking both endpoints, adjacent values, an ordinary case falling
+through into the range body, and another falling through into default.
+Both coverage programs share the existing pre/post-ABI interpreter stages,
+bcc optimization settings and four native LLVM arms, including the optional
+Linux native runner. Bundled Clang independently accepts and executes both
+programs at -O0 and -O2.
+The new cases also pass in all interpreter stages on Linux GNU and Windows
+GNU and all four Windows native arms; no overflow or switch implementation
+change was needed. Linux native execution was skipped because WSL is
+unavailable in this environment.
+
+Validation passed: all-target tests, feature-enabled allocation counting
+(26 tests), nightly format checking, all-target Clippy in debug, release and
+benchmarking-internals configurations with -D warnings, and git diff --check.
+The final all-target run includes the backward jump into a closed sibling
+expression regression. The plain CLI was rebuilt after feature-enabled checks.
+
+### PR #41 round-3 corrections (2026-10-13)
+
+A statement expression returns its tail expression statement's converted value:
+arrays and function designators decay, lvalues lose their qualifiers and value
+category, and bit-field identity does not escape. Struct/union results are values;
+empty blocks, void expressions and other endings remain void. The ordinary
+expression-statement visit already records these conversions, so result typing
+uses the shared conversion classifier without adding duplicate records. Lowering
+now evaluates the tail with those records. Enclosing `sizeof` does not suppress
+the conversions inside the block, and block effects still prohibit folding the
+construct to its tail constant. C99 6.3.2.1p2-4 (printed p. 46, PDF p. 58) and
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+
+Loop jump context is installed by a body continuation and removed before a
+`do` condition; `while` and `for` headers likewise retain only outer contexts.
+Switch traversal already installs its context after its controlling expression,
+so it needs no change. Invalid header jumps use the existing break/continue
+constraint diagnostics and preserve following declarations. Tests cover every
+header, expression and declaration initializers, and valid jumps to outer loops
+or switches, including continue through a nested switch. C99 6.8.6.2p1 and
+6.8.6.3p1 (printed p. 138, PDF p. 150), extended by GCC Statement Exprs.
+
+The shared value and header-target fixtures run before/after bcc optimization
+and ABI lowering on Linux GNU and Windows GNU, and compare host native execution
+with bundled Clang at O0/O2. Semantic tests inspect categories and exact types;
+the header-jump diagnostic fixture pins complete rendered output. The previous
+positive test assigning to a statement-expression result was corrected to read
+its value, consistent with the independent Clang reference.
+
+Native-reference limitation: bundled Clang 23.1.1 crashes for outer-switch
+breaks from for initializers and a nested switch controlling expression. It
+also selects the inner loop for jumps from while/do conditions and for
+conditions/increments, even when an outer body exists; continue can loop
+forever. `CLANG_HEADER_REFERENCE` excludes those 15 cases from Clang alone,
+retaining the six for-initializer and switch-header jumps to an outer loop.
+All 21 cases execute in bcc against literal results and, when GCC is available,
+an independent GCC O0/O2 reference. The installed GCC passes all 21 at both
+levels. No compiler or LLVM-tree change was made for these upstream failures.
+
+Validation passed: `cargo test --all-targets`, the 26 feature-enabled allocation
+tests, nightly formatting, Clippy with warnings denied in debug, release and
+benchmarking-internals configurations, `git diff --check`, and
+`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`. The plain CLI was rebuilt
+last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
+and exits with status 1, without an internal lowering error. Shared LLVM trees
+were preserved; no staging or commits were performed.
+### PR #41 round-5 constant-argument audit (2026-10-13)
+
+Object-size modes now convert their ICE value to the target's `int` before
+checking 0 through 3. Both object-size spellings fold from that converted
+mode; lowering consumes the retained folded result instead of inspecting the
+original argument again. Signed narrowing uses the existing target integer
+truncation/sign-extension rule. The red semantic regression rejected
+4294967296ULL before this repair. Accepted and rejected wide constants are
+covered on all four targets, including unsigned 128-bit high-half values.
+The execution table covers all four converted modes in both spellings before
+and after optimization/ABI lowering and in the native arms. The reference
+program passes bundled Clang at O0/O2, with its expected conversion warnings.
+See [GCC Object Size Checking](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html)
+and C99 6.5.2.2p7 (printed p. 72, PDF p. 84), 6.3.1.3p1-3
+(printed p. 43, PDF p. 55).
+
+The audit also found the fixed `size_t` alignment parameter was checked before
+conversion. It now shares the converted-integer checker: 128-bit values that
+convert to 16 are valid; values that convert to zero or three remain invalid.
+Its optional offset accepts runtime values and has no immediate range check;
+lowering already evaluates its recorded conversion and effects. Installed GCC
+accepts and executes the wide-alignment program at O0/O2. Bundled Clang instead
+checks the original alignment and rejects it; this repair follows the task's
+specified parameter-conversion rule and the fixed GCC signature. See
+[GCC Other Builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html).
+
+The remaining audited paths need no narrowing repair:
+
+- Prefetch rw/locality follow `...`, with no fixed `int` parameter. Checking
+  their original wide ICE value is intentional; implicit narrowing would
+  wrongly accept 4294967296ULL as rw or 4294967299ULL as locality. Bundled
+  Clang rejects both. New audit regressions retain those constraints.
+- Expect-with-probability already rounds to the parameter's `double` before
+  checking its endpoints. Expect's other operands and fixed-signature bit,
+  byte-swap, allocation and overflow inputs use recorded parameter conversions.
+- Choose-expr tests ICE truth without an `int` parameter conversion; constant-p
+  tests constantness without evaluating its operand. Wide nonzero conditions
+  and wide constant queries are pinned by new audit assertions.
+- Generic overflow operands retain their own types; overflow-p's third operand
+  supplies a type/bit-field width, not a converted value. Existing fixed-signature
+  overflow execution coverage checks conversions at int/long/long-long widths;
+  new audit assertions distinguish wide and narrow predicate destinations.
+- Va-start/end/copy validate list storage and va-arg validates a type operand;
+  none has an integer/floating constant parameter. Offsetof indices and shuffle
+  lanes have their own integer-expression constraints, not fixed `int` formals.
+- X86 immediates already cast to the prototype parameter before range checking.
+  Atomic lock-free size queries already cast to target `size_t` before folding.
+
+The alloca coverage now pairs undeclared strict C99 rejection with GNU99
+intrinsic lowering and strict C99 acceptance of reserved __builtin_alloca.
+The strict test asserts the undeclared-identifier diagnostic and the pipeline's
+UnitHasErrors refusal, on Linux GNU and Windows GNU targets. No binding change
+was necessary. Bundled Clang rejects strict plain alloca and accepts the
+reserved spelling; its GNU99 mode lowers plain alloca when the modern
+implicit-function-declaration diagnostic is disabled.
+
+Validation passed: `cargo test --all-targets` (1,604 library tests passed,
+three existing ignores, and every integration target passed),
+`cargo test --features benchmarking-internals --test allocation_count`
+(26 tests), nightly formatting and format checking, all-target Clippy with
+warnings denied in debug, release and benchmarking-internals configurations,
+and `git diff --check`. Object-size and alignment regressions each failed
+before their corresponding fix. A missing final newline in the new alloca
+fixture was corrected before the successful full-suite rerun.
+Linux native execution was skipped because WSL returned access denied; all
+four target semantic checks and all interpreter stages on both targets passed.
+The plain CLI was rebuilt after all feature-enabled checks. Shared LLVM
+junctions were preserved, and nothing was staged or committed. Whole-file
+commit groups are recorded in `target/commit-plan.md`.
+
+### PR #41 round-6 review repairs (2026-10-13)
+
+Reserved builtin identifiers acquire their semantic binding before expression
+reduction, including inside compile-time selections. Shared iterative lookup
+follows parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
+to the selected binding. Scalar intrinsic dispatch uses that binding in both
+semantic checking and lowering; user declarations and local function pointers
+keep ordinary-call behavior. Direct callee lookup also follows retained
+selections before falling back to an indirect call.
+
+Intrinsic-only builtin designators outside a call now report Clang's "builtin
+functions must be directly called" diagnostic instead of producing external
+references. An arena-backed linear pass marks transparent child edges and
+callee uses, then diagnoses the outermost invalid designator use. Library
+builtin aliases retain addressability. See
+[GCC Other Builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html)
+and [Library Builtins](https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html);
+C99 6.5.1p5 (printed p. 69, PDF p. 81) preserves parenthesized designation.
+
+Statement-expression tail lookup iteratively strips ordinary, case/default,
+case-range and attributed labels. Lowering keeps the final statement on its
+task stack with a value-preserving flag: each label enters its usual jump
+target before the converted tail is evaluated. C99 6.8.1p4 (printed p. 132,
+PDF p. 144) and
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html)
+support ordinary labeled tails. Direct case/default tails would require an
+outer switch to enter a statement expression, which GCC and Clang reject;
+semantic regressions preserve that diagnostic while checking tail typing.
+Execution tests therefore use legal internal case/default dispatch and jumps
+from those arms to an ordinary labeled value tail.
+
+Object-size modes, expect probabilities, assume-aligned alignments, and
+prefetch read/write/locality operands have requirement-specific diagnostics
+and goldens. Fixed-parameter checks retain round 5's converted-value rules;
+prefetch ICEs retain their original width, and optional alignment offsets
+remain allowed at runtime. Incompatible argument types emit only conversion
+errors, without an additional value-constraint error. Both new goldens retain
+following declarations and exact source spellings.
+
+The focused `Pass::Inline` regression calls a small dynamic-alloca function
+from a loop, asserts its call survives, and checks literal return values and
+at most 512 retained interpreter byte cells for 1 and 10,000 iterations.
+The original exclusion is retained: inlining would extend each allocation's
+lifetime to the caller's return. See
+[GCC Stack Allocation](https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html).
+
+Round-6 validation passed on Windows: `cargo test --all-targets` (1,611
+library tests passed, three existing ignores, and every integration target),
+all 26 feature-enabled allocation tests, nightly formatting and format checking,
+all-target Clippy with warnings denied in debug, release and feature-enabled
+configurations, and `git diff --check`. The plain CLI was rebuilt last.
+Removing the dynamic-alloca inliner exclusion made the new call-retention
+assertion fail; restoring it passed both iteration counts. Both execution
+fixtures returned zero with GCC and Clang at O0/O2. Linux native execution
+was unavailable because WSL returned access denied. Shared LLVM junctions
+were preserved, and nothing was staged or committed. The whole-file commit
+plan is `target/commit-plan.md`; check logs are under `target/round6/`.

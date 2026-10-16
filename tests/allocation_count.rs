@@ -534,6 +534,32 @@ mod measurements {
     }
 
     #[test]
+    fn gcc_scalar_builtin_typing_allocates_only_from_arenas() {
+        let source = r#"
+_Static_assert(__builtin_mul_overflow_p(100,3,(signed char)0),"overflow");
+int f(unsigned x,int y) {
+  int result;unsigned swapped=__builtin_bswap32(x);
+  __builtin_add_overflow(x,y,&result);
+  void *p=__builtin_alloca(x+1);p=__builtin_assume_aligned(p,16);
+  __builtin_prefetch(p,0,3);
+  return ({int z=__builtin_clz(x)+__builtin_ctz(x)+__builtin_popcount(x)+__builtin_ffs(y)+__builtin_clrsb(y);z;}) ?: (int)__builtin_expect(result,0);
+}
+int g(void) {return __builtin_constant_p(1+2)+(__builtin_object_size((void*)0,0)==(__SIZE_TYPE__)-1);}
+int h(void) {return __builtin_choose_expr(1,__builtin_clz,__builtin_ctz)(1u);}
+int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
+"#;
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("GCC scalar builtin typing", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "void f(void){_Bool \
+                      b;__builtin_mul_overflow(1,2,&b);__builtin_prefetch((void*)0,2,4);\
+                      __builtin_ctz();&__builtin_clz;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "invalid scalar builtin operands");
+        assert!(summary.diagnostics >= 3);
+    }
+
+    #[test]
     fn int128_types_constants_and_diagnostics_allocate_only_from_arenas() {
         let source = include_str!("fixtures/targets/int128.c");
         let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));

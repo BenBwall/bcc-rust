@@ -55,10 +55,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
     pub(super) fn statement_work(&mut self, work: StatementWork<'tu>) {
         match work {
+            | StatementWork::RestoreStatementExpression { index, previous } => {
+                self.statements.statement_expressions[index].end =
+                    self.statements.statement_expressions.len();
+                self.statements.statement_expression = previous;
+            },
             | StatementWork::Substatement(statement) => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
                 self.work.push(Work::Statement(statement, false));
+            },
+            | StatementWork::LoopBody(statement) => {
+                // C99 §6.8.6.2p1, §6.8.6.3p1 (p. 138; PDF p. 150):
+                // jump context belongs to the body. GNU "Statement Exprs"
+                // sends header jumps to an enclosing body, if one exists.
+                // <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+                self.statements.loops += 1;
+                self.work
+                    .push(Work::StatementWork(StatementWork::LeaveLoop));
+                self.work
+                    .push(Work::StatementWork(StatementWork::Substatement(statement)));
             },
             | StatementWork::SwitchReady(slot, body) => {
                 let ty = if let Some(e) = slot_expression(slot) {
@@ -77,6 +93,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 let index = self.statements.switches.len();
                 self.statements.switches.push(Switch {
+                    statement_expression: self.statements.statement_expression,
                     ty,
                     vm: self.statements.vm,
                     cases: self.scratch.alloc(Collection::new()),
@@ -209,6 +226,50 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Retains the expression ancestry after its lexical block closes, so
+    /// forward gotos can be checked after their labels have been resolved.
+    /// GNU extension: GCC "Statement Exprs" prohibits entering an expression.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended goto constraint).
+    pub(super) fn enter_statement_expression(&mut self, source: SourceVectors) {
+        let previous = self.statements.statement_expression;
+        let index = self.statements.statement_expressions.len();
+        self.statements
+            .statement_expressions
+            .push(StatementExpression {
+                source,
+                end: usize::MAX,
+            });
+        self.statements.statement_expression = Some(index);
+        self.work.push(Work::StatementWork(
+            StatementWork::RestoreStatementExpression { index, previous },
+        ));
+    }
+
+    /// A target inside an expression is legal only when that expression
+    /// already encloses the jump. Preorder subtree intervals make each query
+    /// constant-time, permitting outward jumps and distinguishing siblings.
+    /// An open expression's end is unbounded until its restore continuation;
+    /// switch labels can therefore query it during body traversal too.
+    /// GNU extension: GCC "Statement Exprs"; C99: §6.8.6.1p1, p. 137;
+    /// PDF p. 149; §6.8.4.2p5, p. 134; PDF p. 146.
+    fn entered_statement_expression(
+        &self,
+        from: Option<usize>,
+        to: Option<usize>,
+    ) -> Option<SourceVectors> {
+        let target = to?;
+        #[cfg(test)]
+        self.statements
+            .ancestry_steps
+            .set(self.statements.ancestry_steps.get() + 1);
+        let expression = &self.statements.statement_expressions[target];
+        if from.is_some_and(|index| target <= index && index < expression.end) {
+            return None;
+        }
+        Some(expression.source)
+    }
+
     /// Records unique label definitions and goto uses in the current function.
     /// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
     /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
@@ -230,14 +291,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 self.statements.labels[index].definition = Some(name);
                 self.statements.labels[index].vm = self.statements.vm;
+                self.statements.labels[index].statement_expression =
+                    self.statements.statement_expression;
             }
         } else {
             _ = self.statements.labels[index].used.get_or_insert(name);
             self.statements.jumps.push(Jump {
-                function: self.functions.current.map_or(usize::MAX, |f| f.id),
-                label:    index,
-                source:   name,
-                vm:       self.statements.vm,
+                statement_expression: self.statements.statement_expression,
+                function:             self.functions.current.map_or(usize::MAX, |f| f.id),
+                label:                index,
+                source:               name,
+                vm:                   self.statements.vm,
             });
         }
     }
@@ -265,6 +329,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let index = self.statements.labels.len();
             self.statements.labels.push(Label {
+                statement_expression: None,
                 local: true,
                 function: self.functions.current.map_or(usize::MAX, |f| f.id),
                 name,
@@ -290,6 +355,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let index = self.statements.labels.len();
         self.statements.labels.push(Label {
+            statement_expression: None,
             local: false,
             function,
             name,
@@ -405,6 +471,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let label = self.statements.labels[jump.label];
             if label.definition.is_some()
                 && label.function == jump.function
+                && let Some(source) = self.entered_statement_expression(
+                    jump.statement_expression,
+                    label.statement_expression,
+                )
+            {
+                self.error(
+                    SemanticErrorKind::JumpIntoStatementExpression,
+                    jump.source.source_vectors,
+                    Some(jump.source.name),
+                    Some(source),
+                );
+            }
+            if label.definition.is_some()
+                && label.function == jump.function
                 && let Some(binding) = self.entered_vm(jump.vm, label.vm)
             {
                 self.error(
@@ -453,6 +533,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.4.2 paragraph 2, p. 134; PDF p. 146.
     pub(super) fn switch_label(&mut self, source: SourceVectors) {
         if let Some(index) = self.statements.switch {
+            if let Some(expression) = self.entered_statement_expression(
+                self.statements.switches[index].statement_expression,
+                self.statements.statement_expression,
+            ) {
+                self.error(
+                    SemanticErrorKind::SwitchIntoStatementExpression,
+                    source,
+                    None,
+                    Some(expression),
+                );
+            }
             if let Some(binding) =
                 self.entered_vm(self.statements.switches[index].vm, self.statements.vm)
             {
@@ -558,12 +649,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
 #[derive(Clone, Copy)]
 pub(super) enum StatementWork<'tu> {
+    RestoreStatementExpression {
+        index:    usize,
+        previous: Option<usize>,
+    },
     /// C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135;
     /// PDF p. 147. Associated substatements are blocks, including expressions.
     Substatement(&'tu Statement<'tu>),
     SwitchReady(ExpressionSlot<'tu>, &'tu Statement<'tu>),
     SwitchFinish(usize, Option<usize>),
     LeaveLoop,
+    LoopBody(&'tu Statement<'tu>),
     ForDeclarationDone(&'tu Declaration<'tu>),
     CaseDone(
         Option<&'tu Expression<'tu>>,
@@ -571,6 +667,14 @@ pub(super) enum StatementWork<'tu> {
         SourceVectors,
     ),
     ReturnDone(Option<ExpressionSlot<'tu>>, SourceVectors),
+}
+
+/// A preorder subtree interval, finalized when its expression body closes.
+/// GNU extension: GCC "Statement Exprs"; C99: §6.8.6.1p1, p. 137;
+/// PDF p. 149 (extended goto constraint).
+struct StatementExpression {
+    source: SourceVectors,
+    end:    usize,
 }
 
 /// A persistent declaration-scope path; forward labels can retain it after
@@ -589,22 +693,24 @@ struct VmScope {
 /// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
 #[derive(Clone, Copy)]
 struct Label {
-    local:      bool,
-    function:   usize,
-    name:       Identifier,
-    definition: Option<Identifier>,
-    vm:         Option<usize>,
-    used:       Option<Identifier>,
+    statement_expression: Option<usize>,
+    local:                bool,
+    function:             usize,
+    name:                 Identifier,
+    definition:           Option<Identifier>,
+    vm:                   Option<usize>,
+    used:                 Option<Identifier>,
 }
 
 /// A goto target and the variably modified scope path at its use.
 /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
 #[derive(Clone, Copy)]
 struct Jump {
-    function: usize,
-    label:    usize,
-    source:   Identifier,
-    vm:       Option<usize>,
+    statement_expression: Option<usize>,
+    function:             usize,
+    label:                usize,
+    source:               Identifier,
+    vm:                   Option<usize>,
 }
 
 /// A converted switch case value or inclusive GNU case interval.
@@ -624,23 +730,28 @@ struct Case {
 /// C99: §6.8.4.2 paragraphs 2-5, p. 134; PDF p. 146.
 #[derive(Clone, Copy)]
 struct Switch<'s> {
-    ty:    TypeId,
-    vm:    Option<usize>,
-    cases: &'s Collection<'s, Case>,
+    statement_expression: Option<usize>,
+    ty:                   TypeId,
+    vm:                   Option<usize>,
+    cases:                &'s Collection<'s, Case>,
 }
 
 pub(super) struct State<'s> {
-    pub(super) loops:    usize,
-    pub(super) switch:   Option<usize>,
-    pub(super) vm:       Option<usize>,
+    #[cfg(test)]
+    pub(super) ancestry_steps: std::cell::Cell<usize>,
+    pub(super) statement_expression: Option<usize>,
+    statement_expressions: ArenaVec<'s, StatementExpression>,
+    pub(super) loops: usize,
+    pub(super) switch: Option<usize>,
+    pub(super) vm: Option<usize>,
     pub(super) scope_vm: ArenaVec<'s, Option<usize>>,
-    vm_scopes:           ArenaVec<'s, VmScope>,
-    labels:              ArenaVec<'s, Label>,
-    label_names:         ArenaMap<'s, (usize, StringCacheId), usize>,
-    jumps:               ArenaVec<'s, Jump>,
-    switches:            ArenaVec<'s, Switch<'s>>,
-    case_count:          usize,
-    vm_queries:          ArenaMap<'s, (Option<usize>, Option<usize>), Option<usize>>,
+    vm_scopes: ArenaVec<'s, VmScope>,
+    labels: ArenaVec<'s, Label>,
+    label_names: ArenaMap<'s, (usize, StringCacheId), usize>,
+    jumps: ArenaVec<'s, Jump>,
+    switches: ArenaVec<'s, Switch<'s>>,
+    case_count: usize,
+    vm_queries: ArenaMap<'s, (Option<usize>, Option<usize>), Option<usize>>,
 }
 
 impl<'s> State<'s> {
@@ -648,6 +759,10 @@ impl<'s> State<'s> {
         let mut scope_vm = ArenaVec::new_in(scratch);
         scope_vm.push(None);
         Self {
+            #[cfg(test)]
+            ancestry_steps: std::cell::Cell::new(0),
+            statement_expression: None,
+            statement_expressions: ArenaVec::new_in(scratch),
             loops: 0,
             switch: None,
             vm: None,

@@ -143,6 +143,9 @@ pub(crate) enum Feature {
     MsVaArgs,
     Float128,
     VectorBuiltins,
+    /// GNU extension: GCC "Other Builtins" and the scalar builtin manuals.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    GnuBuiltins,
     /// Evaluated comma in #if, extending C99 §6.6p3, p. 95; PDF p. 107.
     PreprocessorComma,
     /// Macro-generated defined, extending C99 §6.10.1p4, p. 148; PDF p. 160.
@@ -267,6 +270,7 @@ impl Feature {
             | Self::FlexibleArrayExtensions
             | Self::ConstantFolding
             | Self::Float128
+            | Self::GnuBuiltins
             | Self::VectorBuiltins
             | Self::PreprocessorComma
             | Self::MacroExpandedDefined
@@ -403,6 +407,7 @@ impl Feature {
         Self::MsVaArgs,
         Self::Float128,
         Self::VectorBuiltins,
+        Self::GnuBuiltins,
         Self::PreprocessorComma,
         Self::MacroExpandedDefined,
         Self::QuotedHeaderBackslash,

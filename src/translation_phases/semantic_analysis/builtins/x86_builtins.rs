@@ -116,6 +116,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(binding) = function.binding else {
             return;
         };
+        if !self.bindings[binding].builtin {
+            return;
+        }
         let name = self
             .context
             .string_cache
@@ -163,18 +166,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         function: &'tu Expression<'tu>,
         args: super::ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
+        let function =
+            super::super::selected_designator(function, |e| Some(self.expression_info(e)));
         let super::ExpressionType::Identifier(id) = function.kind else {
             return None;
         };
-        let name = self.context.string_cache.at(id.name);
-        if name == "__builtin_prefetch" {
-            self.context.report_extension(
-                crate::configuration::Feature::VectorBuiltins,
-                "prefetch builtin",
-                id.source_vectors,
-            );
-            return Some(self.prefetch_builtin(e, args));
+        if !self
+            .expression_info(function)
+            .binding
+            .is_some_and(|id| self.bindings[id].builtin)
+        {
+            return None;
         }
+        let name = self.context.string_cache.at(id.name);
         let (arity, integer, floating) = match name {
             | "__builtin_elementwise_abs"
             | "__builtin_nondeterministic_value"
@@ -274,59 +278,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 TypeKind::Pointer(_)
                     | TypeKind::Scalar(Scalar::Float | Scalar::Double | Scalar::LongDouble)
             )
-    }
-}
-
-impl<'tu> Analyzer<'_, 'tu, '_> {
-    /// GCC Other Builtins: prefetch accepts a pointer and two optional ICEs.
-    /// GNU extension: GCC manual, "Other Builtins".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-    fn prefetch_builtin(
-        &mut self,
-        e: &'tu Expression<'tu>,
-        args: super::ArenaList<'tu, &'tu Expression<'tu>>,
-    ) -> ExpressionInfo<'tu> {
-        if args.is_empty() || args.len() > 3 {
-            self.error(
-                SemanticErrorKind::InvalidArgumentCount,
-                e.source_vectors,
-                None,
-                None,
-            );
-            return Self::expression_result(e, self.types.unknown());
-        }
-        let address = self.expression_info(args[0]);
-        let ty = self.converted(address);
-        if !self.types.unanalyzed(ty) && !matches!(self.types.nodes[ty.index], TypeKind::Pointer(_))
-        {
-            self.error(
-                SemanticErrorKind::InvalidArgumentType,
-                args[0].source_vectors,
-                None,
-                None,
-            );
-        }
-        for (i, &argument) in args.iter().enumerate().skip(1) {
-            let info = self.expression_info(argument);
-            if self.types.unanalyzed(info.ty) {
-                continue;
-            }
-            let value = info
-                .integer
-                .filter(|_| info.ice)
-                .and_then(super::Integer::to_i128);
-            let high = if i == 1 { 1 } else { 3 };
-            if !value.is_some_and(|v| v >= 0 && v <= high) {
-                self.error(
-                    SemanticErrorKind::InvalidImmediate,
-                    argument.source_vectors,
-                    None,
-                    None,
-                );
-            }
-        }
-        let ty = self.types.scalar(Scalar::Void);
-        Self::expression_result(e, ty)
     }
 }
 

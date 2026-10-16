@@ -174,10 +174,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.tasks.push(Task::EvaluateRaw(left_expression));
                 },
                 | operator if compound_operator(operator).is_some() => {
+                    // Choose RHS-first evaluation, then evaluate and update
+                    // the lvalue once. In particular, do not retain its old
+                    // value across a call that can modify the object.
+                    // C99 §6.5.16.2p3 (p. 93; PDF p. 105) permits this order;
+                    // C11 §6.5.16.2p3 (pp. 103-104; PDF pp. 121-122) requires
+                    // the update to be one evaluation relative to such a call.
                     self.tasks.push(Task::Finish(expression));
-                    self.tasks.push(Task::Evaluate(right_expression));
                     self.tasks.push(Task::ReadForUpdate(left_expression));
                     self.tasks.push(Task::EvaluateRaw(left_expression));
+                    self.tasks.push(Task::Evaluate(right_expression));
                 },
                 | _ => {
                     self.tasks.push(Task::Finish(expression));
@@ -212,6 +218,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 function_expression,
                 arguments,
             } => {
+                if self.schedule_builtin(expression, function_expression, arguments) {
+                    return Ok(());
+                }
                 self.tasks.push(Task::Finish(expression));
                 for &argument in arguments.iter().rev() {
                     self.tasks.push(Task::SnapshotArgument(argument));
@@ -262,14 +271,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )),
             | E::CompoundLiteral { initializer, .. } =>
                 self.compound_literal(info.ty, initializer, source)?,
-            | E::StatementExpression(_)
-            | E::Builtin(_)
-            | E::LabelAddress(_)
-            | E::OmittedConditional(_)
-            | E::Countof(_)
-            | E::Boolean(_)
-            | E::Nullptr
-            | E::Error =>
+            | E::Builtin(b) => self.schedule_keyword(expression, b)?,
+            | E::OmittedConditional(c) => {
+                let merge_params = self.merge_params(info.ty, source)?;
+                let merge = self.draft.create_block(merge_params);
+                let otherwise = self.draft.create_block(&[]);
+                self.tasks.push(Task::OmittedConditional {
+                    expression,
+                    conditional: c,
+                    otherwise,
+                    merge,
+                });
+                self.tasks.push(Task::EvaluateRaw(c.condition_expression));
+            },
+            | E::StatementExpression(statement) =>
+                self.statement_expression(statement, info.ty, super::StatementMode::Value),
+            | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
@@ -294,9 +311,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.push_item(result.operand, info.ty);
             },
             | E::Binary { operator, .. } if let Some(operation) = compound_operator(operator) => {
-                let right = self.pop();
                 let left = self.pop();
                 let place = self.pop();
+                let right = self.pop();
                 let operation_type = info.operation_type.ok_or_else(|| {
                     LoweringError::missing("a compound assignment has no type", source)
                 })?;
@@ -1285,58 +1302,59 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// The function binding a callee names directly, if it is an
-    /// identifier (in parentheses or not) that decays to its function.
+    /// identifier through transparent syntax or a compile-time selection
+    /// that decays to its function. GNU extension: GCC "Other Builtins".
+    /// C99: §6.5.1p5, p. 69; PDF p. 81 (parentheses).
     fn direct_callee(&self, callee: &'tu Expression<'tu>) -> Result<Option<usize>, LoweringError> {
         let conversions = self.conversions(callee);
         if conversions.len() != 1 || conversions[0].kind != ConversionKind::FunctionDecay {
             return Ok(None);
         }
-        let mut inner = callee;
-        loop {
-            match inner.kind {
-                | ExpressionType::Parenthesized { expression }
-                | ExpressionType::Unary {
-                    operator: UnaryOperator::Extension,
-                    operand_expression: expression,
-                } => {
-                    if !self.conversions(expression).is_empty() {
-                        return Ok(None);
-                    }
-                    inner = expression;
-                },
-                | ExpressionType::Identifier(name) => {
-                    let Some(binding) = self.info(inner)?.binding else {
-                        return Ok(None);
-                    };
-                    if self.unit.sema.bindings[binding].kind != BindingKind::Function {
-                        return Ok(None);
-                    }
-                    // A function that returns twice needs facts the IR does
-                    // not carry yet (C99 §7.13).
-                    let text = self.unit.context.string_cache.at(name.name);
-                    if matches!(
-                        text,
-                        "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
-                    ) {
-                        return Err(LoweringError::unsupported(
-                            Construct::Setjmp,
-                            callee.source_vectors,
-                        ));
-                    }
-                    // A typed compiler builtin is an operation, not a symbol
-                    // to call.
-                    if (text.starts_with("__builtin_") || named_builtin(text))
-                        && library_builtin_name(text).is_none()
-                    {
-                        return Err(LoweringError::unsupported(
-                            Construct::Builtin,
-                            callee.source_vectors,
-                        ));
-                    }
-                    return Ok(Some(binding));
-                },
-                | _ => return Ok(None),
-            }
+        let mut converted_child = false;
+        let inner =
+            crate::translation_phases::semantic_analysis::selected_designator(callee, |e| {
+                if !std::ptr::eq(e, callee) && !self.conversions(e).is_empty() {
+                    converted_child = true;
+                }
+                self.info(e).ok().copied()
+            });
+        if converted_child {
+            return Ok(None);
+        }
+        match inner.kind {
+            | ExpressionType::Identifier(name) => {
+                let Some(binding) = self.info(inner)?.binding else {
+                    return Ok(None);
+                };
+                if self.unit.sema.bindings[binding].kind != BindingKind::Function {
+                    return Ok(None);
+                }
+                // A function that returns twice needs facts the IR does
+                // not carry yet (C99 §7.13).
+                let text = self.unit.context.string_cache.at(name.name);
+                if matches!(
+                    text,
+                    "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
+                ) {
+                    return Err(LoweringError::unsupported(
+                        Construct::Setjmp,
+                        callee.source_vectors,
+                    ));
+                }
+                // A typed compiler builtin is an operation, not a symbol
+                // to call.
+                if self.unit.sema.bindings[binding].builtin
+                    && (text.starts_with("__builtin_") || named_builtin(text))
+                    && library_builtin_name(text).is_none()
+                {
+                    return Err(LoweringError::unsupported(
+                        Construct::Builtin,
+                        callee.source_vectors,
+                    ));
+                }
+                Ok(Some(binding))
+            },
+            | _ => Ok(None),
         }
     }
 
@@ -1450,10 +1468,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 /// The construct an expression form is, if lowering does not support it.
 fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
-        | ExpressionType::StatementExpression(_) => Construct::StatementExpression,
-        | ExpressionType::Builtin(_) => Construct::Builtin,
+        | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
         | ExpressionType::LabelAddress(_) => Construct::LabelAddress,
-        | ExpressionType::OmittedConditional(_) => Construct::OmittedConditional,
         | ExpressionType::Countof(_) | ExpressionType::Nullptr => Construct::Extension,
         | _ => return None,
     })

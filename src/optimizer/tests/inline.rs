@@ -30,6 +30,66 @@ block0(v0: i32):
 ";
 
 #[test]
+fn dynamic_alloca_callee_in_a_loop_retains_its_call_and_bounded_storage() {
+    // GNU Stack Allocation: each allocation dies when the callee returns.
+    // <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
+    let text = "\
+function @allocate(i64) -> i32 internal {
+block0(v0: i64):
+    v1 = dyn_alloca.i64 v0
+    v2 = iconst.i32 7
+    store.i32 v2, v1, align 4
+    v3 = load.i32 v1, align 4
+    return v3
+}
+
+function @main(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    v2 = iconst.i32 1
+    v3 = iconst.i64 256
+    jump block1(v1, v1)
+block1(v4: i32, v5: i32):
+    v6 = icmp.i32 slt v4, v0
+    brif v6, block2, block3
+block2:
+    v7 = call @allocate(v3)
+    v8 = iadd.i32 v5, v7
+    v9 = iadd.i32 v4, v2
+    jump block1(v9, v8)
+block3:
+    return v5
+}
+";
+    let (output, report) = optimize_text(text, &only(&[Pass::Inline]));
+    assert!(output.contains("call @allocate"), "{output}");
+    assert_eq!(report.stats(Pass::Inline).changes, 0);
+    for program in [text, output.as_str()] {
+        for iterations in [1_u32, 10_000] {
+            let run = crate::backend::interpreter::run_text_with(
+                program,
+                "main",
+                &[RuntimeValue::int(Type::I32, u128::from(iterations))],
+                crate::backend::interpreter::Limits::default(),
+            );
+            let outcome = run.result.unwrap();
+            assert_eq!(
+                outcome.termination,
+                crate::backend::interpreter::Termination::Returned(Some(RuntimeValue::int(
+                    Type::I32,
+                    u128::from(iterations * 7)
+                )))
+            );
+            assert!(
+                outcome.memory_cells <= 512,
+                "{iterations} iterations retained {} byte cells",
+                outcome.memory_cells
+            );
+        }
+    }
+}
+
+#[test]
 fn leaf_splits_block_and_replaces_result_with_continuation_parameter() {
     assert_pass(
         Pass::Inline,

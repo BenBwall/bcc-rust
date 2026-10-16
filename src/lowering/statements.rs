@@ -31,6 +31,7 @@ use super::{
         Local,
         Object,
         Operand,
+        StatementMode,
         Task,
     },
 };
@@ -81,14 +82,33 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn statement(
         &mut self,
         statement: &'tu Statement<'tu>,
+        mode: StatementMode,
     ) -> Result<(), LoweringError> {
         use StatementType as S;
         let source = statement.source_vectors;
+        // C99 §6.8.1p4, p. 132; PDF p. 144: labels preserve their statement.
+        // GNU statement-expression tails enter the same targets without
+        // discarding the final expression's converted value. Overflow type
+        // operands carry effect-only evaluation through the same targets.
+        // GNU extension: GCC "Integer Overflow Builtins".
+        // <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
+        let labeled_child = |inner| match mode {
+            | StatementMode::Value => Task::StatementValue(inner),
+            | StatementMode::Effects => Task::StatementEffects(inner),
+            | StatementMode::Discard => Task::Statement(inner),
+        };
+        let child = |inner| {
+            if mode == StatementMode::Effects {
+                Task::StatementEffects(inner)
+            } else {
+                Task::Statement(inner)
+            }
+        };
         match statement.kind {
             | S::Compound { items } =>
                 for item in items.iter().rev() {
                     self.tasks.push(match *item {
-                        | BlockItem::Statement(statement) => Task::Statement(statement),
+                        | BlockItem::Statement(statement) => child(statement),
                         | BlockItem::Declaration(declaration) => Task::Declaration(declaration),
                         | BlockItem::FunctionDefinition(definition) =>
                             return Err(LoweringError::unsupported(
@@ -99,8 +119,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 },
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
-                self.tasks.push(Task::Discard);
-                self.tasks.push(Task::Evaluate(expression));
+                if mode == StatementMode::Effects {
+                    self.tasks.push(Task::BuiltinEffects(expression, true));
+                } else {
+                    if mode == StatementMode::Discard {
+                        self.tasks.push(Task::Discard);
+                    }
+                    self.tasks.push(Task::Evaluate(expression));
+                }
             },
             | S::If {
                 condition_expression,
@@ -122,7 +148,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             block: then,
                             seal:  true,
                         },
-                        Task::Statement(then_statement),
+                        child(then_statement),
                         Task::JumpTo {
                             block: join,
                             seal:  false,
@@ -131,7 +157,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             block: otherwise,
                             seal:  true,
                         },
-                        Task::Statement(else_statement),
+                        child(else_statement),
                         Task::JumpTo {
                             block: join,
                             seal:  true,
@@ -152,7 +178,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             block: then,
                             seal:  true,
                         },
-                        Task::Statement(then_statement),
+                        child(then_statement),
                         Task::JumpTo {
                             block: join,
                             seal:  true,
@@ -194,7 +220,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         break_to:    exit,
                         continue_to: Some(header),
                     }),
-                    Task::Statement(body_statement),
+                    child(body_statement),
                     Task::PopTargets,
                     Task::JumpTo {
                         block: header,
@@ -227,7 +253,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         break_to:    exit,
                         continue_to: Some(test),
                     }),
-                    Task::Statement(body_statement),
+                    child(body_statement),
                     Task::PopTargets,
                     Task::JumpTo {
                         block: test,
@@ -293,7 +319,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         break_to:    exit,
                         continue_to: Some(step),
                     }),
-                    Task::Statement(clauses.body_statement),
+                    child(clauses.body_statement),
                     Task::PopTargets,
                     Task::JumpTo {
                         block: step,
@@ -359,7 +385,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let block = self.label_block(label.name);
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
-                self.tasks.push(Task::Statement(statement));
+                self.tasks.push(labeled_child(statement));
             },
             | S::Case(_, inner) | S::Default(inner) => {
                 let block = self
@@ -371,7 +397,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     })?;
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
-                self.tasks.push(Task::Statement(inner));
+                self.tasks.push(labeled_child(inner));
             },
             | S::Switch {
                 condition_expression,
@@ -385,15 +411,25 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         body: body_statement,
                         exit,
                     },
-                    Task::Statement(body_statement),
+                    child(body_statement),
                     Task::EndSwitch { statement, exit },
                 ]);
             },
             | S::Declaration(declaration) => self.tasks.push(Task::Declaration(declaration)),
-            | S::Attributed(attributed) => self.tasks.push(Task::Statement(attributed.statement)),
+            | S::Attributed(attributed) => self.tasks.push(labeled_child(attributed.statement)),
             | S::Null => {},
-            | S::CaseRange(_) =>
-                return Err(LoweringError::unsupported(Construct::CaseRange, source)),
+            | S::CaseRange(range) => {
+                let block = self
+                    .cases
+                    .get(&std::ptr::from_ref(statement).addr())
+                    .copied()
+                    .ok_or_else(|| {
+                        LoweringError::missing("a case range is outside a switch", source)
+                    })?;
+                self.draft.jump(block, &[]);
+                self.draft.switch_to(block);
+                self.tasks.push(labeled_child(range.statement));
+            },
             | S::Asm(_) | S::MsAsm(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::InlineAssembly,
@@ -436,6 +472,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let start = self.switch_blocks.len();
         let mut default = None;
         let mut cases = ArenaVec::new_in(self.scratch);
+        let mut ranges = ArenaVec::new_in(self.scratch);
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push(body);
         while let Some(statement) = pending.pop() {
@@ -462,11 +499,43 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     default = Some(self.case_block(statement));
                     pending.push(inner);
                 },
-                | StatementType::CaseRange(_) =>
-                    return Err(LoweringError::unsupported(
-                        Construct::CaseRange,
-                        statement.source_vectors,
-                    )),
+                | StatementType::CaseRange(range) => {
+                    let (
+                        ConstantExpressionSlot::Parsed(lower),
+                        ConstantExpressionSlot::Parsed(upper),
+                    ) = (range.lower, range.upper)
+                    else {
+                        return Err(LoweringError::missing(
+                            "case range bounds are absent",
+                            statement.source_vectors,
+                        ));
+                    };
+                    let lower = self
+                        .info(lower.expression())?
+                        .integer
+                        .ok_or_else(|| {
+                            LoweringError::missing(
+                                "case range bound is not constant",
+                                statement.source_vectors,
+                            )
+                        })?
+                        .cast(ty.bits(), signed);
+                    let upper = self
+                        .info(upper.expression())?
+                        .integer
+                        .ok_or_else(|| {
+                            LoweringError::missing(
+                                "case range bound is not constant",
+                                statement.source_vectors,
+                            )
+                        })?
+                        .cast(ty.bits(), signed);
+                    let block = self.case_block(statement);
+                    if lower.order_key() <= upper.order_key() {
+                        ranges.push((lower.value, upper.value, block));
+                    }
+                    pending.push(range.statement);
+                },
                 | StatementType::Compound { items } =>
                     for item in items.iter().rev() {
                         if let BlockItem::Statement(statement) = *item {
@@ -490,12 +559,41 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | _ => {},
             }
         }
-        let default = self.draft.edge(default.unwrap_or(exit), &[]);
-        self.draft.terminate_and_continue_dead(Terminator::Switch {
-            value,
-            default,
-            cases,
-        });
+        // GNU inclusive ranges use one unsigned interval comparison each,
+        // never an expansion proportional to the number of covered values.
+        // GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>.
+        let default = default.unwrap_or(exit);
+        if ranges.is_empty() {
+            let default = self.draft.edge(default, &[]);
+            self.draft.terminate_and_continue_dead(Terminator::Switch {
+                value,
+                default,
+                cases,
+            });
+        } else {
+            let first = self.draft.create_block(&[]);
+            let edge = self.draft.edge(first, &[]);
+            self.draft.terminate(Terminator::Switch {
+                value,
+                default: edge,
+                cases,
+            });
+            self.draft.seal(first);
+            self.draft.switch_to(first);
+            for (lower, upper, target) in ranges {
+                let next = self.draft.create_block(&[]);
+                let low = self.iconst(ty, lower);
+                let span = self.iconst(ty, upper.wrapping_sub(lower));
+                let offset = self.binary_inst(Opcode::Isub, InstFlags::empty(), value, low);
+                let condition = self.icmp(crate::ir::IntCC::Ule, offset, span);
+                self.draft.brif(condition, target, next);
+                self.draft.seal(next);
+                self.draft.switch_to(next);
+            }
+            let edge = self.draft.edge(default, &[]);
+            self.draft
+                .terminate_and_continue_dead(Terminator::Jump(edge));
+        }
         self.switch_starts.push(start);
         self.jumps.push(JumpTargets {
             break_to:    exit,
@@ -689,6 +787,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             name,
             draft,
             scratch,
+            effect_summaries: crate::translation_phases::semantic_analysis::EffectSummaries::new(
+                scratch,
+            ),
             tasks: ArenaVec::new_in(scratch),
             operands: ArenaVec::new_in(scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),

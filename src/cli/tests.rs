@@ -73,6 +73,38 @@ fn language_flags_apply_in_order_and_input_values_stay_opaque() {
 
 struct CountDiagnostics(usize);
 
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Startup argv tests own clap argument strings."
+)]
+fn inline_flags_override_the_final_standard_and_each_other() {
+    for (flags, expected) in [
+        (vec!["-std=gnu89"], true),
+        (vec!["-std=c89"], true),
+        (vec!["-std=c90"], true),
+        (vec!["-std=gnu17"], false),
+        (vec!["-fgnu89-inline", "-std=c99"], true),
+        (
+            vec!["-std=gnu17", "-fgnu89-inline", "-fno-gnu89-inline"],
+            false,
+        ),
+        (
+            vec!["-std=c99", "-fno-gnu89-inline", "-fgnu89-inline"],
+            true,
+        ),
+        (vec!["-std=gnu89", "-fno-gnu89-inline"], false),
+    ] {
+        let args = [vec!["bcc-rust", "--input", "int x;"], flags].concat();
+        let cli = Cli::try_parse_from(normalize_language_arguments(
+            args.iter().map(std::ffi::OsString::from),
+        ))
+        .unwrap();
+        assert_eq!(cli.configuration().gnu89_inline(), expected, "{args:?}");
+    }
+}
+
 impl Write for CountDiagnostics {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.starts_with(b"error: #error bad") {

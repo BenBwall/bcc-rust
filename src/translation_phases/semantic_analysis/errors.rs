@@ -111,6 +111,13 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Local Labels".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     UndefinedLocalLabel,
+    /// GNU extension: GCC "Statement Exprs" forbids jumping into expressions.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended goto constraint).
+    JumpIntoStatementExpression,
+    /// GNU extension to switch dispatch, C99 §6.8.4.2p5, p. 134; PDF p. 146.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    SwitchIntoStatementExpression,
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     JumpIntoVariableScope,
     /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
@@ -132,8 +139,30 @@ pub(crate) enum SemanticErrorKind {
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
     UndeclaredIdentifier,
+    /// Clang-compatible extension; C99: §6.5.2.2p6,p9, pp. 71-72;
+    /// PDF pp. 83-84; §7.1.4p2, p. 167; PDF p. 179.
+    ImplicitLibraryFunction(StringCacheId),
     /// C99: §6.5.3.2p1, p. 78; PDF p. 90.
     InvalidAddressOperand,
+    /// Intrinsic-only GNU builtins have no addressable external function.
+    /// GNU extension: GCC manual, "Built-in Functions Provided by GCC".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html>
+    BuiltinRequiresCall,
+    /// GNU extension: GCC "Object Size Checking" mode constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
+    InvalidObjectSizeMode,
+    /// GNU extension: GCC "Other Builtins" probability constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidBuiltinProbability,
+    /// GNU extension: GCC "Other Builtins" alignment constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidBuiltinAlignment,
+    /// GNU extension: GCC "Other Builtins" prefetch read/write constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidPrefetchReadWrite,
+    /// GNU extension: GCC "Other Builtins" prefetch locality constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidPrefetchLocality,
     /// C99: §6.5.3p1, p. 78; PDF p. 90.
     InvalidUnaryOperand,
     /// C99: §6.5.16p2, p. 91; PDF p. 103.
@@ -310,7 +339,14 @@ impl SemanticErrorKind {
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
+            | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
+            | Self::BuiltinRequiresCall => "builtin must be directly called",
+            | Self::InvalidObjectSizeMode | Self::InvalidPrefetchLocality =>
+                "expected an integer constant from 0 to 3",
+            | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
+            | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
+            | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
                 "operand type is not allowed here",
             | Self::ExpectedModifiableLvalue => "not a modifiable lvalue",
@@ -390,6 +426,8 @@ impl SemanticErrorKind {
             | Self::UndefinedLocalLabel => "local label is never defined",
             | Self::JumpIntoVariableScope | Self::SwitchIntoVariableScope =>
                 "jumps into a variably modified scope",
+            | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression =>
+                "jumps into a statement expression",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
             | Self::BreakOutsideLoopOrSwitch => "not in a loop or switch",
@@ -408,8 +446,41 @@ impl SemanticErrorKind {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep semantic diagnostic headlines and their standard notes in one exhaustive \
+                  table."
+    )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::BuiltinRequiresCall => (
+                "builtin functions must be directly called",
+                "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
+            ),
+            | Self::InvalidObjectSizeMode => (
+                "the mode argument must be an integer constant from 0 to 3",
+                "GNU extension: GCC Object Size Checking requires a constant mode after conversion to int",
+            ),
+            | Self::InvalidBuiltinProbability => (
+                "the probability argument must be a constant from 0 to 1",
+                "GNU extension: GCC Other Builtins requires a constant probability in the inclusive range [0, 1] after conversion to double",
+            ),
+            | Self::InvalidBuiltinAlignment => (
+                "the alignment argument must be a positive power-of-two integer constant",
+                "GNU extension: GCC Other Builtins requires a constant power-of-two alignment after conversion to size_t; the optional offset may be nonconstant",
+            ),
+            | Self::InvalidPrefetchReadWrite => (
+                "the read/write argument must be an integer constant of 0 or 1",
+                "GNU extension: GCC Other Builtins uses 0 for read prefetch and 1 for write prefetch",
+            ),
+            | Self::InvalidPrefetchLocality => (
+                "the locality argument must be an integer constant from 0 to 3",
+                "GNU extension: GCC Other Builtins uses locality 0 for no temporal locality through 3 for high temporal locality",
+            ),
+            | Self::ImplicitLibraryFunction(_) => (
+                "implicitly declaring library function",
+                "C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers",
+            ),
             | Self::AtomicBufferQualifiers => (
                 "atomic buffer argument discards pointer target qualifiers",
                 "Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type",
@@ -590,6 +661,7 @@ impl SemanticErrorKind {
                 "GNU local-label declarations require a definition even without a goto; C99 \
                  §6.2.1p3 declares ordinary labels by their definitions",
             ),
+            | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression => Self::statement_expression_explanation(self == Self::JumpIntoStatementExpression),
             | Self::JumpIntoVariableScope => (
                 "goto enters the scope of a variably modified identifier",
                 "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
@@ -901,6 +973,22 @@ impl SemanticErrorKind {
             ),
         }
     }
+
+    fn statement_expression_explanation(goto: bool) -> (&'static str, &'static str) {
+        if goto {
+            (
+                "goto jumps into a statement expression",
+                "GCC Statement Exprs: jumping into a statement expression is not permitted; jumps \
+                 within or out of one are permitted",
+            )
+        } else {
+            (
+                "switch dispatch jumps into a statement expression",
+                "GCC Statement Exprs: an outer switch cannot dispatch to a case or default label \
+                 inside a statement expression",
+            )
+        }
+    }
 }
 
 impl ToDiagnostic for SemanticError {
@@ -911,7 +999,14 @@ impl ToDiagnostic for SemanticError {
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
         let (message, note) = self.kind.explanation();
-        let message = if let Some(name) = self.name {
+        let message = if let SemanticErrorKind::ImplicitLibraryFunction(ty) = self.kind {
+            format_in!(
+                arena,
+                "implicitly declaring library function {} with type `{}`",
+                quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
+                context.string_cache.at(ty)
+            )
+        } else if let Some(name) = self.name {
             format_in!(
                 arena,
                 "{message}: {}",
@@ -931,6 +1026,9 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::JumpIntoVariableScope
                 | SemanticErrorKind::SwitchIntoVariableScope =>
                     "variably modified identifier is declared here",
+                | SemanticErrorKind::JumpIntoStatementExpression
+                | SemanticErrorKind::SwitchIntoStatementExpression =>
+                    "statement expression begins here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
@@ -954,7 +1052,8 @@ impl GetSeverity for SemanticError {
         }
         if matches!(
             self.kind,
-            SemanticErrorKind::QualifiedFunction
+            SemanticErrorKind::ImplicitLibraryFunction(_)
+                | SemanticErrorKind::QualifiedFunction
                 | SemanticErrorKind::MainSignature
                 | SemanticErrorKind::TentativeArrayAssumedOne
                 | SemanticErrorKind::UnusedStaticFunction

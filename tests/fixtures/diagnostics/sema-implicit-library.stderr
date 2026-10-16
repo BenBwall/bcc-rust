@@ -1,0 +1,49 @@
+warning: implicitly declaring library function `memcpy` with type `void * (void *, const void *, unsigned long)`
+ --> sema-implicit-library.c:3:5
+  |
+3 |     memcpy(b, "abc", 4);
+  |     ^^^^^^ library prototype used here
+  |
+  = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+warning: implicitly declaring library function `strcmp` with type `int (const char *, const char *)`
+ --> sema-implicit-library.c:4:5
+  |
+4 |     strcmp(b, "abc");
+  |     ^^^^^^ library prototype used here
+  |
+  = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+warning: implicitly declaring library function `printf` with type `int (const char *, ...)`
+ --> sema-implicit-library.c:5:5
+  |
+5 |     printf("%d", 1);
+  |     ^^^^^^ library prototype used here
+  |
+  = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+warning: implicitly declaring library function `strlen` with type `unsigned long (const char *)`
+ --> sema-implicit-library.c:6:5
+  |
+6 |     strlen(b);
+  |     ^^^^^^ library prototype used here
+  |
+  = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+warning: implicitly declaring library function `abort` with type `void (void)`
+ --> sema-implicit-library.c:7:5
+  |
+7 |     abort();
+  |     ^^^^^ library prototype used here
+  |
+  = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+warning: implicitly declaring library function `exit` with type `void (int)`
+ --> sema-implicit-library.c:8:5
+  |
+8 |     exit(0);
+  |     ^^^^ library prototype used here
+  |
+  = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+6 warnings generated.

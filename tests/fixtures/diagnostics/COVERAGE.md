@@ -1,5 +1,14 @@
 # Diagnostic golden corpus
 
+Round-6 scalar builtin coverage: `sema-builtin-values.c` distinguishes constant
+and value requirements for object-size mode, probability, alignment, and
+prefetch read/write/locality from three incompatible-type controls.
+`sema-builtin-designators.c` pins Clang's direct-call requirement for intrinsic
+addresses and values through parentheses, choose-expr and generic selection.
+Both retain a following ordinary declaration. The semantic tests check exact
+diagnostic kinds and suppress duplicate value errors for incompatible types;
+the shared selected-callee execution fixture also preserves user shadows.
+
 Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the current directory. An optional sibling `.args` supplies whitespace-separated CLI flags before the filename. Its sibling `.stderr` stores the exact bytes, including the summary. `NO_COLOR=1` is set; `CLICOLOR_FORCE`, `CPATH`, and `C_INCLUDE_PATH` are removed. `RUST_BACKTRACE=0` keeps crash regressions from depending on an inherited backtrace setting. No paths, whitespace, source spellings, or panic output are normalized.
 
 Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagnostics_golden` to rewrite every snapshot. The guard remains active while blessing and runs every C fixture again. Both tests accumulate failures so one mismatch does not hide later fixtures.
@@ -55,7 +64,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **384 top-level C inputs and 384 stderr snapshots**, plus seven supporting headers and 142 mode/policy `.args` sidecars. One hundred nineteen of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-two for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **391 top-level C inputs and 391 stderr snapshots**, plus seven supporting headers and 148 mode/policy `.args` sidecars. One hundred twenty-six of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-six for statements and functions, three for 128-bit integers, four for resource intrinsics, two for scalar builtin constraints, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -812,3 +821,35 @@ the same rule.
 
 The pedantic member fixture also includes `system-headers/mingw-members.h`,
 which suppresses the promoted warning under `#pragma GCC system_header`.
+
+### Implicit library declarations
+
+`sema-implicit-library.c` renders `ImplicitLibraryFunction` warnings for
+`memcpy`, `strcmp`, `printf`, `strlen`, `abort` and `exit`, including the
+function name, complete target-specific type and C99 call/library note.
+The semantic tests cover repeated calls, all extension policies, C89/GNU17,
+LP64/LLP64, const inputs, variadic parameters, explicit incompatible declarations,
+unknown-name `int ()` fallback and strict C99 rejection. The pipeline regressions
+run headerless termination and memory/string calls before/after ABI lowering,
+with/without bcc optimization, and through all four native arms. A live Clang
+comparison checks LLVM scalar types and `noundef` at declarations and call sites.
+
+### Statement-expression entry
+
+`semantic-statement-expression-goto.c`, `semantic-statement-expression-switch.c`
+and `semantic-statement-expression-prior-call.c` pin semantic diagnostics for
+entering a GNU statement expression. Primary labels identify the goto or switch
+label; secondary labels identify the expression. These prevent the previous
+lowering/SSA internal errors from becoming user diagnostics. Semantic and
+pipeline tests also preserve legal internal jumps and exits.
+
+### Statement-expression header jumps
+
+`semantic-statement-expression-header-jumps.c` renders the existing
+`BreakOutsideLoopOrSwitch` and `ContinueOutsideLoop` constraints for statement
+expressions in while/do conditions, for initializers/conditions/increments and
+switch controlling expressions. Its GNU99 sidecar avoids extension-policy
+noise; all twelve primary labels identify their jump and retain the C99 notes.
+A following ordinary declaration survives. Semantic tests check each error
+individually; the shared header-target execution probe preserves valid outer
+loop/switch targets, including continue through a switch.

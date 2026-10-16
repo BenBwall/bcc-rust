@@ -35,6 +35,10 @@ use crate::{
 pub(super) enum Task<'tu> {
     // Statements
     Statement(&'tu Statement<'tu>),
+    /// Preserve the final expression's value while entering its label blocks.
+    StatementValue(&'tu Statement<'tu>),
+    /// Keep statement effects and label targets without reading unused values.
+    StatementEffects(&'tu Statement<'tu>),
     Declaration(&'tu Declaration<'tu>),
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {
@@ -110,6 +114,8 @@ pub(super) enum Task<'tu> {
     /// Evaluate an expression without its conversions, leaving a place for
     /// an lvalue.
     EvaluateRaw(&'tu Expression<'tu>),
+    /// Overflow predicates retain only third-operand effects, with no item.
+    BuiltinEffects(&'tu Expression<'tu>, bool),
     /// Apply the conversions recorded on an expression, from the `skip`th.
     Convert {
         expression: &'tu Expression<'tu>,
@@ -117,6 +123,20 @@ pub(super) enum Task<'tu> {
     },
     /// Complete an operator whose operands are on the stack.
     Finish(&'tu Expression<'tu>),
+    FinishKeyword(
+        &'tu Expression<'tu>,
+        &'tu crate::translation_phases::parsing::Builtin<'tu>,
+    ),
+    OmittedConditional {
+        expression:  &'tu Expression<'tu>,
+        conditional: &'tu ConditionalExpression<'tu>,
+        otherwise:   Block,
+        merge:       Block,
+    },
+    FinishBuiltin(
+        &'tu Expression<'tu>,
+        crate::translation_phases::semantic_analysis::CommonBuiltin,
+    ),
     /// Copy the place on top of the stack and convert the copy, as a
     /// compound assignment or increment reads its operand.
     ReadForUpdate(&'tu Expression<'tu>),
@@ -161,6 +181,16 @@ pub(super) enum Task<'tu> {
         merge:       Block,
         ty:          TypeId,
     },
+}
+
+/// How expression statements are consumed while retaining their control flow.
+/// C99: §6.8.1p4, p. 132; PDF p. 144.
+/// GNU extension: GCC "Integer Overflow Builtins" and "Statement Exprs".
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StatementMode {
+    Discard,
+    Value,
+    Effects,
 }
 
 /// A value on the operand stack with its C type.

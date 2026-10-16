@@ -33,6 +33,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.label_address(name);
         }
+        // Reserved builtin designators need their binding even before a
+        // compile-time selection becomes a callee, or an address is checked.
+        // GNU extension: GCC "Other Builtins"; C99 §7.1.3p1, p. 166;
+        // PDF p. 178 (implementation-reserved identifiers).
+        if !e.recovered
+            && let E::Identifier(name) = e.kind
+            && self.builtin_name(name)
+        {
+            self.implicit_function(e);
+        }
         if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {
             self.enter_sizeof(e);
         }
@@ -100,7 +110,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::IndirectMember {
                 base_expression, ..
             } => self.work.push(Work::Expression(base_expression)),
-            | E::StatementExpression(s) => self.work.push(Work::Statement(s, true)),
+            | E::StatementExpression(s) => {
+                self.enter_statement_expression(e.source_vectors);
+                self.work.push(Work::Statement(s, true));
+            },
             | E::Generic(g) => {
                 for association in g.associations.iter().rev() {
                     self.work.push(Work::Expression(association.expression));
@@ -201,16 +214,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
-                self.work.push(Work::StatementWork(W::LeaveLoop));
-                self.statements.loops += 1;
                 if matches!(s.kind, S::DoWhile { .. }) {
                     self.work.push(Work::Condition(condition_expression, false));
                     self.expression_slot(condition_expression);
                     self.work
-                        .push(Work::StatementWork(W::Substatement(body_statement)));
+                        .push(Work::StatementWork(W::LoopBody(body_statement)));
                 } else {
                     self.work
-                        .push(Work::StatementWork(W::Substatement(body_statement)));
+                        .push(Work::StatementWork(W::LoopBody(body_statement)));
                     self.work.push(Work::Condition(condition_expression, false));
                     self.expression_slot(condition_expression);
                 }
@@ -218,10 +229,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::For(f) => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
-                self.work.push(Work::StatementWork(W::LeaveLoop));
-                self.statements.loops += 1;
                 self.work
-                    .push(Work::StatementWork(W::Substatement(f.body_statement)));
+                    .push(Work::StatementWork(W::LoopBody(f.body_statement)));
                 if let Some(e) = f.iteration_expression {
                     self.expression_slot(e);
                 }

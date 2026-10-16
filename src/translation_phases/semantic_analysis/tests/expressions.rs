@@ -617,3 +617,163 @@ fn sizeof_matches_shared_linux_clang_assertions() {
 fn expression_record_size_is_pinned() {
     assert_eq!(size_of::<ExpressionInfo<'_>>(), 160);
 }
+
+#[test]
+fn implicit_library_declarations_retain_prototypes_and_warn_once() {
+    use crate::{
+        configuration::{
+            CompilerConfiguration,
+            ExtensionPolicy,
+        },
+        target::Target,
+        translation_phases::{
+            ErrorSeverity,
+            GetSeverity,
+        },
+    };
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for standard in [CStandard::C89, CStandard::C17] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                let configuration = CompilerConfiguration::new(standard, policy)
+                    .with_gnu_extensions(true)
+                    .with_target(target);
+                with_configuration(
+                    "void f(void) { exit(0); exit(1); abort(); char b[4]; memcpy(b, \"abc\", 4); \
+                     strcmp(b, \"abc\"); strlen(b); printf(\"%d\", 1); outside(1); }",
+                    configuration,
+                    |context, unit| {
+                        let binding = |name| {
+                            unit.bindings
+                                .iter()
+                                .find(|b| context.string_cache.at(b.name.name) == name)
+                                .unwrap()
+                        };
+                        for (name, count, expected_variadic) in [
+                            ("exit", 1, false),
+                            ("abort", 0, false),
+                            ("memcpy", 3, false),
+                            ("strcmp", 2, false),
+                            ("strlen", 1, false),
+                            ("printf", 1, true),
+                        ] {
+                            let TypeKind::Function {
+                                result,
+                                parameters,
+                                prototype,
+                                variadic,
+                            } = unit.types.nodes[binding(name).ty.index]
+                            else {
+                                panic!("function expected");
+                            };
+                            assert!(prototype, "{name}");
+                            assert_eq!(parameters.len(), count, "{name}");
+                            assert_eq!(variadic, expected_variadic);
+                            if matches!(name, "exit" | "abort") {
+                                assert_eq!(
+                                    unit.types.nodes[result.index],
+                                    TypeKind::Scalar(Scalar::Void)
+                                );
+                            }
+                            if name == "strlen" {
+                                assert_eq!(
+                                    unit.types.nodes[result.index],
+                                    TypeKind::Scalar(unit.types.target.size_t)
+                                );
+                            }
+                            if name == "memcpy" {
+                                assert_eq!(
+                                    unit.types.nodes[parameters[2].index],
+                                    TypeKind::Scalar(unit.types.target.size_t)
+                                );
+                                let TypeKind::Pointer(pointee) =
+                                    unit.types.nodes[parameters[1].index]
+                                else {
+                                    panic!("pointer expected");
+                                };
+                                assert!(pointee.qualifiers.contains(TypeQualifiers::CONST));
+                            }
+                        }
+                        assert!(
+                            matches!(unit.types.nodes[binding("outside").ty.index], TypeKind::Function {result, prototype:false, parameters:[], variadic:false} if unit.types.nodes[result.index] == TypeKind::Scalar(Scalar::Int))
+                        );
+                        let diagnostics = context.take_pending_errors();
+                        let warnings: Vec<_> = diagnostics
+                            .iter()
+                            .filter_map(|e| match e {
+                                | TranslationError::Semantic(e)
+                                    if matches!(
+                                        e.kind,
+                                        SemanticErrorKind::ImplicitLibraryFunction(_)
+                                    ) =>
+                                    Some(e),
+                                | _ => None,
+                            })
+                            .collect();
+                        assert_eq!(warnings.len(), 6);
+                        for warning in warnings {
+                            assert_eq!(warning.severity(), ErrorSeverity::Warning);
+                            let SemanticErrorKind::ImplicitLibraryFunction(ty) = warning.kind
+                            else {
+                                unreachable!()
+                            };
+                            let name = context.string_cache.at(warning.name.unwrap());
+                            let expected = match name {
+                                | "exit" => "void (int)",
+                                | "abort" => "void (void)",
+                                | "memcpy" => crate::diagnostics::format_in!(
+                                    context.tu_arena(),
+                                    "void * (void *, const void *, {})",
+                                    unit.types.target.size_t.spelling()
+                                ),
+                                | "strcmp" => "int (const char *, const char *)",
+                                | "strlen" => crate::diagnostics::format_in!(
+                                    context.tu_arena(),
+                                    "{} (const char *)",
+                                    unit.types.target.size_t.spelling()
+                                ),
+                                | "printf" => "int (const char *, ...)",
+                                | _ => unreachable!(),
+                            };
+                            assert_eq!(context.string_cache.at(ty), expected);
+                        }
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_library_declaration_keeps_the_user_type() {
+    with_configuration(
+        "int exit(); int f(void) { return exit(0); }",
+        crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
+        |context, unit| {
+            assert_eq!(context.pending_error_count(), 0);
+            let exit = unit
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "exit")
+                .unwrap();
+            assert!(
+                matches!(unit.types.nodes[exit.ty.index], TypeKind::Function {result, prototype:false, ..} if unit.types.nodes[result.index] == TypeKind::Scalar(Scalar::Int))
+            );
+        },
+    );
+    rejects(
+        "int main(void) {exit(0);}",
+        SemanticErrorKind::UndeclaredIdentifier,
+    );
+    with_configuration(
+        "void f(void) { memcpy(0, 0); }",
+        crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
+        |context, _| {
+            assert!(context.take_pending_errors().iter().any(|e|
+            matches!(e, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::InvalidArgumentCount)));
+        },
+    );
+}

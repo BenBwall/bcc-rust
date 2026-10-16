@@ -139,6 +139,7 @@ impl Cli {
                 flag.apply(configuration)
             })
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
+            .with_suppress_warnings(self.suppress_warnings)
     }
 
     pub(super) fn configure_preprocessing(&self, context: &mut Context<'_>) {
@@ -167,6 +168,8 @@ enum LanguageFlag {
     MsvcFeature(MsvcFeature, bool),
     /// `-fhosted` (true) or `-ffreestanding` (false).
     Hosted(bool),
+    /// `-fgnu89-inline` or `-fno-gnu89-inline`.
+    Gnu89Inline(bool),
 }
 
 impl LanguageFlag {
@@ -176,6 +179,8 @@ impl LanguageFlag {
             | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
+            | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
+            | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
             | _ => {},
         }
         let (name, enabled) = text
@@ -196,6 +201,7 @@ impl LanguageFlag {
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
+            | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
         }
     }
 }
