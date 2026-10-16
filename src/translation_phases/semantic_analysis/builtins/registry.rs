@@ -67,6 +67,8 @@ impl Analyzer<'_, '_, '_> {
                 }
                 self.types.intern(TypeKind::Pointer(ty))
             },
+            | SignatureType::VaList => self.va_list_parameter(),
+            | SignatureType::File => self.file_parameter(),
         }
     }
 }

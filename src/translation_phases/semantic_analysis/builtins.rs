@@ -14,9 +14,10 @@
 //! - Header intrinsics: `intrinsics.rs` handles varargs, type operands and
 //!   member offsets; `names.rs` joins the named-call recognition queries.
 //!   `registry.rs` projects signatures and diagnostic identities; `library.rs`
-//!   retains the implicit-library warning policy. `common.rs` checks scalar
-//!   calls; their effect classes feed the retained expression effects in
-//!   `facts/effects.rs`. `designators.rs` rejects non-call uses of
+//!   retains the implicit-library warning policy; `checked.rs` forms the target
+//!   `va_list` and `FILE *` parameters of checked library calls. `common.rs`
+//!   checks scalar calls; their effect classes feed the retained expression
+//!   effects in `facts/effects.rs`. `designators.rs` rejects non-call uses of
 //!   intrinsic-only functions.
 //! - Atomic calls: `atomics.rs` classifies and checks atomic operands.
 //! - Target calls: `x86_builtins.rs` decodes signatures and checks operands;
@@ -29,6 +30,7 @@
 //! C99: §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
 
 // Header intrinsics and recognition
+mod checked;
 mod common;
 mod designators;
 mod floating;

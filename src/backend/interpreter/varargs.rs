@@ -337,6 +337,40 @@ impl Machine<'_, '_, '_> {
         }
     }
 
+    /// Prepares the `va_list` operand of a host function that reads one:
+    /// after ABI lowering, the target's convention, whose layout the host
+    /// reads; before it, `None`, with the values the list's cursor has left
+    /// in `host_varargs`. A System V list is an array, passed as the address
+    /// of the object holding the cursor; a Win64 list is the cursor pointer.
+    /// C99: §7.15p3, p. 249; PDF p. 261.
+    pub(super) fn host_va_list(&mut self, name: &str) -> Result<Option<Convention>, Fault> {
+        self.host_varargs.clear();
+        let Some(operand) = super::host::va_list_operand(name) else {
+            return Ok(None);
+        };
+        let convention = self.convention()?;
+        if self.module.profile() == Profile::PostAbi {
+            return Ok(Some(convention));
+        }
+        let list = self
+            .arguments
+            .get(operand)
+            .copied()
+            .ok_or(Fault::Ub(UbKind::InvalidVaList))?;
+        let pointer = match convention {
+            | Convention::SystemV => self.memory.load(Type::Ptr, list, Align::BYTE)?,
+            | Convention::Win64 => list,
+        };
+        let (_, cursor) = self.cursor_at(pointer)?;
+        let frame = self.frames[cursor.depth as usize];
+        let start = frame.varargs + cursor.position as usize;
+        for index in start..frame.varargs + frame.varargs_len {
+            let (_, value, _) = self.varargs[index];
+            self.host_varargs.push(value);
+        }
+        Ok(None)
+    }
+
     /// The calling convention of the module's target, whose `va_list` a
     /// post-ABI module uses.
     fn convention(&self) -> Result<Convention, Fault> {
@@ -368,12 +402,13 @@ impl Machine<'_, '_, '_> {
     /// The live cursor the `va_list` at `list` points to, whose frame must
     /// still be the activation that made it.
     fn cursor(&self, list: RuntimeValue) -> Result<(ObjectRef, VaCursor), Fault> {
+        self.cursor_at(self.memory.load(Type::Ptr, list, Align::BYTE)?)
+    }
+
+    /// The live cursor `pointer` designates.
+    fn cursor_at(&self, pointer: RuntimeValue) -> Result<(ObjectRef, VaCursor), Fault> {
         let invalid = || Fault::Ub(UbKind::InvalidVaList);
-        let pointer = self
-            .memory
-            .load(Type::Ptr, list, Align::BYTE)?
-            .as_pointer()
-            .ok_or_else(invalid)?;
+        let pointer = pointer.as_pointer().ok_or_else(invalid)?;
         let cursor_ref = pointer.provenance.ok_or_else(invalid)?;
         let cursor = self.memory.cursor(cursor_ref).ok_or_else(invalid)?;
         let alive = self

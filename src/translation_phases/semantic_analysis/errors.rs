@@ -183,6 +183,11 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Built-in Functions Provided by GCC".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html>
     BuiltinRequiresCall,
+    /// A checked library builtin whose prototype names `FILE` before the
+    /// program declares it, as Clang requires `<stdio.h>`.
+    /// GNU extension: GCC "Object Size Checking"; C99: §7.19.1p2, p. 262;
+    /// PDF p. 274.
+    BuiltinRequiresHeader,
     /// GNU extension: GCC "Object Size Checking" mode constraint.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
     InvalidObjectSizeMode,
@@ -498,6 +503,7 @@ impl SemanticErrorKind {
             | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
             | Self::BuiltinRequiresCall => "builtin must be directly called",
+            | Self::BuiltinRequiresHeader => "use of a builtin whose library type is undeclared",
             | Self::InvalidObjectSizeMode | Self::InvalidPrefetchLocality =>
                 "expected an integer constant from 0 to 3",
             | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
@@ -679,6 +685,10 @@ impl SemanticErrorKind {
             | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
             | Self::PragmaPackUnterminated => ("unterminated '#pragma pack(push, ...)' at end of file", "restore the saved packing state with #pragma pack(pop)"),
             | Self::PragmaPackShow(_) => ("current #pragma pack alignment value", "GCC/MSVC packing state at this directive"),
+            | Self::BuiltinRequiresHeader => (
+                "this builtin's prototype needs the FILE type of <stdio.h>",
+                "GNU extension: the checked stream builtin takes a FILE pointer; Clang rejects its use until FILE is declared",
+            ),
             | Self::BuiltinRequiresCall => (
                 "builtin functions must be directly called",
                 "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
