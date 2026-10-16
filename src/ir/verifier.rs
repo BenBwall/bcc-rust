@@ -350,6 +350,10 @@ fn verify_signature(
                 .any(|scalar| u64::from(scalar.offset) + u64::from(scalar.ty.bytes()) > layout.size)
         {
             Some(ParamAbiProblem::ScalarOutside)
+        } else if let Some(layout) = param.abi.layout()
+            && let Some(first) = layout.first
+        {
+            first_member_problem(param.abi, layout, first)
         } else if let ParamAbi::Registers(registers) = param.abi
             && registers
                 .types()
@@ -1357,6 +1361,55 @@ pub(crate) enum ParamAbiProblem {
     RegisterType,
     /// A pair's natural layout does not match two ABI eightbytes.
     RegisterLayout,
+    /// A first member is recorded for something other than a pre-ABI
+    /// aggregate argument.
+    FirstMisplaced,
+    /// The first member is empty or larger than the aggregate.
+    FirstSize,
+    /// A scalar extends past the first member it describes.
+    FirstScalarOutside,
+    /// The first member's extension does not describe a lone narrow
+    /// integer or `_Bool` scalar that is the whole member.
+    FirstExtension,
+}
+
+/// What is wrong with the first member a transparent union argument's
+/// layout records (System V; see [`FirstMember`](super::FirstMember)): it
+/// describes only a pre-ABI argument, fits the union and holds every scalar
+/// recorded, and an extension describes one narrow integer or `_Bool`
+/// scalar that is the whole member.
+fn first_member_problem(
+    abi: ParamAbi<'_>,
+    layout: super::AggregateLayout<'_>,
+    first: super::FirstMember,
+) -> Option<ParamAbiProblem> {
+    if !matches!(abi, ParamAbi::Aggregate(_)) {
+        return Some(ParamAbiProblem::FirstMisplaced);
+    }
+    if first.size == 0 || first.size > layout.size {
+        return Some(ParamAbiProblem::FirstSize);
+    }
+    if layout
+        .scalars
+        .iter()
+        .any(|scalar| u64::from(scalar.offset) + u64::from(scalar.ty.bytes()) > first.size)
+    {
+        return Some(ParamAbiProblem::FirstScalarOutside);
+    }
+    let extension = first.extension?;
+    let narrow = match (extension, layout.scalars) {
+        | (
+            Extension::Signed | Extension::Unsigned,
+            &[super::AggregateScalar { offset: 0, ty }],
+        ) => matches!(ty, Type::I8 | Type::I16),
+        | (Extension::Bool, &[super::AggregateScalar { offset: 0, ty }]) => ty == Type::I8,
+        | _ => false,
+    };
+    let whole = layout
+        .scalars
+        .first()
+        .is_some_and(|scalar| u64::from(scalar.ty.bytes()) == first.size);
+    (!narrow || !whole).then_some(ParamAbiProblem::FirstExtension)
 }
 
 /// What is wrong with an extended parameter or result of a signature.
@@ -1506,6 +1559,14 @@ impl fmt::Display for VerifierErrorKind {
                     | ParamAbiProblem::RegisterType => "returns a register of type i1 or ptr",
                     | ParamAbiProblem::RegisterLayout =>
                         "has a register pair incompatible with the eightbyte return area",
+                    | ParamAbiProblem::FirstMisplaced =>
+                        "records a first member outside a pre-ABI aggregate argument",
+                    | ParamAbiProblem::FirstSize =>
+                        "has a first member that is empty or larger than its aggregate",
+                    | ParamAbiProblem::FirstScalarOutside =>
+                        "has an aggregate scalar beyond its first member's size",
+                    | ParamAbiProblem::FirstExtension =>
+                        "extends a first member that is not one narrow integer or _Bool scalar",
                 }
             ),
             | Self::Extension { param, problem } => {

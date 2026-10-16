@@ -165,3 +165,129 @@ fn malformed_aggregate_descriptions_do_not_parse() {
         }
     }
 }
+
+/// Transparent union arguments as System V lowering records them (#68):
+/// the union's size and alignment with its first member's size, scalars
+/// and, for a narrow integer or `_Bool` member, extension.
+const FIRST_MEMBERS: &str = "\
+function @floats(ptr aggregate(size 32, align 32, first(size 8), [0: f32, 4: f32])) external
+
+function @pointer(ptr aggregate(size 16, align 16, first(size 8), [0: ptr])) external
+
+function @signed(ptr aggregate(size 1, align 1, first(size 1, signed), [0: i8])) external
+
+function @short(ptr aggregate(size 2, align 2, first(size 2, unsigned), [0: i16])) external
+
+function @flag(ptr aggregate(size 1, align 1, first(size 1, bool), [0: i8])) external
+
+function @call(ptr) external {
+block0(v0: ptr):
+    call_indirect v0(v0) : (ptr aggregate(size 1, align 1, first(size 1, signed), [0: i8]))
+    return
+}
+";
+
+#[test]
+fn first_members_round_trip_and_verify() {
+    assert_round_trip(FIRST_MEMBERS);
+    let arena = Bump::new();
+    let module = parse(&arena, FIRST_MEMBERS);
+    assert_eq!(verify(&module, Profile::PreAbi), Vec::<String>::new());
+}
+
+#[test]
+fn first_members_must_describe_their_union() {
+    let misplaced = "@f: parameter 0 records a first member outside a pre-ABI aggregate argument";
+    let size = "@f: parameter 0 has a first member that is empty or larger than its aggregate";
+    let outside = "@f: parameter 0 has an aggregate scalar beyond its first member's size";
+    let extension =
+        "@f: parameter 0 extends a first member that is not one narrow integer or _Bool scalar";
+    for (text, expected) in [
+        // A result, or a post-ABI copy, is the whole union.
+        (
+            "function @f(ptr result(size 8, align 8, first(size 8), [0: f64])) external\n",
+            misplaced,
+        ),
+        (
+            "abi lowered\nfunction @f(ptr byval(size 8, align 8, first(size 8))) external\n",
+            misplaced,
+        ),
+        (
+            "abi lowered\nfunction @f(ptr sret(size 8, align 8, first(size 8))) external\n",
+            misplaced,
+        ),
+        // The member fits the union and holds its scalars.
+        (
+            "function @f(ptr aggregate(size 8, align 8, first(size 16), [0: f64])) external\n",
+            size,
+        ),
+        (
+            "function @f(ptr aggregate(size 8, align 8, first(size 0))) external\n",
+            size,
+        ),
+        (
+            "function @f(ptr aggregate(size 8, align 8, first(size 1), [0: f64])) external\n",
+            outside,
+        ),
+        (
+            "function @f(ptr aggregate(size 8, align 8, first(size 4), [0: i32, 4: i32])) \
+             external\n",
+            outside,
+        ),
+        // An extension is one narrow integer or `_Bool` scalar, all of it.
+        (
+            "function @f(ptr aggregate(size 4, align 4, first(size 4, signed), [0: i32])) \
+             external\n",
+            extension,
+        ),
+        (
+            "function @f(ptr aggregate(size 4, align 4, first(size 4, signed), [0: f32])) \
+             external\n",
+            extension,
+        ),
+        (
+            "function @f(ptr aggregate(size 2, align 1, first(size 2, signed), [0: i8, 1: i8])) \
+             external\n",
+            extension,
+        ),
+        (
+            "function @f(ptr aggregate(size 2, align 2, first(size 2, signed), [1: i8])) \
+             external\n",
+            extension,
+        ),
+        (
+            "function @f(ptr aggregate(size 2, align 2, first(size 2, bool), [0: i16])) external\n",
+            extension,
+        ),
+        (
+            "function @f(ptr aggregate(size 2, align 2, first(size 2, signed), [0: i8])) \
+             external\n",
+            extension,
+        ),
+        (
+            "function @f(ptr aggregate(size 1, align 1, first(size 1, signext), [0: i8])) \
+             external\n",
+            extension,
+        ),
+        (
+            "function @f(ptr aggregate(size 8, align 8, first(size 8, signed))) external\n",
+            extension,
+        ),
+    ] {
+        let arena = Bump::new();
+        let module = parse(&arena, text);
+        let profile = module.profile();
+        assert_eq!(verify(&module, profile), [expected], "for\n{text}");
+    }
+}
+
+#[test]
+fn a_repeated_first_member_does_not_parse() {
+    let text = "function @f(ptr aggregate(size 8, align 8, first(size 8), first(size 4), [0: \
+                f64])) external\n";
+    let arena = Bump::new();
+    match parse_module(&arena, text) {
+        | Ok(module) => panic!("parsed {text}as\n{module}"),
+        | Err(error) => assert_eq!(error.to_string(), "1:59: `first` is defined twice"),
+    }
+}

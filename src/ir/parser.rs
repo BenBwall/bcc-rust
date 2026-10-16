@@ -1403,7 +1403,12 @@ impl<'t> Cursor<'_, 't> {
         let mut scalars = ArenaVec::new_in(scratch);
         let mut first = None;
         while self.eat(TokenKind::Comma) {
-            if self.eat(TokenKind::Ident("first")) {
+            if self.peek().kind == TokenKind::Ident("first") {
+                let token = self.next();
+                // One first member: a second would contradict the first.
+                if first.is_some() {
+                    return Err(token.error(ParseErrorKind::DuplicateDefinition(token.text)));
+                }
                 first = Some(self.first_member()?);
                 continue;
             }
