@@ -1428,7 +1428,7 @@ pub(crate) enum ParamAbiProblem {
     /// A first member is recorded for something other than a pre-ABI
     /// aggregate argument.
     FirstMisplaced,
-    /// The first member is empty or larger than the aggregate.
+    /// The first member is larger than the aggregate.
     FirstSize,
     /// A scalar extends past the first member it describes.
     FirstScalarOutside,
@@ -1450,7 +1450,8 @@ fn first_member_problem(
     if !matches!(abi, ParamAbi::Aggregate(_)) {
         return Some(ParamAbiProblem::FirstMisplaced);
     }
-    if first.size == 0 || first.size > layout.size {
+    // An empty first member (GNU empty structure) has size 0.
+    if first.size > layout.size {
         return Some(ParamAbiProblem::FirstSize);
     }
     if layout
@@ -1628,8 +1629,7 @@ impl fmt::Display for VerifierErrorKind {
                         "has a register pair incompatible with the eightbyte return area",
                     | ParamAbiProblem::FirstMisplaced =>
                         "records a first member outside a pre-ABI aggregate argument",
-                    | ParamAbiProblem::FirstSize =>
-                        "has a first member that is empty or larger than its aggregate",
+                    | ParamAbiProblem::FirstSize => "has a first member larger than its aggregate",
                     | ParamAbiProblem::FirstScalarOutside =>
                         "has an aggregate scalar beyond its first member's size",
                     | ParamAbiProblem::FirstExtension =>
