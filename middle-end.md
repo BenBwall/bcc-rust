@@ -816,7 +816,9 @@ generation, the length of a write log on the current dominator path. A fact
 from an earlier generation survives only when the alias check proves every
 intervening store disjoint. Calls (direct and indirect), volatile accesses,
 `copy`, `fill` and every `va_*` operation advance the generation with a full
-barrier. Each eliminated load consumes one `allow()` rewrite; stores stay.
+barrier. One classifier, `memory_write`, decides what an instruction writes for
+both numbering and the region scan below, so a new writing instruction is added
+in one place. Each eliminated load consumes one `allow()` rewrite; stores stay.
 Facts cross a dominator-tree edge as they are when the child has exactly one CFG
 predecessor, the parent. Entering a join or loop header, GVN logs the writes of
 every block on a path from its immediate dominator (the loop body, for a

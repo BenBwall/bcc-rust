@@ -60,8 +60,8 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
         report: &mut OptimizationReport,
     ) -> bool {
         let data = *draft.inst(inst);
+        self.log(memory_write(draft, data));
         if data.flags().contains(InstFlags::VOLATILE) {
-            self.barrier();
             return false;
         }
         match data {
@@ -91,24 +91,13 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
                 args: [value, addr],
                 ty,
                 ..
-            } => {
-                let addr = draft.resolve(addr);
-                self.writes.push(Some(location(draft, addr, ty)));
-                self.remember(Key { addr, ty }, draft.resolve(value));
-            },
-            | InstData::Atomic { .. }
-            | InstData::Call { .. }
-            | InstData::CallIndirect { .. }
-            | InstData::VaArgAggregate { .. }
-            | InstData::MemoryRange { .. }
-            | InstData::Unary {
-                opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
-                ..
-            }
-            | InstData::Binary {
-                opcode: Opcode::VaCopy,
-                ..
-            } => self.barrier(),
+            } => self.remember(
+                Key {
+                    addr: draft.resolve(addr),
+                    ty,
+                },
+                draft.resolve(value),
+            ),
             | _ => {},
         }
         false
@@ -137,6 +126,14 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
         self.writes.push(None);
     }
 
+    fn log(&mut self, write: MemoryWrite) {
+        match write {
+            | MemoryWrite::None => {},
+            | MemoryWrite::At(location) => self.writes.push(Some(location)),
+            | MemoryWrite::Unknown => self.barrier(),
+        }
+    }
+
     /// Enters a join or loop header: logs every write of `region`, the
     /// blocks on some path from its immediate dominator to it, or a full
     /// barrier when the region is unknown. A fact from the dominator then
@@ -149,43 +146,9 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
         for &block in region {
             for &inst in &draft.block(block).insts {
                 if !draft.is_removed(inst) {
-                    self.record_write(draft, inst);
+                    self.log(memory_write(draft, *draft.inst(inst)));
                 }
             }
-        }
-    }
-
-    /// Logs what `inst` writes, as [`MemoryFacts::number`] would, without
-    /// recording any fact.
-    fn record_write(&mut self, draft: &Draft<'_, '_>, inst: Inst) {
-        let data = *draft.inst(inst);
-        if data.flags().contains(InstFlags::VOLATILE) {
-            self.barrier();
-            return;
-        }
-        match data {
-            | InstData::Store {
-                args: [_, addr],
-                ty,
-                ..
-            } => {
-                let addr = draft.resolve(addr);
-                self.writes.push(Some(location(draft, addr, ty)));
-            },
-            | InstData::Atomic { .. }
-            | InstData::Call { .. }
-            | InstData::CallIndirect { .. }
-            | InstData::VaArgAggregate { .. }
-            | InstData::MemoryRange { .. }
-            | InstData::Unary {
-                opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
-                ..
-            }
-            | InstData::Binary {
-                opcode: Opcode::VaCopy,
-                ..
-            } => self.barrier(),
-            | _ => {},
         }
     }
 
@@ -207,6 +170,50 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
             writes:  ArenaVec::new_in(draft.scratch),
             aliases: AliasCheck::compute(draft, module),
         }
+    }
+}
+
+/// What one instruction may write, as GVN sees it.
+#[derive(Clone, Copy)]
+enum MemoryWrite {
+    /// Nothing; a non-volatile load or a pure instruction.
+    None,
+    /// Exactly the bytes of one store.
+    At(Location),
+    /// Anything: a full barrier.
+    Unknown,
+}
+
+/// The only classifier of memory writes for GVN: both numbering a block and
+/// scanning a join's region log what it returns, so an instruction that
+/// writes cannot be missed by one of them. A volatile access, a call, a range
+/// operation, an atomic (including relaxed loads and fences), or a `va_*`
+/// operation is a full barrier. A new instruction that
+/// may write memory or synchronize must be added here.
+fn memory_write(draft: &Draft<'_, '_>, data: InstData) -> MemoryWrite {
+    if data.flags().contains(InstFlags::VOLATILE) {
+        return MemoryWrite::Unknown;
+    }
+    match data {
+        | InstData::Store {
+            args: [_, addr],
+            ty,
+            ..
+        } => MemoryWrite::At(location(draft, draft.resolve(addr), ty)),
+        | InstData::Atomic { .. }
+        | InstData::Call { .. }
+        | InstData::CallIndirect { .. }
+        | InstData::VaArgAggregate { .. }
+        | InstData::MemoryRange { .. }
+        | InstData::Unary {
+            opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
+            ..
+        }
+        | InstData::Binary {
+            opcode: Opcode::VaCopy,
+            ..
+        } => MemoryWrite::Unknown,
+        | _ => MemoryWrite::None,
     }
 }
 
