@@ -1427,7 +1427,9 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
   (nonempty, without quote, newline or NUL), default visibility on internal
   symbols (LLVM rejects any other for local linkage) and
   constructors/destructors (defined, no parameters).
-- **Lowering.** An external entity with `weak` gets `weak` linkage; every
+- **Lowering.** An external entity with `weak` gets `weak` linkage, and a
+  Microsoft `selectany` object this unit defines `selectany` linkage (LLVM
+  `weak_odr` in its own comdat; the native back end refuses it); every
   retained alias is declared, even if unused, and points at its target's
   symbol; section, used, visibility and function alignment go on the symbol
   when it is declared; constructors and destructors are registered in

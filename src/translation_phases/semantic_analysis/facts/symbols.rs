@@ -42,7 +42,7 @@ impl<'tu> SymbolFacts<'tu> {
 #[derive(Debug, Clone, Copy, Default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "Each flag is an independent GNU attribute or declaration fact merged per entity."
+    reason = "Each flag is an independent attribute fact that lowering reads on its own."
 )]
 pub(crate) struct EntityAttributes<'tu> {
     /// GNU `weak`: a definition yields to a strong one at link time; an
@@ -74,6 +74,9 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) declared_alignment: bool,
     /// GNU `noinline`/`noipa` or `always_inline` on a function.
     pub(crate) inlining:           Inlining,
+    /// Microsoft `selectany` on an external object: its definitions in
+    /// different translation units are one, and the linker keeps any.
+    pub(crate) select_any:     bool,
 }
 
 /// A function's inline-control request. `Never` wins over `Always` when

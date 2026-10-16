@@ -168,6 +168,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                     None,
                 ),
+                | Rule::SelectAny => self.select_any_attribute(subject, attribute),
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | _ => {},
@@ -241,6 +242,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.attributes.entity(entity).returns_twice = true;
         } else {
             self.ignored(attribute);
+        }
+    }
+
+    /// Microsoft `selectany` on an object with external linkage; on a
+    /// function or an object without external linkage it is Clang's error.
+    /// A typedef keeps it silently, as in Clang.
+    /// MSVC extension: Microsoft Learn, "selectany".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/selectany>
+    fn select_any_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        match subject {
+            | Subject::Object { binding, .. }
+                if self.bindings[binding].linkage == Linkage::External =>
+            {
+                let entity = self.entity_of(binding);
+                self.attributes.entity(entity).select_any = true;
+            },
+            | Subject::Typedef => {},
+            | _ => self.error(
+                SemanticErrorKind::SelectAnySubject,
+                attribute.source,
+                None,
+                None,
+            ),
         }
     }
 

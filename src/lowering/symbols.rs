@@ -41,17 +41,22 @@ use crate::{
 
 impl Unit<'_, '_, '_> {
     /// The IR linkage of the entity `binding` declares: internal for C
-    /// internal linkage, weak for a `weak` external entity, else external.
+    /// internal linkage, weak for a `weak` external entity, selectany for a
+    /// Microsoft `selectany` object this unit defines, else external.
+    /// MSVC extension: Microsoft Learn, "selectany".
     /// C99: §6.2.2p3-5, pp. 30-31; PDF pp. 42-43.
     pub(super) fn ir_linkage(&self, binding: usize) -> IrLinkage {
+        let attributes = self.sema.entity_attributes(binding);
         match self.sema.bindings[binding].linkage {
             | Linkage::Internal => IrLinkage::Internal,
-            | Linkage::External
-                if self
-                    .sema
-                    .entity_attributes(binding)
-                    .is_some_and(|attributes| attributes.weak) =>
+            | Linkage::External if attributes.is_some_and(|attributes| attributes.weak) =>
                 IrLinkage::Weak,
+            // A `selectany` object this unit defines; another unit's
+            // definition is an ordinary external reference here.
+            | Linkage::External
+                if attributes.is_some_and(|attributes| attributes.select_any)
+                    && self.defines_object(binding) =>
+                IrLinkage::SelectAny,
             | Linkage::External | Linkage::None => IrLinkage::External,
         }
     }

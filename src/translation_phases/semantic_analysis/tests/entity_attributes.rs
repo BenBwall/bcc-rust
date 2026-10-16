@@ -475,6 +475,20 @@ fn attribute_diagnostics_match_clang() {
             "void f(int p __attribute__((section(\"s\"))));",
             &[K::AttributeSubject],
         ),
+        // Microsoft `selectany` is for data with external linkage.
+        (
+            "__attribute__((selectany)) int f(void) { return 1; }",
+            &[K::SelectAnySubject],
+        ),
+        (
+            "static __attribute__((selectany)) int s = 1;",
+            &[K::SelectAnySubject],
+        ),
+        (
+            "void f(void) { __attribute__((selectany)) int l = 1; (void)l; }",
+            &[K::SelectAnySubject],
+        ),
+        ("typedef int T __attribute__((selectany));", &[]),
     ];
     for &(source, expected) in cases {
         assert_eq!(kinds(source, Target::LinuxGnu), expected, "{source}");
@@ -532,6 +546,7 @@ fn valid_cleanup_signatures_and_jumps_are_accepted() {
 fn entity_attributes_follow_clang_spellings_and_definition_order() {
     let source = r#"
 [[gnu::weak]] extern int scoped;
+__attribute__((selectany)) const int chosen = 7;
 [[clang::weak]] extern int foreign;
 int late(void) { return 0; }
 int late(void) __attribute__((weak, section(".late")));
@@ -539,6 +554,7 @@ void prefixed(void) __attribute__((section(L"wide")));
 "#;
     with_configuration(source, gnu(Target::LinuxGnu), |context, s| {
         let attributes = |name| s.entity_attributes(binding(context, s, name)).copied();
+        assert!(attributes("chosen").unwrap().select_any);
         assert!(attributes("scoped").unwrap().weak);
         assert!(attributes("foreign").is_none());
         assert!(attributes("late").is_none());

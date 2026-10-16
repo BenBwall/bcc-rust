@@ -289,6 +289,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         functions
     }
 
+    /// Whether this unit defines the linked object `binding`, tentatively
+    /// included. C99: §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn defines_object(&self, binding: usize) -> bool {
+        self.defined_objects.contains_key(self.symbol_name(binding))
+    }
+
     /// Projects the module plan's body decision for declaration modifier gates.
     /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p3-5,
     /// p. 140; PDF p. 152.

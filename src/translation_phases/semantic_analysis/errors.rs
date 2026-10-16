@@ -239,6 +239,9 @@ pub(crate) enum SemanticErrorKind {
     InvalidArgumentCount,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentType,
+    /// Clang: Microsoft's `selectany` applies to data with external linkage.
+    /// MSVC extension: Microsoft Learn, "selectany".
+    SelectAnySubject,
     /// Clang: Microsoft's `__annotation` takes wide string literals only.
     /// MSVC extension: Microsoft Learn, "__annotation".
     AnnotationArgument,
@@ -589,6 +592,7 @@ impl SemanticErrorKind {
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
             | Self::AnnotationArgument => "not a wide string literal",
+            | Self::SelectAnySubject => "not a data item with external linkage",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
             | Self::InvalidCondition => "condition is not scalar",
@@ -1161,6 +1165,11 @@ impl SemanticErrorKind {
                 "call requires a function pointer returning void or complete object type",
                 "C99 §6.5.2.2p1: the called expression points to a function with a valid return \
                  type",
+            ),
+            | Self::SelectAnySubject => (
+                "'selectany' can only be applied to data items with external linkage",
+                "Clang: Microsoft's `selectany` lets several translation units define one \
+                 external object",
             ),
             | Self::AnnotationArgument => (
                 "argument to `__annotation` must be a wide string literal",
