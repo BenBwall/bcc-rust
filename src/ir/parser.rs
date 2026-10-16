@@ -52,6 +52,7 @@ use super::{
         AggregateScalar,
         ExtendedParam,
         Extension,
+        FirstMember,
         GlobalDecl,
         GlobalInit,
         InitFunction,
@@ -1444,7 +1445,12 @@ impl<'t> Cursor<'_, 't> {
         let align = self.align()?;
         let mut flags = AggregateFlags::empty();
         let mut scalars = ArenaVec::new_in(scratch);
+        let mut first = None;
         while self.eat(TokenKind::Comma) {
+            if self.eat(TokenKind::Ident("first")) {
+                first = Some(self.first_member()?);
+                continue;
+            }
             if self.eat(TokenKind::LBracket) {
                 while !self.eat(TokenKind::RBracket) {
                     if !scalars.is_empty() {
@@ -1467,7 +1473,7 @@ impl<'t> Cursor<'_, 't> {
                     .map(|&(flag, _)| flag),
                 | _ => None,
             }
-            .ok_or_else(|| token.expected("`unaligned`, `flexible` or `[`"))?;
+            .ok_or_else(|| token.expected("`unaligned`, `flexible`, `first` or `[`"))?;
         }
         self.expect(TokenKind::RParen, "`)`")?;
         Ok(Some(make(AggregateLayout {
@@ -1475,7 +1481,30 @@ impl<'t> Cursor<'_, 't> {
             align,
             flags,
             scalars: scratch.alloc_slice_copy(&scalars),
+            first,
         })))
+    }
+
+    /// `(size N[, extension])` after `first`: a transparent union's first
+    /// member.
+    fn first_member(&mut self) -> Result<FirstMember, ParseError<'t>> {
+        self.expect(TokenKind::LParen, "`(`")?;
+        self.expect(TokenKind::Ident("size"), "`size`")?;
+        let (token, size) = self.unsigned()?;
+        let size = u64::try_from(size).map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?;
+        let mut extension = None;
+        if self.eat(TokenKind::Comma) {
+            let token = self.next();
+            extension = Some(
+                match token.kind {
+                    | TokenKind::Ident(name) => Extension::from_keyword(name),
+                    | _ => None,
+                }
+                .ok_or_else(|| token.expected("an extension"))?,
+            );
+        }
+        self.expect(TokenKind::RParen, "`)`")?;
+        Ok(FirstMember { size, extension })
     }
 
     /// `registers(ty[, ty], align N)`.

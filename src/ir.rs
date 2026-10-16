@@ -120,6 +120,7 @@ pub(crate) use module::{
     AggregateScalar,
     ExtendedParam,
     Extension,
+    FirstMember,
     Global,
     GlobalDecl,
     GlobalInit,

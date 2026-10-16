@@ -14,6 +14,7 @@ mod aggregate_varargs;
 mod layout_alignment;
 mod noundef;
 mod poison_returns;
+mod transparent_unions;
 mod wide_float_varargs;
 
 use std::{
@@ -642,6 +643,43 @@ int main(void) {
 /// executable for `target` at `-O0` and `-O2`, runs each, and asserts that
 /// it exits with 0.
 fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
+    let mut ll = String::new();
+    emit_module(module, target, &mut ll).unwrap();
+    assert_object_conforms(name, target, c, &ll, |object, options| {
+        compile_module(
+            module,
+            object,
+            LlvmOptions {
+                kind: OutputKind::Object,
+                ..options
+            },
+        )
+        .unwrap();
+    });
+}
+
+/// As [`assert_conforms`], with the bcc side compiled by the native back
+/// end instead of LLVM.
+fn assert_native_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
+    let mut assembly = String::new();
+    crate::backend::native::emit_assembly(module, target, &mut assembly)
+        .unwrap_or_else(|error| panic!("{name} for {target:?}: {error}"));
+    assert_object_conforms(name, target, c, &assembly, |object, _| {
+        crate::backend::native::assemble(&assembly, object, target, OutputKind::Object)
+            .unwrap_or_else(|error| panic!("{name} for {target:?} does not assemble: {error}"));
+    });
+}
+
+/// Links the object `compile` writes for each optimization level with the
+/// Clang C source `c` into one executable for `target`, runs it, and asserts
+/// that it exits with 0; `text` is the bcc side shown on failure.
+fn assert_object_conforms(
+    name: &str,
+    target: Target,
+    c: &str,
+    text: &str,
+    compile: impl Fn(&Path, LlvmOptions),
+) {
     let Some(runner) = Runner::for_target(target) else {
         return;
     };
@@ -654,8 +692,6 @@ fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
     };
     let directory = TempDir::new("abi-conformance");
     let object = directory.join(format!("{name}.o"));
-    let mut ll = String::new();
-    emit_module(module, target, &mut ll).unwrap();
     let c_path = directory.join(format!("{name}-clang.c"));
     let c = match runner {
         | Runner::Native => c.to_string(),
@@ -671,16 +707,7 @@ fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
             kind: OutputKind::Executable,
             code: crate::target::CodeOptions::default(),
         };
-        compile_module(
-            module,
-            &object,
-            LlvmOptions {
-                kind: OutputKind::Object,
-                code: crate::target::CodeOptions::default(),
-                ..options
-            },
-        )
-        .unwrap();
+        compile(&object, options);
         let mut command = toolchain.command(&object, &executable, options);
         _ = command.args(["-x", "c"]).arg(&c_path);
         if runner == Runner::Wsl {
@@ -694,16 +721,16 @@ fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
         let output = command.output().unwrap();
         assert!(
             output.status.success(),
-            "{name} for {target:?} at {opt:?} does not build:\n{}\n{ll}",
+            "{name} for {target:?} at {opt:?} does not build:\n{}\n{text}",
             String::from_utf8_lossy(&output.stderr)
         );
         let status = runner
             .run(&executable)
-            .unwrap_or_else(|error| panic!("{name} for {target:?} at {opt:?}: {error}\n{ll}"));
+            .unwrap_or_else(|error| panic!("{name} for {target:?} at {opt:?}: {error}\n{text}"));
         assert_eq!(
             status,
             Some(0),
-            "{name} for {target:?} at {opt:?} failed its check {status:?}:\n{ll}"
+            "{name} for {target:?} at {opt:?} failed its check {status:?}:\n{text}"
         );
     }
 }

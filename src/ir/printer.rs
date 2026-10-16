@@ -517,7 +517,7 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
 /// An aggregate parameter's kind and facts, as
 /// `aggregate(size 12, align 4, [0: i32, 4: f32, 8: f32])`, `byval(size 24,
 /// align 8)` or `registers(i64, f64, align 8)`. Flags such as `unaligned`
-/// follow the alignment.
+/// follow the alignment, then a transparent union's `first(size 8)`.
 fn display_param_abi(abi: ParamAbi<'_>) -> impl fmt::Display + '_ {
     fmt::from_fn(move |f| {
         write!(f, "{}(", abi.keyword())?;
@@ -535,6 +535,13 @@ fn display_param_abi(abi: ParamAbi<'_>) -> impl fmt::Display + '_ {
             if layout.flags.contains(flag) {
                 write!(f, ", {name}")?;
             }
+        }
+        if let Some(first) = layout.first {
+            write!(f, ", first(size {}", first.size)?;
+            if let Some(extension) = first.extension {
+                write!(f, ", {}", extension.keyword())?;
+            }
+            f.write_char(')')?;
         }
         if !layout.scalars.is_empty() {
             f.write_str(", [")?;

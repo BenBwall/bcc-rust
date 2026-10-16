@@ -311,7 +311,23 @@ pub(super) fn lowered_signature<'s>(
                 }
                 params.push(Type::Ptr);
             },
-            | ArgPlan::Registers { parts, .. } => params.extend_from_slice(parts.types()),
+            | ArgPlan::Registers { layout, parts } => {
+                // A transparent union's narrow scalar first member keeps a
+                // scalar argument's extension (Clang: `i8 signext`).
+                if let [_] = parts.types()
+                    && let Some(extension) = layout
+                        .first
+                        .and_then(|first| first.extension)
+                        .and_then(|extension| convention.extension(extension))
+                {
+                    extensions.push(ExtendedParam {
+                        index: parameter_count(params.len())
+                            .expect("ABI planning checked parameter counts"),
+                        extension,
+                    });
+                }
+                params.extend_from_slice(parts.types());
+            },
             | ArgPlan::Stack { layout, align } => {
                 // Clang marks the byval pointer, not its object bytes.
                 // C99 §6.5.2.2p4: parameters receive argument values.
@@ -365,13 +381,15 @@ fn parameter_count(count: usize) -> Result<u32, AbiErrorKind> {
     u32::try_from(count).map_err(|_| AbiErrorKind::TooManyParameters)
 }
 
-/// `layout` without its scalars, which only classification reads.
+/// `layout` without its scalars and first member, which only
+/// classification reads.
 pub(crate) fn without_scalars(layout: AggregateLayout<'_>) -> AggregateLayout<'static> {
     AggregateLayout {
         size:    layout.size,
         align:   layout.align,
         flags:   layout.flags,
         scalars: &[],
+        first:   None,
     }
 }
 

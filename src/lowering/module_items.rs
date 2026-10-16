@@ -424,6 +424,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// [`ParamAbi::Aggregate`]; a structure or union result is returned
     /// through a `ptr` to the receiving object inserted as parameter 0 and
     /// described by [`ParamAbi::Result`], and the signature has no result.
+    /// A System V transparent union parameter also records its first
+    /// member, which takes the registers ([`types::argument_layout`]).
     /// A parameter or result of an integer type narrower than `int` records
     /// its signedness, or that it is `_Bool`
     /// ([`Extension`](crate::ir::Extension)). The lists are allocated in
@@ -466,8 +468,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     params.push(Type::Ptr);
                     aggregates.push(AggregateParam {
                         index,
-                        abi: ParamAbi::Aggregate(types::aggregate_layout(
-                            types, parameter, scratch,
+                        abi: ParamAbi::Aggregate(types::argument_layout(
+                            types,
+                            self.target,
+                            parameter,
+                            scratch,
                         )?),
                     });
                 },

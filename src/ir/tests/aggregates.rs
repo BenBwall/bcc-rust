@@ -150,7 +150,7 @@ fn malformed_aggregate_descriptions_do_not_parse() {
         ),
         (
             "function @f(ptr aggregate(size 8, align 8, packed)) external\n",
-            "1:44: expected `unaligned`, `flexible` or `[`, found `packed`",
+            "1:44: expected `unaligned`, `flexible`, `first` or `[`, found `packed`",
         ),
         (
             "function @f(ptr registers(i64)) external\n",
