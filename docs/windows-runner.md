@@ -54,7 +54,9 @@ gh run download RUN_ID --repo BenBwall/bcc-rust --dir RESULT_DIRECTORY
 Logs and `results.json` (requested SHA, tree, actual Windows/Rust identity,
 arguments, and per-command exit codes) are uploaded for 14 days. Criterion
 reports are uploaded when produced. Artifacts include failures; a completed
-run is not necessarily a passing run. Jobs are serialized on this one host.
+run is not necessarily a passing run. The requested compiler commit receives
+the `windows/test`, `windows/bench`, or `windows/ci` GitHub commit status and a
+link to its run. Jobs are serialized on this one host.
 
 ## Windows host maintenance
 
@@ -67,8 +69,9 @@ run is not necessarily a passing run. Jobs are serialized on this one host.
   `C:\Strawberry\c`, Python 3.14; at most eight Cargo build jobs.
 - Matching Rust/LLVM source pins reuse junctions to the verified Windows
   installations under `C:\bcc\manual-checkout`; Cargo outputs stay in the
-  Actions checkout. Different source pins use the sparse source preparation
-  helper and a separate build rather than overwriting those installations.
+  Actions checkout. A different source pin requires a fresh source/cache
+  checkout; the source helper stops on a mismatched existing pin, preserving
+  the prepared installations.
 - Keep `target/llvm` and `target/llvm-libs` installations intact. The existing
   manual validation checkout and the sandbox compiler checkout are preserved.
 

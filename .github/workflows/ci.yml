@@ -26,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   windows:
@@ -58,6 +59,18 @@ jobs:
           $evidence = Join-Path $env:RUNNER_TEMP "bcc-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           New-Item -ItemType Directory -Path $evidence | Out-Null
           "BCC_EVIDENCE=$evidence" >> $env:GITHUB_ENV
+
+      - name: Mark requested commit pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXACT_SHA: ${{ inputs.commit_sha }}
+          SUITE: ${{ inputs.suite }}
+        run: |
+          $body = @{ state = 'pending'; context = "windows/$env:SUITE"; description = 'Windows runner executing workload';
+                     target_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } | ConvertTo-Json
+          Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/statuses/$env:EXACT_SHA" `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } `
+            -ContentType 'application/json' -Body $body | Out-Null
 
       - name: Check out dispatcher helpers
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -104,3 +117,19 @@ jobs:
             ${{ env.BCC_EVIDENCE }}
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Publish result on requested commit
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXACT_SHA: ${{ inputs.commit_sha }}
+          SUITE: ${{ inputs.suite }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if ($env:EXACT_SHA -cnotmatch '^[0-9a-f]{40}$') { exit 0 }
+          $state = if ($env:JOB_STATUS -eq 'success') { 'success' } else { 'failure' }
+          $body = @{ state = $state; context = "windows/$env:SUITE"; description = "Windows $env:SUITE $env:JOB_STATUS";
+                     target_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" } | ConvertTo-Json
+          Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/statuses/$env:EXACT_SHA" `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } `
+            -ContentType 'application/json' -Body $body | Out-Null
