@@ -758,7 +758,8 @@ fn elf_tls_models_match_clang_for_each_relocation_and_tls_model() {
 
 /// The LLVM IR states the models as Clang's does, up to `dso_local`, which
 /// LLVM-C cannot set and the local-exec request replaces; only code for an
-/// executable carries the PIE level.
+/// executable carries the PIE level. As in Clang, the PIC level merges as
+/// the minimum (behavior 8) and the PIE level as the maximum (7).
 #[test]
 fn elf_tls_models_and_pic_levels_appear_in_llvm_ir() {
     let target = Target::LinuxGnu;
@@ -771,8 +772,8 @@ fn elf_tls_models_and_pic_levels_appear_in_llvm_ir() {
                 "@ext = external thread_local global",
                 "@wk = weak thread_local(localexec) global",
                 "@def_alias = thread_local(localexec) alias",
-                "!\"PIC Level\", i32 2}",
-                "!\"PIE Level\", i32 2}",
+                "!{i32 8, !\"PIC Level\", i32 2}",
+                "!{i32 7, !\"PIE Level\", i32 2}",
             ][..],
             &[][..],
         ),
@@ -785,13 +786,16 @@ fn elf_tls_models_and_pic_levels_appear_in_llvm_ir() {
                 "@hid = hidden thread_local global",
                 "@wk = weak thread_local global",
                 "@def_alias = thread_local alias",
-                "!\"PIC Level\", i32 2}",
+                "!{i32 8, !\"PIC Level\", i32 2}",
             ],
             &["PIE Level", "localexec"],
         ),
         (
             &["-fpie"],
-            &["!\"PIC Level\", i32 1}", "!\"PIE Level\", i32 1}"],
+            &[
+                "!{i32 8, !\"PIC Level\", i32 1}",
+                "!{i32 7, !\"PIE Level\", i32 1}",
+            ],
             &[],
         ),
         (

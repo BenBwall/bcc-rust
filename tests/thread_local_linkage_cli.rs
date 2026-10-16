@@ -439,6 +439,129 @@ int main(void) {
         }
     }
 
+    /// The pairs of relocation flags whose LLVM modules are linked together.
+    const MERGED_FLAGS: [(&str, &str); 7] = [
+        ("-fpic", "-fPIC"),
+        ("-fPIC", "-fpic"),
+        ("-fpie", "-fPIE"),
+        ("-fPIE", "-fpic"),
+        ("-fpie", "-fPIC"),
+        ("-fno-pic", "-fPIC"),
+        ("-fPIE", "-fno-pic"),
+    ];
+
+    /// LLVM modules of different PIC and PIE levels link with LTO, as
+    /// Clang's do: the merged module keeps the smallest PIC level (an absent
+    /// one, from `-fno-pic`, counting as 0) and the largest PIE level. bcc's
+    /// modules merge with each other and with Clang's to the module flags
+    /// Clang's own pair merges to (the LLVM Language Reference, "Module Flags
+    /// Metadata").
+    #[test]
+    fn llvm_modules_of_mixed_pic_and_pie_levels_link_with_lto() {
+        if !clang_path().is_file() {
+            eprintln!("skipping: no bundled clang");
+            return;
+        }
+        let directory = temporary("module-flags");
+        std::fs::create_dir_all(&directory).unwrap();
+        let target = "--target=x86_64-unknown-linux-gnu";
+        let sources = [
+            "int small(void) { return 1; }\n",
+            "int big(void) { return 2; }\n",
+        ];
+        for (index, (first, second)) in MERGED_FLAGS.into_iter().enumerate() {
+            let mut modules = Vec::new();
+            for (unit, (source, flag)) in sources.iter().zip([first, second]).enumerate() {
+                let emitted = bcc(source, &[target, flag, "--emit=llvm"]);
+                assert!(
+                    emitted.status.success(),
+                    "{flag}: {}",
+                    text(&emitted.stderr)
+                );
+                let ours = directory.join(format!("bcc-{index}-{unit}.ll"));
+                std::fs::write(&ours, &emitted.stdout).unwrap();
+                let input = directory.join(format!("unit-{index}-{unit}.c"));
+                std::fs::write(&input, source).unwrap();
+                let theirs = directory.join(format!("clang-{index}-{unit}.ll"));
+                let compiled = run_native(
+                    Command::new(clang_path())
+                        .args([target, flag, "-S", "-emit-llvm", "-o"])
+                        .arg(&theirs)
+                        .arg(&input),
+                )
+                .unwrap();
+                assert!(
+                    compiled.status.success(),
+                    "{flag}: {}",
+                    text(&compiled.stderr)
+                );
+                modules.push((ours, theirs));
+            }
+            let expected = merged_flags(&directory, &modules[0].1, &modules[1].1);
+            assert!(!expected.is_empty(), "{first} {second}");
+            for (name, left, right) in [
+                ("bcc", &modules[0].0, &modules[1].0),
+                ("bcc with clang", &modules[0].0, &modules[1].1),
+                ("clang with bcc", &modules[0].1, &modules[1].0),
+            ] {
+                assert_eq!(
+                    merged_flags(&directory, left, right),
+                    expected,
+                    "{name}: {first} {second}"
+                );
+            }
+        }
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
+    /// Links two LLVM modules with LTO into one relocatable bitcode module
+    /// through the bundled Clang and LLD, and returns its PIC and PIE level
+    /// module flags.
+    fn merged_flags(directory: &Path, first: &Path, second: &Path) -> Vec<String> {
+        let merged = directory.join("merged.bc");
+        let linked = run_native(
+            Command::new(clang_path())
+                .args([
+                    "--target=x86_64-unknown-linux-gnu",
+                    "-fuse-ld=lld",
+                    "-flto",
+                    "-nostdlib",
+                    "-r",
+                    "-Wl,--plugin-opt=emit-llvm",
+                ])
+                .arg(first)
+                .arg(second)
+                .arg("-o")
+                .arg(&merged),
+        )
+        .unwrap();
+        assert!(
+            linked.status.success(),
+            "{} {}: {}",
+            first.display(),
+            second.display(),
+            text(&linked.stderr)
+        );
+        let printed = run_native(
+            Command::new(clang_path())
+                .args(["-S", "-emit-llvm", "-x", "ir", "-o", "-"])
+                .arg(&merged),
+        )
+        .unwrap();
+        assert!(printed.status.success(), "{}", text(&printed.stderr));
+        let mut flags: Vec<String> = text(&printed.stdout)
+            .lines()
+            .filter(|line| line.contains("PIC Level") || line.contains("PIE Level"))
+            .map(|line| {
+                line.split_once(" = ")
+                    .map_or(line, |(_, flag)| flag)
+                    .to_owned()
+            })
+            .collect();
+        flags.sort();
+        flags
+    }
+
     #[test]
     fn invalid_tls_models_and_link_kinds_are_rejected() {
         let output = bcc("int x;", &["-ftls-model=bogus", "--emit=ir"]);
