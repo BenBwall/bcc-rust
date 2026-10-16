@@ -1,7 +1,13 @@
 //! GNU cleanup calls. Semantic analysis retains each `cleanup` variable as a
-//! region whose every exit, normal or by jump, calls its function with the
-//! variable's address; `vla.rs` walks a transition's regions innermost first
-//! and asks this file for each call. The call's result is discarded.
+//! region from the end of its initializer to the end of its block. Every
+//! transition that leaves the region calls its function with the variable's
+//! address: falling off the block, `break`, `continue`, `return` (after the
+//! returned value is computed), `goto` and the end of a statement
+//! expression. Indirect gotos never cross a cleanup region (semantic
+//! analysis rejects them), and a goto may enter one only from the
+//! variable's own initializer. `vla.rs` walks a transition's left regions
+//! innermost first, interleaving VLA releases, and asks this file for each
+//! call. The call's result is discarded.
 //! GNU extension: GCC manual, "Common Variable Attributes", cleanup.
 //! <https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html>
 //! C99: §6.2.4p5, p. 32; PDF p. 44 (an automatic object's lifetime ends when
@@ -43,9 +49,11 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     source,
                 )),
         };
+        // A cleanup function is a direct call, so it reaches a private
+        // `always_inline` body as one does.
         let func = self
             .unit
-            .function(function)
+            .direct_callee(function)
             .map_err(|kind| at(kind, source))?;
         let signature = self.unit.module.function_signature(func);
         let mut args = ArenaVec::with_capacity_in(2, self.scratch);

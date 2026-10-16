@@ -321,6 +321,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::Continue => self.control_jump(s, true),
             | S::Expression(e) => self.expression_slot(e),
             | S::ComputedGoto(e) => self.computed_goto(s, e),
+            | S::Asm(_) | S::MsAsm(_) =>
+                if let Some(function) = self.functions.current {
+                    self.function_records[function.id].assembly = true;
+                },
             | _ => {},
         }
     }

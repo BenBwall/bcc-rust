@@ -72,6 +72,20 @@ pub(crate) struct EntityAttributes<'tu> {
     /// (as in Clang, `ASTContext::getDeclAlign`).
     /// C11: §6.7.5p6, p. 127; PDF p. 145.
     pub(crate) declared_alignment: bool,
+    /// GNU `noinline`/`noipa` or `always_inline` on a function.
+    pub(crate) inlining: Inlining,
+}
+
+/// A function's inline-control request. `Never` wins over `Always` when
+/// declarations write both.
+/// GNU extension: GCC manual, "Common Function Attributes", noinline,
+/// noipa, `always_inline`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Inlining {
+    #[default]
+    Default,
+    Never,
+    Always,
 }
 
 /// ELF symbol visibility; COFF targets ignore it as Clang does.
@@ -149,6 +163,15 @@ pub(crate) enum UnsupportedAttribute {
     AliasAssemblerLabel,
     /// An alias whose thread storage duration differs from its target's.
     AliasThreadLocal,
+    /// Clang `address_space`: on x86-64, address spaces 256-258 address
+    /// memory through the `gs`, `fs` and `ss` segments.
+    AddressSpace,
+    /// Clang's Swift parameter attributes, such as `swift_async_context`,
+    /// which passes its parameter in `r14` under the ordinary C convention.
+    SwiftParameter,
+    /// Clang `internal_linkage`: an external declaration given internal
+    /// linkage.
+    InternalLinkage,
 }
 
 impl UnsupportedAttribute {
@@ -167,6 +190,9 @@ impl UnsupportedAttribute {
             | Self::SectionName => "this section name",
             | Self::AliasAssemblerLabel => "aliases involving assembler labels",
             | Self::AliasThreadLocal => "aliases between thread-local and other objects",
+            | Self::AddressSpace => "the `address_space` attribute",
+            | Self::SwiftParameter => "Swift parameter attributes such as `swift_async_context`",
+            | Self::InternalLinkage => "the `internal_linkage` attribute",
         }
     }
 }

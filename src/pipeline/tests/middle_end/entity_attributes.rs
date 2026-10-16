@@ -1,10 +1,10 @@
 //! GNU `cleanup`, `constructor`, `destructor`, `alias` and `weak` through the
 //! interpreter, every LLVM arm and bundled Clang, and across translation
-//! units linked with Clang-compiled code: natively for the Windows GNU host
-//! and under WSL for System V. Expected outputs are bundled Clang 23's (and
-//! GCC 15's, which agrees on these programs).
-//! GNU extension: GCC manual, "Common Function Attributes" and "Common
-//! Variable Attributes".
+//! units linked with Clang-compiled code: natively for the host's target
+//! (Linux or Windows GNU) and, from Windows, under WSL for System V. Expected
+//! outputs are bundled Clang 23's (and GCC 15's, which agrees on these
+//! programs). GNU extension: GCC manual, "Common Function Attributes" and
+//! "Common Variable Attributes".
 
 use super::*;
 
@@ -186,6 +186,19 @@ int main(void) { printf(\"ret %d\\n\", run(4)); return 0; }
         "out 10\nret 10\n",
     ),
     (
+        // An alias whose type is compatible with its target's but spelled
+        // without a prototype, called directly and through a pointer.
+        "alias_open_prototype",
+        "int real(void) { return 6; }
+int open_alias() __attribute__((alias(\"real\")));
+int add(int x, long y) { return x + (int)y; }
+int add_alias() __attribute__((alias(\"add\")));
+int main(void) { int (*p)() = open_alias; return open_alias() * 6 + p() + add_alias(1, 2L) - 3; }
+",
+        42,
+        "",
+    ),
+    (
         "undefined_weak",
         "extern int missing(void) __attribute__((weak));
 extern int missing_object __attribute__((weak));
@@ -305,41 +318,35 @@ const TWO_UNIT_OUTPUT: &str = "10 2 -1 5 8 70 30\n";
 
 #[test]
 fn weak_and_alias_link_with_clang_units_on_both_targets() {
-    // Windows GNU natively, through the bundled toolchain.
-    if host() == Some(Target::WindowsGnu)
-        && let Ok(toolchain) = Toolchain::bundled(Target::WindowsGnu)
+    // The host's own target natively, through the bundled toolchain: Linux
+    // GNU on a Linux host, Windows GNU on a Windows host.
+    if let Some(target) = host()
+        && let Ok(toolchain) = Toolchain::bundled(target)
     {
-        let directory = TempDir::new("weak-alias-windows");
+        let directory = TempDir::new("weak-alias-native");
         let clang = directory.join("clang.c");
         std::fs::write(&clang, CLANG_UNIT).unwrap();
         for arm in ARMS {
             let object = directory.join(format!("bcc-{}.o", arm.name));
             let executable = directory.join(format!("two-{}.exe", arm.name));
             let options = LlvmOptions {
-                opt:                 Some(arm.opt),
+                opt: Some(arm.opt),
                 disable_llvm_passes: arm.disable_llvm_passes,
-                target:              Target::WindowsGnu,
-                kind:                OutputKind::Executable,
-                code:                crate::target::CodeOptions::default(),
+                target,
+                kind: OutputKind::Executable,
+                code: crate::target::CodeOptions::default(),
             };
-            with_module(
-                BCC_UNIT,
-                Target::WindowsGnu,
-                arm.bcc,
-                Profile::PostAbi,
-                |module, _| {
-                    compile_module(
-                        module,
-                        &object,
-                        LlvmOptions {
-                            kind: OutputKind::Object,
-                            code: crate::target::CodeOptions::default(),
-                            ..options
-                        },
-                    )
-                    .unwrap();
-                },
-            );
+            with_module(BCC_UNIT, target, arm.bcc, Profile::PostAbi, |module, _| {
+                compile_module(
+                    module,
+                    &object,
+                    LlvmOptions {
+                        kind: OutputKind::Object,
+                        ..options
+                    },
+                )
+                .unwrap();
+            });
             let mut command = toolchain.command(&object, &executable, options);
             _ = command.args(["-x", "c"]).arg(&clang);
             let output = command.output().unwrap();
@@ -347,13 +354,14 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
             assert_eq!(
                 run_native(&executable),
                 (0, TWO_UNIT_OUTPUT.to_string()),
-                "windows {}",
+                "{target:?} {}",
                 arm.name
             );
         }
     }
-    // System V under WSL, linked by the distribution's clang with its C
-    // library so that constructors and the dynamic loader behave as usual.
+    // System V from a Windows host under WSL, linked by the distribution's
+    // clang with its C library so that constructors and the dynamic loader
+    // behave as usual.
     let wsl_clang = cfg!(windows)
         && crate::test_support::native::run_native(Command::new("wsl.exe").args([
             "-e",

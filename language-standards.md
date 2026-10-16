@@ -110,14 +110,21 @@ assumptions) and turns `__glibc_macro_warning` into `#pragma GCC warning`;
 `CMPLX` with `__builtin_complex`, and `bits/floatn.h` enables binary128, as
 described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__`, which bcc never
 defines itself, glibc selects Clang's fortify wrappers, which need the
-`overloadable`, `pass_object_size` and `diagnose_if` attributes; bcc has none
-of them and rejects those headers. In MinGW-w64, `__CRT_INLINE` becomes
+`overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`,
+`enable_if` and `unavailable` attributes. `__has_attribute` reports them as
+Clang does. Their meanings belong to the separate fortify work, whose
+semantics replace these catalog entries on integration; in the attribute
+catalog alone `overloadable` and the two object-size attributes are refused
+and the other three are accepted without meaning, so the fortified headers
+are not supported by the catalog by itself. In MinGW-w64, `__CRT_INLINE` becomes
 `extern inline` with `gnu_inline`, `setjmp` passes `__builtin_frame_address (0)`,
 `intrin.h` always includes the x86 intrinsic headers, the printf and strftime
 format archetypes become Clang's, and `intsafe.h` defines its functions as
-`FORCEINLINE` bodies over the overflow builtins. bcc does not inline
-`always_inline` bodies, so a call to one still needs an external definition,
-which MinGW-w64 does not supply for `intsafe.h`. The UCRT's `corecrt.h` uses
+`FORCEINLINE` bodies over the overflow builtins. bcc keeps each such
+`always_inline` GNU inline body as a private definition that direct calls
+reach and the inliner expands, so `intsafe.h` needs no external definition; a
+body with inline assembly, as in `intrin-impl.h`, still calls the external
+function. The UCRT's `corecrt.h` uses
 `_Static_assert` for `_STATIC_ASSERT` and wraps itself in `#pragma clang
 diagnostic`, which bcc ignores.
 
@@ -140,7 +147,9 @@ attribute parser. Each macro-expanded attribute follows the
 table: `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany` and
 `noinline` are accepted, `__ms_abi__` is the target's own convention, `naked`
 is refused, and `restrict`, `allocate(...)` and `uuid(...)` warn as unknown, as
-bundled Clang's MinGW mode does. MSVC `align(...)` remains unanalyzed. GNU
+bundled Clang's MinGW mode does, as does `align(...)`, which Clang ignores
+there; with `-fms-extensions`, `__declspec` is the Microsoft keyword instead
+(Clang defines it as itself) and `align(...)` remains unanalyzed. GNU
 `aligned(...)` retains the requested declaration/type alignment; GNU `packed`
 and scalar `mode` retain their layouts and representation types. GNU
 `transparent_union` on a union definition or a typedef naming a union lets a
@@ -1200,8 +1209,10 @@ selection, type classification, and real/imaginary components now have
 semantic types and constant eligibility. The reachable old-GCC glibc
 `tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
 Clang rejects that builtin. No resource `tgmath.h` is supplied for MinGW.
-Clang's resource implementation requires `overloadable` function resolution,
-which remains unimplemented, and is ambiguous for binary128 calls.
+Clang's resource implementation requires `overloadable` function resolution
+(not provided by the attribute catalog; see the fortify work above for its
+status), and is ambiguous for binary128 calls, so no resource `tgmath.h` is
+supplied either way.
 
 Binary128 literals are parsed exactly with arena-backed integer rational
 conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,
@@ -1296,10 +1307,28 @@ facts; lowering consumes the facts and never reads attribute tokens
 ([semantic-analysis.md](semantic-analysis.md#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
 Each name in an attribute list, in any position (declarations, type names,
 pointer levels, members, tags, enumerators and statements), is looked up once
-in `semantic_analysis/attributes/catalog.rs`. Unknown names warn as Clang's
-`-Wunknown-attributes` ("unknown attribute ignored"); a vendor prefix other than
-`gnu::` or `clang::` is unknown, as in Clang. Warnings are withheld inside
-system headers, so library headers stay quiet.
+in `semantic_analysis/attributes/catalog.rs`, under the spellings bundled
+Clang knows for the target (`catalog/spellings.rs`, read from the pinned
+Clang): GCC's attributes take `[[gnu::...]]` and Clang's own `[[clang::...]]`,
+so `[[clang::weak]]` and `[[gnu::overloadable]]` are unknown;
+`dllimport`, `dllexport` and `guard` exist only on the Windows targets and
+`ifunc` only for glibc. Unknown names warn as Clang's `-Wunknown-attributes`
+("unknown attribute ignored"); a vendor prefix other than `gnu::` or
+`clang::` is unknown, as in Clang. GCC attributes Clang lacks that bcc
+accepts (`noipa`, `access`, `optimize` and others in the table) keep their
+GNU and `gnu::` spellings, while `__has_attribute` answers Clang's 0 for
+them. Warnings are withheld inside system headers, so library headers stay
+quiet.
+
+An attribute that a redeclaration adds after the entity's function body or
+initialized definition is ignored with Clang's "attribute declaration must
+precede definition" warning, unless a declaration up to the definition
+already wrote it; type attributes (layouts, conventions, `noreturn`) still
+apply, a late `alias` is the alias-definition error, and a tentative
+definition completes only at the end of the unit. String arguments may carry
+an encoding prefix, which Clang's `-Winvalid-unevaluated-string` warning
+reports and ignores. `constructor()` takes the default priority, and too many
+arguments are an argument error, not a syntax error.
 
 Implemented meanings, with Clang's applicability diagnostics:
 

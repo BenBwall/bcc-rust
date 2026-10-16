@@ -51,6 +51,29 @@ impl WrittenAttribute<'_> {
     }
 }
 
+/// The token position and name of every attribute of `specifier` that the
+/// catalog knows in its written spelling and namespace, in source order.
+/// Type construction reads representation attributes through it, so an
+/// unknown vendor name such as `[[clang::vector_size]]` stays unknown there
+/// as it is in the name pass.
+pub(in crate::translation_phases::semantic_analysis) fn known_names<'a>(
+    specifier: &'a AttributeSpecifier<'_>,
+    context: &'a Context<'_>,
+) -> impl Iterator<Item = (usize, &'a str)> {
+    let target = context.configuration.target();
+    written(specifier, context)
+        .filter(move |attribute| {
+            super::catalog::rule(
+                specifier.syntax,
+                attribute.namespace,
+                attribute.name,
+                target,
+            )
+            .is_some()
+        })
+        .map(|attribute| (attribute.index, attribute.name))
+}
+
 /// Every attribute of `specifier`, in source order.
 pub(super) fn written<'a>(
     specifier: &'a AttributeSpecifier<'_>,

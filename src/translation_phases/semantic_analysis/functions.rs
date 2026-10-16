@@ -244,6 +244,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result,
             scope: self.scope,
             parameter_aliases: &[],
+            assembly: false,
         });
         self.functions.current = Some(FunctionContext {
             id,
@@ -611,6 +612,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .entities
             .get(&name)
             .map(|entity| (entity.latest, entity.definition.is_some()))
+    }
+
+    /// Where an earlier declaration defines the linked entity that `binding`
+    /// redeclares: its function body or its initialized object. A tentative
+    /// definition completes only at the end of the translation unit, so it
+    /// does not count yet.
+    /// C99: §6.9p5, p. 140; PDF p. 152; §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn earlier_definition(&self, binding: usize) -> Option<SourceVectors> {
+        let b = self.bindings[binding];
+        if b.linkage == Linkage::None {
+            return None;
+        }
+        let entity = self.functions.entities.get(&b.name.name)?;
+        let definition = match entity.function_body {
+            | Some(FunctionBody::Replaceable(source) | FunctionBody::Unique(source)) =>
+                Some(source),
+            | None => entity.definition,
+        }?;
+        (definition != b.name.source_vectors).then_some(definition)
     }
 
     /// Definition parameters have complete adjusted object types.
@@ -1295,30 +1315,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         spec: DeclarationSpecifiers<'tu>,
         declarator: Declarator<'tu>,
     ) -> bool {
+        // The catalog's namespace-aware reader, so `[[gnu::gnu_inline]]`
+        // selects GNU inline semantics as `__attribute__((gnu_inline))` does.
         let attribute_has = |attribute: &super::AttributeSpecifier<'tu>| {
-            if attribute.recovered
-                || !attribute.tokens.first().is_some_and(|token| {
-                    matches!(
-                        token.kind,
-                        super::super::preprocessing::TokenType::Keyword(
-                            super::super::preprocessing::KeywordTokenType::Attribute
-                        )
-                    )
-                })
-            {
-                return false;
-            }
-            let mut depth = 0usize;
-            attribute.tokens.iter().any(|token| {
-                let spelling = self.context.string_cache.at(token.contents);
-                match spelling {
-                    | "(" => depth += 1,
-                    | ")" => depth = depth.saturating_sub(1),
-                    | "gnu_inline" | "__gnu_inline__" if depth == 2 => return true,
-                    | _ => {},
-                }
-                false
-            })
+            !attribute.recovered
+                && super::attributes::known_names(attribute, self.context)
+                    .any(|(_, name)| name == "gnu_inline")
         };
         let mut chain = spec.extensions;
         while let Some(item) = chain {

@@ -398,6 +398,83 @@ fn attribute_diagnostics_match_clang() {
             "void stdcall_f(void) __attribute__((stdcall));",
             &[K::IgnoredConvention],
         ),
+        // Clang gives GCC's attributes a `gnu::` scope and its own a
+        // `clang::` scope; the other scope is unknown and has no effect.
+        (
+            "[[clang::constructor]] void f(void) {}",
+            &[K::UnknownAttribute],
+        ),
+        ("[[clang::weak]] extern int w;", &[K::UnknownAttribute]),
+        ("[[gnu::overloadable]] void f(int);", &[K::UnknownAttribute]),
+        // Names only some targets know.
+        (
+            "__attribute__((dllimport)) extern int i;",
+            &[K::UnknownAttribute],
+        ),
+        // Clang's attributes beyond bcc's own rules are known.
+        (
+            "__attribute__((guarded_var)) int g; __attribute__((noderef)) int *p;",
+            &[],
+        ),
+        // An attribute a redeclaration adds after the definition is
+        // ignored; one already written before the definition is not.
+        (
+            "int f(void) { return 0; } int f(void) __attribute__((weak, cold));",
+            &[K::AttributeAfterDefinition, K::AttributeAfterDefinition],
+        ),
+        (
+            "__attribute__((used)) int f(void); int f(void) { return 0; } int f(void) \
+             __attribute__((used, noreturn, cdecl));",
+            &[],
+        ),
+        (
+            "int o = 1; extern int o __attribute__((section(\"s\")));",
+            &[K::AttributeAfterDefinition],
+        ),
+        // A tentative definition completes at the end of the unit.
+        (
+            "int t; int t __attribute__((section(\"s\"))); int t = 2;",
+            &[],
+        ),
+        // Argument errors rather than parse errors, as Clang reports them.
+        ("__attribute__((constructor())) void f(void) {}", &[]),
+        (
+            "__attribute__((constructor(1, 2))) void f(void) {}",
+            &[K::AttributeArguments],
+        ),
+        (
+            "__attribute__((destructor(200, x))) void f(void) {}",
+            &[K::AttributeArguments],
+        ),
+        // The undeclared identifier is the only error.
+        (
+            "__attribute__((constructor(missing))) void f(void) {}",
+            &[K::UndeclaredIdentifier],
+        ),
+        (
+            "void f(void) __attribute__((section(L\"x\")));",
+            &[K::UnevaluatedStringPrefix],
+        ),
+        (
+            "typedef int T __attribute__((section(\"s\")));",
+            &[K::AttributeSubject],
+        ),
+        (
+            "void f(void) {} typedef int T __attribute__((alias(\"f\")));",
+            &[K::AttributeSubject],
+        ),
+        (
+            "struct S { int m __attribute__((section(\"s\"))); };",
+            &[K::AttributeSubject],
+        ),
+        (
+            "void f(void) {} struct S { int m __attribute__((alias(\"f\"))); };",
+            &[K::AttributeSubject],
+        ),
+        (
+            "void f(int p __attribute__((section(\"s\"))));",
+            &[K::AttributeSubject],
+        ),
     ];
     for &(source, expected) in cases {
         assert_eq!(kinds(source, Target::LinuxGnu), expected, "{source}");
@@ -424,9 +501,64 @@ fn valid_cleanup_signatures_and_jumps_are_accepted() {
          {&&a, &&b}; goto *t[i]; a:; b:; } }",
         "void d(int *); void f(int i) { void *t[] = {&&a, &&b}; { int x \
          __attribute__((cleanup(d))) = 1; } goto *t[i]; a:; b:; }",
+        // Jumps that stay inside one cleanup scope.
+        "void d(int *); void f(int n) { int x __attribute__((cleanup(d))) = n; if (n) goto out; \
+         n++; out:; }",
+        "void d(int *); void f(int n) { { int x __attribute__((cleanup(d))) = n; back: if (n--) \
+         goto back; } }",
+        // A goto in the variable's own initializer is in its scope already,
+        // as in Clang's jump checker; so is one in an enclosing initializer.
+        "void d(int *); void f(int n) { int x __attribute__((cleanup(d))) = ({ if (n) goto in; 1; \
+         }); in:; }",
+        "void d(int *); void f(int n) { int x __attribute__((cleanup(d))) = ({ int y \
+         __attribute__((cleanup(d))) = ({ if (n) goto in; 2; }); y; }); in:; }",
     ] {
         assert_eq!(kinds(source, Target::LinuxGnu), [], "{source}");
     }
+    // The own-initializer exception does not cover another scope it enters.
+    assert_eq!(
+        kinds(
+            "void d(int *); void f(int n) { int x __attribute__((cleanup(d))) = ({ if (n) goto \
+             in; 1; }); { int y __attribute__((cleanup(d))) = 2; in:; } }",
+            Target::LinuxGnu
+        ),
+        [SemanticErrorKind::JumpIntoCleanupScope]
+    );
+}
+
+/// Scoped and target-specific spellings take effect exactly where Clang
+/// knows them; an attribute written after the definition does not.
+#[test]
+fn entity_attributes_follow_clang_spellings_and_definition_order() {
+    let source = r#"
+[[gnu::weak]] extern int scoped;
+[[clang::weak]] extern int foreign;
+int late(void) { return 0; }
+int late(void) __attribute__((weak, section(".late")));
+void prefixed(void) __attribute__((section(L"wide")));
+"#;
+    with_configuration(source, gnu(Target::LinuxGnu), |context, s| {
+        let attributes = |name| s.entity_attributes(binding(context, s, name)).copied();
+        assert!(attributes("scoped").unwrap().weak);
+        assert!(attributes("foreign").is_none());
+        assert!(attributes("late").is_none());
+        assert_eq!(attributes("prefixed").unwrap().section, Some("wide"));
+    });
+    for (target, known) in [(Target::LinuxGnu, false), (Target::WindowsGnu, true)] {
+        assert_eq!(
+            kinds("__attribute__((dllexport)) int exported;", target).is_empty(),
+            known,
+            "{target:?}"
+        );
+    }
+    // Clang knows `ifunc` only for glibc's Linux target.
+    assert_eq!(
+        kinds(
+            "int r(void); int f(void) __attribute__((ifunc(\"r\")));",
+            Target::LinuxMusl
+        ),
+        [SemanticErrorKind::UnknownAttribute]
+    );
 }
 
 #[test]
@@ -505,6 +637,23 @@ fn unimplementable_attributes_and_conventions_are_retained_refusals() {
             "int x = 1; extern _Thread_local int y __attribute__((alias(\"x\")));",
             Target::WindowsGnu,
             Some(UnsupportedAttribute::AliasThreadLocal),
+        ),
+        // Clang attributes whose ABI, addressing or linkage bcc does not
+        // model are refused, not accepted as hints.
+        (
+            "int use(void *p __attribute__((swift_async_context))) { return p != 0; }",
+            Target::LinuxGnu,
+            Some(UnsupportedAttribute::SwiftParameter),
+        ),
+        (
+            "__attribute__((internal_linkage)) int value = 7;",
+            Target::LinuxGnu,
+            Some(UnsupportedAttribute::InternalLinkage),
+        ),
+        (
+            "int __attribute__((address_space(256))) *gs;",
+            Target::LinuxGnu,
+            Some(UnsupportedAttribute::AddressSpace),
         ),
     ];
     for &(source, target, expected) in cases {

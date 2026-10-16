@@ -27,6 +27,7 @@ mod declaration_initializers;
 mod encoded_strings;
 mod entity_attributes;
 mod flexible_initializers;
+mod inline_control;
 mod math_builtins;
 mod predefined_identifiers;
 mod record_layout;

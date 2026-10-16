@@ -273,7 +273,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let tokens = a.tokens;
         let mut bytes = None;
         let mut alignment = None;
-        for (i, name) in attribute_names(a, self.context) {
+        for (i, name) in super::attributes::known_names(a, self.context) {
             if name == "vector_size" || name == "aligned" {
                 let value = if tokens.get(i + 1).is_some_and(|t| {
                     self.context
@@ -740,68 +740,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
-/// GNU attributes extend C99 declaration specifiers. Only names at
-/// attribute-list depth count; identifiers in parenthesized arguments do not.
-/// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
-/// GNU extension: GCC manual, "Attribute Syntax".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-pub(super) fn attribute_names<'a>(
-    a: &'a AttributeSpecifier<'_>,
-    context: &'a super::Context<'_>,
-) -> impl Iterator<Item = (usize, &'a str)> {
-    let level = match a
-        .tokens
-        .first()
-        .map(|t| context.string_cache.at(t.contents).trim_matches('_'))
-    {
-        | Some("attribute") => 2,
-        | Some("declspec") => 1,
-        | _ => 0,
-    };
-    let mut depth = 0usize;
-    a.tokens.iter().enumerate().filter_map(move |(i, token)| {
-        let spelling = context
-            .string_cache
-            .at(token.contents)
-            .trim_end_matches('\0');
-        match spelling {
-            | "(" => {
-                depth += 1;
-                None
-            },
-            | ")" => {
-                depth = depth.saturating_sub(1);
-                None
-            },
-            | _ if depth == level => {
-                let tokens = a.tokens;
-                let colon = |index: usize| {
-                    tokens
-                        .get(index)
-                        .is_some_and(|token| context.string_cache.at(token.contents) == ":")
-                };
-                // A namespace is not an attribute name. Unknown vendor
-                // attributes do not acquire GNU representation semantics.
-                if colon(i + 1)
-                    || i >= 3
-                        && colon(i - 1)
-                        && colon(i - 2)
-                        && context
-                            .string_cache
-                            .at(tokens[i - 3].contents)
-                            .trim_matches('_')
-                            != "gnu"
-                {
-                    None
-                } else {
-                    Some((i, spelling.trim_matches('_')))
-                }
-            },
-            | _ => None,
-        }
-    })
-}
-
 /// GNU construction and alignment suffixes apply to the declared type.
 /// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
 /// GNU extension: GCC manual, "Vector Extensions".
@@ -812,11 +750,12 @@ pub(super) fn declared_type_attribute(
     a: &AttributeSpecifier<'_>,
     context: &super::Context<'_>,
 ) -> bool {
-    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned" | "mode"))
+    super::attributes::known_names(a, context)
+        .any(|(_, name)| matches!(name, "vector_size" | "aligned" | "mode"))
 }
 
 pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Context<'_>) -> bool {
-    attribute_names(a, context).any(|(_, name)| name == "vector_size")
+    super::attributes::known_names(a, context).any(|(_, name)| name == "vector_size")
 }
 
 /// Clang `__builtin_shufflevector` implementation identity.

@@ -405,6 +405,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         } else {
             _ = self.statements.labels[index].used.get_or_insert(name);
+            self.record_initializing_jump(statement);
             self.statements.jumps.push(Jump {
                 point: self.control.point(),
                 function: self.functions.current.map_or(usize::MAX, |f| f.id),
@@ -652,7 +653,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(self.bindings[binding].name.source_vectors),
                 );
             } else if label.definition.is_some() && label.function == jump.function {
-                self.check_cleanup_entry(jump.statement, jump.source.source_vectors);
+                self.check_cleanup_entry(
+                    jump.statement,
+                    jump.source.source_vectors,
+                    jump.point.zip(label.point),
+                );
             }
         }
         self.finish_indirect_jumps();

@@ -41,6 +41,7 @@ use crate::{
         GlobalDecl,
         GlobalId,
         GlobalInit,
+        InlineControl,
         Linkage as IrLinkage,
         Module,
         ParamAbi,
@@ -78,6 +79,7 @@ use crate::{
             ConstantClass,
             DefinitionKind,
             FunctionRecord,
+            Inlining,
             Integer,
             LabelId,
             Linkage,
@@ -144,6 +146,12 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     conflicting_names: ArenaSet<'a, &'a str>,
     /// Each generated base probes a suffix at most once.
     next_name_suffix: ArenaMap<'a, &'a str, u64>,
+    /// The private copies of `always_inline` GNU and C99 inline bodies,
+    /// by the external symbol they stand in for at direct calls.
+    private_bodies: ArenaMap<'a, &'a str, FuncId>,
+    /// The inline-only definitions lowered as private bodies
+    /// ([`Unit::private_inline`]).
+    private_inline: ArenaSet<'a, usize>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -286,7 +294,18 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// p. 140; PDF p. 152.
     pub(super) fn emits_function(&self, binding: usize) -> bool {
         self.reachable.contains(&binding)
-            && self.definitions.get(&binding) != Some(&DefinitionKind::Inline)
+            && (self.definitions.get(&binding) != Some(&DefinitionKind::Inline)
+                || self.private_inline(binding))
+    }
+
+    /// Whether the inline-only definition `binding` is lowered as a private
+    /// body: it is `always_inline` and has no inline assembly. Emission,
+    /// reachability and the declaration gates share this one decision, so
+    /// a private body's own references and refusals count as emitted ones.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125. GNU extension: GCC
+    /// manual, "Common Function Attributes", `always_inline`.
+    pub(super) fn private_inline(&self, binding: usize) -> bool {
+        self.private_inline.contains(&binding)
     }
 
     /// Declares a function definition's symbol; `None` when its body is
@@ -325,11 +344,62 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             ));
         }
         if self.definitions.get(&binding) == Some(&DefinitionKind::Inline) {
-            return Ok(None);
+            return self.private_body(binding, record);
         }
         self.function(binding)
             .map(Some)
             .map_err(|kind| at(kind, source))
+    }
+
+    /// An inline definition supplies no external definition, but an
+    /// `always_inline` one must still reach its direct calls, as GCC and
+    /// Clang expand it there (MinGW-w64's `FORCEINLINE` `intsafe.h`
+    /// functions, which no library defines). Its body becomes an internal
+    /// function that direct calls name and the inliner expands; its address
+    /// stays the external symbol's. A body with inline assembly, which
+    /// lowering cannot translate, keeps calling the external definition
+    /// instead, as MinGW-w64's `intrin-impl.h` expects.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125 (a call to an inline
+    /// function may use the inline or the external definition).
+    /// GNU extension: GCC manual, "Common Function Attributes",
+    /// `always_inline`, and "Inline".
+    fn private_body(
+        &mut self,
+        binding: usize,
+        record: &FunctionRecord<'tu>,
+    ) -> Result<Option<FuncId>, LoweringError> {
+        if !self.private_inline(binding) {
+            return Ok(None);
+        }
+        let source = record.syntax.source_vectors;
+        let external = self.symbol_name(binding);
+        if let Some(&func) = self.private_bodies.get(external) {
+            return Ok(Some(func));
+        }
+        let signature = self
+            .signature(self.sema.bindings[binding].ty)
+            .map_err(|kind| at(kind, source))?;
+        let base = format_in!(self.tables, "{external}.always_inline");
+        let name = self.unique_name(base);
+        let func = self
+            .module
+            .declare_function(name, signature, IrLinkage::Internal);
+        self.module.function_mut(func).inlining = InlineControl::Always;
+        _ = self.private_bodies.insert(external, func);
+        Ok(Some(func))
+    }
+
+    /// The function a direct call to `binding` runs: the private copy of an
+    /// `always_inline` inline body when there is one, else the function
+    /// the binding names.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    pub(super) fn direct_callee(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
+        if self.sema.bindings[binding].linkage == Linkage::External
+            && let Some(&func) = self.private_bodies.get(self.symbol_name(binding))
+        {
+            return Ok(func);
+        }
+        self.function(binding)
     }
 
     /// The function a function binding names, declaring it on first use
@@ -1467,9 +1537,18 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         let mut defined_functions = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+        let mut private_inline = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         for function in sema.functions {
             if let Some(binding) = function.binding {
                 _ = defined_functions.insert(sema.bindings[binding].name.name);
+                if definitions.get(&binding) == Some(&DefinitionKind::Inline)
+                    && !function.assembly
+                    && sema
+                        .entity_attributes(binding)
+                        .is_some_and(|attributes| attributes.inlining == Inlining::Always)
+                {
+                    _ = private_inline.insert(binding);
+                }
             }
         }
         Ok(Self {
@@ -1495,6 +1574,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             generated_globals: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            private_bodies: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            private_inline,
         })
     }
 }

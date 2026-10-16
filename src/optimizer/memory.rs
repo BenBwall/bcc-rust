@@ -31,7 +31,6 @@ use crate::{
         Module,
         Opcode,
         StackSlot,
-        Symbol,
         Type,
         Value,
         ValueDef,
@@ -277,10 +276,8 @@ impl<'s, 'm, 'ir> AliasCheck<'s, 'm, 'ir> {
 
     /// The location with an alias global replaced by its target.
     fn canonical(&self, mut location: Location) -> Location {
-        if let Base::Global(global) = location.base
-            && let Some(Symbol::Global(target)) = self.module.global(global).attributes.alias
-        {
-            location.base = Base::Global(target);
+        if let Base::Global(global) = location.base {
+            location.base = Base::Global(self.module.global_definition(global));
         }
         location
     }

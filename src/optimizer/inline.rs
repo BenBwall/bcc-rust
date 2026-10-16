@@ -17,6 +17,7 @@ use crate::{
         Body,
         Entity,
         FuncId,
+        InlineControl,
         Inst,
         InstData,
         Module,
@@ -61,9 +62,11 @@ pub(super) fn run(
         }
         let function = module.function(func);
         // A weak definition can be replaced at link time, so its body is not
-        // necessarily the one a call reaches. GNU extension: GCC manual,
-        // "Common Function Attributes", weak.
-        if function.linkage == crate::ir::Linkage::Weak {
+        // necessarily the one a call reaches; GNU `noinline` and `noipa`
+        // forbid expansion. GNU extension: GCC manual, "Common Function
+        // Attributes", weak, noinline, noipa.
+        if function.linkage == crate::ir::Linkage::Weak || function.inlining == InlineControl::Never
+        {
             continue;
         }
         let Some(body) = &function.body else { continue };
@@ -83,8 +86,12 @@ pub(super) fn run(
         });
         let small_leaf = leaf && body.inst_count() <= SMALL_LEAF_SIZE;
         // Splitting adds a jump, and each callee return becomes a jump.
+        // GNU `always_inline` bypasses the size budget, as it does in GCC
+        // and Clang.
         let grown = size.saturating_add(body.inst_count());
-        if (!small_leaf && body.inst_count() > CALLEE_SIZE) || grown > cap {
+        if function.inlining != InlineControl::Always
+            && ((!small_leaf && body.inst_count() > CALLEE_SIZE) || grown > cap)
+        {
             continue;
         }
         let location = draft.alive_blocks().find_map(|block| {

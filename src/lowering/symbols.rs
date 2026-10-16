@@ -1,8 +1,8 @@
 //! Entity attributes as IR symbol facts. Semantic analysis validated and
 //! merged every attribute; this file only maps the retained records onto
-//! the IR: weak linkage, section, retention, visibility and code alignment
-//! of each declared symbol, aliases of definitions, and the constructor and
-//! destructor lists. No attribute token is read here.
+//! the IR: weak linkage, section, retention, visibility, code alignment and
+//! inline control of each declared symbol, aliases of definitions, and the
+//! constructor and destructor lists. No attribute token is read here.
 //! GNU extension: GCC manual, "Common Function Attributes" and "Common
 //! Variable Attributes" (alias, constructor, destructor, section, used,
 //! visibility, weak, aligned).
@@ -22,6 +22,7 @@ use crate::{
         Align,
         InitFunction,
         InitKind,
+        InlineControl,
         Linkage as IrLinkage,
         Symbol,
         SymbolAttributes,
@@ -30,6 +31,7 @@ use crate::{
     translation_phases::semantic_analysis::{
         BindingKind,
         InitFunctionKind,
+        Inlining,
         Linkage,
         UnsupportedAttribute,
         Visibility,
@@ -75,11 +77,16 @@ impl Unit<'_, '_, '_> {
                 visibility,
             },
         );
-        if let Symbol::Function(func) = symbol
-            && attributes.code_alignment > 1
-        {
-            self.module.function_mut(func).align =
-                Align::from_bytes(u64::from(attributes.code_alignment));
+        if let Symbol::Function(func) = symbol {
+            let function = self.module.function_mut(func);
+            if attributes.code_alignment > 1 {
+                function.align = Align::from_bytes(u64::from(attributes.code_alignment));
+            }
+            function.inlining = match attributes.inlining {
+                | Inlining::Default => InlineControl::Default,
+                | Inlining::Never => InlineControl::Never,
+                | Inlining::Always => InlineControl::Always,
+            };
         }
         if let Symbol::Function(func) = symbol
             && attributes.returns_twice

@@ -126,6 +126,7 @@ pub(crate) use module::{
     GlobalInit,
     InitFunction,
     InitKind,
+    InlineControl,
     Linkage,
     ParamAbi,
     Relocation,
@@ -135,6 +136,7 @@ pub(crate) use module::{
     Symbol,
     SymbolAttributes,
     Visibility,
+    valid_section_name,
 };
 pub(crate) use parser::{
     ParseError,
@@ -195,6 +197,8 @@ pub(crate) struct Function<'ir> {
     /// back end refuses them. C99: §7.13.2.1 paragraph 4, p. 244; PDF p.
     /// 256.
     pub(crate) returns_twice: bool,
+    /// Whether calls may, must or must not be expanded inline.
+    pub(crate) inlining:   InlineControl,
 }
 
 // Tests

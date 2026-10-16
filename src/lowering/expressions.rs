@@ -1488,7 +1488,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | (Some(binding), _) => {
                 let func = self
                     .unit
-                    .function(binding)
+                    .direct_callee(binding)
                     .map_err(|kind| at(kind, source))?;
                 if self.unit.module.function(func).signature == sig {
                     self.draft.push(Op::Call(func, args), result)

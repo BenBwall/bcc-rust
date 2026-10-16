@@ -1269,7 +1269,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | SpecifierExtensionKind::ThreadLocal(_) => return true,
                 | SpecifierExtensionKind::Attributes(attribute)
                     if attribute.syntax != super::AttributeSyntax::Standard
-                        && super::vectors::attribute_names(attribute, self.context)
+                        && super::attributes::known_names(attribute, self.context)
                             .any(|(_, name)| name == "thread") =>
                     return true,
                 | _ => {},
@@ -1288,7 +1288,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
     pub(super) fn layout_attribute(&self, attribute: &super::AttributeSpecifier<'tu>) -> bool {
         attribute.recovered
-            || super::vectors::attribute_names(attribute, self.context)
+            || super::attributes::known_names(attribute, self.context)
                 .any(|(_, name)| matches!(name, "align" | "ext_vector_type"))
     }
 

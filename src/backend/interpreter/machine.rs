@@ -167,18 +167,18 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         }
         self.check_arguments(signature)?;
         let returns_twice = self.module.returns_twice(func);
-        // An alias runs its target's body; a weak declaration nothing
-        // defines has the null address, and calling it is undefined.
+        // An alias runs its target's body, which the call reaches as an
+        // indirect call through a compatible type would: `int f()` may alias
+        // `int g(void)`. A weak declaration nothing defines has the null
+        // address, and calling it is undefined.
         // GNU extension: GCC manual, "Common Function Attributes", alias/weak.
-        let func = match self.module.function(func).attributes.alias {
-            | Some(Symbol::Function(target)) => {
-                if self.module.function(func).signature != self.module.function(target).signature {
-                    return Err(UbKind::SignatureMismatch.into());
-                }
-                target
-            },
-            | _ => func,
-        };
+        // C99: §6.5.2.2p9, p. 72; PDF p. 84; §6.7.5.3p15, pp. 119-120;
+        // PDF pp. 131-132.
+        let target = self.module.function_definition(func);
+        if target != func && !self.admits(body, target, signature, args) {
+            return Err(UbKind::SignatureMismatch.into());
+        }
+        let func = target;
         if self.functions[func.index()].provenance.is_none() {
             return Err(UbKind::CallThroughNonFunction.into());
         }
@@ -577,10 +577,8 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             };
             functions.push(pointer);
         }
-        for (func, function) in module.functions() {
-            if let Some(Symbol::Function(target)) = function.attributes.alias {
-                functions[func.index()] = functions[target.index()];
-            }
+        for (func, _) in module.functions() {
+            functions[func.index()] = functions[module.function_definition(func).index()];
         }
         let mut labels = ArenaVec::new_in(arena);
         for (func, function) in module.functions() {
@@ -615,10 +613,8 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
                 .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?;
             globals.push(pointer);
         }
-        for (id, global) in module.globals() {
-            if let Some(Symbol::Global(target)) = global.attributes.alias {
-                globals[id.index()] = globals[target.index()];
-            }
+        for (id, _) in module.globals() {
+            globals[id.index()] = globals[module.global_definition(id).index()];
         }
         for ((_, global), &pointer) in module.globals().zip(&globals) {
             if global.init.is_none() {

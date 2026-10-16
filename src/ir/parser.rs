@@ -57,6 +57,7 @@ use super::{
         GlobalInit,
         InitFunction,
         InitKind,
+        InlineControl,
         Linkage,
         ParamAbi,
         Relocation,
@@ -136,6 +137,7 @@ fn declare_items<'t>(
                 module.function_mut(func).returns_twice = header.returns_twice
                     || (header.linkage != Linkage::Internal
                         && crate::builtins::returns_twice(name.text_name(scratch)?));
+                module.function_mut(func).inlining = header.inlining;
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
                         _ = cursor.next();
@@ -475,8 +477,8 @@ fn parse_relocation_target<'t>(
     }
 }
 
-/// `function @name(params) [-> ty] linkage [align N] [returns_twice]` and
-/// its symbol attributes, up to the body.
+/// `function @name(params) [-> ty] linkage [align N] [returns_twice]
+/// [noinline | alwaysinline]` and its symbol attributes, up to the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
@@ -491,6 +493,14 @@ fn parse_function_header<'t, 's>(
         None
     };
     let returns_twice = cursor.eat(TokenKind::Ident("returns_twice"));
+    let inlining = [InlineControl::Never, InlineControl::Always]
+        .into_iter()
+        .find(|control| {
+            control
+                .keyword()
+                .is_some_and(|keyword| cursor.eat(TokenKind::Ident(keyword)))
+        })
+        .unwrap_or_default();
     let attributes = WrittenAttributes::parse(cursor)?;
     Ok(FunctionHeader {
         name,
@@ -498,6 +508,7 @@ fn parse_function_header<'t, 's>(
         linkage,
         align,
         returns_twice,
+        inlining,
         attributes,
     })
 }
@@ -508,6 +519,7 @@ struct FunctionHeader<'t, 's> {
     linkage:       Linkage,
     align:         Option<Align>,
     returns_twice: bool,
+    inlining: InlineControl,
     attributes:    WrittenAttributes<'t>,
 }
 

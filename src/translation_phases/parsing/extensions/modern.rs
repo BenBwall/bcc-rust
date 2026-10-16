@@ -614,6 +614,11 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 .at(name.contents)
                 .trim_matches('_');
             matches!(name, "aligned" | "constructor" | "destructor" | "nonnull")
+        }) && parser.cursor.following().is_some_and(|token| {
+            !matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            )
         }) && parser.cursor.alignment_argument_closes(parser.arena)
         {
             self.argument_index = parser.cursor.consumed - self.attribute_start - 1;
@@ -622,6 +627,8 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
     }
 
     /// Preserve the operand's original tokens alongside its parsed expression.
+    /// Further comma-separated arguments stay balanced tokens, so semantic
+    /// analysis reports their number as an argument error, as Clang does.
     /// C99: §6.6p6, p. 95; PDF p. 107 (GNU aligned operand).
     fn complete_attribute_argument(
         &mut self,
@@ -637,7 +644,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         if !token.is_some_and(|token| {
             matches!(
                 token.kind,
-                TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::Comma
+                )
             )
         }) {
             self.attribute_expected(parser, token, self.closer_component());

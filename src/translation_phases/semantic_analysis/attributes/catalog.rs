@@ -1,9 +1,14 @@
 //! What bcc does with each attribute name. Every name bundled Clang knows
-//! for C on x86-64 targets has a rule; other names are unknown and warned
-//! about, as Clang's `-Wunknown-attributes` does. A rule says whether the
-//! attribute's meaning is implemented, has no code-generation meaning to
-//! honor, is dropped with a warning because dropping it cannot change a
-//! program's behavior, or is refused because dropping it would.
+//! for C on the selected x86-64 target has a rule, under exactly the
+//! spellings Clang accepts (`spellings.rs`): `[[gnu::weak]]` is `weak`, but
+//! `[[clang::weak]]` is unknown, as `dllimport` is outside Windows. Other
+//! names are unknown and warned about, as Clang's `-Wunknown-attributes`
+//! does, except the GCC attributes bcc also accepts, which keep their GNU
+//! and `gnu::` spellings. A rule says whether the attribute's meaning is
+//! implemented, has no code-generation meaning to honor, is dropped with a
+//! warning because dropping it cannot change a program's behavior, or is
+//! refused because dropping it would. `__has_attribute` answers from the
+//! same table, so it matches Clang even for attributes bcc refuses.
 //! `language-standards.md` ("Attribute status") documents the same table.
 //! GNU extension: GCC manual, "Attribute Syntax" and the attribute pages.
 //! <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
@@ -12,8 +17,15 @@
 //! C23: §6.7.13.2p1-3, pp. 142-143; PDF pp. 155-156 (standard attributes
 //! and implementation-defined vendor prefixes).
 
+mod spellings;
+
+use spellings::Spellings;
+
 use super::super::UnsupportedAttribute;
-use crate::translation_phases::parsing::AttributeSyntax;
+use crate::{
+    target::Target,
+    translation_phases::parsing::AttributeSyntax,
+};
 
 /// The treatment of one attribute name.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -35,6 +47,11 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     Section,
     Used,
     Visibility,
+    /// GNU `noinline` and `noipa`: the inliner never expands the function.
+    NoInline,
+    /// GNU `always_inline`: the inliner expands every direct call it can,
+    /// and a GNU inline body is kept as a private definition.
+    AlwaysInline,
     /// GNU `returns_twice`: an entity fact that lowering projects onto the
     /// IR function, as the external-symbol contract does for `setjmp`.
     ReturnsTwice,
@@ -73,17 +90,62 @@ pub(in crate::translation_phases::semantic_analysis) enum Convention {
     Other,
 }
 
-/// The rule for `name` in `namespace`, or `None` when the name is unknown.
+/// The rule for `name` in `namespace` on `target`, or `None` when the
+/// name is unknown in that spelling.
 pub(in crate::translation_phases::semantic_analysis) fn rule(
     syntax: AttributeSyntax,
     namespace: Option<&str>,
     name: &str,
+    target: Target,
 ) -> Option<Rule> {
+    let clang = spellings::clang(name, target);
+    let meaning = gnu(name);
+    // A name Clang lists in this spelling takes bcc's rule for it, or has
+    // nothing to honor. A GCC attribute Clang lacks keeps GCC's spellings,
+    // unless Clang knows the name for another target only.
+    let known = |spelling: Spellings| match clang {
+        | Some(spellings) if spellings.contains(spelling) =>
+            Some(meaning.unwrap_or(Rule::Accepted)),
+        | None if (spelling == Spellings::GNU || spelling == Spellings::GNU_SCOPE)
+            && !spellings::listed(name) =>
+            meaning,
+        // MinGW-w64's `__declspec` macro writes `thread` in the GNU
+        // spelling, which bcc keeps as thread storage duration.
+        | Some(_) if spelling == Spellings::GNU && name == "thread" => meaning,
+        | _ => None,
+    };
     match (syntax, namespace) {
         | (AttributeSyntax::Standard, None) => standard(name),
-        | (AttributeSyntax::Msvc, None) => declspec(name),
-        | (_, None | Some("gnu" | "clang")) => gnu(name),
+        | (AttributeSyntax::Msvc, None) => declspec(name).or_else(|| known(Spellings::DECLSPEC)),
+        | (AttributeSyntax::Gnu, None) => known(Spellings::GNU),
+        | (AttributeSyntax::Standard, Some("gnu")) => known(Spellings::GNU_SCOPE),
+        | (AttributeSyntax::Standard, Some("clang")) => known(Spellings::CLANG_SCOPE),
         | _ => None,
+    }
+}
+
+/// Clang's `__has_attribute(name)` (no namespace) or
+/// `__has_c_attribute(namespace::name)` answer for a vendor attribute on
+/// `target`: nonzero exactly when Clang recognizes that spelling, whether
+/// or not bcc implements its meaning. Refused and dropped attributes stay
+/// diagnosed where they are written.
+/// Clang extension: Clang Language Extensions, "`__has_attribute`".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#has-attribute>
+pub(crate) fn clang_attribute_version(namespace: Option<&str>, name: &str, target: Target) -> u64 {
+    let spelling = match namespace {
+        | None => Spellings::GNU,
+        | Some("gnu") => Spellings::GNU_SCOPE,
+        | Some("clang") => Spellings::CLANG_SCOPE,
+        | Some(_) => return 0,
+    };
+    match spellings::clang(name, target) {
+        | Some(spellings) if spellings.contains(spelling) =>
+            if name == "external_source_symbol" {
+                20_230_206
+            } else {
+                1
+            },
+        | _ => 0,
     }
 }
 
@@ -104,7 +166,9 @@ fn standard(name: &str) -> Option<Rule> {
     .then_some(Rule::Accepted)
 }
 
-/// MSVC `__declspec` modifiers.
+/// MSVC `__declspec` modifiers with their own meaning, and the Microsoft
+/// modifiers bcc accepts although Clang does not support them. Other
+/// `__declspec` names Clang knows take their GNU rule.
 /// MSVC extension: Microsoft Learn, "declspec".
 /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
 fn declspec(name: &str) -> Option<Rule> {
@@ -112,34 +176,18 @@ fn declspec(name: &str) -> Option<Rule> {
         | "align" => Rule::Representation,
         | "allocate" => Rule::Section,
         | "naked" => Rule::Unsupported(UnsupportedAttribute::Naked),
-        | "dllimport"
-        | "dllexport"
-        | "noreturn"
-        | "nothrow"
-        | "selectany"
-        | "noinline"
-        | "deprecated"
-        | "restrict"
-        | "noalias"
-        | "novtable"
-        | "uuid"
-        | "property"
-        | "safebuffers"
-        | "code_seg"
-        | "allocator"
-        | "empty_bases"
         | "jitintrinsic"
         | "process"
         | "appdomain"
-        | "guard"
         | "spectre"
         | "intrin_type"
         | "no_sanitize_address" => Rule::Accepted,
-        | _ => return gnu(name),
+        | _ => return None,
     })
 }
 
-/// GNU and Clang names, including Clang's `[[gnu::...]]`/`[[clang::...]]`.
+/// The rules of GNU and Clang names that are not merely accepted, and the
+/// GCC attributes Clang lacks that bcc accepts.
 fn gnu(name: &str) -> Option<Rule> {
     use UnsupportedAttribute as U;
     Some(match name {
@@ -185,6 +233,14 @@ fn gnu(name: &str) -> Option<Rule> {
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>
             Rule::Unsupported(U::Multiversioning),
         | "pass_object_size" | "pass_dynamic_object_size" => Rule::Unsupported(U::PassObjectSize),
+        | "address_space" => Rule::Unsupported(U::AddressSpace),
+        | "noinline" | "noipa" => Rule::NoInline,
+        | "always_inline" => Rule::AlwaysInline,
+        // Clang knows these, but they change a parameter's ABI register or
+        // a symbol's linkage, which bcc does not model.
+        | "swift_async_context" | "swift_context" | "swift_error_result"
+        | "swift_indirect_result" => Rule::Unsupported(U::SwiftParameter),
+        | "internal_linkage" => Rule::Unsupported(U::InternalLinkage),
         | "transparent_union" => Rule::TransparentUnion,
         // Dropped with a warning: link-time or multi-version effects that a
         // single executable's behavior does not depend on.
@@ -192,7 +248,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "access"
         | "alloc_align"
         | "alloc_size"
-        | "always_inline"
         | "annotate"
         | "annotate_type"
         | "artificial"
@@ -294,8 +349,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "nodiscard"
         | "noduplicate"
         | "noescape"
-        | "noinline"
-        | "noipa"
         | "nomerge"
         | "nonstring"
         | "noplt"

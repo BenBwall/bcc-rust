@@ -93,6 +93,7 @@ mod inspection;
 #[cfg(test)]
 use std::cell::Cell;
 
+pub(crate) use attributes::clang_attribute_version;
 pub(crate) use builtins::{
     implemented_builtin,
     named_builtin,
@@ -1725,7 +1726,7 @@ struct Analyzer<'a, 'tu, 's> {
     member_names:            ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
     tag_declarations:        ArenaVec<'tu, (usize, usize)>,
     resolved_type_names:     ArenaMap<'s, usize, TypeId>,
-    correspondence:          correspondence::CorrespondenceBuilder<'tu, 's>,
+    correspondence:          correspondence::CorrespondenceBuilder<'tu>,
     runtime_bounds:          ArenaVec<'tu, RuntimeBound<'tu>>,
     bound_origins:           ArenaMap<'s, usize, BoundEvaluationSite>,
     bound_expression_starts: ArenaMap<'s, usize, usize>,

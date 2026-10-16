@@ -19,6 +19,8 @@ impl<'a> Unit<'a, '_, '_> {
     /// and initializers.
     /// Inline-only bodies supply no external definition, even when referenced:
     /// at O0 calls and addresses continue to name the external declaration.
+    /// A private `always_inline` body is emitted when reached, so its own
+    /// references, such as another private body or a static helper, are.
     /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p3-5,
     /// p. 140; PDF p. 152. GNU extern inline follows the same emission policy.
     pub(super) fn reachable_items(&self) -> ArenaSet<'a, usize> {
@@ -36,7 +38,9 @@ impl<'a> Unit<'a, '_, '_> {
         heads.resize(canonical.len(), None);
         let mut edges = ArenaVec::new_in(self.tables);
         for reference in self.sema.references {
-            if self.definitions.get(&reference.owner) == Some(&DefinitionKind::Inline) {
+            if self.definitions.get(&reference.owner) == Some(&DefinitionKind::Inline)
+                && !self.private_inline(reference.owner)
+            {
                 continue;
             }
             let owner = canonical[reference.owner];

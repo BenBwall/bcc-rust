@@ -20,7 +20,7 @@ const TARGETS: [Target; 4] = [
 ];
 
 #[test]
-fn mingw_attributes_preserve_types_and_keep_alignment_conservative() {
+fn mingw_attributes_preserve_types_and_ignore_unknown_alignment() {
     with_configuration(
         include_str!("../../../../tests/fixtures/targets/mingw-callconv.c"),
         CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
@@ -42,10 +42,13 @@ fn mingw_attributes_preserve_types_and_keep_alignment_conservative() {
                     .unwrap()
                     .ty
             };
-            assert!(matches!(
-                unit.types.nodes[ty("aligned_object").index],
-                TypeKind::Unknown
-            ));
+            // MinGW's `__declspec(align(16))` is `__attribute__((align(16)))`,
+            // which Clang does not know and ignores: the structure keeps its
+            // natural alignment.
+            assert_eq!(
+                unit.types.layout(ty("aligned_object")),
+                Some(Layout { size: 4, align: 4 })
+            );
             assert!(matches!(
                 unit.types.nodes[ty("compatible").index],
                 TypeKind::Function { .. }

@@ -32,6 +32,7 @@ use super::{
             EntityId,
             InitFunctionFacts,
             InitFunctionKind,
+            Inlining,
             RegionKind,
             SymbolFacts,
             UnsupportedAttribute,
@@ -52,6 +53,7 @@ use crate::{
     translation_phases::{
         SourceVectors,
         preprocessing::{
+            LiteralEncoding,
             StringTokenType,
             TokenType,
         },
@@ -85,16 +87,52 @@ pub(in crate::translation_phases::semantic_analysis) enum Subject {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
-    /// Applies one attribute list to `subject`.
+    /// Applies one attribute list to `subject`. A redeclaration of a
+    /// defined entity cannot add attributes: as in Clang, each attribute
+    /// not already written before the definition is ignored with a warning.
     pub(super) fn entity_attribute_list(
         &mut self,
         subject: Subject,
         specifier: &'tu AttributeSpecifier<'tu>,
     ) {
+        let linked = match subject {
+            | Subject::Function { binding, .. } | Subject::Object { binding, .. }
+                if self.bindings[binding].linkage != Linkage::None =>
+                Some((self.entity_of(binding), self.earlier_definition(binding))),
+            | _ => None,
+        };
         for attribute in self.written_attributes(specifier) {
-            let Some(rule) = rule(specifier.syntax, attribute.namespace, attribute.name) else {
+            let Some(rule) = rule(
+                specifier.syntax,
+                attribute.namespace,
+                attribute.name,
+                self.context.configuration.target(),
+            ) else {
                 continue;
             };
+            if let Some((entity, definition)) = linked
+                && follows_definition(rule, attribute.name)
+            {
+                let name = self.context.string_cache.intern(attribute.name);
+                match definition {
+                    | Some(definition)
+                        if !self
+                            .attributes
+                            .before_definition
+                            .contains_key(&(entity, name)) =>
+                    {
+                        self.error(
+                            SemanticErrorKind::AttributeAfterDefinition,
+                            attribute.source,
+                            None,
+                            Some(definition),
+                        );
+                        continue;
+                    },
+                    | Some(_) => {},
+                    | None => _ = self.attributes.before_definition.insert((entity, name), ()),
+                }
+            }
             match rule {
                 | Rule::Aligned => match subject {
                     | Subject::Function { binding, .. } => {
@@ -128,6 +166,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                     None,
                 ),
+                | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
+                | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | _ => {},
             }
         }
@@ -199,6 +239,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.attributes.entity(entity).returns_twice = true;
         } else {
             self.ignored(attribute);
+        }
+    }
+
+    /// GCC `noinline`, `noipa` and `always_inline` on a function; `never`
+    /// prevails over `always`. Elsewhere they are ignored with a warning,
+    /// as in Clang.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    fn inline_attribute(
+        &mut self,
+        subject: Subject,
+        attribute: WrittenAttribute<'_>,
+        inlining: Inlining,
+    ) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let entity = self.entity_of(binding);
+        let attributes = self.attributes.entity(entity);
+        if attributes.inlining != Inlining::Never {
+            attributes.inlining = inlining;
         }
     }
 
@@ -370,7 +434,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 definition,
                 ..
             } if self.bindings[binding].linkage != Linkage::None => (binding, definition),
-            | Subject::Object { .. } => {
+            // An alias names a symbol: Clang rejects it on anything else.
+            | _ => {
                 let name = self.context.string_cache.intern(attribute.name);
                 self.error(
                     SemanticErrorKind::AttributeSubject,
@@ -378,10 +443,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(name),
                     None,
                 );
-                return;
-            },
-            | _ => {
-                self.ignored(attribute);
                 return;
             },
         };
@@ -417,7 +478,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(binding) = self.static_subject(subject, attribute, true) else {
             return;
         };
-        if section.is_empty() || section.contains(['"', '\n', '\r', '\0']) {
+        if !crate::ir::valid_section_name(section) {
             self.refuse(UnsupportedAttribute::SectionName, attribute.source);
             return;
         }
@@ -479,7 +540,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let entity = self.entity_of(binding);
                     self.attributes.entity(entity).visibility = Some(visibility);
                 },
-            | _ => self.ignored(attribute),
+            // Clang ignores visibility silently on members, parameters and
+            // local variables, and with a warning on typedefs.
+            | Subject::Typedef => self.ignored(attribute),
+            | _ => {},
         }
     }
 
@@ -506,12 +570,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let priority = if attribute.argument_count(self.context) == 0 {
             65_535
         } else {
-            let value = specifier
+            let info = specifier
                 .arguments
                 .iter()
                 .find(|argument| argument.index == attribute.index)
-                .map(|argument| self.expression_info(argument.expression))
-                .and_then(|info| info.integer.filter(|_| info.ice));
+                .map(|argument| self.expression_info(argument.expression));
+            // An operand that is already in error, such as an undeclared
+            // identifier, has its diagnostic.
+            if info.is_some_and(|info| self.types.unanalyzed(info.ty)) {
+                return;
+            }
+            let value = info.and_then(|info| info.integer.filter(|_| info.ice));
             let Some(value) = value.and_then(super::super::Integer::to_i128) else {
                 self.error(
                     SemanticErrorKind::AttributeRequiresConstant,
@@ -672,13 +741,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The binding of a function or static- or thread-storage object (Clang
-    /// places a thread-local object in a named section too); an automatic
-    /// object is an error for `section` and a warning for `used`.
+    /// places a thread-local object in a named section too). Anything else
+    /// is an error for `section`, which names a symbol's section, and a
+    /// warning for `used`.
     fn static_subject(
         &mut self,
         subject: Subject,
         attribute: WrittenAttribute<'_>,
-        automatic_error: bool,
+        symbol_error: bool,
     ) -> Option<usize> {
         match subject {
             | Subject::Function { binding, .. } => Some(binding),
@@ -688,7 +758,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Duration::Static | Duration::Thread
                 ) =>
                 Some(binding),
-            | Subject::Object { .. } if automatic_error => {
+            | _ if symbol_error => {
                 let name = self.context.string_cache.intern(attribute.name);
                 self.error(
                     SemanticErrorKind::AttributeSubject,
@@ -729,29 +799,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
-    /// The text of a single narrow string-literal argument, or an error.
+    /// The text of a single string-literal argument, or an error. An
+    /// encoding prefix has no effect on the text, with Clang's warning.
     fn string_argument(&mut self, attribute: WrittenAttribute<'_>) -> Option<&'tu str> {
         let arguments = attribute.arguments.unwrap_or_default();
         let mut text: Option<&str> = None;
         let mut valid = !arguments.is_empty();
         for token in arguments {
-            match token.kind {
-                | TokenType::String(StringTokenType::String(id)) => {
-                    let Some(part) = self.context.literal_text_in(self.scratch, id, false) else {
-                        valid = false;
-                        break;
-                    };
-                    text = Some(match text {
-                        | None => part,
-                        | Some(previous) =>
-                            crate::diagnostics::format_in!(self.scratch, "{previous}{part}"),
-                    });
-                },
+            let (id, wide) = match token.kind {
+                | TokenType::String(StringTokenType::String(id)) => (id, false),
+                | TokenType::String(StringTokenType::WideString(id)) => (id, true),
+                | TokenType::String(StringTokenType::EncodedString(id, encoding)) =>
+                    (id, encoding != LiteralEncoding::Utf8),
                 | _ => {
                     valid = false;
                     break;
                 },
+            };
+            if !matches!(token.kind, TokenType::String(StringTokenType::String(_))) {
+                self.error(
+                    SemanticErrorKind::UnevaluatedStringPrefix,
+                    token.source_vectors,
+                    None,
+                    None,
+                );
             }
+            let Some(part) = self.context.literal_text_in(self.scratch, id, wide) else {
+                valid = false;
+                break;
+            };
+            text = Some(match text {
+                | None => part,
+                | Some(previous) =>
+                    crate::diagnostics::format_in!(self.scratch, "{previous}{part}"),
+            });
         }
         match text.filter(|_| valid) {
             | Some(text) => Some(self.types.tu.alloc_str(text)),
@@ -947,6 +1028,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
+/// Whether an attribute that a redeclaration adds after the definition is
+/// ignored, as Clang's `checkNewAttributesAfterDef` does. Type attributes
+/// (layouts, conventions and `noreturn`, which Clang keeps in the function
+/// type) still apply; a late `alias` is the alias-definition error.
+fn follows_definition(rule: Rule, name: &str) -> bool {
+    !matches!(
+        rule,
+        Rule::Representation
+            | Rule::TransparentUnion
+            | Rule::Convention(_)
+            | Rule::RecordLayout { .. }
+            | Rule::Alias
+    ) && name != "noreturn"
+}
+
 /// Attribute work in semantic scratch.
 pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 's> {
     /// Specifier lists already checked by name, by address.
@@ -962,20 +1058,39 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Validated cleanups by declarator identity, waiting for the end of
     /// their declarator's initializer.
     pending_cleanups: ArenaMap<'s, usize, (usize, usize, SourceVectors)>,
+    /// Gotos written in the initializers of cleanup variables, by statement
+    /// address, with each such variable.
+    pub(in crate::translation_phases::semantic_analysis) initializing_jumps:
+        ArenaVec<'s, (usize, usize)>,
+    /// The attribute names written on an entity's declarations up to and
+    /// including its definition.
+    before_definition: ArenaMap<'s, (EntityId, StringCacheId), ()>,
 }
 
 impl<'tu, 's> AttributeState<'tu, 's> {
     pub(in crate::translation_phases::semantic_analysis) fn new(scratch: &'s Bump) -> Self {
         Self {
-            checked:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            refusals:         ArenaVec::new_in(scratch),
-            entities:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            sections:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            initializers:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            aliases:          ArenaVec::new_in(scratch),
-            alias_names:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            pending_cleanups: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            checked:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            refusals:           ArenaVec::new_in(scratch),
+            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            sections:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            initializers:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            aliases:            ArenaVec::new_in(scratch),
+            alias_names:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            pending_cleanups:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            before_definition:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            initializing_jumps: ArenaVec::new_in(scratch),
         }
+    }
+
+    /// The cleanup variables whose initializers are being analyzed: their
+    /// regions open once the initializer is complete.
+    pub(in crate::translation_phases::semantic_analysis) fn initializing_cleanups(
+        &self,
+    ) -> impl Iterator<Item = usize> {
+        self.pending_cleanups
+            .values()
+            .map(|&(variable, ..)| variable)
     }
 
     fn entity(&mut self, entity: EntityId) -> &mut EntityAttributes<'tu> {

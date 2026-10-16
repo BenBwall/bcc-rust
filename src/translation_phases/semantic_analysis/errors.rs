@@ -482,6 +482,14 @@ pub(crate) enum SemanticErrorKind {
     /// Clang: an indirect goto cannot enter or leave a cleanup variable's
     /// scope. GNU extension: GCC manual, "Labels as Values".
     IndirectJumpCleanupScope,
+    /// Clang `-Wignored-attributes`: an attribute a redeclaration adds after
+    /// the entity's definition is ignored.
+    /// Clang extension: Clang `SemaDecl.cpp`, `checkNewAttributesAfterDef`.
+    AttributeAfterDefinition,
+    /// Clang `-Winvalid-unevaluated-string`: an attribute's string names
+    /// text, so an encoding prefix has no effect.
+    /// C23: §6.4.5p1, p. 67; PDF p. 80 (encoding prefixes).
+    UnevaluatedStringPrefix,
 }
 
 impl SemanticErrorKind {
@@ -528,6 +536,8 @@ impl SemanticErrorKind {
             | Self::JumpIntoCleanupScope | Self::SwitchIntoCleanupScope =>
                 "jump bypasses a cleanup variable's initialization",
             | Self::IndirectJumpCleanupScope => "indirect jump crosses a cleanup scope",
+            | Self::AttributeAfterDefinition => "ignored after the definition",
+            | Self::UnevaluatedStringPrefix => "prefix ignored",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
             | Self::PredefinedOutsideFunction => "used outside a function",
@@ -681,7 +691,9 @@ impl SemanticErrorKind {
             | Self::CleanupParameterType
             | Self::JumpIntoCleanupScope
             | Self::SwitchIntoCleanupScope
-            | Self::IndirectJumpCleanupScope =>
+            | Self::IndirectJumpCleanupScope
+            | Self::AttributeAfterDefinition
+            | Self::UnevaluatedStringPrefix =>
                 self.attribute_explanation(),
             | Self::PointerConstraint(group) => (
                 match group {
@@ -1473,6 +1485,15 @@ impl SemanticErrorKind {
                 "cannot jump from this indirect goto statement to one of its possible targets",
                 "Clang: an indirect goto cannot enter or leave the scope of a cleanup variable",
             ),
+            | Self::AttributeAfterDefinition => (
+                "attribute declaration must precede definition",
+                "Clang -Wignored-attributes: an attribute that a declaration adds after the \
+                 definition is ignored",
+            ),
+            | Self::UnevaluatedStringPrefix => (
+                "encoding prefix on an unevaluated string literal has no effect",
+                "Clang -Winvalid-unevaluated-string: the attribute reads the string's characters",
+            ),
             | _ => ("invalid attribute", "GCC Attribute Syntax"),
         }
     }
@@ -1563,6 +1584,7 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayBraces
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
+                | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
@@ -1615,6 +1637,8 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::TransparentUnionPlacement(_)
                 | SemanticErrorKind::InitializerOverride
                 | SemanticErrorKind::PartialInitializerOverride
+                | SemanticErrorKind::AttributeAfterDefinition
+                | SemanticErrorKind::UnevaluatedStringPrefix
         ) {
             ErrorSeverity::Warning
         } else {
