@@ -101,3 +101,87 @@ fn braced_strings_match_clang_and_native_execution() {
         }
     }
 }
+
+/// A string that is the sole braced initializer of an array whose elements
+/// are not characters initializes the first element, as any other
+/// expression would (C99 §6.7.8p17), including SQLite's `azEndings`:
+/// static and automatic, incomplete and fixed, and nested arrays, with the
+/// remaining elements zero.
+const POINTER_ARRAYS: &str = r#"
+static const char *file_endings[] = { "dll" };
+const char *fixed[3] = { "so" };
+const char *nested[][2] = { "a" };
+const char *inner[][2] = { { "b" } };
+struct entry { const char *name; int value; } entries[] = { "e" };
+void *opaque[] = { "v" };
+static int endings(void) {
+    static const char *azEndings[] = {
+       "dll"
+    };
+    return (int)(sizeof azEndings / sizeof azEndings[0]) * 100 + azEndings[0][1];
+}
+int main(void) {
+    const char *automatic[] = { "auto" };
+    const char *parenthesized[2] = { ("p") };
+    char text[] = { "xy" };
+    if (sizeof file_endings != sizeof(char *) || file_endings[0][2] != 'l') return 1;
+    if (fixed[0][1] != 'o' || fixed[1] != 0 || fixed[2] != 0) return 2;
+    if (sizeof nested != 2 * sizeof(char *) || nested[0][0][0] != 'a' || nested[0][1] != 0)
+        return 3;
+    if (sizeof inner != sizeof nested || inner[0][0][0] != 'b' || inner[0][1] != 0) return 4;
+    if (sizeof entries != sizeof(struct entry) || entries[0].name[0] != 'e' ||
+        entries[0].value != 0) return 5;
+    if (((const char *)opaque[0])[0] != 'v') return 6;
+    if (endings() != 208) return 7;
+    if (sizeof automatic != sizeof(char *) || automatic[0][3] != 'o') return 8;
+    if (parenthesized[0][0] != 'p' || parenthesized[1] != 0) return 9;
+    if (sizeof text != 3 || text[1] != 'y') return 10;
+    return 0;
+}
+"#;
+
+#[test]
+fn braced_strings_initialize_the_first_element_of_pointer_arrays() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for (optimize, profile) in STAGES {
+            let actual = with_module(POINTER_ARRAYS, target, optimize, profile, interpret);
+            assert_eq!(actual.0, 0, "{target:?} {optimize} {profile:?}");
+        }
+    }
+    let Some(target) = host() else { return };
+    let toolchain = Toolchain::bundled(target).unwrap();
+    let directory = TempDir::new("braced-pointer-strings");
+    let input = directory.join("pointers.c");
+    std::fs::write(&input, POINTER_ARRAYS).unwrap();
+    for opt in [OptLevel::O0, OptLevel::O2] {
+        let options = LlvmOptions {
+            target,
+            opt: Some(opt),
+            disable_llvm_passes: false,
+            kind: OutputKind::Executable,
+            code: crate::target::CodeOptions::default(),
+        };
+        let clang = directory.join(format!("clang-{opt:?}.exe"));
+        let output = toolchain.command(&input, &clang, options).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = run_native(&clang);
+        assert_eq!(expected.0, 0, "Clang {opt:?}");
+        for optimize in [false, true] {
+            let executable = directory.join(format!("bcc-{opt:?}-{optimize}.exe"));
+            with_module(
+                POINTER_ARRAYS,
+                target,
+                optimize,
+                Profile::PostAbi,
+                |module, _| {
+                    compile_module(module, &executable, options).unwrap();
+                },
+            );
+            assert_eq!(run_native(&executable), expected, "{opt:?} {optimize}");
+        }
+    }
+}

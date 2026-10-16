@@ -230,12 +230,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 ));
                                 continue;
                             }
-                            // A character array may have its string enclosed in
-                            // braces.
+                            // A character or wide array may have its string
+                            // enclosed in braces (§6.7.8p14-15). A string that
+                            // does not fit the array, as `{ "x" }` for an array
+                            // of pointers, initializes its first element like
+                            // any other list (§6.7.8p17), as in Clang.
                             if let [element] = list.elements.as_slice()
                                 && element.designation.is_none()
                                 && let InitializerType::AssignmentExpression(e) =
                                     element.initializer.kind
+                                && self.braced_string_fits(target, e)
                                 && let Some(extent) = self.initialize_string(target, e)
                             {
                                 if std::ptr::eq(init, initializer) {
@@ -942,6 +946,46 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_some()
     }
 
+    /// Whether the sole element `e` of a braced list initializes the whole
+    /// array `target` as a string: a string literal of the array's own
+    /// character or wide kind. Any other expression, or a string that does
+    /// not fit, initializes the first element instead.
+    /// C99: §6.7.8 paragraphs 14-15 and 17, pp. 126-127; PDF pp. 138-139.
+    fn braced_string_fits(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
+        let ExpressionType::StringLiteral(value) = unparenthesized(e).kind else {
+            return false;
+        };
+        let TypeKind::Array(element, _) = self.types.nodes[target.index] else {
+            return false;
+        };
+        let (literal_element, _) = self.string_type(value);
+        self.string_fits(element, value, literal_element)
+    }
+
+    /// Whether a string literal `value`, whose elements have type
+    /// `literal_element`, may initialize an array of `element`.
+    /// A character array takes a character or UTF-8 literal (C23 `char8_t`
+    /// included); a wide array the literal of its own element type.
+    /// C11: §6.7.9 paragraphs 14-15, p. 140; PDF p. 158.
+    fn string_fits(
+        &self,
+        element: TypeId,
+        value: StringTokenType,
+        literal_element: TypeId,
+    ) -> bool {
+        if matches!(
+            value,
+            StringTokenType::String(_) | StringTokenType::EncodedString(_, LiteralEncoding::Utf8)
+        ) {
+            matches!(
+                self.types.nodes[element.index],
+                TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar)
+            )
+        } else {
+            element.unqualified() == literal_element
+        }
+    }
+
     /// C99: §6.7.8p14-15, p. 126; PDF p. 138; §6.5.1p5,
     /// p. 69; PDF p. 81. Parentheses retain the literal's type and value.
     fn initialize_string(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> Option<u64> {
@@ -957,21 +1001,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         }
         let (literal_element, count) = self.string_type(value);
-        // C11 §6.7.9p14: a character array takes a character or UTF-8
-        // literal (C23 `char8_t` included); p15: a wide array the literal of
-        // its own element type.
-        let compatible = if matches!(
-            value,
-            StringTokenType::String(_) | StringTokenType::EncodedString(_, LiteralEncoding::Utf8)
-        ) {
-            matches!(
-                self.types.nodes[element.index],
-                TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar)
-            )
-        } else {
-            element.unqualified() == literal_element
-        };
-        if !compatible {
+        if !self.string_fits(element, value, literal_element) {
             self.error(
                 SemanticErrorKind::InvalidInitializer,
                 e.source_vectors,

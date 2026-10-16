@@ -763,10 +763,73 @@ fn braced_strings_initialize_the_first_nested_array() {
         ),
         []
     );
+    // A string that does not fit the array initializes its first element,
+    // which an `int` cannot take from a pointer, as in Clang.
     assert_eq!(
         kinds("int a[3] = { \"ab\" };", gnu17()),
-        [SemanticErrorKind::InvalidInitializer]
+        [SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::IntConversion
+        )]
     );
+}
+
+/// A sole braced string initializes the first element of an array that is
+/// not of a character or wide kind the string fits (C99 §6.7.8p14-15 and
+/// p17), as Clang accepts SQLite's `static const char *azEndings[] = {
+/// "dll" };`. Character and wide arrays keep string initialization and its
+/// diagnostics; an unbraced string still cannot initialize such an array.
+#[test]
+fn braced_strings_initialize_the_first_element_of_other_arrays() {
+    for target in [
+        crate::target::Target::LinuxGnu,
+        crate::target::Target::WindowsMsvc,
+    ] {
+        let configuration = gnu17().with_target(target);
+        assert_eq!(
+            kinds(
+                "static const char *a[] = { \"dll\" }; char *b[2] = { \"x\" }; const char *c[][2] \
+                 = { \"x\" }; const char *d[][2] = { { \"x\" } }; void *e[] = { \"v\" }; struct S \
+                 { const char *p; int n; } s[] = { \"x\" }; const char *f[] = { (\"p\") }; void \
+                 g(void) { const char *h[] = { \"x\" }; static const char *i[1] = { \"x\" }; char \
+                 j[] = { \"x\" }; unsigned char k[2] = { \"x\" }; char l[] = { u8\"x\" }; }",
+                configuration
+            ),
+            [],
+            "{target:?}"
+        );
+        for (source, expected) in [
+            ("char *a[] = \"x\";", SemanticErrorKind::InvalidInitializer),
+            ("int a[] = \"x\";", SemanticErrorKind::InvalidInitializer),
+            (
+                "char a[1] = { \"xy\" };",
+                SemanticErrorKind::ExcessInitializer,
+            ),
+            (
+                "long a[3] = { \"ab\" };",
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+            ),
+            (
+                "char a[] = { L\"x\" };",
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+            ),
+            (
+                "typedef __WCHAR_TYPE__ wchar_t; wchar_t a[] = { \"x\" };",
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+            ),
+        ] {
+            assert_eq!(
+                kinds(source, configuration),
+                [expected],
+                "{target:?}: {source}"
+            );
+        }
+    }
 }
 
 #[test]
