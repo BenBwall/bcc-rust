@@ -21,6 +21,7 @@ mod asm_labels;
 mod atomics;
 mod braced_strings;
 mod builtin_bindings;
+mod checked_builtins;
 mod compound_assignments;
 mod computed_goto;
 mod declaration_initializers;

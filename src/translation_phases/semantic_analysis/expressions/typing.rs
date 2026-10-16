@@ -1981,7 +1981,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
-            let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name));
+            let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name))
+                .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
             let ty = if let Some(ty) = descriptor
                 .map(|descriptor| self.descriptor_type(descriptor))
                 .or_else(|| self.x86_builtin_type(name))

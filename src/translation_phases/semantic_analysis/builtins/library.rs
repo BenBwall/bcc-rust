@@ -79,6 +79,8 @@ impl Analyzer<'_, '_, '_> {
             | T::Pointer(_, false) => "void *",
             | T::Pointer(_, true) => "const void *",
             | T::Unsigned(_) => "unsigned long long",
+            | T::VaList => "va_list",
+            | T::File => "FILE *",
         }
     }
 }

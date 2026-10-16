@@ -3,8 +3,12 @@
 //! The interpreter hands such a call to a [`Host`] by name. [`DefaultHost`]
 //! implements the small part of the C library that test programs use to
 //! report results and manage memory, and captures their output in an arena
-//! buffer.
+//! buffer. `checked.rs` adds the object-size-checking `__*_chk` entry
+//! points of fortified C libraries, and `arguments.rs` reads the variadic
+//! arguments of formatted output, including from a `va_list`.
 
+mod arguments;
+mod checked;
 mod complex;
 mod math;
 
@@ -12,6 +16,13 @@ use std::fmt::{
     self,
     Write as _,
 };
+
+pub(crate) use arguments::HostVaList;
+use arguments::{
+    ArgumentClass,
+    FormatArguments,
+};
+pub(crate) use checked::va_list_operand;
 
 use super::{
     memory::{
@@ -67,6 +78,8 @@ pub(crate) struct HostCall<'c> {
     pub(crate) arg_types: &'c [Type],
     /// The callee's declared result type, if any.
     pub(crate) result:    Option<Type>,
+    /// How the callee's `va_list` operand, if it takes one, is read.
+    pub(crate) va_list:   HostVaList<'c>,
 }
 
 /// How a host call ended.
@@ -111,7 +124,7 @@ pub(crate) struct DefaultHost<'a> {
 
 impl Host for DefaultHost<'_> {
     fn provides(&self, name: &str) -> bool {
-        HOST_FUNCTIONS.contains(&name) || complex::provides(name)
+        HOST_FUNCTIONS.contains(&name) || complex::provides(name) || checked::provides(name)
     }
 
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
@@ -128,6 +141,9 @@ impl Host for DefaultHost<'_> {
         ) {
             return value.map(|value| HostReturn::Value(Some(value)));
         }
+        if let Some(result) = self.checked(call, memory) {
+            return result;
+        }
         let args = call.args;
         let arg = |index: usize| args.get(index).copied().unwrap_or(RuntimeValue::Poison);
         let value = match call.name {
@@ -143,7 +159,8 @@ impl Host for DefaultHost<'_> {
             },
             | "printf" => {
                 let before = self.output.len();
-                self.printf(arg(0), args.get(1..).unwrap_or_default(), memory)?;
+                let mut values = FormatArguments::Values(args.get(1..).unwrap_or_default().iter());
+                self.printf(arg(0), &mut values, memory)?;
                 RuntimeValue::Int((self.output.len() - before) as u128)
             },
             | "sprintf" | "snprintf" => {
@@ -156,35 +173,12 @@ impl Host for DefaultHost<'_> {
                 let bounded = call.name == "snprintf";
                 let limit = if bounded { integer(arg(1))? } else { u128::MAX };
                 let format = if bounded { 2 } else { 1 };
-                let result = self.printf(
-                    arg(format),
-                    args.get(format + 1..).unwrap_or_default(),
-                    memory,
-                );
+                let mut values =
+                    FormatArguments::Values(args.get(format + 1..).unwrap_or_default().iter());
+                let result = self.printf(arg(format), &mut values, memory);
                 let count = self.output.len() - before;
-                let result = result.and_then(|()| {
-                    let written = if limit == 0 {
-                        0
-                    } else {
-                        count.min(usize::try_from(limit - 1).unwrap_or(usize::MAX))
-                    };
-                    for (offset, byte) in self.output[before..before + written]
-                        .iter()
-                        .copied()
-                        .chain((limit != 0).then_some(0))
-                        .enumerate()
-                    {
-                        let address =
-                            memory.ptr_add(arg(0), RuntimeValue::Int(offset as u128), true);
-                        memory.store(
-                            Type::I8,
-                            RuntimeValue::Int(u128::from(byte)),
-                            address,
-                            Align::BYTE,
-                        )?;
-                    }
-                    Ok(())
-                });
+                let result =
+                    result.and_then(|()| self.store_formatted(before, arg(0), limit, memory));
                 self.output.truncate(before);
                 result?;
                 RuntimeValue::Int(count as u128)
@@ -224,32 +218,7 @@ impl Host for DefaultHost<'_> {
                 arg(0)
             },
             | "strncpy" => {
-                // C99: §7.21.2.4 paragraphs 2-3, p. 326; PDF p. 338.
-                // Copy at most n source bytes, then pad the destination with
-                // zeros. A full-length copy need not have a terminating null.
-                let count = integer(arg(2))?;
-                let count = u64::try_from(count)
-                    .map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
-                let mut copied = 0;
-                for offset in 0..count {
-                    let address =
-                        memory.ptr_add(arg(1), RuntimeValue::Int(u128::from(offset)), true);
-                    let byte = integer(memory.load(Type::I8, address, Align::BYTE)?)?;
-                    if byte == 0 {
-                        break;
-                    }
-                    copied += 1;
-                }
-                // Use the memory copy's overlap check for the accessed prefix.
-                let prefix = RuntimeValue::Int(u128::from(copied));
-                memory.copy(arg(0), arg(1), prefix, Align::BYTE, false)?;
-                let tail = memory.ptr_add(arg(0), prefix, true);
-                memory.fill(
-                    tail,
-                    RuntimeValue::Int(0),
-                    RuntimeValue::Int(u128::from(count - copied)),
-                    Align::BYTE,
-                )?;
+                _ = strncpy(memory, arg(0), arg(1), integer(arg(2))?)?;
                 arg(0)
             },
             | "memchr" | "strchr" | "strrchr" => {
@@ -352,7 +321,10 @@ fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
         | "strlen" => (&[Ptr], Some(I64), false),
         | "exit" => (&[I32], None, false),
         | "abort" => (&[], None, false),
-        | _ => return Ok(()),
+        | _ => match checked::signature(call.name) {
+            | Some(signature) => signature,
+            | None => return Ok(()),
+        },
     };
     if call.result != result
         || (!variadic && call.arg_types.len() != params.len())
@@ -361,6 +333,43 @@ fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
         return Err(UbKind::SignatureMismatch.into());
     }
     Ok(())
+}
+
+/// `strncpy`: copies at most `count` source bytes, then pads the
+/// destination with zeros. A full-length copy need not have a terminating
+/// null. Returns how many bytes preceded the source's null, at most `count`.
+/// C99: §7.21.2.4 paragraphs 2-3, p. 326; PDF p. 338.
+fn strncpy(
+    memory: &mut Memory<'_>,
+    destination: RuntimeValue,
+    source: RuntimeValue,
+    count: u128,
+) -> Result<u64, Fault> {
+    let count = u64::try_from(count).map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
+    let copied = string_length(memory, source, count)?;
+    // Use the memory copy's overlap check for the accessed prefix.
+    let prefix = RuntimeValue::Int(u128::from(copied));
+    memory.copy(destination, source, prefix, Align::BYTE, false)?;
+    let tail = memory.ptr_add(destination, prefix, true);
+    memory.fill(
+        tail,
+        RuntimeValue::Int(0),
+        RuntimeValue::Int(u128::from(count - copied)),
+        Align::BYTE,
+    )?;
+    Ok(copied)
+}
+
+/// The bytes before the first null at `string`, reading at most `limit`.
+/// C99: §7.1.1 paragraph 1, p. 164; PDF p. 176.
+fn string_length(memory: &Memory<'_>, string: RuntimeValue, limit: u64) -> Result<u64, Fault> {
+    for offset in 0..limit {
+        let address = memory.ptr_add(string, RuntimeValue::Int(u128::from(offset)), true);
+        if integer(memory.load(Type::I8, address, Align::BYTE)?)? == 0 {
+            return Ok(offset);
+        }
+    }
+    Ok(limit)
 }
 
 /// Compares bytes as unsigned char, stopping at n or the first string null.
@@ -398,12 +407,11 @@ impl DefaultHost<'_> {
     fn printf(
         &mut self,
         format: RuntimeValue,
-        args: &[RuntimeValue],
+        args: &mut FormatArguments<'_>,
         memory: &Memory<'_>,
     ) -> Result<(), Fault> {
         self.scratch.clear();
         memory.read_c_string(format, &mut self.scratch)?;
-        let mut args = args.iter().copied();
         let mut position = 0;
         while position < self.scratch.len() {
             let byte = self.scratch[position];
@@ -457,7 +465,12 @@ impl DefaultHost<'_> {
                 self.output.push(b'%');
                 continue;
             }
-            let arg = args.next().ok_or(UbKind::MissingFormatArgument)?;
+            let class = match conversion {
+                | b'f' | b'F' => ArgumentClass::Double,
+                | b'p' | b's' => ArgumentClass::Pointer,
+                | _ => ArgumentClass::Integer(length),
+            };
+            let arg = args.next(class, memory)?;
             let mut digits = Digits::default();
             let body: &[u8] = match conversion {
                 | b'd' | b'i' => {
@@ -524,6 +537,40 @@ impl DefaultHost<'_> {
                 | _ => return Err(Fault::Unsupported(Unsupported::FormatConversion)),
             };
             spec.pad(&mut self.output, body);
+        }
+        Ok(())
+    }
+
+    /// Writes the formatted bytes after `before` to `destination`: at most
+    /// `limit - 1` of them and a terminating null, or nothing for a zero
+    /// `limit`. C99: §7.19.6.5p2, p. 290; PDF p. 302; §7.19.6.6p2, p. 291;
+    /// PDF p. 303.
+    fn store_formatted(
+        &self,
+        before: usize,
+        destination: RuntimeValue,
+        limit: u128,
+        memory: &mut Memory<'_>,
+    ) -> Result<(), Fault> {
+        let count = self.output.len() - before;
+        let written = if limit == 0 {
+            0
+        } else {
+            count.min(usize::try_from(limit - 1).unwrap_or(usize::MAX))
+        };
+        for (offset, byte) in self.output[before..before + written]
+            .iter()
+            .copied()
+            .chain((limit != 0).then_some(0))
+            .enumerate()
+        {
+            let address = memory.ptr_add(destination, RuntimeValue::Int(offset as u128), true);
+            memory.store(
+                Type::I8,
+                RuntimeValue::Int(u128::from(byte)),
+                address,
+                Align::BYTE,
+            )?;
         }
         Ok(())
     }

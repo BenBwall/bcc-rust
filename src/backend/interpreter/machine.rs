@@ -7,6 +7,8 @@ use super::{
         Host,
         HostCall,
         HostReturn,
+        HostVaList,
+        va_list_operand,
     },
     memory::{
         Memory,
@@ -203,11 +205,18 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         if returns_twice {
             return Err(Fault::Unsupported(Unsupported::ReturnsTwice));
         }
+        let va_list = match self.host_va_list(callee.name)? {
+            | Some(convention) => HostVaList::Target(convention),
+            | None if va_list_operand(callee.name).is_some() =>
+                HostVaList::Values(&self.host_varargs),
+            | None => HostVaList::None,
+        };
         let call = HostCall {
-            name:      callee.name,
-            args:      &self.arguments,
+            name: callee.name,
+            args: &self.arguments,
             arg_types: &self.argument_types,
-            result:    self.module.function_signature(func).result,
+            result: self.module.function_signature(func).result,
+            va_list,
         };
         match host.call(call, &mut self.memory)? {
             | HostReturn::Value(value) => {
@@ -674,6 +683,7 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             argument_abis: ArenaVec::new_in(arena),
             arguments: ArenaVec::new_in(arena),
             argument_types: ArenaVec::new_in(arena),
+            host_varargs: ArenaVec::new_in(arena),
             functions,
             labels,
             globals,

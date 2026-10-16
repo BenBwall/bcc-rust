@@ -68,6 +68,14 @@ pub(crate) enum SignatureType {
     Size,
     Unsigned(u8),
     Pointer(Scalar, bool),
+    /// The target's `__builtin_va_list` as a parameter: adjusted to a
+    /// pointer to its element where the list is an array (System V), the
+    /// `char *` itself on Windows. C99: §7.15p3, p. 249; PDF p. 261;
+    /// §6.7.5.3p7, p. 119; PDF p. 131.
+    VaList,
+    /// `FILE *`, naming the program's own `<stdio.h>` typedef.
+    /// C99: §7.19.1p2, p. 262; PDF p. 274.
+    File,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
