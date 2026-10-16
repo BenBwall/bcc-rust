@@ -997,7 +997,12 @@ pub(super) fn with_identity_macros<'a>(
     } else {
         "#define __GNUC_STDC_INLINE__ 1\n"
     });
-    if configuration.msvc_compatibility() {
+    // Clang claims MSVC only for the MSVC target, and not without the
+    // umbrella flag; MinGW-w64 and Linux with `-fms-extensions` keep their
+    // GNU header paths (MinGW's `__CRT_INLINE` tests `_MSC_VER`).
+    if configuration.msvc_compatibility()
+        && configuration.target() == crate::target::Target::WindowsMsvc
+    {
         out.push_str(
             "#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n#define _MSC_BUILD \
              1\n#define _MSC_EXTENSIONS 1\n",
