@@ -1052,3 +1052,20 @@ fn symbol_attributes_match_clang_spellings() {
         }
     }
 }
+
+/// A Microsoft `selectany` definition is `weak_odr` in an `any` comdat of
+/// its own name, as bundled Clang emits it on every target, so units that
+/// each define it link to one object.
+#[test]
+fn selectany_definitions_are_weak_odr_comdats() {
+    let text = "global @meta selectany constant size 4, align 4 = bytes \"07000000\"\n";
+    for target in [Target::WindowsMsvc, Target::WindowsGnu, Target::LinuxGnu] {
+        let llvm = emit(text, Profile::PostAbi, target);
+        for expected in [
+            "$meta = comdat any",
+            "@meta = weak_odr constant [4 x i8] c\"\\07\\00\\00\\00\", comdat, align 4",
+        ] {
+            assert!(llvm.contains(expected), "{target:?}: {expected}\n{llvm}");
+        }
+    }
+}

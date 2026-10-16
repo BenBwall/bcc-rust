@@ -175,6 +175,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         match linkage {
             | Linkage::External => writeln!(self.out, "\t.globl\t{name}")?,
             | Linkage::Weak => writeln!(self.out, "\t.weak\t{name}")?,
+            | Linkage::SelectAny => unreachable!("support refuses selectany definitions"),
             | Linkage::Internal => {},
         }
         match visibility {

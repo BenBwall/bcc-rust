@@ -209,6 +209,9 @@ pub(super) enum Linkage {
     Weak,
     /// A declaration that may stay undefined, with a null address.
     ExternWeak,
+    /// A definition equal to every other of its name, of which the linker
+    /// keeps any one.
+    WeakOdr,
     /// The special `llvm.global_ctors`, `llvm.global_dtors` and `llvm.used`
     /// arrays.
     Appending,
@@ -484,12 +487,33 @@ impl<'id> Session<'id> {
             | Linkage::Internal => LLVMLinkage::LLVMInternalLinkage,
             | Linkage::Weak => LLVMLinkage::LLVMWeakAnyLinkage,
             | Linkage::ExternWeak => LLVMLinkage::LLVMExternalWeakLinkage,
+            | Linkage::WeakOdr => LLVMLinkage::LLVMWeakODRLinkage,
             | Linkage::Appending => LLVMLinkage::LLVMAppendingLinkage,
         };
         // SAFETY: The type system ties handles to this live session; every
         // caller passes a function, global or alias.
         unsafe {
             LLVMSetLinkage(value.0, linkage);
+        }
+    }
+
+    /// Places the global `value` in an `any` comdat of its own name, as
+    /// Clang places a Microsoft `selectany` definition.
+    pub(super) fn own_comdat(&self, value: Val<'id>, name: &CStr) {
+        // SAFETY: The module belongs to this live session; the name is
+        // NUL-terminated and LLVM copies it.
+        let comdat = unsafe { llvm_sys::comdat::LLVMGetOrInsertComdat(self.module, name.as_ptr()) };
+        // SAFETY: The comdat was just returned by this live module.
+        unsafe {
+            llvm_sys::comdat::LLVMSetComdatSelectionKind(
+                comdat,
+                llvm_sys::comdat::LLVMComdatSelectionKind::LLVMAnyComdatSelectionKind,
+            );
+        }
+        // SAFETY: The type system ties the global to this live session, and
+        // the comdat belongs to its module.
+        unsafe {
+            llvm_sys::comdat::LLVMSetComdat(value.0, comdat);
         }
     }
 

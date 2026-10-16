@@ -47,6 +47,9 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     Section,
     Used,
     Visibility,
+    /// Microsoft `selectany`: a data definition that may be repeated in
+    /// several translation units, of which the linker keeps one.
+    SelectAny,
     /// GNU `noinline` and `noipa`: the inliner never expands the function.
     NoInline,
     /// GNU `always_inline`: the inliner expands every direct call it can,
@@ -235,6 +238,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "pass_object_size" | "pass_dynamic_object_size" => Rule::Unsupported(U::PassObjectSize),
         | "address_space" => Rule::Unsupported(U::AddressSpace),
         | "noinline" | "noipa" => Rule::NoInline,
+        | "selectany" => Rule::SelectAny,
         | "always_inline" => Rule::AlwaysInline,
         // Clang knows these, but they change a parameter's ABI register or
         // a symbol's linkage, which bcc does not model.
@@ -370,7 +374,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "unsequenced"
         | "retain"
         | "returns_nonnull"
-        | "selectany"
         | "sentinel"
         | "simd"
         | "sized_by"

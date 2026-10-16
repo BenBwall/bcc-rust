@@ -735,6 +735,10 @@ pub(crate) enum Linkage {
     External,
     Internal,
     Weak,
+    /// A data definition that other units may repeat, of which the linker
+    /// keeps one (Microsoft `selectany`; LLVM `weak_odr` in a comdat of its
+    /// own name, as Clang emits it). Only a defined global has it.
+    SelectAny,
 }
 
 impl Linkage {
@@ -743,11 +747,12 @@ impl Linkage {
             | Self::External => "external",
             | Self::Internal => "internal",
             | Self::Weak => "weak",
+            | Self::SelectAny => "selectany",
         }
     }
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
-        [Self::External, Self::Internal, Self::Weak]
+        [Self::External, Self::Internal, Self::Weak, Self::SelectAny]
             .into_iter()
             .find(|linkage| linkage.name() == name)
     }

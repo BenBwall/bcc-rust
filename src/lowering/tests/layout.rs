@@ -297,3 +297,34 @@ fn declspec_align_objects_lower_with_their_alignment() {
     assert!(global.contains("align 1"), "{global}");
     assert!(global.contains("section \".rdata\""), "{global}");
 }
+
+/// `TraceLoggingProvider.h`'s event metadata is a function-local static
+/// whose `__declspec(allocate(...)) __declspec(align(1))` follows the
+/// record's closing brace, and its provider metadata is `selectany`. The
+/// static keeps the section and byte alignment, and a `selectany`
+/// definition gets `selectany` linkage while a mere declaration of one
+/// stays external, as Clang emits them.
+#[test]
+fn trace_logging_static_and_selectany_metadata_lower() {
+    let configuration = crate::configuration::CompilerConfiguration::default()
+        .with_target(Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    let text = lower_with(
+        "const void *f(void) { static struct { char a; int b; } \
+         __declspec(allocate(\".rdata$zETW1\")) __declspec(align(1)) const event = {6, 11}; \
+         return &event; } __declspec(selectany) const int meta = 7; extern __declspec(selectany) \
+         const int other; int use(void) { return meta + other; }",
+        configuration,
+    )
+    .unwrap();
+    let line = |prefix: &str| {
+        text.lines()
+            .find(|line| line.starts_with(prefix))
+            .unwrap_or_else(|| panic!("{prefix}\n{text}"))
+    };
+    let event = line("global @f.event");
+    assert!(event.contains("align 1"), "{event}");
+    assert!(event.contains("section \".rdata$zETW1\""), "{event}");
+    assert!(line("global @meta").contains("selectany"), "{text}");
+    assert!(line("global @other").contains("external"), "{text}");
+}

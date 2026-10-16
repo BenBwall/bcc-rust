@@ -93,6 +93,13 @@ fn verify_symbol_attributes(
             "an internal symbol has default visibility",
         ));
     }
+    if linkage == Linkage::SelectAny
+        && !matches!(symbol, Symbol::Global(global) if module.global(global).init.is_some())
+    {
+        error(VerifierErrorKind::SymbolAttribute(
+            "a selectany symbol is a defined global",
+        ));
+    }
     if let Some(section) = attributes.section
         && !super::valid_section_name(section)
     {

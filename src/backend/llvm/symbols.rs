@@ -85,6 +85,9 @@ pub(super) fn declare<'id, 'a, 'm>(
         api.constant_global(value, global.constant);
         if let Some(linkage) = linkage(global.linkage, global.init.is_some()) {
             api.linkage(value, linkage);
+            if linkage == Linkage::WeakOdr {
+                api.own_comdat(value, api.name(global.name));
+            }
         }
         if global.thread_local {
             // Clang marks a definition `dso_local`, so in a position-
@@ -157,10 +160,11 @@ pub(super) fn declare<'id, 'a, 'm>(
 /// default. An undefined internal function stays an external declaration.
 fn linkage(linkage: IrLinkage, defined: bool) -> Option<Linkage> {
     match (linkage, defined) {
-        | (IrLinkage::External, _) | (IrLinkage::Internal, false) => None,
+        | (IrLinkage::External, _) | (IrLinkage::Internal | IrLinkage::SelectAny, false) => None,
         | (IrLinkage::Internal, true) => Some(Linkage::Internal),
         | (IrLinkage::Weak, true) => Some(Linkage::Weak),
         | (IrLinkage::Weak, false) => Some(Linkage::ExternWeak),
+        | (IrLinkage::SelectAny, true) => Some(Linkage::WeakOdr),
     }
 }
 
@@ -203,6 +207,7 @@ fn alias_linkage<'id>(api: &Session<'id>, value: Val<'id>, linkage: IrLinkage) {
         | IrLinkage::External => {},
         | IrLinkage::Internal => api.linkage(value, Linkage::Internal),
         | IrLinkage::Weak => api.linkage(value, Linkage::Weak),
+        | IrLinkage::SelectAny => api.linkage(value, Linkage::WeakOdr),
     }
 }
 

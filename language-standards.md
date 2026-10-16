@@ -1383,24 +1383,29 @@ Implemented meanings, with Clang's applicability diagnostics:
 
 | Status | Attributes |
 | --- | --- |
-| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `noinline`, `noipa`, `always_inline` |
+| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `noinline`, `noipa`, `always_inline`, `selectany` |
 | Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `returns_twice` (at each direct call; declarations nothing calls, as in MinGW's `<setjmp.h>`, are accepted), `overloadable`, `cpu_dispatch`, `cpu_specific`, `target_version`, `pass_object_size`, `pass_dynamic_object_size`, `address_space` (x86 segment address spaces), `internal_linkage`, the Swift parameter attributes (`swift_async_context` passes its parameter in `r14`, `swift_context`, `swift_error_result`, `swift_indirect_result`), the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
-| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, the C23 standard attributes and every other name Clang knows; see the catalog for the full list |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, the C23 standard attributes and every other name Clang knows; see the catalog for the full list |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and the target-specific names on other targets |
 
 `__declspec` modifiers use the names Clang supports there: `align(N)` is
 Clang's `aligned` attribute (it sets an object's or typedef's alignment, also
-below the natural one, raises a record's and cannot lower a member's; in
-declaration specifiers after a record body, as in `} const
-__declspec(align(1)) name`, it describes the declared object; written
-directly after the closing brace bcc still applies it to the record, where
-Clang applies it to the object), `allocate` is `section`, `thread` is thread storage
+below the natural one and replacing the alignment a typedef carries, raises a
+record's and cannot lower a member's; after a record body, directly or behind
+other specifiers as in `} const __declspec(align(1)) name`, every
+`__declspec` is a declaration specifier, so it describes the declared object
+and not the record), `allocate` is `section` (also on function-local statics),
+`selectany` makes an external data definition `weak_odr` in a comdat of its
+own name, as Clang emits it, so units that each define it link to one object
+(on a function or data without external linkage it is Clang's error; the
+native back end refuses it; a `selectany` declaration without an initializer
+stays a declaration, where Clang makes it a zero definition), `thread` is thread storage
 duration (also in the GNU spelling MinGW's `__declspec` macro produces; see
 the thread-local storage notes), `naked` is refused, `noinline` is the GNU
-attribute, and `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
+attribute, and `dllimport`, `dllexport`, `noreturn`, `nothrow`,
 `deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
 declaration annotations are accepted. Space-separated modifiers, as in
 `__declspec(selectany allocate("s"))`, are one list. Other names, such as the

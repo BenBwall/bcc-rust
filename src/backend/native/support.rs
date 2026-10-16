@@ -67,6 +67,9 @@ pub(crate) fn check_module<'m>(
         if global.thread_local && global.attributes.section.is_some() {
             return Err(refuse(Some(global.name), Construct::ThreadLocalSection));
         }
+        if global.linkage == Linkage::SelectAny {
+            return Err(refuse(Some(global.name), Construct::SelectAny));
+        }
     }
     let checker = Checker {
         module,
@@ -285,6 +288,8 @@ pub(crate) enum Construct {
     NotAbiLowered,
     /// A thread-local global placed in a named section.
     ThreadLocalSection,
+    /// A Microsoft `selectany` definition, which needs a COMDAT section.
+    SelectAny,
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -310,6 +315,7 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::NotAbiLowered => write!(f, "a module not lowered for the ABI")?,
             | Construct::ThreadLocalSection =>
                 write!(f, "a thread-local global in a named section")?,
+            | Construct::SelectAny => write!(f, "a `selectany` definition")?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;
