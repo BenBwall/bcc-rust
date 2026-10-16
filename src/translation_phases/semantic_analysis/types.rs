@@ -72,7 +72,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     }
 
     /// Retains a distinct bound identity for each evaluated array derivation.
-    /// C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129.
+    /// C99: §6.7.5.2p5, p. 117; PDF p. 129.
     pub(crate) fn variable_bound(
         &mut self,
         expression: &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,

@@ -1922,7 +1922,7 @@ evaluations on each declaration and type-name syntax identity. The semantic
 without array decay. Nested type operands compose already-retained site facts.
 Non-VM expression operands retain an empty evaluation list. Typedef uses have
 no original operand action: their extents are remembered, as required by
-C99 §6.7.5.2p5 (pp. 116-117; PDF pp. 128-129).
+C99 §6.7.5.2p5 (p. 117; PDF p. 129).
 
 Written sites retain only newly introduced runtime-bound identities, excluding
 inherited bounds from an evaluated typeof operand or typedef. Lowering executes

@@ -2,8 +2,8 @@
 //! cleanup calls, innermost first, on every region exit. Bound expressions run
 //! on the ordinary explicit task stack; saved extents are SSA variables so loop
 //! invocations evaluate new bounds without reevaluating a typedef's bound.
-//! C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.5.3.4p2,
-//! p. 80; PDF p. 92; §6.2.4p6, p. 32; PDF p. 44.
+//! C99: §6.7.5.2p5, p. 117; PDF p. 129; §6.5.3.4p2, p. 80;
+//! PDF p. 92; §6.2.4p6, p. 32; PDF p. 44.
 
 use super::{
     FunctionLowerer,
@@ -133,7 +133,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// C99: §6.5.3.4p2, p. 80; PDF p. 92; §6.7.5.2p5,
-    /// pp. 116-117; PDF pp. 128-129. A saved bound is never reevaluated.
+    /// p. 117; PDF p. 129. A saved bound is never reevaluated.
     pub(super) fn runtime_size(
         &mut self,
         ty: TypeId,
