@@ -110,6 +110,17 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Selects the relocation and thread-local storage models, which
+    /// `__PIC__` and `__PIE__` and the back ends follow.
+    pub(crate) const fn with_code_options(mut self, options: crate::target::CodeOptions) -> Self {
+        self.code_options = options;
+        self
+    }
+
+    pub(crate) const fn code_options(self) -> crate::target::CodeOptions {
+        self.code_options
+    }
+
     pub(crate) const fn with_gnu_extensions(mut self, enabled: bool) -> Self {
         self.gnu = enabled;
         self.derive_features()
@@ -212,6 +223,10 @@ impl CompilerConfiguration {
     pub(crate) const fn new(standard: CStandard, extension_policy: ExtensionPolicy) -> Self {
         Self {
             target: crate::target::Target::LinuxGnu,
+            code_options: crate::target::CodeOptions {
+                relocation: None,
+                tls_model:  crate::target::TlsModel::GlobalDynamic,
+            },
             standard,
             gnu: false,
             msvc: 0,

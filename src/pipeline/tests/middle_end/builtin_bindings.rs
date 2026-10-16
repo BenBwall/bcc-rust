@@ -187,6 +187,7 @@ fn builtin_bindings_and_language_modes_match_native_clang() {
                 } else {
                     OutputKind::Object
                 },
+                code: crate::target::CodeOptions::default(),
             };
             let clang = directory.join(format!("clang-{index}-{opt:?}.exe"));
             let mut command = toolchain.command(&input, &clang, options);

@@ -118,6 +118,7 @@ fn check_arm(
         disable_llvm_passes,
         target,
         kind: OutputKind::Executable,
+        code: crate::target::CodeOptions::default(),
     };
     compile_module(&module, &executable, options)
         .map_err(|error| format!("seed {:#x} {arm:?}: {error}\n{text}\n{llvm}", case.seed))?;

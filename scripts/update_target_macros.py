@@ -36,7 +36,9 @@ def exclusion(name):
         return "Extended integer syntax exists but these widths lack semantic types."
     if name in {"__FXSR__", "__GCC_ASM_FLAG_OUTPUTS__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:
         return "Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented."
-    if name in {"__PIC__", "__pic__", "__PIE__", "__pie__", "__code_model_small__", "__NO_INLINE__", "__NO_MATH_ERRNO__", "__tune_k8__"}:
+    if name in {"__PIC__", "__pic__", "__PIE__", "__pie__"}:
+        return "Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros."
+    if name in {"__code_model_small__", "__NO_INLINE__", "__NO_MATH_ERRNO__", "__tune_k8__"}:
         return "Code generation, relocation and optimization policy are not implemented."
     if name in {"__CONSTANT_CFSTRINGS__", "__OBJC_BOOL_IS_BOOL"}:
         return "Objective-C and CoreFoundation string intrinsics are not implemented."

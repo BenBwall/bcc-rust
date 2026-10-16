@@ -53,6 +53,7 @@ fn compound_updates_follow_rhs_calls_in_native_arms() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .expect("compile the compound update regression");

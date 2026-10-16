@@ -40,6 +40,7 @@ bcc-rust x.c --target=x86_64-w64-windows-gnu -o x.exe [--llvm-opt=O2]
 bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
 bcc-rust x.c --target=x86_64-w64-windows-gnu --backend=native -o x.exe
 bcc-rust x.c --target=x86_64-unknown-linux-gnu --backend=native --emit=asm
+bcc-rust lib.c -fPIC -shared -o libx.so   # a shared library (Linux)
 ```
 
 Every back end receives the module after ABI lowering, which fixes how the
@@ -63,6 +64,14 @@ runs no LLVM IR passes, so `--opt=bcc --llvm-opt=O2
 [middle-end.md](middle-end.md#comparison-arms). Errors, constructs lowering
 does not support yet (such as variable length arrays) and clang failures exit
 with status 1.
+
+As in Clang, Linux code is position-independent executable code by default
+(`-fPIE`). `-fpic`/`-fPIC` makes code a shared library can contain and
+`-fno-pic` fixed-address code, which links with `-no-pie`; `-shared` links a
+shared library. `-ftls-model=global-dynamic|local-dynamic|initial-exec|local-exec`
+names the least specific thread-local access model, as in GCC and Clang
+([middle-end.md](middle-end.md#module) has the rules). The native back end
+generates executable code only and refuses `-fpic`, `-fPIC` and `-shared`.
 
 `--backend=native` replaces LLVM with bcc's own x86-64 code generator
 ([design](docs/design/native-backend.md)): it writes AT&T assembly for System V

@@ -516,6 +516,7 @@ pub(super) fn run_through_llvm(
             disable_llvm_passes,
             target,
             kind: OutputKind::Executable,
+            code: crate::target::CodeOptions::default(),
         };
         compile_module(&module, &executable, options)
             .unwrap_or_else(|error| panic!("{}: {error}", program.name));

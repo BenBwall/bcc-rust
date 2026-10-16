@@ -60,6 +60,7 @@ fn transparent_union_arguments_match_native_execution() {
                     disable_llvm_passes: arm.disable_llvm_passes,
                     target,
                     kind: OutputKind::Executable,
+                    code: crate::target::CodeOptions::default(),
                 },
             )
             .unwrap();

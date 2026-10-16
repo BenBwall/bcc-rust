@@ -63,7 +63,11 @@ use crate::{
         Module,
         Symbol,
     },
-    target::Target,
+    target::{
+        CodeOptions,
+        Relocation,
+        Target,
+    },
     util::bump::Bump,
 };
 
@@ -110,10 +114,24 @@ pub(crate) fn weak_declaration(module: &Module<'_>, symbol: Symbol) -> bool {
     linkage == Linkage::Weak && !defines(module, symbol)
 }
 
-/// Writes the module's assembly for `target`, or refuses it.
+/// Writes the module's assembly for `target` with the default code
+/// options, or refuses it.
 pub(crate) fn emit_assembly<'m>(
     module: &'m Module<'_>,
     target: Target,
+    out: &mut dyn fmt::Write,
+) -> Result<(), NativeError<'m>> {
+    emit_assembly_with(module, target, CodeOptions::default(), out)
+}
+
+/// Writes the module's assembly for `target` with the relocation and TLS
+/// models of `code`, or refuses it. The back end generates code for
+/// executables only, which also serves `-fno-pic`; it refuses `-fpic` and
+/// `-fPIC`, whose code a shared library must be able to contain.
+pub(crate) fn emit_assembly_with<'m>(
+    module: &'m Module<'_>,
+    target: Target,
+    code: CodeOptions,
     out: &mut dyn fmt::Write,
 ) -> Result<(), NativeError<'m>> {
     if !module.triple().is_empty() && Target::parse(module.triple()) != Some(target) {
@@ -121,6 +139,11 @@ pub(crate) fn emit_assembly<'m>(
             module:    module.triple(),
             requested: target.triple(),
         });
+    }
+    if matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+        && matches!(code.relocation(target), Relocation::Pic(_))
+    {
+        return Err(NativeError::SharedLibraryCode);
     }
     support::check_module(module, target)?;
     let conv = CallConv::of(target);
@@ -131,12 +154,10 @@ pub(crate) fn emit_assembly<'m>(
         let Some(body) = &function.body else { continue };
         {
             let arena = &scratch;
-            let mut func =
-                isel::select(module, function, body, target, arena).map_err(|construct| {
-                    Unsupported {
-                        function: Some(function.name),
-                        construct,
-                    }
+            let mut func = isel::select(module, function, body, target, code.tls_model, arena)
+                .map_err(|construct| Unsupported {
+                    function: Some(function.name),
+                    construct,
                 })?;
             let allocation = regalloc::allocate(&mut func, conv, arena);
             regalloc::rewrite(&mut func, &allocation, arena);
@@ -161,6 +182,13 @@ pub(crate) enum NativeError<'m> {
         module:    &'m str,
         requested: &'static str,
     },
+    /// `-fpic`, `-fPIC` or `-shared` asks for code a shared library can
+    /// contain.
+    #[error(
+        "the native back end generates code for executables only; -fpic, -fPIC and -shared need \
+         --backend=llvm"
+    )]
+    SharedLibraryCode,
 }
 
 impl<'m> From<Unsupported<'m>> for NativeError<'m> {

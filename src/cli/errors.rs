@@ -14,7 +14,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[expect(
     clippy::disallowed_types,
-    reason = "Carries the input path out of `run`, past its arenas, for `main`'s message."
+    reason = "Carries the input path or an option out of `run`, past its arenas, for `main`'s \
+              message."
 )]
 pub enum MainError {
     #[error("error: cannot read `{}`: {source}", path.display())]
@@ -25,6 +26,13 @@ pub enum MainError {
     /// An output whose identity cannot be checked is rejected before writing.
     #[error("error: cannot inspect output file '{}': {source}", path.display())]
     InspectOutputFileError { path: PathBuf, source: io::Error },
+    /// An option the target does not support, as Clang rejects `-fPIC` for
+    /// MSVC.
+    #[error("error: unsupported option '{option}' for target '{target}'")]
+    UnsupportedOption {
+        option: String,
+        target: &'static str,
+    },
     #[error(transparent)]
     ParseArgumentsError(#[from] clap::Error),
 }

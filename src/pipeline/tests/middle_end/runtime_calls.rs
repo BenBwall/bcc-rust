@@ -168,6 +168,7 @@ fn torture_runtime_calls_match_native_arms() {
                             disable_llvm_passes: arm.disable_llvm_passes,
                             target,
                             kind: OutputKind::Executable,
+                            code: crate::target::CodeOptions::default(),
                         },
                     )
                     .unwrap();
@@ -221,6 +222,7 @@ fn alternate_integer_formats_match_native_arms() {
                     disable_llvm_passes: arm.disable_llvm_passes,
                     target,
                     kind: OutputKind::Executable,
+                    code: crate::target::CodeOptions::default(),
                 },
             )
             .expect("compile the formatted output regression");
@@ -275,6 +277,7 @@ fn implicit_library_calls_match_interpreter_and_native_arms() {
                                     disable_llvm_passes: arm.disable_llvm_passes,
                                     target,
                                     kind: OutputKind::Executable,
+                                    code: crate::target::CodeOptions::default(),
                                 },
                             )
                             .unwrap();

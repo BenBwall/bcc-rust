@@ -82,7 +82,10 @@ use crate::{
         Value,
         ValueDef,
     },
-    target::Target,
+    target::{
+        Target,
+        TlsModel,
+    },
     util::bump::{
         ArenaVec,
         Bump,
@@ -95,11 +98,12 @@ pub(crate) fn select<'a>(
     function: &Function<'_>,
     body: &Body<'_>,
     target: Target,
+    tls_model: TlsModel,
     arena: &'a Bump,
 ) -> Result<MFunction<'a>, Construct> {
     let cfg = ControlFlowGraph::compute(body, arena);
     let tree = DominatorTree::compute(body, &cfg, arena);
-    let mut selector = Selector::new(module, function, body, target, arena);
+    let mut selector = Selector::new(module, function, body, target, tls_model, arena);
     for (_, slot) in body.stack_slots() {
         selector.func.slots.push(FrameSlotData {
             size:  slot.size,
@@ -176,6 +180,9 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     pub(super) signature: Signature<'ir>,
     pub(super) conv:      CallConv,
     pub(super) target:    Target,
+    /// The `-ftls-model`: local-exec also reaches declared thread-locals
+    /// at a link-time offset.
+    pub(super) tls_model: TlsModel,
     pub(super) arena:     &'a Bump,
     pub(super) func:      MFunction<'a>,
     /// Each value's representation.
@@ -209,6 +216,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         function: &'m Function<'ir>,
         body: &'m Body<'ir>,
         target: Target,
+        tls_model: TlsModel,
         arena: &'a Bump,
     ) -> Self {
         Self {
@@ -218,6 +226,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             signature: module.signature(function.signature),
             conv: CallConv::of(target),
             target,
+            tls_model,
             arena,
             func: MFunction::new_in(arena),
             values: filled(arena, body.value_count(), ValueKind::Unknown),

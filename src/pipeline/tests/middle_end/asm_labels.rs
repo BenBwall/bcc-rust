@@ -26,6 +26,7 @@ fn builtin_spelling_in_asm_label_is_exact() {
             opt: Some(opt),
             disable_llvm_passes: false,
             kind: OutputKind::Executable,
+            code: crate::target::CodeOptions::default(),
         };
         let clang = directory.join(format!("clang-{opt:?}.exe"));
         let output = toolchain.command(&input, &clang, options).output().unwrap();
@@ -85,6 +86,7 @@ fn asm_labels_native_and_clang_return_42() {
             opt: Some(OptLevel::O0),
             disable_llvm_passes: false,
             kind: OutputKind::Executable,
+            code: crate::target::CodeOptions::default(),
         };
         let clang = directory.join(format!("clang-{index}.exe"));
         let output = toolchain.command(&input, &clang, options).output().unwrap();
