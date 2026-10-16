@@ -2,6 +2,8 @@
 //! that tests them, and a second test of a shared destination merges with
 //! the first.
 
+use std::fmt::Write as _;
+
 use super::*;
 
 /// Runs `simplify-cfg` then `dce` and checks the printed result.
@@ -196,4 +198,55 @@ block4:
 }
 ";
     assert_pass_leaves(Pass::SimplifyCfg, input);
+}
+
+/// A wide `switch` or `indirect_br` into many blocks that branch on a
+/// constant parameter threads nothing, and the prefilter reads none of its
+/// edges: listing them for every successor would be quadratic.
+#[test]
+fn wide_switches_and_indirect_branches_are_not_rescanned() {
+    const WIDTH: usize = 512;
+    let mut cases = String::new();
+    let mut dests = String::new();
+    let mut labels = String::new();
+    let mut blocks = String::new();
+    for index in 1..=WIDTH {
+        if index > 1 {
+            let separator = if index > 2 { ", " } else { "" };
+            let _ = write!(cases, "{separator}{index}: block{index}(v1)");
+        }
+        let separator = if index > 1 { ", " } else { "" };
+        let _ = write!(dests, "{separator}block{index}(v1)");
+        let _ = writeln!(labels, "    label{} = block_label block{index}", index - 1);
+        let _ = writeln!(
+            blocks,
+            "block{index}(v{}: i1):\n    brif v{}, block{}, block{}",
+            index + 3,
+            index + 3,
+            WIDTH + 1,
+            WIDTH + 2
+        );
+    }
+    let tail = format!(
+        "block{}:\n    return v2\nblock{}:\n    return v3\n}}\n",
+        WIDTH + 1,
+        WIDTH + 2
+    );
+    let switch = format!(
+        "function @f(i32) -> i32 external {{\nblock0(v0: i32):\n    v1 = iconst.i1 1\n    v2 = \
+         iconst.i32 0\n    v3 = iconst.i32 1\n    switch v0, block1(v1), [{cases}]\n{blocks}{tail}"
+    );
+    let indirect = format!(
+        "function @f(i32) -> i32 external {{\n{labels}block0(v0: i32):\n    v1 = iconst.i1 1\n    \
+         v2 = iconst.i32 0\n    v3 = iconst.i32 1\n    v{} = block_addr label0\n    indirect_br \
+         v{}, [{dests}]\n{blocks}{tail}",
+        WIDTH + 4,
+        WIDTH + 4
+    );
+    for input in [switch, indirect] {
+        crate::test_support::THREAD_PREFILTER_EDGES.with(|edges| edges.set(0));
+        assert_pass_leaves(Pass::SimplifyCfg, &input);
+        let edges = crate::test_support::THREAD_PREFILTER_EDGES.with(std::cell::Cell::get);
+        assert_eq!(edges, 0);
+    }
 }
