@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Optimizer"
+  short_description: "Review optimizer soundness, poison, termination, and perf claims"
+  default_prompt: "Use $review-pr-optimizer to review the current PR's optimizer changes."

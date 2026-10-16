@@ -35,6 +35,8 @@ Relevant state varies by phase:
 
 - **Lexical processing:** physical/logical newline, trigraph and splice lookahead, comment/string/header context, token prefix, EOF, and source-vector segments.
 - **Preprocessing:** directive line, include and conditional-group stack, macro argument depth, disabled/replacing macro state, rescan position, token-paste/stringize context, and output-token conversion.
+- **Semantic analysis:** recovered subtrees that suppress new diagnostics, rejected definitions walked against a fresh unanalyzed tag, bindings that stay visible after a conflict, unanalyzed types, and the error count that decides whether lowering runs.
+- **Lowering and back ends:** a construct that is not yet supported must refuse with a diagnostic naming it, before any output is written, rather than panic, emit partial output, or miscompile; a missing retained fact is an internal `MissingFact` error carrying source provenance.
 - **Parsing:** control-frame and phase, delimiter/question depth, scope and name classification, unmatched-owner state, synchronization kind, deferred child, and recovery unwind target.
 
 For each malformed prefix, try every plausible successor or owner boundary at the same and nested depths. Include newline, comma, colon, semicolon, closing delimiters, braces, EOF, identifiers with context-dependent meaning, and a complete next construct for the phase.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Backend"
+  short_description: "Review ABI lowering, LLVM, interpreter, and native code generation"
+  default_prompt: "Use $review-pr-backend to review the current PR's ABI and back-end changes."
