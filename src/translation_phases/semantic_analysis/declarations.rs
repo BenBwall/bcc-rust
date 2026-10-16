@@ -1292,7 +1292,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn layout_attribute(&self, attribute: &super::AttributeSpecifier<'tu>) -> bool {
         attribute.recovered
             || super::attributes::known_names(attribute, self.context)
-                .any(|(_, name)| matches!(name, "align" | "ext_vector_type"))
+                .any(|(_, name)| name == "ext_vector_type")
     }
 
     /// Discover core type names inside opaque later-standard operands.

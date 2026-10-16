@@ -550,8 +550,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
-    /// GCC aligned, and the constructor/destructor priority, have a C integer
-    /// constant expression operand. Keep unknown vendor-prefixed attributes
+    /// GCC aligned (Microsoft's `__declspec(align(N))` too), and the
+    /// constructor/destructor priority, have a C integer constant expression
+    /// operand. Keep unknown vendor-prefixed attributes
     /// opaque, even if their name is `aligned`.
     /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
     fn start_attribute_argument(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
@@ -579,6 +580,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 .at(name.contents)
                 .trim_matches('_');
             matches!(name, "aligned" | "constructor" | "destructor")
+                || (name == "align" && self.attribute_syntax == AttributeSyntax::Msvc)
         }) && parser.cursor.following().is_some_and(|token| {
             !matches!(
                 token.kind,

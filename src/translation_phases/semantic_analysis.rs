@@ -574,6 +574,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let ty = self.take_type();
                 let attributes = self.layout_attribute_chain(chain);
                 let ty = self.align_declared_type(ty, attributes.alignment);
+                let can_weaken = can_weaken || self.microsoft_alignment(chain);
                 let ty = self.minimum_declared_alignment(ty, base, can_weaken);
                 let ty = self.standard_alignment(ty, chain);
                 self.values.push(ty);
