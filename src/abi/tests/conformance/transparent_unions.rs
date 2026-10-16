@@ -308,3 +308,63 @@ fn transparent_union_arguments_run_in_the_interpreter() {
         }
     }
 }
+
+/// A transparent union whose first member is an empty GNU structure: its
+/// first member records size 0, which verifies, and System V passes nothing
+/// for it, as Clang 23 does (`define i32 @f()`).
+const EMPTY: &str = "typedef union __attribute__((transparent_union)) { struct {} e; } U;
+int b_f(U x) { (void)x; return 3; }
+int c_f(U x);
+int b_calls(void) { U x = {}; return c_f(x) - 4; }";
+
+#[test]
+fn an_empty_transparent_union_argument_is_passed_as_nothing() {
+    use crate::backend::interpreter::{
+        DefaultHost,
+        RuntimeValue,
+        Termination,
+        run,
+    };
+    let interpreted = format!(
+        "{EMPTY}\nint c_f(U x) {{ (void)x; return 4; }}\nint main(void) {{ U x = {{}}; return \
+         b_f(x) - 3 + b_calls(); }}"
+    );
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for profile in [Profile::PreAbi, Profile::PostAbi] {
+            let tu = Bump::new();
+            let arena = Bump::new();
+            // `lower_c` verifies the pre-ABI module.
+            let mut module = lower_c(&tu, &arena, &interpreted, target);
+            if target == Target::LinuxGnu {
+                let line = function_line(&module, "b_f");
+                assert!(line.contains("first(size 0)"), "{line}");
+            }
+            if profile == Profile::PostAbi {
+                lower_abi(&mut module, target, &Bump::new()).unwrap();
+                assert_verified(&module, Profile::PostAbi, &module.to_string());
+                if target == Target::LinuxGnu {
+                    assert_eq!(parameters(&module, "b_f"), "()", "{module}");
+                }
+            }
+            let execution = Bump::new();
+            let mut host = DefaultHost::for_target(&execution, target);
+            let result = run(&module, "main", &[], &mut host)
+                .unwrap_or_else(|error| panic!("{target:?} {profile:?}: {error:?}\n{module}"));
+            assert_eq!(
+                result.termination,
+                Termination::Returned(Some(RuntimeValue::Int(0))),
+                "{target:?} {profile:?}"
+            );
+        }
+    }
+    // Linked with Clang's side in both directions.
+    let clang = "typedef union __attribute__((transparent_union)) { struct {} e; } U;
+int b_f(U x); int b_calls(void);
+int c_f(U x) { (void)x; return 4; }
+int main(void) { U x = {}; return b_f(x) - 3 + b_calls(); }";
+    let tu = Bump::new();
+    let arena = Bump::new();
+    let mut module = lower_c(&tu, &arena, EMPTY, Target::LinuxGnu);
+    lower_abi(&mut module, Target::LinuxGnu, &Bump::new()).unwrap();
+    assert_conforms("empty-transparent-union", Target::LinuxGnu, &module, clang);
+}

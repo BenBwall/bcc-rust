@@ -180,6 +180,8 @@ function @short(ptr aggregate(size 2, align 2, first(size 2, unsigned), [0: i16]
 
 function @flag(ptr aggregate(size 1, align 1, first(size 1, bool), [0: i8])) external
 
+function @empty(ptr aggregate(size 0, align 1, first(size 0))) external
+
 function @call(ptr) external {
 block0(v0: ptr):
     call_indirect v0(v0) : (ptr aggregate(size 1, align 1, first(size 1, signed), [0: i8]))
@@ -198,7 +200,7 @@ fn first_members_round_trip_and_verify() {
 #[test]
 fn first_members_must_describe_their_union() {
     let misplaced = "@f: parameter 0 records a first member outside a pre-ABI aggregate argument";
-    let size = "@f: parameter 0 has a first member that is empty or larger than its aggregate";
+    let size = "@f: parameter 0 has a first member larger than its aggregate";
     let outside = "@f: parameter 0 has an aggregate scalar beyond its first member's size";
     let extension =
         "@f: parameter 0 extends a first member that is not one narrow integer or _Bool scalar";
@@ -222,7 +224,7 @@ fn first_members_must_describe_their_union() {
             size,
         ),
         (
-            "function @f(ptr aggregate(size 8, align 8, first(size 0))) external\n",
+            "function @f(ptr aggregate(size 0, align 1, first(size 1))) external\n",
             size,
         ),
         (
