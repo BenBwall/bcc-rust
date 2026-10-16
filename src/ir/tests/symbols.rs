@@ -98,6 +98,43 @@ function @longjmp(ptr, i32) external
 }
 
 #[test]
+fn effective_returns_twice_follows_aliases_and_escapes() {
+    let arena = Bump::new();
+    let text = "\
+global @table internal size 8, align 8 = bytes \"0000000000000000\" relocs [0: @save]
+function @real(ptr) -> i32 external returns_twice {
+block0(v0: ptr):
+    v1 = iconst.i32 0
+    return v1
+}
+function @save(ptr) -> i32 external alias @real
+function @plain() external
+";
+    let module = parse(&arena, text);
+    let func = |name| {
+        let Some(Symbol::Function(func)) = module.symbol(name) else {
+            panic!("{name}")
+        };
+        func
+    };
+    assert!(module.returns_twice(func("real")) && module.returns_twice(func("save")));
+    assert!(!module.function(func("save")).returns_twice);
+    assert!(!module.returns_twice(func("plain")));
+    assert!(module.returns_twice_escapes());
+    let plain = parse(
+        &arena,
+        &text.replace("relocs [0: @save]", "relocs [0: @plain]"),
+    );
+    assert!(!plain.returns_twice_escapes());
+    let address = parse(
+        &arena,
+        "function @vfork() -> i32 external\nfunction @f() -> ptr external {\nblock0:\n    v0 = \
+         func_addr @vfork\n    return v0\n}\n",
+    );
+    assert!(address.returns_twice_escapes());
+}
+
+#[test]
 fn verifier_rejects_broken_aliases_sections_and_init_functions() {
     let rule = |item: &str, text: &str| format!("@{item}: invalid symbol attribute: {text}");
     let cases: &[(&str, &[String])] = &[

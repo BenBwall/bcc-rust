@@ -347,8 +347,8 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert!(!refused.status.success());
         assert!(
             text(&refused.stderr).contains(
-                "not yet supported by the native back end: a call to a function that may return \
-                 twice"
+                "not yet supported by the native back end: a call to, or the address of, a \
+                 function that may return twice"
             ),
             "{}",
             text(&refused.stderr)

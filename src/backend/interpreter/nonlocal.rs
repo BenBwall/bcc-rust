@@ -58,8 +58,7 @@ impl Machine<'_, '_, '_> {
     ) -> Result<(), Fault> {
         match contract {
             | ExternalContract::SaveEnvironment => {
-                if call_result != Some(Type::I32) || self.argument_types.first() != Some(&Type::Ptr)
-                {
+                if call_result != Some(Type::I32) || !save_arguments(&self.argument_types) {
                     return Err(UbKind::SignatureMismatch.into());
                 }
                 self.save_environment(self.arguments[0])?;
@@ -136,9 +135,12 @@ impl Machine<'_, '_, '_> {
         let body = self.body(frame.func);
         // The frame must be the activation that saved the buffer, and the
         // position must follow the call to `setjmp` that has a result.
-        let block = Block::new(block);
-        let call = (word(activation) == frame.activation && block.index() < body.block_count())
-            .then(|| body.block_insts(block))
+        // The block word is untrusted: range-check it before it becomes a
+        // `Block`, whose constructor only accepts valid indices.
+        let block = (block < body.block_count()).then(|| Block::new(block));
+        let call = block
+            .filter(|_| word(activation) == frame.activation)
+            .map(|block| body.block_insts(block))
             .and_then(|insts| next.checked_sub(1).and_then(|last| insts.get(last)))
             .copied()
             .filter(|&inst| {
@@ -155,7 +157,9 @@ impl Machine<'_, '_, '_> {
             .frames
             .get(depth + 1)
             .map_or(self.dynamic_slots.len(), |newer| newer.dynamic_slots);
-        let (Some(result), true) = (call, (frame.dynamic_slots..=end).contains(&mark)) else {
+        let (Some(block), Some(result), true) =
+            (block, call, (frame.dynamic_slots..=end).contains(&mark))
+        else {
             return Err(UbKind::InvalidJmpBuf.into());
         };
         // Objects allocated since the `setjmp` in newer frames, and dynamic
@@ -182,6 +186,18 @@ impl Machine<'_, '_, '_> {
         self.memory
             .ptr_add(buffer, RuntimeValue::Int(8 * index as u128), true)
     }
+}
+
+/// Whether `types` are the arguments of a `setjmp`-family call on an x86-64
+/// target. One spelling has different arities across C libraries (glibc's
+/// `_setjmp(env)`, MinGW-w64's `_setjmp(env, frame)`), so the check accepts
+/// the three shapes the family has rather than one per name: the buffer
+/// alone (`setjmp`, glibc `_setjmp`), with an `int` signal-mask flag
+/// (`sigsetjmp`, `__sigsetjmp`), or with a frame pointer (MinGW-w64
+/// `_setjmp`, `_setjmpex`, `__mingw_setjmp`, `__intrinsic_setjmp(ex)`).
+/// 32-bit MSVC's variadic `_setjmp3` has no x86-64 form and is refused.
+fn save_arguments(types: &[Type]) -> bool {
+    matches!(types, [Type::Ptr] | [Type::Ptr, Type::I32 | Type::Ptr])
 }
 
 /// A count or index as a saved word; bcc runs only on 64-bit hosts.

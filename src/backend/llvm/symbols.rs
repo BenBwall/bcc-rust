@@ -46,7 +46,7 @@ pub(super) fn declare<'id, 'a, 'm>(
     arena: &'a Bump,
 ) -> Result<(ArenaVec<'a, Val<'id>>, ArenaVec<'a, Val<'id>>), EmitError<'m>> {
     let mut functions = ArenaVec::new_in(arena);
-    for (_, function) in module.functions() {
+    for (id, function) in module.functions() {
         let signature = module.signature(function.signature);
         let ty = function::signature_type(api, signature, arena);
         if function.attributes.alias.is_some() {
@@ -56,7 +56,7 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         let value = api.function(api.name(function.name), ty);
         function::attributes(api, value, signature, false);
-        if function.returns_twice {
+        if module.returns_twice(id) {
             function::returns_twice(api, value, false);
         }
         if let Some(linkage) = linkage(function.linkage, function.body.is_some()) {

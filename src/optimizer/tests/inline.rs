@@ -333,6 +333,55 @@ block0(v0: ptr):
     assert!(output.contains("function @save(ptr) -> i32 external returns_twice"));
 }
 
+#[test]
+fn aliases_and_escaped_addresses_keep_returns_twice_frames() {
+    // A wrapper of an alias of an attributed definition, and a wrapper
+    // making an indirect call in a module where `@_setjmp` escapes.
+    let text = "\
+global @table internal size 8, align 8 = bytes \"0000000000000000\" relocs [0: @_setjmp]
+
+function @_setjmp(ptr) -> i32 external
+
+function @real(ptr) -> i32 external returns_twice {
+block0(v0: ptr):
+    v1 = iconst.i32 0
+    return v1
+}
+
+function @save(ptr) -> i32 external alias @real
+
+function @direct(ptr) -> i32 internal {
+block0(v0: ptr):
+    v1 = call @save(v0)
+    return v1
+}
+
+function @indirect(ptr) -> i32 internal {
+block0(v0: ptr):
+    v1 = global_addr @table
+    v2 = load.ptr v1, align 8
+    v3 = call_indirect v2(v0) : (ptr) -> i32
+    return v3
+}
+
+function @main(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = call @direct(v0)
+    v2 = call @indirect(v0)
+    v3 = iadd.i32 v1, v2
+    return v3
+}
+";
+    let (output, report) = optimize_text(text, &only(&[Pass::Inline]));
+    assert_eq!(report.stats(Pass::Inline).changes, 0, "{output}");
+    // Without the escaping relocation an indirect call is ordinary.
+    let ordinary = text
+        .replace("relocs [0: @_setjmp]", "relocs [0: @main]")
+        .replace("    v1 = call @direct(v0)\n", "    v1 = iconst.i32 0\n");
+    let (output, report) = optimize_text(&ordinary, &only(&[Pass::Inline]));
+    assert_eq!(report.stats(Pass::Inline).changes, 1, "{output}");
+}
+
 /// A `setjmp` in `@main`, a `longjmp` two internal calls down and a
 /// counter changed between them through volatile accesses.
 /// C99: §7.13.2.1 paragraphs 3-4, p. 244; PDF p. 256.
