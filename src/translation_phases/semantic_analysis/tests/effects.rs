@@ -24,8 +24,40 @@ fn probe(
     expression: &str,
     check: impl for<'tu> FnOnce(&SemanticTranslationUnit<'tu>, &'tu Expression<'tu>),
 ) {
-    with_source(
+    probe_in(
+        crate::configuration::CompilerConfiguration::default(),
+        declarations,
+        expression,
+        check,
+    );
+}
+
+/// [`probe`] in GNU C23, for its predefined constants.
+fn probe_c23(
+    expression: &str,
+    check: impl for<'tu> FnOnce(&SemanticTranslationUnit<'tu>, &'tu Expression<'tu>),
+) {
+    probe_in(
+        crate::configuration::CompilerConfiguration::new(
+            CStandard::C23,
+            crate::configuration::ExtensionPolicy::Allow,
+        )
+        .with_gnu_extensions(true),
+        "",
+        expression,
+        check,
+    );
+}
+
+fn probe_in(
+    configuration: crate::configuration::CompilerConfiguration,
+    declarations: &str,
+    expression: &str,
+    check: impl for<'tu> FnOnce(&SemanticTranslationUnit<'tu>, &'tu Expression<'tu>),
+) {
+    with_configuration(
         &format!("{PRELUDE}\nvoid probe(void){{ {declarations} {expression}; }}"),
+        configuration,
         |context, sema| {
             assert_eq!(
                 context.error_count(),
@@ -109,6 +141,16 @@ fn m5_effect_classes_follow_c_evaluation_and_registry_contracts() {
             F::WRITE,
             F::WRITE,
         ),
+        // Constants: label addresses, C23 predefined constants, and C2y
+        // `_Countof`, which evaluates only an operand of variable length.
+        ("l:;", "&&l", none, none),
+        ("int a[3];", "_Countof(a)", none, none),
+        ("int a[g];", "_Countof(a)", none, none),
+        ("int b[g][g];", "_Countof(b[f(0)])", F::CALL, F::CALL),
+        ("int b[g][3];", "_Countof(b[f(0)])", none, none),
+        ("", "_Countof(int[3][g++])", none, none),
+        ("", "_Countof(int[g++])", F::WRITE, F::WRITE),
+        ("", "_Countof(g)", F::UNKNOWN, F::UNKNOWN),
         // Comma, conditional and short circuit operands.
         ("", "(g, f(1))", F::CALL, F::CALL),
         ("", "(g, v)", F::VOLATILE, F::VOLATILE),
@@ -134,6 +176,12 @@ fn m5_effect_classes_follow_c_evaluation_and_registry_contracts() {
             F::VOLATILE,
         ),
         ("", "__builtin_add_overflow_p(g, 1, f(1))", F::CALL, F::CALL),
+        (
+            "l:;",
+            "__builtin_add_overflow_p(g, 1, (long)&&l)",
+            none,
+            none,
+        ),
         ("", "__builtin_object_size(p, 0)", none, none),
         ("", "__builtin_strlen(\"x\")", F::CALL, F::CALL),
         (
@@ -148,6 +196,18 @@ fn m5_effect_classes_follow_c_evaluation_and_registry_contracts() {
             [value, designation],
             "{declarations} {expression}"
         );
+    }
+    for expression in ["true", "false", "nullptr"] {
+        probe_c23(expression, |sema, e| {
+            for context in [EffectContext::Value, EffectContext::Designation] {
+                assert_eq!(sema.effect_summary(e, context), Some(none), "{expression}");
+                assert_eq!(
+                    sema.effect_recipe(e, context),
+                    Some(EffectRecipe::None),
+                    "{expression}"
+                );
+            }
+        });
     }
 }
 
@@ -253,8 +313,18 @@ fn m5_recipes_schedule_only_effects_and_conditions() {
             }])
         );
     });
-    probe("", "sizeof(f(1))", |sema, e| {
-        assert_eq!(recipe(sema, e), EffectRecipe::None);
+    for (declarations, expression) in [
+        ("", "sizeof(f(1))"),
+        ("l:;", "&&l"),
+        ("", "_Countof(int[3][g++])"),
+    ] {
+        probe(declarations, expression, |sema, e| {
+            assert_eq!(recipe(sema, e), EffectRecipe::None, "{expression}");
+        });
+    }
+    probe("", "_Countof(int[g++])", |sema, e| {
+        let index = sema.expression_index(e).unwrap();
+        assert_eq!(recipe(sema, e), EffectRecipe::EvaluateValue(ExprId(index)));
     });
     // Selected arms forward; unselected arms are never named.
     probe("", "_Generic(0, int: f(1), default: g++)", |sema, e| {
@@ -331,5 +401,23 @@ fn m5_deep_effect_production_is_linear() {
         size_of::<facts::effects::ExpressionEffects>(),
         4,
         "two contexts of one effect byte and one recipe byte"
+    );
+}
+
+/// A label address in the destination operand of an overflow predicate is
+/// effect-free, so the predicate folds to an integer constant expression.
+/// GNU extension: GCC Integer Overflow Builtins and Labels as Values.
+#[test]
+fn m5_overflow_predicate_folds_over_label_addresses() {
+    probe(
+        "l:;",
+        "__builtin_add_overflow_p(1, 2, (long)&&l) + __builtin_mul_overflow_p(1 << 30, 4, \
+         (int)(&&l - &&l))",
+        |sema, e| {
+            let index = sema.expression_index(e).unwrap();
+            let info = &sema.expressions[index];
+            assert!(info.ice);
+            assert_eq!(info.integer.map(|integer| integer.value), Some(1));
+        },
     );
 }
