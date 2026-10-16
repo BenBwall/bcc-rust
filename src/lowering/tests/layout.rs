@@ -301,9 +301,8 @@ fn declspec_align_objects_lower_with_their_alignment() {
 /// `TraceLoggingProvider.h`'s event metadata is a function-local static
 /// whose `__declspec(allocate(...)) __declspec(align(1))` follows the
 /// record's closing brace, and its provider metadata is `selectany`. The
-/// static keeps the section and byte alignment, and a `selectany`
-/// definition gets `selectany` linkage while a mere declaration of one
-/// stays external, as Clang emits them.
+/// static keeps the section and byte alignment, and `selectany` objects get
+/// `selectany` linkage, as Clang emits them.
 #[test]
 fn trace_logging_static_and_selectany_metadata_lower() {
     let configuration = crate::configuration::CompilerConfiguration::default()
@@ -326,5 +325,11 @@ fn trace_logging_static_and_selectany_metadata_lower() {
     assert!(event.contains("align 1"), "{event}");
     assert!(event.contains("section \".rdata$zETW1\""), "{event}");
     assert!(line("global @meta").contains("selectany"), "{text}");
-    assert!(line("global @other").contains("external"), "{text}");
+    // As in Clang, a `selectany` declaration without an initializer, even
+    // `extern`, defines its object, zero-initialized.
+    let other = line("global @other");
+    assert!(
+        other.contains("selectany") && other.contains("= zero"),
+        "{other}"
+    );
 }

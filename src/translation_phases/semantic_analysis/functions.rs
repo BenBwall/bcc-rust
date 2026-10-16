@@ -1118,6 +1118,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// A Microsoft `selectany` declaration without an initializer defines
+    /// its object, zero-initialized, even when it is `extern`, as Clang
+    /// treats it: a later initialized declaration is a redefinition, and
+    /// the type must be complete.
+    /// MSVC extension: Microsoft Learn, "selectany"; C99: §6.9p3, p. 140;
+    /// PDF p. 152; §6.7.8p10, p. 126; PDF p. 138 (zero initialization).
+    pub(super) fn select_any_definition(&mut self, index: usize) {
+        let b = self.bindings[index];
+        let mut entity = self
+            .functions
+            .entities
+            .get(&b.name.name)
+            .copied()
+            .unwrap_or_default();
+        if entity.definition == Some(b.name.source_vectors) {
+            return;
+        }
+        if !self.types.unanalyzed(b.ty) && !self.complete_object(b.ty) {
+            self.error(
+                SemanticErrorKind::IncompleteTentativeDefinition,
+                b.name.source_vectors,
+                Some(b.name.name),
+                None,
+            );
+            return;
+        }
+        let defined = entity.definition.is_some();
+        self.define_entity(index, &mut entity);
+        _ = self.functions.entities.insert(b.name.name, entity);
+        if !defined {
+            self.definitions.push(Definition {
+                binding: index,
+                kind:    DefinitionKind::Tentative,
+            });
+        }
+    }
+
     /// Rejects multiple definitions of an identifier with linkage.
     /// C99: §6.9 paragraph 3, p. 140; PDF p. 152.
     /// C99: §6.9 paragraph 5, p. 140; PDF p. 152.
