@@ -5,7 +5,10 @@
 use super::{
     super::interpreter::Trap,
     generate::generate,
-    native::check_native,
+    native::{
+        check_native,
+        check_native_backend,
+    },
     oracle::{
         Pipeline,
         observe_text,
@@ -127,6 +130,59 @@ fn check_native_sweep(first: u64, cases: u64) {
         summary.kept.len() * 2,
         failures[0]
     );
+}
+
+/// The cases a default run compiles with the native back end, two arms
+/// each.
+const DEFAULT_NATIVE_BACKEND_CASES: u64 = 20;
+
+#[test]
+fn native_backend_matches_the_interpreter_on_generated_programs() {
+    check_native_backend_sweep(
+        first_seed(),
+        setting(
+            "BCC_DIFFTEST_NATIVE_BACKEND_CASES",
+            DEFAULT_NATIVE_BACKEND_CASES,
+        ),
+    );
+}
+
+/// A long native back end sweep for occasional runs.
+#[test]
+#[ignore = "takes minutes; run explicitly"]
+fn native_backend_matches_the_interpreter_on_many_generated_programs() {
+    check_native_backend_sweep(first_seed().wrapping_add(1 << 34), 500);
+}
+
+/// Checks the first `cases` kept cases from `first` with the native back
+/// end, which must accept every one of them: the generator writes only
+/// integer, pointer, `f32` and `f64` code.
+fn check_native_backend_sweep(first: u64, cases: u64) {
+    if cases == 0 {
+        return;
+    }
+    let mut summary = sweep(first, cases * 2);
+    assert!(
+        summary.failures.is_empty(),
+        "the optimizer miscompiled a case; the first:\n{}",
+        summary.failures[0]
+    );
+    summary
+        .kept
+        .truncate(usize::try_from(cases).expect("the case count fits"));
+    let (failures, refused) = check_native_backend(&summary.kept);
+    eprintln!(
+        "{} native back end runs, {refused} refused",
+        summary.kept.len() * 2
+    );
+    assert!(
+        failures.is_empty(),
+        "{} of {} native back end runs disagreed; the first:\n{}",
+        failures.len(),
+        summary.kept.len() * 2,
+        failures[0]
+    );
+    assert_eq!(refused, 0, "generated programs are refused");
 }
 
 /// `main` returning `value` (an `i32` constant or `poison`) after printing

@@ -76,7 +76,8 @@ class ArmTests(unittest.TestCase):
         self.assertIsNone(harness.STANDARD_ARMS["R"])
 
     def test_n_is_selected_by_default_and_can_be_selected_alone(self):
-        self.assertEqual(harness.parse_arguments([]).arms, "A0,N,A1,A2,A3,R")
+        self.assertEqual(harness.parse_arguments([]).arms, "A0,N,A1,A2,A3,B0,B1,R")
+        self.assertEqual(harness.STANDARD_ARMS["B1"], ("--opt=bcc", "--backend=native"))
         self.assertEqual(harness.parse_arguments(["--arms", "N"]).arms, "N")
 
     def test_n_builds_unoptimized_ir_with_codegen_only_for_both_workloads(self):

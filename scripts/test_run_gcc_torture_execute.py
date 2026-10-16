@@ -138,6 +138,20 @@ class ExecuteClassifierTests(unittest.TestCase):
                                  ("error: cannot build `test.exe`: x.ll:10:2: error: invalid phi\n", "compiler-crash")):
             self.assertEqual(classify(result(stderr, 1), "compile")["status"], expected)
 
+    def test_native_refusals_and_invalid_assembly(self):
+        run = classify(result("error: not yet supported by the native back end: f64 values (in @half)\n", 1),
+                       "compile")
+        self.assertEqual((run["status"], run["constructs"]), ("native-unsupported", ["f64 values"]))
+        stderr = "error: cannot build `test.exe`: clang failed:\nx.exe.bcc-1-0.s:12:3: error: invalid operand\n"
+        self.assertEqual(classify(result(stderr, 1), "compile")["status"], "compiler-crash")
+
+    def test_arm_selection_restricts_the_survey(self):
+        import run_gcc_torture_execute as survey
+        with patch("run_gcc_torture_execute.ARMS", dict(ARMS)):
+            survey.select_arms(["B0", "interpret"])
+            self.assertEqual(list(survey.ARMS), ["B0", "interpret"])
+            self.assertEqual(survey.ARMS["B0"], ["--backend=native"])
+
     def test_summary_keeps_capability_disagreements_and_source_counts(self):
         arms = {arm: classify(result("error: not yet supported by lowering: this builtin\n", 1), "compile")
                 for arm in ARMS}

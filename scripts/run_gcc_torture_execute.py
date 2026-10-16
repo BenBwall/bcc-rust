@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Survey existing GCC execute sources through bcc's interpreter and native arms.
 
+Arms A0/A1 build through LLVM; B0/B1 through bcc's own native back end
+(docs/design/native-backend.md), whose refusals are classified as
+native-unsupported. --arms selects a subset.
+
 No downloads or source rewrites. This is an exploratory single-file survey,
 not DejaGnu: supported unconditional dg-options/dg-additional-options are
 applied; target selectors and additional-source directives remain recorded.
@@ -37,10 +41,14 @@ ARMS = {
     "interpret-bcc": ["--interpret", "--opt=bcc"],
     "A0": ["--llvm-opt=O0"],
     "A1": ["--opt=bcc", "--llvm-opt=O2", "--llvm-codegen-only"],
+    "B0": ["--backend=native"],
+    "B1": ["--opt=bcc", "--backend=native"],
 }
 CLASSES = ("pass", "frontend-error", "lowering-unsupported", "abi-unsupported",
-           "compiler-crash", "interpreter-trap", "wrong-result", "timeout", "link-error")
+           "native-unsupported", "compiler-crash", "interpreter-trap", "wrong-result", "timeout",
+           "link-error")
 LOWERING = re.compile(r"not yet supported by lowering: (.*)")
+NATIVE = re.compile(r"not yet supported by the native back end: (.*?)(?: \(in @.*\))?$", re.M)
 TRAP = re.compile(r"the interpreter stopped the program: (.*)")
 PANIC = re.compile(r"panicked at|stack overflow|fatal runtime error")
 DG_OPTIONS = re.compile(r'\{\s*dg-(options|additional-options)\s+"((?:\\.|[^"\\])*)"')
@@ -149,7 +157,13 @@ def main():
     parser.add_argument("--limit", type=int)
     parser.add_argument("--match", action="append", default=[], help="Repeatable execute-relative glob")
     parser.add_argument("--recursive", action="store_true", help="Also include ieee/ and builtins/")
+    parser.add_argument("--arms", help=f"Comma-separated arms (default: all of {','.join(ARMS)})")
     args = parser.parse_args()
+    if args.arms:
+        unknown = [arm for arm in args.arms.split(",") if arm not in ARMS]
+        if unknown:
+            parser.error(f"unknown arms {unknown}; known: {list(ARMS)}")
+        select_arms(args.arms.split(","))
     if args.jobs < 1 or args.timeout <= 0 or (args.limit is not None and args.limit < 1):
         parser.error("jobs, timeout and limit must be positive")
     args.bcc = args.bcc.resolve(strict=True)
@@ -213,6 +227,12 @@ def main():
         run["status"] in {"wrong-result", "timeout"} for row in rows for run in row["arms"].values())))
 
 
+def select_arms(names):
+    """Restrict the survey, its summary and its manifest to these arms."""
+    global ARMS
+    ARMS = {name: ARMS[name] for name in names}
+
+
 def classify(result, phase):
     """phase is interpret, compile, or execute; program exits are never crashes."""
     stderr = ANSI.sub("", result["stderr"])
@@ -240,12 +260,16 @@ def classify(result, phase):
         constructs = ["type not analyzed by semantic analysis"]
     elif re.search(r"not (?:yet )?supported by ABI lowering|unsupported by ABI lowering", stderr):
         status = "abi-unsupported"
+    elif "not yet supported by the native back end:" in stderr:
+        status = "native-unsupported"
+        constructs = sorted(set(NATIVE.findall(stderr)))
     elif "internal error:" in stderr or "invalid IR" in stderr:
         status = "compiler-crash"
     elif "cannot build `" in stderr:
-        # Invalid emitted LLVM IR is a compiler defect, not a link limitation.
+        # Invalid emitted LLVM IR or native assembly is a compiler defect, not
+        # a link limitation.
         status = "compiler-crash" if re.search(
-            r"\.ll:\d+:\d+: error:|LLVM ERROR:|PLEASE submit a bug report", stderr) else "link-error"
+            r"\.(?:ll|s):\d+:\d+: error:|LLVM ERROR:|PLEASE submit a bug report", stderr) else "link-error"
     elif errors:
         status = "frontend-error"
     elif result["exit"] != 0:
