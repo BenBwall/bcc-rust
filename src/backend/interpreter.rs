@@ -253,4 +253,6 @@ struct Machine<'m, 'ir, 'a> {
     steps:          u64,
     /// The number the next frame's activation gets.
     activations:    u64,
+    /// The last value `read_timestamp` produced.
+    timestamp:      u64,
 }

@@ -971,3 +971,40 @@ fn msvc_declspec_thread_is_thread_storage() {
         ]
     );
 }
+
+/// Microsoft's Windows Runtime headers declare `typedef enum E E;` before `enum
+/// E`'s list. GCC and Clang accept the forward reference in every mode, with a
+/// pedantic diagnostic only; the type stays incomplete until its list.
+#[test]
+fn forward_enum_references_are_an_extension_in_every_mode() {
+    let source = "typedef enum E E; enum E { A = 2 }; E value = A; int a[sizeof(E) == sizeof(int) \
+                  ? 1 : -1];";
+    let strict = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    assert_eq!(kinds(source, strict), []);
+    assert_eq!(
+        extensions(source, pedantic(CStandard::C99, false)),
+        ["'forward reference to an enum type' is a GNU extension"]
+    );
+    // Until its list, the enum is incomplete.
+    assert_eq!(
+        kinds("enum F *p; int n = sizeof(enum F);", strict),
+        [SemanticErrorKind::InvalidSizeof]
+    );
+}
+
+/// Microsoft's `__annotation`, which `TraceLoggingProvider.h` uses, takes
+/// wide string literals with Microsoft extensions, as in Clang.
+#[test]
+fn annotation_takes_wide_string_literals() {
+    let msvc = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_target(crate::target::Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    assert_eq!(
+        kinds("void f(void) { __annotation(L\"a\", L\"b\"); }", msvc),
+        []
+    );
+    assert_eq!(
+        kinds("void f(void) { __annotation(L\"a\", \"narrow\"); }", msvc),
+        [SemanticErrorKind::AnnotationArgument]
+    );
+}

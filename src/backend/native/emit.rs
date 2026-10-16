@@ -675,6 +675,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             },
             | MInst::Ret { .. } => self.epilogue(frame),
             | MInst::Ud2 => writeln!(out, "\tud2"),
+            | MInst::Int3 => writeln!(out, "\tint3"),
         }
     }
 

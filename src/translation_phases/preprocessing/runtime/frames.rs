@@ -118,6 +118,10 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         invocation_end: SourceVector,
         /// Spelling before replacement, for nested expansion notes.
         spelling:       SourceVector,
+        /// The replacement was read to its end by a call that closes beyond
+        /// it, so `name` is no longer being replaced (see
+        /// `MacroCallCursor::commit`).
+        released:       bool,
     },
     /// The replacement list of a function-like macro, with the arguments
     /// that its parameters stand for.
@@ -131,6 +135,8 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         is_variadic:    bool,
         /// Spelling before replacement, for nested expansion notes.
         spelling:       SourceVector,
+        /// As for object-like replacements.
+        released:       bool,
     },
     /// The tokens of one argument, read where its parameter is substituted.
     ///
@@ -141,6 +147,9 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         /// or `None` for a replayed operand, which ends with its tokens.
         paren_depth:         Option<usize>,
         has_generated_token: bool,
+        /// As for macro replacements: a call read past the argument's end,
+        /// so its disabled names no longer apply to later tokens.
+        released:            bool,
     },
 }
 

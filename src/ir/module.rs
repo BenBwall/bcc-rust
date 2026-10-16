@@ -46,7 +46,7 @@ impl<'ir> Module<'ir> {
                 ..
             }
             | InstData::Nullary {
-                opcode: Opcode::Trap,
+                opcode: Opcode::Trap | Opcode::DebugTrap,
                 ..
             }
             | InstData::Store { .. }

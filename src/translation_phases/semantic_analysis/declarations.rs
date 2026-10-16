@@ -1384,16 +1384,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             return (entry.binding, body);
         }
-        if kind == TagKind::Enum
-            && !body
-            && !allow_incomplete
-            && !self.context.configuration.gnu_extensions()
-        {
-            self.error(
-                SemanticErrorKind::IncompleteEnum,
+        if kind == TagKind::Enum && !body && !allow_incomplete {
+            self.context.report_extension(
+                crate::configuration::Feature::ForwardEnumReference,
+                "forward reference to an enum type",
                 source,
-                name.map(|n| n.name),
-                None,
             );
         }
         let index = self.new_tag(kind, name);

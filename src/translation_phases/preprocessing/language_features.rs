@@ -1017,6 +1017,14 @@ pub(super) fn with_identity_macros<'a>(
             _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
         }
     }
+    // MinGW-w64 targets spell `__declspec(a)` as a GNU attribute, unless
+    // Microsoft extensions make `__declspec` a keyword: Clang then defines
+    // it as itself, so Microsoft modifier lists are retained.
+    if configuration.target() == crate::target::Target::WindowsGnu
+        && configuration.accepts(Feature::MsDeclspec)
+    {
+        out.push_str("#undef __declspec\n#define __declspec __declspec\n");
+    }
     out.into_str()
 }
 
@@ -1069,4 +1077,8 @@ fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
     KeywordTokenType::classify(id, context.configuration).is_some_and(|keyword| {
         crate::translation_phases::semantic_analysis::implemented_builtin(keyword.kind)
     }) || crate::translation_phases::semantic_analysis::named_builtin(spelling)
+        || crate::builtins::lookup(spelling).is_some_and(|descriptor| {
+            descriptor.availability.naming == crate::builtins::NamingPolicy::Microsoft
+                && context.configuration.msvc_compatibility()
+        })
 }

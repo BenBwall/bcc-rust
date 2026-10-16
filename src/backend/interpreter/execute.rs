@@ -284,10 +284,21 @@ impl Machine<'_, '_, '_> {
                 address:    (self.frame().activation << 32) | 1 << 31,
                 provenance: None,
             }),
+            // Without a debugger, a breakpoint ends the program as the
+            // operating system's breakpoint exception does.
             | InstData::Nullary {
-                opcode: Opcode::Trap,
+                opcode: Opcode::Trap | Opcode::DebugTrap,
                 ..
             } => return Ok(Some(Termination::Aborted)),
+            // A counter that increases with every read, as the time-stamp
+            // counter does; its values say nothing about real time.
+            | InstData::Nullary {
+                opcode: Opcode::ReadTimestamp,
+                ..
+            } => {
+                self.timestamp = self.timestamp.wrapping_add(1);
+                RuntimeValue::Int(u128::from(self.timestamp))
+            },
             | InstData::Nullary { opcode, .. } =>
                 if opcode == Opcode::Null {
                     RuntimeValue::NULL

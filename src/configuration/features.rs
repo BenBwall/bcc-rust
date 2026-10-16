@@ -163,6 +163,13 @@ pub(crate) enum Feature {
     /// GNU extension: GCC "Pointer Arith",
     /// <https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html>.
     VoidPointerArithmetic,
+    /// An enum specifier without a list naming a tag that has no complete
+    /// declaration yet, as in `typedef enum E E;` before `enum E { ... }`
+    /// (Microsoft's Windows Runtime headers), extending C99 §6.7.2.3p3, p. 106;
+    /// PDF p. 118. The type is incomplete until its list. Accepted in every
+    /// mode, as GCC and Clang do (Clang's `-Wpedantic`
+    /// "forward references to 'enum' types").
+    ForwardEnumReference,
 }
 
 impl Feature {
@@ -284,7 +291,8 @@ impl Feature {
             | Self::PreprocessorComma
             | Self::MacroExpandedDefined
             | Self::QuotedHeaderBackslash
-            | Self::VoidPointerArithmetic => FeatureOrigin::Gnu,
+            | Self::VoidPointerArithmetic
+            | Self::ForwardEnumReference => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -423,6 +431,7 @@ impl Feature {
         Self::QuotedHeaderBackslash,
         Self::UnnamedDefinitionParameters,
         Self::VoidPointerArithmetic,
+        Self::ForwardEnumReference,
     ];
 }
 

@@ -332,6 +332,12 @@ named! {
         ReturnAddress = "return_address",
         StackRestore = "stack_restore",
         Trap = "trap",
+        /// The x86 time-stamp counter, an `i64` (Clang's `__rdtsc`). Every
+        /// read is a distinct observation, never merged or reordered.
+        ReadTimestamp = "read_timestamp",
+        /// A breakpoint trap after which execution may continue
+        /// (Microsoft's `__debugbreak`, LLVM's `llvm.debugtrap`).
+        DebugTrap = "debug_trap",
         Icmp = "icmp",
         Fcmp = "fcmp",
         Select = "select",
@@ -485,6 +491,8 @@ impl Opcode {
                 | Self::IndirectBr
                 | Self::Unreachable
                 | Self::Trap
+                | Self::ReadTimestamp
+                | Self::DebugTrap
         )
     }
 

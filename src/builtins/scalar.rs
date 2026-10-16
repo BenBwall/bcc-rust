@@ -1474,6 +1474,53 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Parameter(T::Scalar(S::LongDouble)))],
         1,
     ),
+    // Clang's x86 `__rdtsc` builtin, declared for every x86 target and
+    // language mode: `unsigned long long __rdtsc(void)`.
+    descriptor(
+        Id::Rdtsc,
+        "__rdtsc",
+        B::ReadTimestamp,
+        Signature {
+            result:     T::Scalar(S::UnsignedLongLong),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    // Microsoft's `void __debugbreak(void)`, with Microsoft extensions.
+    descriptor(
+        Id::Debugbreak,
+        "__debugbreak",
+        B::DebugTrap,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    // Microsoft's `void __annotation(const wchar_t *, ...)`: one or more
+    // wide string literals, with Microsoft extensions.
+    BuiltinDescriptor {
+        arity: (1, usize::MAX),
+        ..descriptor(
+            Id::Annotation,
+            "__annotation",
+            B::Annotation,
+            Signature {
+                result:     T::Scalar(S::Void),
+                parameters: &[],
+                prototype:  true,
+                variadic:   true,
+            },
+            &[],
+            0,
+        )
+    },
 ];
 
 const fn descriptor(
@@ -1537,6 +1584,18 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
+        | B::ReadTimestamp | B::DebugTrap => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Write,
+            None,
+            SyntaxForm::OrdinaryCall,
+        ),
+        | B::Annotation => (
+            TypeRule::WideStrings,
+            BuiltinEffectClass::Query,
+            None,
+            SyntaxForm::OrdinaryCall,
+        ),
         | _ => (
             TypeRule::Fixed,
             BuiltinEffectClass::Pure,
@@ -1558,10 +1617,10 @@ const fn descriptor(
         designator: DesignatorPolicy::DirectCallOnly,
         availability: Availability {
             feature,
-            naming: if matches!(id, Id::PlainAlloca) {
-                NamingPolicy::GnuOrdinary
-            } else {
-                NamingPolicy::Reserved
+            naming: match id {
+                | Id::PlainAlloca => NamingPolicy::GnuOrdinary,
+                | Id::Debugbreak | Id::Annotation => NamingPolicy::Microsoft,
+                | _ => NamingPolicy::Reserved,
             },
         },
     }

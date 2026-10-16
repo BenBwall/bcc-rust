@@ -924,6 +924,8 @@ pub(crate) enum MInst {
         uses: PRegSet,
     },
     Ud2,
+    /// A breakpoint trap (`__debugbreak`).
+    Int3,
 }
 
 impl MInst {
@@ -1050,7 +1052,7 @@ impl MInst {
                 for register in uses.iter() {
                     phys(register, Role::Use, &mut visit);
                 },
-            | Self::Jmp { .. } | Self::Jcc { .. } | Self::Ud2 => {},
+            | Self::Jmp { .. } | Self::Jcc { .. } | Self::Ud2 | Self::Int3 => {},
         }
     }
 

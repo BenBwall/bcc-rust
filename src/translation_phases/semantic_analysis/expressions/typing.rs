@@ -2061,8 +2061,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         name: Identifier,
     ) -> bool {
         crate::builtins::lookup(self.context.string_cache.at(name.name)).is_some_and(|descriptor| {
-            descriptor.availability.naming == crate::builtins::NamingPolicy::GnuOrdinary
-                && self.context.configuration.gnu_extensions()
+            match descriptor.availability.naming {
+                | crate::builtins::NamingPolicy::GnuOrdinary =>
+                    self.context.configuration.gnu_extensions(),
+                // Reserved intrinsics outside `__builtin_`, such as x86
+                // `__rdtsc`, are declared in every mode, as in Clang.
+                | crate::builtins::NamingPolicy::Reserved => true,
+                | crate::builtins::NamingPolicy::Microsoft =>
+                    self.context.configuration.msvc_compatibility(),
+            }
         }) || super::atomics::modeled(self.context.string_cache.at(name.name))
             || self
                 .context

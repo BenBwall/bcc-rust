@@ -166,7 +166,7 @@ fn remove_param<'s>(
 fn has_side_effects(data: &InstData) -> bool {
     match *data {
         | InstData::Nullary {
-            opcode: Opcode::StackSave,
+            opcode: Opcode::StackSave | Opcode::DebugTrap | Opcode::ReadTimestamp,
             ..
         }
         | InstData::Atomic { .. }

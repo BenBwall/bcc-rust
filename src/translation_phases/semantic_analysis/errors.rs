@@ -239,6 +239,9 @@ pub(crate) enum SemanticErrorKind {
     InvalidArgumentCount,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentType,
+    /// Clang: Microsoft's `__annotation` takes wide string literals only.
+    /// MSVC extension: Microsoft Learn, "__annotation".
+    AnnotationArgument,
     /// C99: §6.5.2.5p1, p. 75; PDF p. 87.
     InvalidCompoundLiteral,
     /// C99: §6.8.4.1p1, p. 133; PDF p. 145.
@@ -323,8 +326,6 @@ pub(crate) enum SemanticErrorKind {
     TagKindMismatch,
     /// C99: §6.7.2.3p1, p. 106; PDF p. 118.
     TagRedefinition,
-    /// C99: §6.7.2.3p3, p. 106; PDF p. 118.
-    IncompleteEnum,
     /// C99: §6.6p3-6, p. 95; PDF p. 107.
     InvalidConstant,
     /// C99: §6.6p4; 6.5p5, p. 95; 67; PDF p. 107; 79.
@@ -584,6 +585,7 @@ impl SemanticErrorKind {
             | Self::InvalidMemberAccess => "no such member",
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
+            | Self::AnnotationArgument => "not a wide string literal",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
             | Self::InvalidCondition => "condition is not scalar",
@@ -619,7 +621,6 @@ impl SemanticErrorKind {
             | Self::ConflictingLinkage => "linkage conflicts with the previous declaration",
             | Self::TagKindMismatch => "different tag kind",
             | Self::TagRedefinition | Self::DuplicateDefinition => "defined again here",
-            | Self::IncompleteEnum => "enum is not yet complete",
             | Self::InvalidConstant | Self::InvalidChooseCondition =>
                 "not an integer constant expression",
             | Self::ConstantOverflow => "overflow or invalid operation",
@@ -1157,6 +1158,11 @@ impl SemanticErrorKind {
                 "C99 §6.5.2.2p1: the called expression points to a function with a valid return \
                  type",
             ),
+            | Self::AnnotationArgument => (
+                "argument to `__annotation` must be a wide string literal",
+                "Clang: Microsoft's `__annotation` records wide strings in the debug \
+                 information",
+            ),
             | Self::InvalidArgumentCount => (
                 "function call has the wrong number of arguments",
                 "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
@@ -1354,11 +1360,6 @@ impl SemanticErrorKind {
             | Self::TagRedefinition => (
                 "tag is already defined",
                 "C99 §6.7.2.3p1: a specific type has its contents defined at most once",
-            ),
-            | Self::IncompleteEnum => (
-                "enum tag has no preceding complete declaration",
-                "C99 §6.7.2.3p3: an enum specifier without an enumerator list follows a complete \
-                 declaration",
             ),
             | Self::InvalidConstant => (
                 "an integer constant expression is required",

@@ -144,6 +144,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     argument:            arg,
                     paren_depth:         (!arg.substituted).then_some(1),
                     has_generated_token: false,
+                    released:            false,
                 },
                 tokenizer:  arg.tokenizer.clone(),
             };
@@ -230,6 +231,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 argument,
                 paren_depth: (!argument.substituted).then_some(1),
                 has_generated_token: false,
+                released: false,
             },
             tokenizer:  argument.tokenizer.clone(),
         });

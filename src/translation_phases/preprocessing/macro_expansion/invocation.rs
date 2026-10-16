@@ -236,13 +236,23 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     fn macro_is_disabled_in(frames: &[TokenizerFrame<'x>], name: StringCacheId) -> bool {
         for frame in frames.iter().rev() {
             match &frame.frame_type {
-                | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
+                | TokenizerFrameType::FunctionLikeMacroArgument {
+                    argument,
+                    released: false,
+                    ..
+                } => {
                     return argument.disabled_macros.contains(&name);
                 },
-                | TokenizerFrameType::ObjectLikeMacroInvocation { name: active, .. }
-                | TokenizerFrameType::FunctionLikeMacroInvocation { name: active, .. }
-                    if *active == name =>
-                    return true,
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    name: active,
+                    released: false,
+                    ..
+                }
+                | TokenizerFrameType::FunctionLikeMacroInvocation {
+                    name: active,
+                    released: false,
+                    ..
+                } if *active == name => return true,
                 | _ => (),
             }
         }
@@ -256,20 +266,35 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(frame) = frames.last() {
             match &frame.frame_type {
                 | TokenizerFrameType::SourceFile { .. } => return &[],
-                | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } =>
-                    return argument.disabled_macros,
+                | TokenizerFrameType::FunctionLikeMacroArgument {
+                    argument,
+                    released: false,
+                    ..
+                } => return argument.disabled_macros,
                 | _ => (),
             }
         }
         let mut names = ArenaVec::new_in(self.scratch);
         for frame in frames.iter().rev() {
             match &frame.frame_type {
-                | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
+                | TokenizerFrameType::FunctionLikeMacroArgument {
+                    argument,
+                    released: false,
+                    ..
+                } => {
                     names.extend_from_slice(argument.disabled_macros);
                     break;
                 },
-                | TokenizerFrameType::ObjectLikeMacroInvocation { name, .. }
-                | TokenizerFrameType::FunctionLikeMacroInvocation { name, .. } => names.push(*name),
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    name,
+                    released: false,
+                    ..
+                }
+                | TokenizerFrameType::FunctionLikeMacroInvocation {
+                    name,
+                    released: false,
+                    ..
+                } => names.push(*name),
                 | _ => (),
             }
         }
@@ -490,11 +515,30 @@ impl<'x> MacroCallCursor<'x> {
         }
     }
 
+    /// Moves the real frame stack to the cursor. Replacement frames that the
+    /// call read to their end are released, as GCC and Clang pop them: their
+    /// macros are no longer being replaced when the call's own replacement
+    /// is rescanned (the frames stay for expansion notes). So `f(2)(9)` for
+    /// `#define f(a) a*g` and `#define g(a) f(a)` is `2*9*g` (C11
+    /// §6.10.3.4p4 leaves the choice open). Microsoft's
+    /// `TraceLoggingProvider.h` argument counter needs this. Tokens read
+    /// from those frames keep their paint. C99: §6.10.3.4p2, p. 155; PDF p.
+    /// 167. C11: §6.10.3.4p4, p. 170; PDF p. 188.
     fn commit(
         mut self,
         preprocessor: &mut Expander<'_, '_, '_, 'x>,
         location: crate::translation_phases::SourceVector,
     ) {
+        let read = self.index.map_or(0, |index| index + 1);
+        for frame in &mut self.frames[read..] {
+            if let TokenizerFrameType::ObjectLikeMacroInvocation { released, .. }
+            | TokenizerFrameType::FunctionLikeMacroInvocation { released, .. }
+            | TokenizerFrameType::FunctionLikeMacroArgument { released, .. } =
+                &mut frame.frame_type
+            {
+                *released = true;
+            }
+        }
         if self.pending_head < self.pending.len() {
             let tokenizer = TokenSource::replay(
                 preprocessor.context,
