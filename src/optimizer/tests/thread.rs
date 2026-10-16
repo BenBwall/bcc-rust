@@ -86,6 +86,48 @@ block2(v7: i32):
     assert_threaded(input, expected);
 }
 
+/// The mirror image: the first test's true edge is shared, so the arm sits
+/// on its false side and the merged condition is `select v0, true, v1`.
+#[test]
+fn an_or_of_two_tests_for_one_success_edge_merges() {
+    let input = "\
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iconst.i32 0
+    v3 = icmp.i32 slt v0, v2
+    brif v3, block3(v2), block1
+block1:
+    v4 = icmp.i32 sgt v0, v1
+    brif v4, block3(v2), block2
+block2:
+    return v1
+block3(v5: i32):
+    return v5
+}
+";
+    let expected = "\
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iconst.i1 1
+    v3 = iconst.i32 0
+    v4 = icmp.i32 slt v0, v3
+    v5 = icmp.i32 sgt v0, v1
+    v6 = select.i1 v4, v2, v5
+    brif v6, block2(v3), block1
+block1:
+    return v1
+block2(v7: i32):
+    return v7
+}
+";
+    assert_threaded(input, expected);
+    // The arm's shared edge passes another argument: no merge.
+    assert_pass_leaves(
+        Pass::SimplifyCfg,
+        &input.replace("brif v4, block3(v2)", "brif v4, block3(v1)"),
+    );
+}
+
 #[test]
 fn an_arm_that_loads_does_not_merge() {
     let input = "\
