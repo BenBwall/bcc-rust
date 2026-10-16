@@ -1017,6 +1017,14 @@ pub(super) fn with_identity_macros<'a>(
             _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
         }
     }
+    // MinGW-w64 targets spell `__declspec(a)` as a GNU attribute, unless
+    // Microsoft extensions make `__declspec` a keyword: Clang then defines
+    // it as itself, so Microsoft modifier lists are retained.
+    if configuration.target() == crate::target::Target::WindowsGnu
+        && configuration.accepts(Feature::MsDeclspec)
+    {
+        out.push_str("#undef __declspec\n#define __declspec __declspec\n");
+    }
     out.into_str()
 }
 
