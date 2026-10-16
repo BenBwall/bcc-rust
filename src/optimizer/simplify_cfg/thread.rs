@@ -74,23 +74,22 @@ const MERGE_BUDGET: u32 = 2;
 
 /// Threads edges that pass a constant condition past the block that tests
 /// it. Returns whether any edge moved.
+///
+/// The dominator tree and the use counts are built only once some block
+/// can thread an edge: most rounds of most functions have none, and building
+/// the tree every round made `simplify-cfg` the slowest pass. Both are built
+/// from the CFG taken at the start, as they would be eagerly.
 pub(super) fn thread_constant_branches(
     draft: &mut Draft<'_, '_>,
     report: &mut OptimizationReport,
 ) -> bool {
     let cfg = draft.control_flow_graph();
-    let tree = DominatorTree::from_cfg(&cfg, draft.scratch);
-    // Threading only redirects edges, so it adds no use of a parameter
-    // outside its block; counts taken now stay safe.
-    let uses = draft.use_counts();
+    let mut analyses = None;
     let mut changed = false;
     for index in 1..draft.blocks.len() {
         let block = Block::new(index);
         let data = draft.block(block);
-        if !data.alive
-            || !tree.is_reachable(block)
-            || data.insts.iter().any(|&inst| !draft.is_removed(inst))
-        {
+        if !data.alive || data.insts.iter().any(|&inst| !draft.is_removed(inst)) {
             continue;
         }
         let Term::Brif {
@@ -105,6 +104,21 @@ pub(super) fn thread_constant_branches(
         let Some(position) = data.params.iter().position(|&param| param == cond) else {
             continue;
         };
+        if !passes_constant(draft, cfg.predecessors(block), block, position) {
+            continue;
+        }
+        // Threading only redirects edges, so it adds no use of a parameter
+        // outside its block; counts taken now stay safe.
+        let (tree, uses) = analyses.get_or_insert_with(|| {
+            (
+                DominatorTree::from_cfg(&cfg, draft.scratch),
+                draft.use_counts(),
+            )
+        });
+        if !tree.is_reachable(block) {
+            continue;
+        }
+        let data = draft.block(block);
         // A parameter used past the block (by a block it dominates) would
         // be undefined on a threaded path.
         let own_uses = |param: Value| {
@@ -194,6 +208,29 @@ pub(super) fn thread_constant_branches(
         }
     }
     changed
+}
+
+/// Whether a `jump` or `brif` edge from `predecessors` into `block` passes
+/// a constant as parameter `position`: the only edges threading can move.
+/// A `switch` or `indirect_br` is skipped before its edges are listed, as
+/// threading skips it, so a wide one is not rescanned for every successor.
+fn passes_constant(
+    draft: &Draft<'_, '_>,
+    predecessors: &[Block],
+    block: Block,
+    position: usize,
+) -> bool {
+    predecessors.iter().any(|&predecessor| {
+        let term = &draft.block(predecessor).term;
+        matches!(term, Term::Jump(_) | Term::Brif { .. })
+            && term.edges().any(|edge| {
+                #[cfg(test)]
+                crate::test_support::THREAD_PREFILTER_EDGES
+                    .with(|edges| edges.set(edges.get() + 1));
+                edge.target == block
+                    && matches!(draft.constant(edge.args[position]), Some(Constant::Int(..)))
+            })
+    })
 }
 
 /// Merges a branch with an arm that only tests a second condition for one

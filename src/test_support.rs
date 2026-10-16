@@ -16,6 +16,16 @@ std::thread_local! {
         )
     )]
     pub(crate) static EFFECT_RECIPE_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Counts the predecessor edges constant threading's prefilter reads,
+    /// scoped to the optimizing test thread.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::missing_const_for_thread_local,
+            reason = "The const initializer still trips the lint in the Windows std expansion."
+        )
+    )]
+    pub(crate) static THREAD_PREFILTER_EDGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 use std::{
