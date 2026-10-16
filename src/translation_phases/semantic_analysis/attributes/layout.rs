@@ -373,6 +373,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty.with_alignment(ty.alignment.max(alignment))
     }
 
+    /// Whether a declaration's specifiers request Microsoft's
+    /// `__declspec(align(N))`, which, as Clang's `aligned` attribute does,
+    /// also lowers an object's alignment: `TraceLoggingProvider.h` packs
+    /// its metadata objects with `align(1)`. GCC's `aligned` keeps the GCC
+    /// rule below.
+    /// MSVC extension: Microsoft Learn, "align (C++)".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/align-cpp>
+    pub(in crate::translation_phases::semantic_analysis) fn microsoft_alignment(
+        &self,
+        mut chain: Option<&'tu SpecifierExtension<'tu>>,
+    ) -> bool {
+        while let Some(item) = chain {
+            if let SpecifierExtensionKind::Attributes(a) = item.kind
+                && a.syntax == super::super::AttributeSyntax::Msvc
+                && super::known_names(a, self.context).any(|(_, name)| name == "aligned")
+            {
+                return true;
+            }
+            chain = item.next;
+        }
+        false
+    }
+
     /// GCC aligned cannot weaken a variable's requirement. A typedef may
     /// lower it, and declarations using that typedef inherit its alignment.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>

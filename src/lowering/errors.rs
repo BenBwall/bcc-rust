@@ -174,7 +174,7 @@ impl ToDiagnostic for LoweringError {
                 .note(
                     "unmodeled are `constexpr` objects, `_BitInt`, decimal floating, inferred and \
                      fixed-underlying enum types, MSVC pointer-size modifiers, and attributes \
-                     that change layout, such as `align` or `ext_vector_type`",
+                     that change layout, such as `ext_vector_type`",
                 ),
             | _ => explanation,
         };

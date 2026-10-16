@@ -153,7 +153,7 @@ table: `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany` and
 is refused, and `restrict`, `allocate(...)` and `uuid(...)` warn as unknown, as
 bundled Clang's MinGW mode does, as does `align(...)`, which Clang ignores
 there; with `-fms-extensions`, `__declspec` is the Microsoft keyword instead
-(Clang defines it as itself) and `align(...)` remains unanalyzed. GNU
+(Clang defines it as itself) and `align(N)` is GNU `aligned(N)`. GNU
 `aligned(...)` retains the requested declaration/type alignment; GNU `packed`
 and scalar `mode` retain their layouts and representation types. GNU
 `transparent_union` on a union definition or a typedef naming a union lets a
@@ -1395,11 +1395,20 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, and the C23 standard attributes; see the catalog for the full list |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), and MSVC `restrict`, `uuid`, `allocate` through MinGW's `__declspec` macro |
 
-`__declspec` modifiers use the MSVC catalog: `align` stays an unanalyzed
-representation, `allocate` is `section`, `thread` is thread storage duration
-(also in the GNU spelling MinGW's `__declspec` macro produces; see the
-thread-local storage notes), `naked` is refused, and
-`dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`, `noinline`,
+The accepted `error` and `warning` annotations do not yet issue diagnostics for
+calls that survive code generation. They are distinct from the implemented
+`diagnose_if` call contract.
+
+`__declspec` modifiers use the names Clang supports there: `align(N)` is
+Clang's `aligned` attribute (it sets an object's or typedef's alignment, also
+below the natural one, raises a record's and cannot lower a member's; in
+declaration specifiers after a record body, as in `} const
+__declspec(align(1)) name`, it describes the declared object; written
+directly after the closing brace bcc still applies it to the record, where
+Clang applies it to the object), `allocate` is `section`, `thread` is thread storage
+duration (also in the GNU spelling MinGW's `__declspec` macro produces; see
+the thread-local storage notes), `naked` is refused, `noinline` is the GNU
+attribute, and `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
 `deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
 declaration annotations are accepted.
 
