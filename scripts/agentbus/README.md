@@ -22,6 +22,53 @@ State lives in a SQLite database (WAL mode) at `<git common dir>/agentbus/bus.db
 so every linked worktree shares one bus and nothing is tracked by git. Set
 `AGENTBUS_DB` to use another path.
 
+## Docker Sandboxes on Windows
+
+The `bcc-rust` sandbox runs both Claude and Codex against the host checkout.
+The Windows-backed mount cannot safely host SQLite connections from the VM
+and Windows. In particular, [SQLite WAL requires shared memory on one
+host](https://sqlite.org/wal.html). Use the host relay instead:
+
+```powershell
+./scripts/agentbus/start-relay.ps1 -AtLogon
+```
+
+This builds the existing Rust agentbus on Windows, starts a hidden Python
+relay, and installs `Agentbus-bcc-rust.lnk` in the current user's Startup
+folder. Omit `-AtLogon` to start it without installing login startup. Re-running
+the command reuses a healthy relay. Logs and runtime configuration live in
+`<git common dir>/agentbus/relay/`; only Windows processes open the existing
+`bus.db`. No port or firewall change is required. Remove the Startup shortcut
+to disable login startup. After changing relay code, stop its `python relay.py`
+process and run the start command again; existing clients fail explicitly if
+their host relay disappears or restarts, without retrying a possibly completed
+operation.
+
+The sandbox needs `python` on PATH. The standard images provide `python3`;
+install the alias once from the host if it is missing:
+
+```powershell
+sbx exec -u root bcc-rust ln -s /usr/bin/python3 /usr/local/bin/python
+sbx exec bcc-rust python scripts/agentbus/run.py where
+```
+
+The `where` command should report the Windows database path. The sandbox
+does not need Rust. The shared launcher automatically selects the relay for the
+configured `SANDBOX_NAME`, covering MCP, hooks and CLI commands,
+including calls from nested checkout directories. Other callers keep the
+normal local launcher. `AGENTBUS_DB` bypasses automatic relay selection;
+`AGENTBUS_RELAY_DIR` explicitly selects a relay directory. The shared folder
+is the trust boundary: anyone able to write the checkout can call agentbus
+through its relay. Only agent identity and chat IDs cross to the host; caller
+PATH, secrets and database overrides are not forwarded. To use additional
+sandboxes, pass their names together with `bcc-rust` in `-Sandboxes` when
+starting the relay and installing the Startup shortcut.
+
+Reconnect the agentbus MCP server in chats that started before setup. Hook
+delivery still requires the per-chat opt-in described below; enabling the
+relay does not opt in other chats. Stop hooks can wait concurrently with other
+requests, so an AFK receiver does not block a sender.
+
 ## Enable for one chat
 
 Hooks are **off by default**, including for existing chats. Enable them only
