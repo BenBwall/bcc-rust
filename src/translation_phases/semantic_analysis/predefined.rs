@@ -120,6 +120,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             SemanticErrorKind::PredefinedOutsideFunction,
             name.source_vectors,
             Some(name.name),
+            None,
         );
         let slot = usize::from(which == Predefined::Pretty);
         if let Some(binding) = self.functions.outside[slot] {
