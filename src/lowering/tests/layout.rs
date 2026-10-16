@@ -274,3 +274,26 @@ fn check(name: &'static str, source: &'static str) {
         );
     }
 }
+
+/// `TraceLoggingProvider.h` places its metadata in byte-aligned objects of
+/// unnamed structures: `} const __declspec(allocate(...)) __declspec(align(1))
+/// name = {...}`. The object lowers with byte alignment, as Clang emits
+/// it, and its members stay addressable.
+#[test]
+fn declspec_align_objects_lower_with_their_alignment() {
+    let configuration = crate::configuration::CompilerConfiguration::default()
+        .with_target(Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    let text = lower_with(
+        "struct { int size; char tag; } const __declspec(allocate(\".rdata\")) \
+         __declspec(align(1)) meta = {8, 1}; const int *size(void) { return &meta.size; }",
+        configuration,
+    )
+    .unwrap();
+    let global = text
+        .lines()
+        .find(|line| line.starts_with("global @meta"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(global.contains("align 1"), "{global}");
+    assert!(global.contains("section \".rdata\""), "{global}");
+}

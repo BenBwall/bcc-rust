@@ -9,7 +9,10 @@
 use crate::translation_phases::{
     Context,
     SourceVectors,
-    parsing::AttributeSpecifier,
+    parsing::{
+        AttributeSpecifier,
+        AttributeSyntax,
+    },
     preprocessing::Token,
 };
 
@@ -71,7 +74,16 @@ pub(in crate::translation_phases::semantic_analysis) fn known_names<'a>(
             )
             .is_some()
         })
-        .map(|attribute| (attribute.index, attribute.name))
+        .map(move |attribute| {
+            // Microsoft's `__declspec(align(N))` is Clang's `aligned`
+            // attribute in another spelling, with the same meaning.
+            let name = if specifier.syntax == AttributeSyntax::Msvc && attribute.name == "align" {
+                "aligned"
+            } else {
+                attribute.name
+            };
+            (attribute.index, name)
+        })
 }
 
 /// Every attribute of `specifier`, in source order.

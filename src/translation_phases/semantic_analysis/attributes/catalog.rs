@@ -173,7 +173,8 @@ fn standard(name: &str) -> Option<Rule> {
 /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
 fn declspec(name: &str) -> Option<Rule> {
     Some(match name {
-        | "align" => Rule::Representation,
+        // Clang's `AlignedAttr` in its Microsoft spelling: GNU `aligned`.
+        | "align" => Rule::Aligned,
         | "allocate" => Rule::Section,
         | "naked" => Rule::Unsupported(UnsupportedAttribute::Naked),
         | "jitintrinsic"

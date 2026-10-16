@@ -635,3 +635,62 @@ fn natural_and_member_place_alignment_are_distinct_retained_facts() {
         );
     }
 }
+
+/// Microsoft's `__declspec(align(N))` is Clang's `aligned` attribute: it
+/// raises a record's alignment and size, sets a declared object's or
+/// typedef's alignment (also below the natural one, as `align(1)` in
+/// `TraceLoggingProvider.h` does), and cannot lower a member's. In the
+/// declaration specifiers that follow a record body it describes the
+/// object, not the record. Values are bundled Clang 23's for
+/// `x86_64-pc-windows-msvc -fms-extensions`; MinGW's `__declspec` macro
+/// spelling, which Clang ignores, is covered in `targets.rs`.
+#[test]
+fn declspec_align_is_clangs_aligned_attribute() {
+    let source = r#"
+struct __declspec(align(16)) A { int x; };
+struct B { int x; } const __declspec(align(1)) b1 = {0};
+__declspec(align(1)) double d1;
+__declspec(align(32)) int i32;
+typedef __declspec(align(1)) int T1;
+typedef __declspec(align(8)) int T8;
+struct M { char c; __declspec(align(8)) int m; };
+struct P { char c; __declspec(align(1)) int m; };
+const __declspec(allocate(".rdata")) __declspec(align(1)) struct B cb = {1};
+__declspec(align) int y;
+__declspec(align(1)) __declspec(align(64)) char two;
+int checks[_Alignof(struct A) == 16 && sizeof(struct A) == 16 && __alignof__(b1) == 1
+    && __alignof__(d1) == 1 && __alignof__(i32) == 32 && _Alignof(T1) == 1 && _Alignof(T8) == 8
+    && _Alignof(struct M) == 8 && sizeof(struct M) == 16 && __builtin_offsetof(struct M, m) == 8
+    && _Alignof(struct P) == 4 && sizeof(struct P) == 8 && __alignof__(cb) == 1
+    && __alignof__(y) == 16 && __alignof__(two) == 64 ? 1 : -1];
+"#;
+    let configuration = CompilerConfiguration::default()
+        .with_target(Target::WindowsMsvc)
+        .with_gnu_extensions(true)
+        .with_msvc_extensions(true);
+    with_configuration(source, configuration, |context, sema| {
+        assert_eq!(
+            context.error_count(),
+            0,
+            "{:?}",
+            context.take_pending_errors()
+        );
+        let binding = |name: &str| {
+            sema.bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == name)
+                .unwrap()
+        };
+        // The objects have analyzed types, so lowering can emit them.
+        for name in ["b1", "d1", "cb", "two"] {
+            assert!(!sema.types.unanalyzed(binding(name).ty), "{name}");
+        }
+    });
+    with_configuration(
+        "struct S { int a; } __declspec(align(3)) x;",
+        CompilerConfiguration::default()
+            .with_target(Target::WindowsMsvc)
+            .with_msvc_extensions(true),
+        |context, _| assert_ne!(context.error_count(), 0),
+    );
+}
