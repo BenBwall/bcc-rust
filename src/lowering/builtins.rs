@@ -8,6 +8,7 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
 //! <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
 
+mod atomic;
 mod floating;
 
 use super::{
@@ -293,6 +294,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.operands.truncate(start);
         let source = e.source_vectors;
         let result = match builtin {
+            | CommonBuiltin::Atomic(atomic) =>
+                self.finish_atomic(e, instance, atomic, &items[..count])?,
             | CommonBuiltin::Varargs(_) | CommonBuiltin::Library | CommonBuiltin::Offsetof =>
                 return Err(LoweringError::missing(
                     "varargs must use keyword scheduling",

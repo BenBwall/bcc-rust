@@ -24,7 +24,9 @@ impl Verifier<'_, '_, '_, '_> {
         for block in body.blocks() {
             for &inst in body.block_insts(block) {
                 let valid = match *body.inst(inst) {
-                    | InstData::Call { args, .. } | InstData::CallIndirect { args, .. } =>
+                    | InstData::Atomic { args, .. }
+                    | InstData::Call { args, .. }
+                    | InstData::CallIndirect { args, .. } =>
                         self.pool_list(inst, EntityKind::ValueList, args.0, 1, 1),
                     | InstData::Jump { dest } => self.pool_edge(inst, dest),
                     | InstData::Brif { dests, .. } => {

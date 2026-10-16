@@ -203,6 +203,16 @@ stack_save                     → ptr     (opaque current stack position)
 stack_restore position                   (releases later dynamic objects)
 ```
 
+Atomic memory operations carry their operation, success and failure orders,
+alignment and volatile flag in one 16-byte instruction record. Operands live in
+the function value pool. Scalar load/store/exchange/compare-exchange use integer
+object bits; arithmetic RMW operations also support `f32`/`f64`. Separate byte
+buffer operations cover arbitrary-sized objects. The verifier checks operand
+shapes, eligible types and LLVM-compatible memory-order combinations. Consume
+is conservatively acquire; dynamic orders are conservatively sequentially
+consistent. Fences and every atomic operation are optimizer memory barriers,
+including when unused or encountered on paths joining the current block.
+
 Calls: `call func(args)` and `call_indirect sig, callee(args)`, each with zero
 or one result in both profiles. A call to a variadic signature carries its extra
 arguments after the fixed ones. `va_start`, `va_arg`, `va_copy` and `va_end` are
@@ -592,8 +602,10 @@ library and varargs calls, plus keyword varargs and offsetof, retain
 normalized operands and result/operation types. Lowering schedules those operand
 modes and dispatches the checked operation. Scalar name redispatch, the synthetic
 varargs `Builtin` AST adapters and varargs storage rediscovery are deleted. ABI
-classification and cursor movement remain downstream. Atomic, x86, vector and
-type-generic recognition/keyword handlers are explicit temporary M6 bridges;
+classification and cursor movement remain downstream. Atomic builtins now use
+the neutral registry and retain object types and memory-order operands for
+execution. The x86, vector and type-generic recognition/keyword handlers remain
+explicit temporary M6 bridges;
 preprocessing retains its capability adapter until that migration. Scalar/library
 support is tested against the registry on every current target and environment.
 
@@ -617,6 +629,28 @@ Some consumers therefore still inspect syntax in those families. See
 [M3 receipt](docs/research/semantic-facts-m3.md),
 [M4 receipt](docs/research/semantic-facts-m4.md), and
 [M5 receipt](docs/research/semantic-facts-m5.md) for checks and corpus comparisons.
+
+### Atomic execution
+
+`_Atomic` objects use memory storage. Ordinary reads and writes are sequentially
+consistent atomic operations; compound assignments and increments retry a
+compare-exchange against the observed value, evaluating the lvalue and right
+operand once. `<stdatomic.h>`, the modeled `__c11_atomic_*`, `__atomic_*` and
+`__sync_*` spellings share the builtin registry. Compare-exchange updates the
+expected buffer only on failure; weak operations may use a strong instruction.
+Pointer fetch offsets follow each family: C11 scales by the element size, while
+GNU and legacy sync offsets are bytes. Signed fetch arithmetic wraps.
+
+LLVM emits real atomic instructions and fences. Generic buffers and large
+objects call the platform `libatomic` ABI; executable linking adds `-latomic`
+for buffer, 128-bit or under-aligned atomic operations. Objects using those paths
+require the same runtime at final link. Windows native execution of these paths
+requires a compatible libatomic installation; interpreter coverage of the
+Windows data model does not verify that runtime. The interpreter executes each
+operation as one indivisible step in its single-threaded model. Existing
+extended-float interpreter limits still apply; LLVM supports the x87 object
+representation through padded memory.
+The native backend explicitly refuses atomic instructions before emission.
 
 ### Algorithm
 

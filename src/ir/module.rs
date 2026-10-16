@@ -36,6 +36,7 @@ impl<'ir> Module<'ir> {
     /// signature has none, which the verifier reports separately.
     pub(crate) fn result_type(&self, data: &InstData) -> Option<Type> {
         match *data {
+            | InstData::Atomic { op, ty, .. } => op.has_result().then_some(ty),
             | InstData::Binary {
                 opcode: Opcode::VaCopy,
                 ..

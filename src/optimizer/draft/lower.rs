@@ -221,6 +221,14 @@ impl<'s> Draft<'_, 's> {
                     align,
                     args: [map(a), map(b), map(c)],
                 },
+                | InstData::Atomic { args, .. } => {
+                    let values = self.mapped(self.call_operands(inst, args), &map);
+                    let mut data = original;
+                    if let InstData::Atomic { args, .. } = &mut data {
+                        *args = builder.value_list(&values);
+                    }
+                    data
+                },
                 | InstData::Call { func, args } => {
                     let args = self.mapped(self.call_operands(inst, args), &map);
                     InstData::Call {

@@ -14,6 +14,7 @@
 mod contract;
 
 // Static index and contract shards
+mod atomic;
 mod index;
 mod library;
 mod scalar;

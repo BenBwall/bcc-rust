@@ -3,6 +3,7 @@
 //! indirect branches, and the instruction record's size.
 
 mod aggregates;
+mod atomics;
 mod builder;
 mod dominators;
 mod extensions;

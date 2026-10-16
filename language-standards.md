@@ -417,7 +417,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | Alignof | - | - | - | Y | Y | Y | Y | extension | parser |
 | Noreturn | - | - | - | Y | Y | Y | Y | extension | parser |
 | ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering |
-| Atomic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
+| Atomic | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering, interpreter, LLVM |
 | AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | parser |
 | TypedefRedefinition | - | - | - | Y | Y | Y | Y | extension | semantic analysis |
 | C23Keywords | - | - | - | - | - | Y | Y | native | preprocessor/parser |
@@ -1147,6 +1147,12 @@ when their conversions discard qualifiers. Only lock-free queries fold:
 default targets; 16-byte `is_lock_free` remains runtime. An `always_lock_free`
 query with a constant size can fold false. Pointer type alignment and typed
 null pointers affect GNU lock-free queries, as in Clang.
+
+As of 2026-10-16, atomic objects and all modeled builtin spellings execute in
+the interpreter and LLVM backend. Aggregate operations use the platform
+libatomic runtime; the native backend explicitly refuses atomic instructions.
+See [atomic execution](middle-end.md#atomic-execution) for ordering, runtime
+requirements and the extended-float interpreter limit.
 
 The macro oracle now includes memory orders, supported lock-free promises and
 legacy compare-and-swap widths. Its C23 additions have separate per-target

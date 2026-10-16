@@ -204,7 +204,10 @@ fn expand(draft: &mut Draft<'_, '_>, body: &Body<'_>, block: Block, position: us
                 if let Some(bits) = body.const_bits(body.inst(old)) {
                     draft.set_const_bits(new_inst, bits);
                 }
-                if let InstData::Call { args, .. } | InstData::CallIndirect { args, .. } = data {
+                if let InstData::Atomic { args, .. }
+                | InstData::Call { args, .. }
+                | InstData::CallIndirect { args, .. } = data
+                {
                     let mapped = scratch
                         .alloc_slice_fill_iter(body.value_list(args).iter().map(|&v| map(v)));
                     draft.set_call_args(new_inst, mapped);

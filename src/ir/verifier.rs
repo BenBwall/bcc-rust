@@ -778,6 +778,60 @@ impl Verifier<'_, '_, '_, '_> {
                     ));
                 }
             },
+            | InstData::Atomic {
+                op,
+                ty,
+                order,
+                failure,
+                args,
+                ..
+            } => {
+                use super::{
+                    AtomicOp as A,
+                    MemoryOrder as M,
+                };
+                let args = checker.verifier.body.value_list(args);
+                let floating = matches!(op, A::Fadd | A::Fsub | A::Fmin | A::Fmax);
+                checker.require(
+                    if op.is_fence() || op.is_bytes() {
+                        ty == Type::I8
+                    } else if floating {
+                        matches!(ty, Type::F32 | Type::F64)
+                    } else {
+                        ty.is_int() && ty != Type::I1
+                    },
+                    ty,
+                );
+                let valid_order = match op {
+                    | A::Load | A::LoadBytes => !matches!(order, M::Release | M::AcqRel),
+                    | A::Store | A::StoreBytes => !matches!(order, M::Acquire | M::AcqRel),
+                    | A::CompareExchange | A::CompareExchangeBytes => order.valid_failure(failure),
+                    | _ => true,
+                } && (matches!(op, A::CompareExchange | A::CompareExchangeBytes)
+                    || failure == M::Relaxed);
+                if !valid_order || args.len() != op.arity() {
+                    checker
+                        .verifier
+                        .error(Location::Inst(inst), VerifierErrorKind::AtomicContract);
+                }
+                for (index, &arg) in args.iter().enumerate() {
+                    checker.operand(
+                        index,
+                        arg,
+                        if op.is_bytes() {
+                            if index + 1 == op.arity() {
+                                Type::I64
+                            } else {
+                                Type::Ptr
+                            }
+                        } else if index == 0 {
+                            Type::Ptr
+                        } else {
+                            ty
+                        },
+                    );
+                }
+            },
             | InstData::Load { addr, .. } => checker.operand(0, addr, Type::Ptr),
             | InstData::Store { ty, args, .. } => checker.operands(&args, &[ty, Type::Ptr]),
             | InstData::MemoryRange { args, .. } => match opcode {
@@ -1210,6 +1264,7 @@ pub(crate) enum Location {
 /// What the verifier found wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum VerifierErrorKind {
+    AtomicContract,
     VariadicDescription,
     /// A defined-value contract describes a position that does not exist.
     Noundef(&'static str),
@@ -1408,6 +1463,8 @@ impl fmt::Display for VerifierErrorKind {
                 f.write_str("invalid trailing variadic argument descriptions"),
             | Self::Noundef(problem) => write!(f, "invalid noundef: {problem}"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
+            | Self::AtomicContract =>
+                f.write_str("invalid atomic operand count or memory ordering"),
             | Self::SymbolAttribute(rule) => write!(f, "invalid symbol attribute: {rule}"),
             | Self::NoBlocks => f.write_str("a defined function has no blocks"),
             | Self::EmptyBlock => f.write_str("the block is empty"),

@@ -60,6 +60,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let binding = self.expression_info(callee).binding?;
         let descriptor = self.bindings[binding].origin.descriptor()?;
         let builtin = descriptor.operation;
+        if matches!(builtin, CommonBuiltin::Atomic(_)) {
+            return self.atomic_call(e, callee, arguments);
+        }
         if builtin == CommonBuiltin::Library {
             return None;
         }
@@ -184,6 +187,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                 }
             },
+            | CommonBuiltin::Atomic(_)
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::Bswap(_)
             | CommonBuiltin::Expect(_)

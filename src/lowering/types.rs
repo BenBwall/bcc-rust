@@ -63,8 +63,11 @@ pub(super) enum Repr {
 }
 
 /// The representation of `ty`, or why lowering cannot handle it.
-pub(super) fn repr(types: &Types<'_>, ty: TypeId) -> Result<Repr, LoweringErrorKind> {
+pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringErrorKind> {
     let unsupported = |construct| Err(LoweringErrorKind::Unsupported(construct));
+    while let TypeKind::Atomic(inner) = types.kind(ty) {
+        ty = inner;
+    }
     match types.kind(ty) {
         | TypeKind::Unknown => Err(LoweringErrorKind::UnanalyzedType),
         | TypeKind::Scalar(scalar) => scalar_repr(types, scalar),
@@ -86,7 +89,7 @@ pub(super) fn repr(types: &Types<'_>, ty: TypeId) -> Result<Repr, LoweringErrorK
                 | TagKind::Struct | TagKind::Union => Ok(Repr::Aggregate),
             }
         },
-        | TypeKind::Atomic(_) => unsupported(Construct::Atomic),
+        | TypeKind::Atomic(_) => unreachable!("atomic wrappers were removed above"),
         | TypeKind::Vector { .. } => unsupported(Construct::Vector),
     }
 }
@@ -319,8 +322,7 @@ pub(super) fn aggregate_layout<'s>(
                     return Err(LoweringErrorKind::MissingFact(
                         "an aggregate has a function member",
                     )),
-                | TypeKind::Atomic(_) =>
-                    return Err(LoweringErrorKind::Unsupported(Construct::Atomic)),
+                | TypeKind::Atomic(value) => work.push((value, offset)),
                 | TypeKind::Vector { .. } =>
                     return Err(LoweringErrorKind::Unsupported(Construct::Vector)),
             }

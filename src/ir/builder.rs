@@ -322,6 +322,14 @@ impl FunctionBuilder<'_, '_> {
         })
     }
 
+    pub(crate) fn atomic(&mut self, mut data: InstData, values: &[Value]) -> Inst {
+        let InstData::Atomic { args, .. } = &mut data else {
+            unreachable!("atomic record")
+        };
+        *args = self.value_list(values);
+        self.insert(data)
+    }
+
     pub(crate) fn load(&mut self, ty: Type, addr: Value, mem: MemFlags) -> Value {
         self.insert_value(InstData::Load {
             ty,

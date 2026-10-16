@@ -567,6 +567,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             },
             | InstData::Load { .. } | InstData::Store { .. } | InstData::MemoryRange { .. } =>
                 self.memory(inst, data)?,
+            | InstData::Atomic { .. } => unreachable!("atomics refused by support check"),
             | InstData::Call { .. } | InstData::CallIndirect { .. } => self.call(inst, data)?,
             | InstData::Nullary {
                 opcode: Opcode::Trap,

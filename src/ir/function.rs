@@ -240,7 +240,9 @@ impl<'ir> Body<'ir> {
             | InstData::Load { addr: value, .. }
             | InstData::VaArgAggregate { list: value, .. }
             | InstData::DynAlloca { size: value, .. } => visit(value),
-            | InstData::Call { args, .. } | InstData::CallIndirect { args, .. } =>
+            | InstData::Atomic { args, .. }
+            | InstData::Call { args, .. }
+            | InstData::CallIndirect { args, .. } =>
                 self.value_list(args).iter().for_each(|&value| visit(value)),
             | InstData::Jump { dest } => edge(dest, &mut visit),
             | InstData::Brif { cond, dests } => {

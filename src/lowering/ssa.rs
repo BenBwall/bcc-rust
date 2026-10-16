@@ -109,6 +109,7 @@ pub(super) enum Op<'s> {
     Iconst(Type, i128),
     /// A floating constant given by its bits (see `floats.rs`).
     Fconst(Type, u128),
+    Atomic(InstData, &'s [Value]),
     Call(FuncId, &'s [Value]),
     CallIndirect(SigId, Value, &'s [Value]),
 }
