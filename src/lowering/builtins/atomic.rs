@@ -141,6 +141,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .operation_type
             .ok_or_else(|| LoweringError::missing("atomic object type is not retained", source))?;
         let value_type = self.unit.sema.types.non_atomic(object).unqualified();
+        if matches!(self.repr(value_type, source)?, types::Repr::Complex { .. }) {
+            return Err(LoweringError::unsupported(
+                crate::lowering::Construct::ComplexAtomic,
+                source,
+            ));
+        }
         let address = self.value(items[0], source)?;
         let layout = if builtin.operation == O::TestSet {
             crate::target::Layout { size: 1, align: 1 }

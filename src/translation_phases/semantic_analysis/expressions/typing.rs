@@ -489,17 +489,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && right.constant == ConstantClass::Arithmetic);
             let floating = left.floating.is_some() || right.floating.is_some();
             if floating
-                && let Some((left, right)) = self
+                && let Some((left_value, right_value)) = self
                     .floating_value(left)
                     .and_then(|v| self.round_floating(v, arithmetic_operands.unwrap_or(info.ty)))
                     .zip(self.floating_value(right).and_then(|v| {
                         self.round_floating(v, arithmetic_operands.unwrap_or(info.ty))
                     }))
             {
-                info.floating = self
-                    .floating_binary(op, left, right)
-                    .and_then(|value| self.round_floating(value, info.ty));
-                info.integer = Self::floating_comparison(op, left, right);
+                let operand_type = arithmetic_operands.unwrap_or(info.ty);
+                let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
+                    unreachable!("floating scalar operation")
+                };
+                let precision = self
+                    .floating_precision(scalar)
+                    .expect("foldable real precision");
+                let complex_type = |ty: TypeId| {
+                    matches!(
+                        self.types.nodes[ty.index],
+                        TypeKind::Scalar(
+                            Scalar::ComplexFloat
+                                | Scalar::ComplexDouble
+                                | Scalar::ComplexLongDouble
+                        )
+                    )
+                };
+                let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
+                info.floating =
+                    Self::floating_binary(op, left_value, right_value, precision, domains)
+                        .and_then(|value| self.round_floating(value, info.ty));
+                info.integer = Self::floating_comparison(op, left_value, right_value);
             }
             info.ice = left.ice && right.ice;
             if !floating && let Some((l, r)) = left.integer.zip(right.integer) {
@@ -1747,8 +1765,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         };
         let ty = self.types.scalar(scalar);
-        self.convert(left.expression, ty, ConversionKind::Arithmetic);
-        self.convert(right.expression, ty, ConversionKind::Arithmetic);
+        // C99 §6.3.1.8p1: common real precision does not change type domain.
+        let complex_scalar = |s| {
+            matches!(
+                s,
+                Scalar::ComplexFloat
+                    | Scalar::ComplexDouble
+                    | Scalar::ComplexLongDouble
+                    | Scalar::ComplexFloat128
+            )
+        };
+        let real = if complex {
+            self.types.scalar(match rank {
+                | 1 => Scalar::Float,
+                | 2 => Scalar::Double,
+                | 4 => Scalar::Float128,
+                | _ => Scalar::LongDouble,
+            })
+        } else {
+            ty
+        };
+        self.convert(
+            left.expression,
+            if complex && !complex_scalar(ls) {
+                real
+            } else {
+                ty
+            },
+            ConversionKind::Arithmetic,
+        );
+        self.convert(
+            right.expression,
+            if complex && !complex_scalar(rs) {
+                real
+            } else {
+                ty
+            },
+            ConversionKind::Arithmetic,
+        );
         ty
     }
 

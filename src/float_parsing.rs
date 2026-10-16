@@ -23,6 +23,7 @@
 //! pp. 308-310; PDF pp. 320-322.
 
 // Conversion
+mod complex;
 mod conversion;
 mod range;
 
@@ -32,6 +33,10 @@ mod representation;
 
 use std::ffi::c_char;
 
+pub(crate) use complex::{
+    complex_f32,
+    complex_f64,
+};
 pub(crate) use conversion::{
     string_to_binary64_long_double,
     string_to_double,

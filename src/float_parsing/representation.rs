@@ -105,7 +105,7 @@ impl LongDouble {
         }
     }
 
-    fn to_ffi(self) -> ffi::long_double_t {
+    pub(super) fn to_ffi(self) -> ffi::long_double_t {
         ffi::long_double_t { bytes: self.value }
     }
 

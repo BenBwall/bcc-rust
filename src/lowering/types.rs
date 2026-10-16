@@ -56,6 +56,11 @@ pub(super) enum Repr {
     Float {
         ty: Type,
     },
+    /// A C scalar held as two real SSA components.
+    /// C99: §6.2.5p13, p. 34; PDF p. 46.
+    Complex {
+        component: Type,
+    },
     Pointer,
     /// An array, structure or union: an object in memory, never a value.
     Aggregate,
@@ -66,6 +71,14 @@ pub(super) enum Repr {
 pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringErrorKind> {
     let unsupported = |construct| Err(LoweringErrorKind::Unsupported(construct));
     while let TypeKind::Atomic(inner) = types.kind(ty) {
+        if matches!(
+            types.kind(inner),
+            TypeKind::Scalar(
+                Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
+            )
+        ) {
+            return unsupported(Construct::ComplexAtomic);
+        }
         ty = inner;
     }
     match types.kind(ty) {
@@ -108,12 +121,21 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
                 Type::F80
             },
         }),
-        | Scalar::Float128 => Err(LoweringErrorKind::Unsupported(Construct::Float128)),
-        | Scalar::ComplexFloat
-        | Scalar::ComplexDouble
-        | Scalar::ComplexLongDouble
-        | Scalar::ComplexFloat128 =>
-            Err(LoweringErrorKind::Unsupported(Construct::ComplexArithmetic)),
+        | Scalar::Float128 | Scalar::ComplexFloat128 =>
+            Err(LoweringErrorKind::Unsupported(Construct::Float128)),
+        | Scalar::ComplexFloat => Ok(Repr::Complex {
+            component: Type::F32,
+        }),
+        | Scalar::ComplexDouble => Ok(Repr::Complex {
+            component: Type::F64,
+        }),
+        | Scalar::ComplexLongDouble => Ok(Repr::Complex {
+            component: if types.target.long_double_is_double() {
+                Type::F64
+            } else {
+                Type::F80
+            },
+        }),
         | _ => {
             let (bits, signed) =
                 types
@@ -148,7 +170,7 @@ impl Repr {
             | Self::Int { ty, .. } | Self::Float { ty } => Some(ty),
             | Self::Bool => Some(Type::I8),
             | Self::Pointer => Some(Type::Ptr),
-            | Self::Void | Self::Aggregate | Self::Function => None,
+            | Self::Void | Self::Aggregate | Self::Complex { .. } | Self::Function => None,
         }
     }
 
@@ -158,7 +180,11 @@ impl Repr {
     pub(super) const fn is_scalar(self) -> bool {
         matches!(
             self,
-            Self::Int { .. } | Self::Bool | Self::Float { .. } | Self::Pointer
+            Self::Int { .. }
+                | Self::Bool
+                | Self::Float { .. }
+                | Self::Complex { .. }
+                | Self::Pointer
         )
     }
 
@@ -337,10 +363,53 @@ pub(super) fn aggregate_layout<'s>(
     })
 }
 
+/// A complex scalar's two components, retaining its scalar ABI identity.
+/// C99: §6.2.5p13, p. 34; PDF p. 46.
+pub(super) fn complex_layout<'s>(
+    types: &Types<'_>,
+    ty: TypeId,
+    scratch: &'s Bump,
+) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
+    let TypeKind::Scalar(scalar) = types.kind(types.non_atomic(ty)) else {
+        return Err(LoweringErrorKind::MissingFact(
+            "a complex type has no scalar",
+        ));
+    };
+    // Calling conventions classify the nominal scalar, not a typedef's storage
+    // override.
+    let whole = types
+        .target
+        .scalar(scalar)
+        .ok_or(LoweringErrorKind::MissingFact(
+            "a complex scalar has no target layout",
+        ))?;
+    let mut scalars = ArenaVec::new_in(scratch);
+    scalar_leaves(types, scalar, 0, &mut scalars)?;
+    Ok(AggregateLayout {
+        size:    whole.size,
+        align:   align(whole),
+        flags:   AggregateFlags::COMPLEX,
+        scalars: scratch.alloc_slice_copy(&scalars),
+    })
+}
+
+/// The ABI object layout, preserving nominal aggregate layout and complex
+/// identity.
+pub(super) fn object_layout<'s>(
+    types: &Types<'_>,
+    ty: TypeId,
+    scratch: &'s Bump,
+) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
+    if matches!(repr(types, ty)?, Repr::Complex { .. }) {
+        complex_layout(types, ty, scratch)
+    } else {
+        aggregate_layout(types, ty, scratch)
+    }
+}
+
 /// The scalars of a C scalar type at `offset`: one for a real type and two
-/// for a complex one. Floating types are recorded although lowering does not
-/// compute with floating values yet, because a structure that holds one
-/// travels in floating registers.
+/// for a complex one. A record containing a complex member retains these
+/// leaves without acquiring top-level complex scalar ABI identity.
 /// C99: §6.2.5 paragraphs 10-13, pp. 34-35; PDF pp. 46-47.
 fn scalar_leaves(
     types: &Types<'_>,

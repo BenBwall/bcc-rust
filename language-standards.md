@@ -1254,8 +1254,14 @@ The type-generic `__builtin_isnan`, `__builtin_isfinite`, `__builtin_isnormal`,
 selects for Clang, fold constants and lower to ordered comparisons.
 `__builtin_complex`, which glibc's C11 `CMPLX` uses for Clang, takes a real and
 an imaginary part of one real floating type, without promotion, and folds two
-constants into a complex constant; like every complex value, it is not lowered
-yet.
+constants into a complex constant. It evaluates both operands once and lowers
+supported F32/F64/F80 complex values through pair-valued expressions, component
+lvalues, conversions, arithmetic, object initialization and ABI boundaries.
+F32/F64 execute in the interpreter, LLVM and native backend; x87 complex
+arithmetic uses LLVM and retains the existing native/interpreter F80 boundary.
+Real and complex binary128 lowering remain explicitly unsupported. The
+interpreter supports complex component extraction functions; full complex libm
+coverage is not implied.
 `__builtin_frame_address` and `__builtin_return_address` take a constant level
 and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
 `__builtin_extract_return_addr` is the identity.
@@ -1266,8 +1272,8 @@ GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Att
 and [other builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html).
 ISO constraints and arithmetic/address constant classification remain those of
 C99 §6.6 and §6.7.8; standard alignment follows C11 §6.7.5. GNU range expressions
-execute once for the entire selected range. Vector and complex execution, inline
-assembly and nested functions remain outside this change; label relocations
+execute once for the entire selected range. Vector execution, inline assembly
+and nested functions remain outside this change; label relocations
 arrived with labels as values below.
 
 PR #42 round-1 repairs complete explicit alignment of packed System V

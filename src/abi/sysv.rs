@@ -87,6 +87,23 @@ pub(super) fn result<'s>(
         _ = registers.take(1, 0);
         ResultPlan::Memory(layout)
     };
+    if layout.flags.contains(AggregateFlags::COMPLEX)
+        && layout
+            .scalars
+            .first()
+            .is_some_and(|scalar| scalar.ty == Type::F80)
+    {
+        return Ok(ResultPlan::Registers {
+            layout,
+            registers: ResultRegisters {
+                complex:       true,
+                first:         Type::F80,
+                second:        Some(Type::F80),
+                second_offset: 16,
+                align:         layout.align,
+            },
+        });
+    }
     let classes = match classify(layout) {
         | Classification::Memory => return Ok(memory(registers)),
         | Classification::Classes(classes) => classes,
@@ -97,9 +114,11 @@ pub(super) fn result<'s>(
     let registers_of = |first, second: Option<Type>| ResultPlan::Registers {
         layout,
         registers: ResultRegisters {
-            first:  integer(first),
-            second: second.map(integer),
-            align:  layout.align,
+            complex:       layout.flags.contains(AggregateFlags::COMPLEX),
+            second_offset: 8,
+            first:         integer(first),
+            second:        second.map(integer),
+            align:         layout.align,
         },
     };
     if classes == [Class::X87, Class::X87Up] {
@@ -151,9 +170,11 @@ fn parts(layout: AggregateLayout<'_>, classes: [Class; 2]) -> Result<Option<Part
             // widened.
             let (low, high) = (part(0), part(1));
             let registers = ResultRegisters {
-                first:  low,
-                second: Some(high),
-                align:  layout.align,
+                complex:       false,
+                second_offset: 8,
+                first:         low,
+                second:        Some(high),
+                align:         layout.align,
             };
             let low = if registers.valid_layout() {
                 low
@@ -209,8 +230,8 @@ fn part_type(layout: AggregateLayout<'_>, index: usize, class: Class) -> Type {
 
 /// An eightbyte's class.
 /// psABI §3.2.3: INTEGER, SSE, SSEUP, X87, X87UP, `COMPLEX_X87`, `NO_CLASS` and
-/// MEMORY; `COMPLEX_X87` never arises here, since a complex `long double`
-/// is 32 bytes and so MEMORY.
+/// MEMORY. Top-level complex `long double` results take the separate
+/// `COMPLEX_X87` path before this ordinary aggregate classification.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[expect(
     clippy::enum_variant_names,

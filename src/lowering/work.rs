@@ -218,6 +218,8 @@ pub(super) struct Item {
 pub(super) enum Operand {
     Void,
     Value(Value),
+    /// Immutable real/imaginary SSA values in the function scratch arena.
+    Complex(u32),
     /// An `int` that is 0 or 1, still held as the `i1` of a comparison, so a
     /// condition can branch on it directly.
     Truth(Value),

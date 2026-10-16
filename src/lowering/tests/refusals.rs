@@ -49,11 +49,11 @@ fn unsupported_constructs_name_themselves() {
             "__float128 f(__float128 x) { return x; }",
             "binary128 floating-point types",
         ),
-        ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),
         (
-            "_Complex double z; int f(void) { return __real__ z; }",
-            "complex arithmetic",
+            "double _Complex f(void) { _Atomic(double _Complex) z; return z; }",
+            "atomic complex values",
         ),
+        ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),
     ];
     for (source, construct) in cases {
         let message = refusal(source);

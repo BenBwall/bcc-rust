@@ -192,7 +192,7 @@ impl Checker<'_, '_> {
                     return Err(Construct::SlotAlignment(layout.align.bytes())),
                 | ParamAbi::Registers(registers) if registers.align.bytes() > 16 =>
                     return Err(Construct::SlotAlignment(registers.align.bytes())),
-                | ParamAbi::Sret(_) | ParamAbi::ByVal(_) => {},
+                | ParamAbi::Sret(_) | ParamAbi::ByVal(_) | ParamAbi::Indirect(_) => {},
                 // Win64's `__int128` result in `%xmm0`.
                 | ParamAbi::Registers(registers)
                     if registers.first == Type::I128 && registers.second.is_none() => {},

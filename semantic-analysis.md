@@ -651,7 +651,10 @@ return expressions.
   Clang do on this target: overflow and division by zero give infinities or
   NaNs, negation keeps the sign of zero, and a NaN compares unordered. These
   are valid arithmetic constants; only converting a nonfinite value to an
-  integer type is diagnosed. Annex G complex special cases and floating
+  integer type is diagnosed. Complex multiplication and division use the native
+  C arithmetic bridge at the common real precision, including its recovery
+  behavior for huge/tiny values and infinities. Mixed real/complex expressions
+  preserve their operand domains. Full Annex G conformance and floating
   exception flags are not modeled. Floating evaluation also depends on the
   configured native x87 bridge rather than a portable software target-float
   engine.

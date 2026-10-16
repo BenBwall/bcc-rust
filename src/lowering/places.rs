@@ -169,6 +169,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let result = self.value_type(ty, source)?;
                 Operand::Value(self.load_bit_field(address, field, types::is_volatile(ty), result))
             },
+            | (Place::Memory(address), Repr::Complex { .. }) =>
+                self.load_complex(address, ty, source)?,
             | (Place::Memory(address), Repr::Aggregate) => {
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
@@ -244,6 +246,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             });
         }
         let stored = match (target, value.operand) {
+            | (Place::Memory(address), Operand::Complex(_)) => {
+                self.store_complex(address, Item { ty, ..value }, source)?;
+                value.operand
+            },
             | (Place::Memory(address), Operand::Aggregate(from)) => {
                 // C99 §6.5.16.1p3: the objects may overlap only exactly.
                 let layout =

@@ -673,6 +673,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let source = self.record.syntax.source_vectors;
         let value = match self.repr(self.result, source)? {
             | Repr::Void => None,
+            | Repr::Complex { .. } => {
+                let to = self.draft.block_params(Draft::entry())[0];
+                self.store_complex(to, item, source)?;
+                None
+            },
             | Repr::Aggregate => {
                 let Operand::Aggregate(from) = item.operand else {
                     return Err(LoweringError::missing(
@@ -956,6 +961,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             scratch,
             tasks: ArenaVec::new_in(scratch),
             operands: ArenaVec::new_in(scratch),
+            complex_values: ArenaVec::new_in(scratch),
             initializer_values: ArenaVec::new_in(scratch),
             alignments: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
@@ -998,7 +1004,10 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             let declared = facts.declared;
             let incoming = facts.promoted;
             let parameter_source = lowerer.unit.sema.bindings[parameter].name.source_vectors;
-            if lowerer.repr(declared, parameter_source)? == Repr::Aggregate {
+            if matches!(
+                lowerer.repr(declared, parameter_source)?,
+                Repr::Aggregate | Repr::Complex { .. }
+            ) {
                 // C99 §6.9.1p10: the parameter object has its declared
                 // storage alignment, independently of its ABI representation.
                 let required =
@@ -1087,7 +1096,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         let source = self.record.syntax.source_vectors;
         let value =
             match repr(&self.unit.sema.types, self.result).map_err(|kind| at(kind, source))? {
-                | Repr::Void | Repr::Aggregate => None,
+                | Repr::Void | Repr::Aggregate | Repr::Complex { .. } => None,
                 | representation => {
                     let ty = representation.value_type().ok_or_else(|| {
                         LoweringError::missing("a result has no value type", source)
