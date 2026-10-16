@@ -54,7 +54,7 @@ pub(crate) enum LoweringErrorKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Construct {
     Float128,
-    ComplexArithmetic,
+    ComplexAtomic,
     Atomic,
     Vector,
     VariableLengthArray,
@@ -110,7 +110,7 @@ impl Construct {
     pub(crate) const fn description(self) -> &'static str {
         match self {
             | Self::Float128 => "binary128 floating-point types",
-            | Self::ComplexArithmetic => "complex arithmetic",
+            | Self::ComplexAtomic => "atomic complex values",
             | Self::Atomic => "atomic types",
             | Self::Vector => "vector types",
             | Self::VariableLengthArray => "variable length arrays",

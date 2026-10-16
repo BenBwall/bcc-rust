@@ -67,6 +67,7 @@ mod bit_fields;
 mod builtin_effects;
 mod builtins;
 mod cleanup;
+mod complex;
 mod expressions;
 mod gnu;
 mod initializers;
@@ -412,6 +413,7 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     scratch:            &'s Bump,
     tasks:              ArenaVec<'s, Task<'tu>>,
     operands:           ArenaVec<'s, Item>,
+    complex_values:     ArenaVec<'s, [crate::ir::Value; 2]>,
     initializer_values: ArenaVec<'s, Item>,
     /// The guaranteed alignment of each known backing address.
     alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,

@@ -350,6 +350,12 @@ fn verify_signature(
                 .any(|scalar| u64::from(scalar.offset) + u64::from(scalar.ty.bytes()) > layout.size)
         {
             Some(ParamAbiProblem::ScalarOutside)
+        } else if let Some(layout) = param.abi.layout()
+            && layout.flags.contains(super::AggregateFlags::COMPLEX)
+            && (layout.flags != super::AggregateFlags::COMPLEX
+                || !matches!(layout.scalars, [a, b] if a.offset == 0 && a.ty == b.ty && a.ty.is_float() && u64::from(b.offset) * 2 == layout.size && u64::from(b.offset) == if a.ty == Type::F80 { 16 } else { u64::from(a.ty.bytes()) }))
+        {
+            Some(ParamAbiProblem::ComplexLayout)
         } else if let ParamAbi::Registers(registers) = param.abi
             && registers
                 .types()
@@ -1410,6 +1416,8 @@ pub(crate) enum ParamAbiProblem {
     ScalarOutside,
     /// A result register is `i1` or `ptr`.
     RegisterType,
+    /// A complex scalar must have exactly two corresponding real components.
+    ComplexLayout,
     /// A pair's natural layout does not match two ABI eightbytes.
     RegisterLayout,
 }
@@ -1560,6 +1568,7 @@ impl fmt::Display for VerifierErrorKind {
                          result",
                     | ParamAbiProblem::ScalarOutside =>
                         "has an aggregate scalar beyond the aggregate's size",
+                    | ParamAbiProblem::ComplexLayout => "has an invalid complex scalar layout",
                     | ParamAbiProblem::RegisterType => "returns a register of type i1 or ptr",
                     | ParamAbiProblem::RegisterLayout =>
                         "has a register pair incompatible with the eightbyte return area",

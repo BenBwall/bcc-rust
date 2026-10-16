@@ -25,51 +25,65 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
     /// (Annex F.3). C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.
     pub(super) fn floating_binary(
-        &self,
         op: BinaryOperator,
         left: Floating,
         right: Floating,
+        precision: i32,
+        domains: u8,
     ) -> Option<Floating> {
         use BinaryOperator as B;
-        let precision = if self.types.target.long_double_is_double() {
-            2
-        } else {
-            3
-        };
-        let add = |a: LongDouble, b| a.arithmetic(b, 0, precision);
-        let sub = |a: LongDouble, b| a.arithmetic(b, 1, precision);
-        let mul = |a: LongDouble, b| a.arithmetic(b, 2, precision);
-        let div = |a: LongDouble, b| a.arithmetic(b, 3, precision);
-        Some(match op {
-            | B::Addition => Floating {
-                real: add(left.real, right.real),
-                imag: add(left.imag, right.imag),
-            },
-            | B::Subtraction => Floating {
-                real: sub(left.real, right.real),
-                imag: sub(left.imag, right.imag),
-            },
-            | B::Multiplication => Floating {
-                real: sub(mul(left.real, right.real), mul(left.imag, right.imag)),
-                imag: add(mul(left.real, right.imag), mul(left.imag, right.real)),
-            },
-            | B::Division if left.imag.is_zero() && right.imag.is_zero() =>
-                Floating::real(div(left.real, right.real)),
-            | B::Division => {
-                let denominator = add(mul(right.real, right.real), mul(right.imag, right.imag));
-                Floating {
-                    real: div(
-                        add(mul(left.real, right.real), mul(left.imag, right.imag)),
-                        denominator,
-                    ),
-                    imag: div(
-                        sub(mul(left.imag, right.real), mul(left.real, right.imag)),
-                        denominator,
-                    ),
-                }
-            },
+        let operation = match op {
+            | B::Addition => 0,
+            | B::Subtraction => 1,
+            | B::Multiplication => 2,
+            | B::Division => 3,
             | _ => return None,
-        })
+        };
+        let arithmetic = |a: LongDouble, b, operation| a.arithmetic(b, operation, precision);
+        if domains == 1 || domains == 2 {
+            let imaginary = if domains == 1 { left.imag } else { right.imag };
+            let real_operand = if domains == 1 { right.real } else { left.real };
+            match op {
+                | B::Addition =>
+                    return Some(Floating {
+                        real: arithmetic(left.real, right.real, 0),
+                        imag: imaginary,
+                    }),
+                | B::Subtraction =>
+                    return Some(Floating {
+                        real: arithmetic(left.real, right.real, 1),
+                        imag: if domains == 1 {
+                            imaginary
+                        } else {
+                            imaginary.negate()
+                        },
+                    }),
+                | B::Multiplication =>
+                    return Some(Floating {
+                        real: arithmetic(left.real, right.real, 2),
+                        imag: arithmetic(imaginary, real_operand, 2),
+                    }),
+                | B::Division if domains == 1 =>
+                    return Some(Floating {
+                        real: arithmetic(left.real, right.real, 3),
+                        imag: arithmetic(imaginary, right.real, 3),
+                    }),
+                | _ => {},
+            }
+        }
+        if domains != 0 {
+            let [real, imag] = LongDouble::complex_arithmetic(
+                [left.real, left.imag],
+                [right.real, right.imag],
+                operation,
+                precision,
+            );
+            Some(Floating { real, imag })
+        } else {
+            Some(Floating::real(
+                left.real.arithmetic(right.real, operation, precision),
+            ))
+        }
     }
 
     /// Folds floating equality and ordering, including unordered NaNs.

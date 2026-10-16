@@ -549,7 +549,7 @@ impl Extension {
     }
 }
 
-/// A `ptr` parameter that stands for a structure or union.
+/// A `ptr` parameter that stands for a memory-backed C value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AggregateParam<'ir> {
     /// The parameter's position in [`Signature::params`].
@@ -575,6 +575,10 @@ pub(crate) enum ParamAbi<'ir> {
     /// layout's alignment is the stack slot's, which ABI lowering may raise
     /// above the aggregate's; the caller's pointer must have it too.
     ByVal(AggregateLayout<'ir>),
+    /// Post-ABI: the address of a caller-owned complex scalar copy, passed
+    /// as an ordinary pointer (Win64). Its leaves retain the scalar's value
+    /// contract; it has no LLVM byval attribute.
+    Indirect(AggregateLayout<'ir>),
     /// Post-ABI, parameter 0 only: the result is returned in memory at the
     /// address the caller passes, and the callee returns that address as
     /// well (LLVM's `sret`).
@@ -606,6 +610,7 @@ impl<'ir> ParamAbi<'ir> {
             | Self::Aggregate(layout)
             | Self::Result(layout)
             | Self::ByVal(layout)
+            | Self::Indirect(layout)
             | Self::Sret(layout) => Some(layout),
             | Self::Registers(_) => None,
         }
@@ -617,6 +622,7 @@ impl<'ir> ParamAbi<'ir> {
             | Self::Aggregate(_) => "aggregate",
             | Self::Result(_) => "result",
             | Self::ByVal(_) => "byval",
+            | Self::Indirect(_) => "indirect",
             | Self::Sret(_) => "sret",
             | Self::Registers(_) => "registers",
         }
@@ -635,6 +641,7 @@ impl<'ir> ParamAbi<'ir> {
             | Self::Aggregate(layout) => ParamAbi::Aggregate(copy(layout)),
             | Self::Result(layout) => ParamAbi::Result(copy(layout)),
             | Self::ByVal(layout) => ParamAbi::ByVal(copy(layout)),
+            | Self::Indirect(layout) => ParamAbi::Indirect(copy(layout)),
             | Self::Sret(layout) => ParamAbi::Sret(copy(layout)),
             | Self::Registers(registers) => ParamAbi::Registers(registers),
         }
@@ -644,8 +651,9 @@ impl<'ir> ParamAbi<'ir> {
 /// The facts about a structure or union that calling conventions classify
 /// it by: its size and alignment, two properties of its members, and, for
 /// one of at most [`AggregateLayout::MAX_SCALAR_BYTES`] bytes, the scalars
-/// it is made of. The IR has no type graph, so lowering records these from
-/// the C type.
+/// it is made of. Top-level complex values always retain their two leaves,
+/// including 32-byte x87 pairs. The IR has no type graph, so lowering records
+/// these from the C type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AggregateLayout<'ir> {
     pub(crate) size:    u64,
@@ -653,8 +661,9 @@ pub(crate) struct AggregateLayout<'ir> {
     pub(crate) flags:   AggregateFlags,
     /// Every scalar member and array element, through nested aggregates, by
     /// byte offset; the members of a union overlap. Empty for an aggregate
-    /// larger than [`AggregateLayout::MAX_SCALAR_BYTES`]. With `first`, the
-    /// first member's.
+    /// larger than [`AggregateLayout::MAX_SCALAR_BYTES`], except a top-level
+    /// complex scalar retains both component leaves. With `first`, these
+    /// describe the first member's scalars.
     pub(crate) scalars: &'ir [AggregateScalar],
     /// For a GNU transparent union argument on System V, the first member,
     /// whose facts decide its registers; `size` and `align` stay the
@@ -692,13 +701,18 @@ bitflags! {
         /// The aggregate, or one it contains, ends in a flexible array
         /// member.
         const FLEXIBLE = 1 << 1;
+        /// A top-level complex scalar, rather than a record of two reals.
+        const COMPLEX = 1 << 2;
     }
 }
 
 impl AggregateFlags {
     /// Each flag with its textual name, in printing order.
-    pub(crate) const NAMES: [(Self, &'static str); 2] =
-        [(Self::UNALIGNED, "unaligned"), (Self::FLEXIBLE, "flexible")];
+    pub(crate) const NAMES: [(Self, &'static str); 3] = [
+        (Self::UNALIGNED, "unaligned"),
+        (Self::FLEXIBLE, "flexible"),
+        (Self::COMPLEX, "complex"),
+    ];
 }
 
 /// One scalar of an aggregate: its byte offset and IR type.
@@ -709,26 +723,38 @@ pub(crate) struct AggregateScalar {
 }
 
 /// The registers a memory-backed result comes back in: the first starts
-/// at byte 0 and an optional second at byte 8. A lone `i128` represents the
+/// at byte 0 and an optional second at its explicit offset (normally 8, or
+/// 16 for complex x87). A lone `i128` represents the
 /// Win64 scalar extension's `<2 x i64>` result in XMM0; `f128` carries a
 /// System V SSE/SSEUP result in one vector register.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct ResultRegisters {
-    pub(crate) first:  Type,
-    pub(crate) second: Option<Type>,
+    pub(crate) first:         Type,
+    pub(crate) second:        Option<Type>,
+    /// Explicit return-area byte offset of the second register.
+    pub(crate) second_offset: u32,
+    /// The returned value is a complex scalar; meaningful bytes retain
+    /// poison rather than aggregate register-packing freeze refinement.
+    pub(crate) complex:       bool,
     /// The aggregate's alignment, which its return area has.
-    pub(crate) align:  Align,
+    pub(crate) align:         Align,
 }
 
 impl ResultRegisters {
-    /// Paired results occupy two ABI eightbytes. Natural LLVM structure
-    /// layout must place the second field at this same byte offset.
+    /// Ordinary paired results occupy two ABI eightbytes. Complex x87 uses
+    /// offset 16 instead. Natural LLVM structure layout must agree.
     /// C99: §6.8.6.4p3, p. 139; PDF p. 151; the layout is an IR/ABI contract.
     pub(crate) const SECOND_OFFSET: u32 = 8;
 
-    /// Whether both parts fit eightbytes and their natural layout agrees
-    /// with the return area produced by ABI lowering.
+    /// Whether the parts' natural layout agrees with the return area produced
+    /// by ABI lowering, including the special complex x87 pair.
     pub(crate) fn valid_layout(self) -> bool {
+        if self.first == Type::F80 && self.second == Some(Type::F80) {
+            return self.second_offset == 16 && self.align.bytes() >= 16;
+        }
+        if self.second_offset != Self::SECOND_OFFSET {
+            return false;
+        }
         self.second.is_none_or(|second| {
             let first_size = self.first.bytes();
             let second_size = second.bytes();
@@ -741,7 +767,7 @@ impl ResultRegisters {
     /// Each register's byte offset and type in the return area.
     pub(crate) fn parts(self) -> impl Iterator<Item = (u64, Type)> {
         std::iter::once((0, self.first))
-            .chain(self.second.map(|ty| (u64::from(Self::SECOND_OFFSET), ty)))
+            .chain(self.second.map(|ty| (u64::from(self.second_offset), ty)))
     }
 
     /// The registers' types in order.
@@ -760,7 +786,7 @@ impl ResultRegisters {
     /// Callee storage also covers the aggregate's trailing padding: C code
     /// may copy the complete object into this area before returning fields.
     pub(crate) fn area_bytes(self) -> u64 {
-        self.bytes().max(2 * u64::from(Self::SECOND_OFFSET))
+        self.bytes().max(2 * u64::from(self.second_offset))
     }
 }
 

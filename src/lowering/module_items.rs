@@ -450,11 +450,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let result_representation = repr(types, result)?;
         let result = match result_representation {
             | Repr::Void => None,
-            | Repr::Aggregate => {
+            | Repr::Aggregate | Repr::Complex { .. } => {
                 params.push(Type::Ptr);
                 aggregates.push(AggregateParam {
                     index: 0,
-                    abi:   ParamAbi::Result(types::aggregate_layout(types, result, scratch)?),
+                    abi:   ParamAbi::Result(types::object_layout(types, result, scratch)?),
                 });
                 None
             },
@@ -462,10 +462,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         };
         for parameter in parameters {
             match repr(types, parameter)? {
-                | Repr::Aggregate => {
+                | Repr::Aggregate | Repr::Complex { .. } => {
                     let index = u32::try_from(params.len())
                         .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?;
-                    // Only the pointer to the caller-owned copy is defined.
+                    // Ordinary aggregates constrain only the caller-owned
+                    // copy's pointer; complex scalar descriptors also cover
+                    // their meaningful component bytes.
                     noundef.push(index);
                     params.push(Type::Ptr);
                     aggregates.push(AggregateParam {
@@ -1046,6 +1048,31 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     TypeKind::Pointer(_) | TypeKind::Array(..)
                 )
         });
+        if let Repr::Complex { component } = representation {
+            let real = match (info.floating, integer) {
+                | (Some(value), _) => floats::constant_bits(&value.real, component),
+                | (_, Some(value)) if value.signed => floats::from_integer(value.value, component),
+                | (_, Some(value)) => floats::from_unsigned(value.value as u128, component),
+                | _ => None,
+            }
+            .ok_or_else(unsupported)?;
+            let imag = info
+                .floating
+                .map_or(Some(0), |value| {
+                    floats::constant_bits(&value.imag, component)
+                })
+                .ok_or_else(unsupported)?;
+            for (index, bits) in [real, imag].into_iter().enumerate() {
+                let stride = size / 2;
+                let target = bytes
+                    .get_mut(start + index * stride..start + (index + 1) * stride)
+                    .ok_or_else(unsupported)?;
+                for (byte, bits) in target.iter_mut().zip(floats::bytes(bits, stride)) {
+                    *byte = bits;
+                }
+            }
+            return Ok(());
+        }
         if let Repr::Float { ty: float } = representation {
             let bits = match (info.floating, integer) {
                 | (Some(folded), _) => floats::constant_bits(&folded.real, float),
@@ -1072,7 +1099,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             // A floating constant truncates toward zero (§6.3.1.4p1); `_Bool`
             // compares with zero (§6.3.1.2p1).
             if representation == Repr::Bool {
-                Some(i128::from(!folded.real.is_zero()))
+                Some(i128::from(!folded.real.is_zero() || !folded.imag.is_zero()))
             } else {
                 Some(floats::to_integer(&folded.real).ok_or_else(unsupported)?)
             }

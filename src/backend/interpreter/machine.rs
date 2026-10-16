@@ -31,6 +31,7 @@ use super::{
 };
 use crate::{
     ir::{
+        AggregateFlags,
         Align,
         Block,
         BlockCall,
@@ -187,9 +188,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         // aggregate register parts may legitimately contain padding poison.
         let actual = self.module.function_signature(func);
         for (index, &arg) in self.arguments.iter().take(actual.params.len()).enumerate() {
-            if actual.param_noundef(index) && arg.is_poison() {
-                return Err(UbKind::Noundef.into());
-            }
+            self.check_argument(actual, index, arg)?;
         }
         if callee.body.is_some() {
             self.push_frame(func, result)?;
@@ -239,12 +238,47 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
     }
 
     /// Enforces the signature's value contract before entering any callee,
-    /// including host functions and unused parameters. Pointer attributes
-    /// constrain only the address, not the pointed-to object bytes.
+    /// including host functions and unused parameters. A complex descriptor
+    /// represents a scalar value: only its meaningful component bytes are
+    /// covered. Ordinary aggregate pointers constrain only the address.
     fn check_arguments(&self, signature: Signature<'_>) -> Result<(), Fault> {
         for (index, &arg) in self.arguments.iter().enumerate() {
-            if signature.param_noundef(index) && arg.is_poison() {
-                return Err(UbKind::Noundef.into());
+            self.check_argument(signature, index, arg)?;
+        }
+        Ok(())
+    }
+
+    fn check_argument(
+        &self,
+        signature: Signature<'_>,
+        index: usize,
+        arg: RuntimeValue,
+    ) -> Result<(), Fault> {
+        if !signature.param_noundef(index) {
+            return Ok(());
+        }
+        if arg.is_poison() {
+            return Err(UbKind::Noundef.into());
+        }
+        if let Some(
+            ParamAbi::Aggregate(layout) | ParamAbi::ByVal(layout) | ParamAbi::Indirect(layout),
+        ) = signature.param_abi(index)
+            && layout.flags.contains(AggregateFlags::COMPLEX)
+        {
+            for leaf in layout.scalars {
+                // Byte reads cover x87's ten meaningful bytes without
+                // requiring interpreter arithmetic for that real format.
+                for byte in 0..leaf.ty.bytes() {
+                    let offset = u128::from(leaf.offset) + u128::from(byte);
+                    let address = self.memory.ptr_add(arg, RuntimeValue::Int(offset), false);
+                    if self
+                        .memory
+                        .load(Type::I8, address, Align::BYTE)?
+                        .is_poison()
+                    {
+                        return Err(UbKind::Noundef.into());
+                    }
+                }
             }
         }
         Ok(())

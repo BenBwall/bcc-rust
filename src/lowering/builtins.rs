@@ -104,7 +104,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let first = self.va_list_address(first, &instance.operands[0], source)?;
         let ty = instance.result_type;
         let operand = if operation == VaOperation::Arg {
-            if types::repr(&self.unit.sema.types, ty).is_ok_and(|r| r == types::Repr::Aggregate) {
+            if types::repr(&self.unit.sema.types, ty)
+                .is_ok_and(|r| matches!(r, types::Repr::Aggregate | types::Repr::Complex { .. }))
+            {
                 let signature = self
                     .unit
                     .signature_of([ty], ty, false, self.scratch)
@@ -120,7 +122,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 };
                 let sig = self.unit.module.intern(signature);
                 let address = self.inst(InstData::VaArgAggregate { sig, list: first }, Type::Ptr);
-                self.push_item(Operand::Aggregate(address), ty);
+                let operand = if matches!(
+                    types::repr(&self.unit.sema.types, ty),
+                    Ok(types::Repr::Complex { .. })
+                ) {
+                    self.load_complex(address, ty, source)?
+                } else {
+                    Operand::Aggregate(address)
+                };
+                self.push_item(operand, ty);
                 return Ok(());
             }
             let result_type = self.value_type(ty, source)?;
@@ -304,11 +314,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     "varargs must use keyword scheduling",
                     source,
                 )),
-            | CommonBuiltin::Complex =>
-                return Err(LoweringError::unsupported(
-                    super::Construct::ComplexArithmetic,
-                    source,
-                )),
+            | CommonBuiltin::Complex => {
+                let pair = [self.value(items[0], source)?, self.value(items[1], source)?];
+                self.complex_pair(pair)
+            },
             | CommonBuiltin::Constant => {
                 let value = self.iconst(
                     Type::I32,

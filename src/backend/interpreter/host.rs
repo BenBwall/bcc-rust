@@ -5,6 +5,7 @@
 //! report results and manage memory, and captures their output in an arena
 //! buffer.
 
+mod complex;
 mod math;
 
 use std::fmt::{
@@ -105,15 +106,19 @@ pub(crate) struct DefaultHost<'a> {
     /// The target's existing long double representation (f64 or unsupported
     /// f80).
     long_double: Type,
+    target:      Target,
 }
 
 impl Host for DefaultHost<'_> {
     fn provides(&self, name: &str) -> bool {
-        HOST_FUNCTIONS.contains(&name)
+        HOST_FUNCTIONS.contains(&name) || complex::provides(name)
     }
 
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
         check_signature(call)?;
+        if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
+            return result;
+        }
         if let Some(value) = math::call(
             call,
             memory,
@@ -664,6 +669,7 @@ impl<'a> DefaultHost<'a> {
             text:        ArenaVec::new_in(arena),
             long_width:  64,
             long_double: Type::F80,
+            target:      Target::LinuxGnu,
         }
     }
 
@@ -675,6 +681,7 @@ impl<'a> DefaultHost<'a> {
             .integer(Scalar::Long)
             .map_or(64, |(bits, _)| bits);
         Self {
+            target,
             long_width,
             long_double: if target.layout().long_double_is_double() {
                 Type::F64

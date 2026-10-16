@@ -526,6 +526,12 @@ fn display_param_abi(abi: ParamAbi<'_>) -> impl fmt::Display + '_ {
                 for ty in registers.types() {
                     write!(f, "{ty}, ")?;
                 }
+                if registers.second_offset != 8 {
+                    write!(f, "offset {}, ", registers.second_offset)?;
+                }
+                if registers.complex {
+                    f.write_str("complex, ")?;
+                }
                 write!(f, "align {}", registers.align.bytes())?;
             }
             return f.write_char(')');

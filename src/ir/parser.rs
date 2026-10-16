@@ -1421,9 +1421,9 @@ impl<'t> Cursor<'_, 't> {
     }
 
     /// The description of an aggregate parameter after its type, if one
-    /// follows: `aggregate`, `result`, `byval` or `sret` with a layout, as
-    /// `(size N, align N[, flag]...[, [offset: ty, ...]])`, or
-    /// `registers(ty[, ty], align N)`.
+    /// follows: `aggregate`, `result`, `byval`, `indirect` or `sret` with a
+    /// layout, as `(size N, align N[, flag]...[, [offset: ty, ...]])`, or
+    /// `registers(ty[, ty][, offset N][, complex], align N)`.
     fn param_abi<'s>(&mut self, scratch: &'s Bump) -> Result<Option<ParamAbi<'s>>, ParseError<'t>> {
         let TokenKind::Ident(keyword) = self.peek().kind else {
             return Ok(None);
@@ -1432,6 +1432,7 @@ impl<'t> Cursor<'_, 't> {
             | "aggregate" => ParamAbi::Aggregate,
             | "result" => ParamAbi::Result,
             | "byval" => ParamAbi::ByVal,
+            | "indirect" => ParamAbi::Indirect,
             | "sret" => ParamAbi::Sret,
             | "registers" => return self.result_registers().map(Some),
             | _ => return Ok(None),
@@ -1507,24 +1508,42 @@ impl<'t> Cursor<'_, 't> {
         Ok(FirstMember { size, extension })
     }
 
-    /// `registers(ty[, ty], align N)`.
+    /// `registers(ty[, ty][, offset N][, complex], align N)`.
     fn result_registers<'s>(&mut self) -> Result<ParamAbi<'s>, ParseError<'t>> {
         _ = self.next();
         self.expect(TokenKind::LParen, "`(`")?;
         let first = self.ty()?;
         self.expect(TokenKind::Comma, "`,`")?;
-        let second = if matches!(self.peek().kind, TokenKind::Ident("align")) {
+        let second = if matches!(
+            self.peek().kind,
+            TokenKind::Ident("align" | "offset" | "complex")
+        ) {
             None
         } else {
             let second = self.ty()?;
             self.expect(TokenKind::Comma, "`,`")?;
             Some(second)
         };
+        let second_offset = if self.eat(TokenKind::Ident("offset")) {
+            let (token, offset) = self.unsigned()?;
+            let offset =
+                u32::try_from(offset).map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?;
+            self.expect(TokenKind::Comma, "`,`")?;
+            offset
+        } else {
+            8
+        };
+        let complex = self.eat(TokenKind::Ident("complex"));
+        if complex {
+            self.expect(TokenKind::Comma, "`,`")?;
+        }
         let align = self.align()?;
         self.expect(TokenKind::RParen, "`)`")?;
         Ok(ParamAbi::Registers(ResultRegisters {
             first,
             second,
+            second_offset,
+            complex,
             align,
         }))
     }

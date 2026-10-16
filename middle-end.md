@@ -287,8 +287,15 @@ UB trap (CLI status 70). `... noundef` applies this promise to every extra
 variadic argument; LLVM emission places it on those call-site arguments, since
 LLVM declarations have no attribute position for the ellipsis. Unmarked
 positions retain the poison semantics above. An attribute on a memory parameter
-(`aggregate`, `result`, `byval` or `sret`) constrains the pointer value only,
-not the bytes it addresses. A synthetic `registers` return-area parameter cannot
+(`aggregate`, `result`, `byval`, `indirect` or `sret`) normally constrains
+the pointer value only. An incoming `aggregate`, `byval` or `indirect`
+`complex` argument descriptor instead represents a scalar: its `noundef` also
+covers each meaningful real/imaginary component byte, excluding padding. The
+interpreter checks these bytes before entering the callee. Result-area pointer
+attributes constrain only the address. Complex memory descriptors retain their
+two leaves after ABI lowering;
+Win64 uses `indirect(...)` to describe an ordinary pointer to the caller's copy
+without an LLVM `byval` attribute. A synthetic `registers` return-area parameter cannot
 be marked as an argument because it is not passed; `-> noundef` instead marks
 the actual returned registers and checks every byte of every register. Its LLVM
 packing does not freeze those bytes. Ordinary unmarked register returns retain
@@ -719,8 +726,41 @@ double` is `f64` on MSVC); arithmetic is `fadd`/`fsub`/`fmul`/`fdiv`/`fneg`,
 comparisons are ordered `fcmp`s except `!=`, which is `une`, and conversions are
 `sitofp`/`uitofp`/`fptosi`/`fptoui`/`fpext`/`fptrunc` (a value converts to
 `_Bool` by comparing with zero). Floating constants and static initializers use
-sema's folded values, rounded to the destination format. `__float128` and
-`_Complex` types are still rejected.
+sema's folded values, rounded to the destination format. Real and complex
+binary128 C lowering still report the existing unsupported diagnostic.
+
+Complex scalars use two immutable SSA component values retained in a sparse
+arena table; taking an lvalue's value immediately loads both components.
+GNU `__real__` and `__imag__` preserve component lvalues, packed alignment and
+volatile access. Conversions, comparisons, truth, assignments, conditional
+values, initializers and direct/indirect calls operate on both components.
+The usual arithmetic conversions preserve real/complex domains while finding
+the common real precision, so adding a real value preserves the imaginary
+component's signed zero. Complex multiplication and division use the target's
+`__mul[sdx]c3` and `__div[sdx]c3` runtime helpers; constant folding uses a native
+C bridge in the selected component precision rather than a denominator-square
+formula.
+
+Call boundaries materialize fresh complex objects and retain a top-level scalar
+ABI flag. This differs from an ordinary record of two real members: System V
+complex `long double` returns two x87 values at offsets 0 and 16 in a 32-byte
+return area, while a same-layout record uses a hidden result pointer.
+`ResultRegisters` records that second offset explicitly. Complex meaningful
+bytes are never frozen during argument packing; padding remains unspecified.
+Register parameters carry scalar `noundef` contracts. Memory parameters retain
+the complex descriptor and its meaningful-byte definedness contract. Complex
+register results retain the `complex` marker, suppressing aggregate byte-freeze
+refinement while still allowing unused indeterminate returns without an
+immediate return `noundef` contract.
+
+The default interpreter host bridges F32/F64 arithmetic helpers through real
+scalar inputs and host output temporaries and implements `crealf`/`creal` and
+`cimagf`/`cimag` extraction, including target ABI coercions. LLVM supports x87
+complex arithmetic and transport; the native backend and interpreter retain
+their existing explicit F80 arithmetic limitation. This does not implement the
+complete complex math library, binary128 C lowering, or GNU complex conjugation
+and increment/decrement extensions. Atomic complex object operations retain an
+explicit unsupported diagnostic.
 
 ## The optimizer
 

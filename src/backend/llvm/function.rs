@@ -191,7 +191,7 @@ fn result_type<'id>(api: &Session<'id>, signature: Signature<'_>) -> Ty<'id> {
 
 fn registers_type<'id>(api: &Session<'id>, registers: ResultRegisters) -> Ty<'id> {
     // The verifier enforces the shared return-area layout, so an unpacked
-    // LLVM structure places the second part at ResultRegisters::SECOND_OFFSET.
+    // LLVM structure places the second part at its explicit register offset.
     debug_assert!(registers.valid_layout(), "verified register return layout");
     match registers.second {
         | Some(second) => api.structure(&[api.ty(registers.first), api.ty(second)], false),
@@ -644,8 +644,8 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 api.gep(area, api.bits(Type::I64, u128::from(offset)), true)
             };
             let bytes = api.load(api.vector(api.ty(Type::I8), ty.bytes()), addr);
-            // The private return area is at least eight-byte aligned; the
-            // optional second part starts at byte eight.
+            // The private return area is at least eight-byte aligned; each
+            // explicit part offset refines that base guarantee.
             let align = registers.align.bytes().max(8);
             api.alignment(
                 bytes,
@@ -655,7 +655,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     align.min(offset)
                 },
             );
-            let frozen = if self.signature.result_noundef {
+            let frozen = if self.signature.result_noundef || registers.complex {
                 bytes
             } else {
                 api.freeze(bytes)

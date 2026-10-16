@@ -56,3 +56,15 @@ int long_double_compare(long_double_t left, long_double_t right);
    host. Returns the number of bytes written, excluding the terminator. */
 size_t long_double_to_hex(long_double_t value, char *buffer,
                           size_t buffer_size);
+
+/* Complex arithmetic crosses Rust only as real scalars and output pointers.
+   C99 §6.5.5-§6.5.6; Annex G.5.1: native recovery/scaling handles infinity
+   and overflow without squaring the denominator. */
+void bcc_complex_float(float ar, float ai, float br, float bi, int operation,
+                       float *real, float *imag);
+void bcc_complex_double(double ar, double ai, double br, double bi, int operation,
+                        double *real, double *imag);
+void long_double_complex_arithmetic(long_double_t ar, long_double_t ai,
+                                    long_double_t br, long_double_t bi,
+                                    int operation, int precision,
+                                    long_double_t *real, long_double_t *imag);

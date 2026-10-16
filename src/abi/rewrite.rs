@@ -613,7 +613,11 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 let chunk_type = int_type(step);
                 let align = align_at(layout.align, start + offset, step);
                 let loaded = self.builder.load(chunk_type, at, MemFlags::aligned(align));
-                let frozen = self.builder.unary(Opcode::Freeze, loaded);
+                let frozen = if layout.flags.contains(crate::ir::AggregateFlags::COMPLEX) {
+                    loaded
+                } else {
+                    self.builder.unary(Opcode::Freeze, loaded)
+                };
                 let wide = if chunk_type == word {
                     frozen
                 } else {

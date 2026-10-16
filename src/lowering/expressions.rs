@@ -103,6 +103,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(Operand::Value(value), info.ty);
             return Ok(());
         }
+        if let Some(folded) = info.floating
+            && let Ok(Repr::Complex { component }) = repr(&self.unit.sema.types, info.ty)
+        {
+            let real = floats::constant_bits(&folded.real, component)
+                .ok_or_else(|| LoweringError::missing("complex constant bits", source))?;
+            let imag = floats::constant_bits(&folded.imag, component)
+                .ok_or_else(|| LoweringError::missing("complex constant bits", source))?;
+            let values = [self.fconst(component, real), self.fconst(component, imag)];
+            let operand = self.complex_pair(values);
+            self.push_item(operand, info.ty);
+            return Ok(());
+        }
         // A folded floating constant has exact bits (§6.6 paragraph 8).
         if let Some(folded) = info.floating
             && let Ok(Repr::Float { ty }) = repr(&self.unit.sema.types, info.ty)
@@ -196,7 +208,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => {
                 self.tasks.push(Task::Finish(expression));
                 match operator {
-                    | UnaryOperator::AddressOf =>
+                    | UnaryOperator::AddressOf | UnaryOperator::Real | UnaryOperator::Imag =>
                         self.tasks.push(Task::EvaluateRaw(operand_expression)),
                     | UnaryOperator::PreIncrement
                     | UnaryOperator::PreDecrement
@@ -205,11 +217,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         self.tasks.push(Task::ReadForUpdate(operand_expression));
                         self.tasks.push(Task::EvaluateRaw(operand_expression));
                     },
-                    | UnaryOperator::Real | UnaryOperator::Imag =>
-                        return Err(LoweringError::unsupported(
-                            Construct::ComplexArithmetic,
-                            source,
-                        )),
                     | _ => self.tasks.push(Task::Evaluate(operand_expression)),
                 }
             },
@@ -614,6 +621,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<Item, LoweringError> {
         let types = &self.unit.sema.types;
         let target = repr(types, to).map_err(|kind| at(kind, source))?;
+        if matches!(target, Repr::Complex { .. })
+            || matches!(repr(types, item.ty), Ok(Repr::Complex { .. }))
+        {
+            return self.convert_complex(item, to, source);
+        }
         if matches!(item.operand, Operand::Value(_)) && repr(types, item.ty) == Ok(target) {
             return Ok(Item { ty: to, ..item });
         }
@@ -676,7 +688,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// narrows (`fptrunc`). An integer constant folds.
     /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5 paragraph
     /// 1, p. 44; PDF p. 56.
-    fn float_from(
+    pub(super) fn float_from(
         &mut self,
         value: Value,
         from: Repr,
@@ -741,6 +753,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<Value, LoweringError> {
         let value = match item.operand {
             | Operand::Truth(truth) => return Ok(truth),
+            | Operand::Complex(id) => {
+                let [real, imag] = self.complex_values[id as usize];
+                let zero = self.fconst(self.draft.value_type(real), 0);
+                let a = self.fcmp(FloatCC::Une, real, zero);
+                let b = self.fcmp(FloatCC::Une, imag, zero);
+                return Ok(self.binary_inst(Opcode::Or, InstFlags::empty(), a, b));
+            },
             | Operand::Value(value) => value,
             | _ => return Err(LoweringError::missing("a condition has no value", source)),
         };
@@ -885,6 +904,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<(), LoweringError> {
         let item = self.pop();
         let source = SourceVectors::empty();
+        if let Operand::Complex(id) = item.operand
+            && !truth
+        {
+            self.draft.jump(merge, &self.complex_values[id as usize]);
+            return Ok(());
+        }
         let args = match self.draft.block_params(merge).len() {
             | 0 => None,
             | _ if truth => Some(self.truth(item, source)?),
@@ -901,6 +926,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn merge(&mut self, merge: Block, ty: TypeId, truth: bool) {
         self.draft.seal(merge);
         self.draft.switch_to(merge);
+        if matches!(repr(&self.unit.sema.types, ty), Ok(Repr::Complex { .. })) && !truth {
+            let pair = [
+                self.draft.block_params(merge)[0],
+                self.draft.block_params(merge)[1],
+            ];
+            let operand = self.complex_pair(pair);
+            self.push_item(operand, ty);
+            return;
+        }
         let operand = match self.draft.block_params(merge).first() {
             | None => Operand::Void,
             | Some(&param) if truth => Operand::Truth(param),
@@ -998,6 +1032,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
         use BinaryOperator as B;
+        if matches!(left.operand, Operand::Complex(_))
+            || matches!(right.operand, Operand::Complex(_))
+        {
+            return self.complex_binary(operator, left, right, ty, source);
+        }
         let left_pointer = self.is_pointer(left.ty);
         let right_pointer = self.is_pointer(right.ty);
         if let Some(cc) = comparison(operator) {
@@ -1160,6 +1199,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Place(Place::Memory(address))
             },
             | U::Plus | U::Extension => operand.operand,
+            | U::Minus if matches!(operand.operand, Operand::Complex(_)) => {
+                let [real, imag] = self.complex_parts(operand, source)?;
+                let ty = self.draft.value_type(real);
+                let pair = [
+                    self.convert(Opcode::Fneg, ty, real),
+                    self.convert(Opcode::Fneg, ty, imag),
+                ];
+                self.complex_pair(pair)
+            },
             | U::Minus => {
                 let value = self.value(operand, source)?;
                 let ty = self.draft.value_type(value);
@@ -1228,10 +1276,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
             },
             | U::Real | U::Imag =>
-                return Err(LoweringError::unsupported(
-                    Construct::ComplexArithmetic,
-                    source,
-                )),
+                self.complex_component(operand, info.ty, operator == U::Imag, source)?,
         };
         self.push_item(result, info.ty);
         Ok(())
@@ -1395,9 +1440,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let open_external = direct.is_some_and(|binding| self.unit.unprototyped_external(binding));
         let fixed = if open_external { 0 } else { call.fixed };
         let variadic = open_external || (call.prototype && call.variadic);
-        let described = items[fixed..]
-            .iter()
-            .any(|item| repr(&self.unit.sema.types, item.ty) == Ok(Repr::Aggregate));
+        let described = items[fixed..].iter().any(|item| {
+            matches!(
+                repr(&self.unit.sema.types, item.ty),
+                Ok(Repr::Aggregate | Repr::Complex { .. })
+            )
+        });
         let mut signature = self
             .unit
             .signature_of(
@@ -1425,7 +1473,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             result_object = Some(object);
         }
         for &item in &items {
-            let value = if let Operand::Aggregate(copy) = item.operand {
+            let value = if let Operand::Complex(_) = item.operand {
+                self.materialize_complex(item, source)?
+            } else if let Operand::Aggregate(copy) = item.operand {
                 copy
             } else {
                 self.value(item, source)?
@@ -1454,6 +1504,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | (None, None) => unreachable!("an indirect callee was popped"),
         };
         let operand = match (result_object, value) {
+            | (Some(object), _) if matches!(self.repr(info.ty, source)?, Repr::Complex { .. }) =>
+                self.load_complex(object, info.ty, source)?,
             | (Some(object), _) => Operand::Aggregate(object),
             | (None, Some(value)) => Operand::Value(value),
             | (None, None) => Operand::Void,
@@ -1640,6 +1692,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Repr::Void => &[],
             | Repr::Aggregate | Repr::Pointer => &[Type::Ptr],
             | Repr::Bool => &[Type::I8],
+            | Repr::Complex {
+                component: Type::F32,
+            } => &[Type::F32, Type::F32],
+            | Repr::Complex {
+                component: Type::F64,
+            } => &[Type::F64, Type::F64],
+            | Repr::Complex { .. } => &[Type::F80, Type::F80],
             | Repr::Float { ty } => match ty {
                 | Type::F32 => &[Type::F32],
                 | Type::F64 => &[Type::F64],

@@ -269,7 +269,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if scalar.integer() {
             result.integer = if op == UnaryOperator::Imag {
-                Some(Integer::int(0))
+                operand.integer.map(|_| Integer::int(0))
             } else {
                 operand.integer
             };
@@ -290,7 +290,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 result.category = ValueCategory::Rvalue;
                 result.constant = operand.constant;
                 result.unfolded_binary128 = component == Scalar::Float128;
-                if !result.unfolded_binary128 {
+                if !result.unfolded_binary128 && operand.floating.is_some() {
                     result.floating = Some(Floating::real(LongDouble::ZERO));
                 }
             } else {

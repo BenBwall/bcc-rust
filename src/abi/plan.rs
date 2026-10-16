@@ -232,7 +232,7 @@ impl Convention {
 /// Narrow integers keep their place with the extension `convention` gives
 /// them.
 pub(super) fn lowered_signature<'s>(
-    signature: Signature<'_>,
+    signature: Signature<'s>,
     convention: Convention,
     result: &ResultPlan<'s>,
     args: &[ArgPlan<'s>],
@@ -252,9 +252,11 @@ pub(super) fn lowered_signature<'s>(
             describe(
                 &params,
                 ParamAbi::Registers(ResultRegisters {
-                    first:  Type::I128,
-                    second: None,
-                    align:  Align::from_bytes(16).unwrap(),
+                    complex:       false,
+                    second_offset: 8,
+                    first:         Type::I128,
+                    second:        None,
+                    align:         Align::from_bytes(16).unwrap(),
                 }),
             );
             params.push(Type::Ptr);
@@ -284,6 +286,11 @@ pub(super) fn lowered_signature<'s>(
         }
         match *plan {
             | ArgPlan::Keep => {
+                if let Some(ParamAbi::Aggregate(layout)) = signature.param_abi(index)
+                    && layout.flags.contains(crate::ir::AggregateFlags::COMPLEX)
+                {
+                    describe(&params, ParamAbi::Indirect(layout));
+                }
                 if signature.param_noundef(index) {
                     noundef.push(
                         parameter_count(params.len())
@@ -325,6 +332,14 @@ pub(super) fn lowered_signature<'s>(
                             .expect("ABI planning checked parameter counts"),
                         extension,
                     });
+                }
+                if layout.flags.contains(crate::ir::AggregateFlags::COMPLEX)
+                    && signature.param_noundef(index)
+                {
+                    for offset in 0..parts.types().len() {
+                        noundef
+                            .push(parameter_count(params.len() + offset).expect("planned count"));
+                    }
                 }
                 params.extend_from_slice(parts.types());
             },
@@ -381,15 +396,20 @@ fn parameter_count(count: usize) -> Result<u32, AbiErrorKind> {
     u32::try_from(count).map_err(|_| AbiErrorKind::TooManyParameters)
 }
 
-/// `layout` without its scalars and first member, which only
-/// classification reads.
-pub(crate) fn without_scalars(layout: AggregateLayout<'_>) -> AggregateLayout<'static> {
+/// Ordinary aggregate leaves are needed only for classification. Complex
+/// leaves also retain the scalar value contract across memory transport.
+/// First-member classification facts do not survive ABI lowering.
+pub(crate) fn without_scalars(layout: AggregateLayout<'_>) -> AggregateLayout<'_> {
     AggregateLayout {
         size:    layout.size,
         align:   layout.align,
         flags:   layout.flags,
-        scalars: &[],
         first:   None,
+        scalars: if layout.flags.contains(crate::ir::AggregateFlags::COMPLEX) {
+            layout.scalars
+        } else {
+            &[]
+        },
     }
 }
 

@@ -59,6 +59,8 @@ pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
         | Some(first) => ResultPlan::Registers {
             layout,
             registers: ResultRegisters {
+                complex: layout.flags.contains(AggregateFlags::COMPLEX),
+                second_offset: 8,
                 first,
                 second: None,
                 align: layout.align,
