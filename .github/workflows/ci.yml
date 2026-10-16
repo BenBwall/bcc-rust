@@ -43,7 +43,6 @@ jobs:
       MINGW_ROOT: C:\Strawberry\c
       CARGO_BUILD_JOBS: 8
       CARGO_TERM_COLOR: never
-      BCC_EVIDENCE: ${{ runner.temp }}/bcc-windows-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Validate request
         env:
@@ -55,7 +54,9 @@ jobs:
           if ($arguments -isnot [array] -or @($arguments | Where-Object { $_ -isnot [string] }).Count) {
             throw 'cargo_args_json must be a JSON array of strings.'
           }
-          New-Item -ItemType Directory -Path $env:BCC_EVIDENCE | Out-Null
+          $evidence = Join-Path $env:RUNNER_TEMP "bcc-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $evidence | Out-Null
+          "BCC_EVIDENCE=$evidence" >> $env:GITHUB_ENV
 
       - name: Check out dispatcher helpers
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
