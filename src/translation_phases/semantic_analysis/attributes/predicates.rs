@@ -28,7 +28,7 @@ use crate::{
 enum Step<'tu> {
     Eval(&'tu Expression<'tu>),
     Unary(UnaryOperator),
-    Binary(BinaryOperator, TypeId),
+    Binary(BinaryOperator, TypeId, u8),
     Logical(BinaryOperator, &'tu Expression<'tu>),
     Conditional(&'tu Expression<'tu>, &'tu Expression<'tu>, TypeId),
     Cast(TypeId),
@@ -194,7 +194,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             left_expression,
                             right_expression,
                         } => {
-                            work.push(Step::Binary(operator, info.ty));
+                            let complex = |expression| {
+                                matches!(
+                                    self.types.nodes[self.expression_info(expression).ty.index],
+                                    TypeKind::Scalar(
+                                        Scalar::ComplexFloat
+                                            | Scalar::ComplexDouble
+                                            | Scalar::ComplexLongDouble
+                                    )
+                                )
+                            };
+                            let domains = u8::from(complex(left_expression))
+                                | (u8::from(complex(right_expression)) << 1);
+                            work.push(Step::Binary(operator, info.ty, domains));
                             work.push(Step::Eval(right_expression));
                             work.push(Step::Eval(left_expression));
                         },
@@ -290,14 +302,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         }),
                     )))));
                 },
-                | Step::Binary(operator, ty) => {
+                | Step::Binary(operator, ty, domains) => {
                     let right = values.pop().flatten();
                     let left = values.pop().flatten();
                     let value = if operator == BinaryOperator::Comma {
                         right
                     } else {
                         left.zip(right).and_then(|(left, right)| {
-                            self.predicate_binary(operator, ty, left, right)
+                            self.predicate_binary(operator, ty, domains, left, right)
                         })
                     };
                     values.push(value);
@@ -311,7 +323,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         ))))),
                     | Some(left) => {
                         values.push(Some(left));
-                        work.push(Step::Binary(operator, self.expression_info(right).ty));
+                        work.push(Step::Binary(operator, self.expression_info(right).ty, 0));
                         work.push(Step::Eval(right));
                     },
                     | None => values.push(None),
@@ -413,6 +425,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &self,
         operator: BinaryOperator,
         ty: TypeId,
+        domains: u8,
         left: PredicateConstant,
         right: PredicateConstant,
     ) -> Option<PredicateConstant> {
@@ -452,7 +465,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Self::floating_comparison(operator, left, right)
             .map(PredicateConstant::Integer)
             .or_else(|| {
-                self.floating_binary(operator, left, right)
+                let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index]
+                else {
+                    return None;
+                };
+                let precision = self.floating_precision(scalar)?;
+                Self::floating_binary(operator, left, right, precision, domains)
                     .and_then(|value| self.round_floating(value, ty))
                     .map(PredicateConstant::Floating)
             })

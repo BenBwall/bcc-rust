@@ -633,7 +633,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if b.linkage == Linkage::None {
             return None;
         }
-        let entity = self.functions.entities.get(&b.name.name)?;
+        let entity = self.functions.entities.get(&self.function_identity(binding))?;
         let definition = match entity.function_body {
             | Some(FunctionBody::Replaceable(source) | FunctionBody::Unique(source)) =>
                 Some(source),

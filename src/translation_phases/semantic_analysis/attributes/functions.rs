@@ -45,6 +45,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut operands = ArenaVec::new_in(self.scratch);
         for &list in &lists {
             for attribute in self.written_attributes(list) {
+                if super::catalog::rule(
+                    list.syntax,
+                    attribute.namespace,
+                    attribute.name,
+                    self.context.configuration.target(),
+                )
+                .is_none()
+                {
+                    continue;
+                }
                 if matches!(attribute.name, "enable_if" | "diagnose_if")
                     && let Some(argument) =
                         list.arguments.iter().find(|a| a.index == attribute.index)
@@ -89,6 +99,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut unavailable = None;
         for &list in &self.declaration_attribute_lists(specifiers, Some(declarator)) {
             for attribute in self.written_attributes(list) {
+                if super::catalog::rule(
+                    list.syntax,
+                    attribute.namespace,
+                    attribute.name,
+                    self.context.configuration.target(),
+                )
+                .is_none()
+                {
+                    continue;
+                }
                 match attribute.name {
                     | "overloadable" => {
                         overloadable = true;
@@ -175,6 +195,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     syntax.declarator,
                 ) {
                     for attribute in self.written_attributes(list) {
+                        if super::catalog::rule(
+                            list.syntax,
+                            attribute.namespace,
+                            attribute.name,
+                            self.context.configuration.target(),
+                        )
+                        .is_none()
+                        {
+                            continue;
+                        }
                         if !matches!(
                             attribute.name,
                             "pass_object_size" | "pass_dynamic_object_size"
