@@ -236,3 +236,105 @@ void test(void) { divided(3.0); multiplied(3.0); rounded(16777216.0f); complex(3
         },
     );
 }
+
+#[test]
+fn cleanup_diagnostics_substitute_the_automatic_object_address() {
+    with_source(
+        r#"
+void nonnull(int *p) __attribute__((diagnose_if(p!=0,"nonnull","error")));
+void null(int *p) __attribute__((diagnose_if(p==0,"null","error")));
+void constant(int *p) __attribute__((diagnose_if(1,"constant","warning")));
+void known(int *p) __attribute__((diagnose_if(__builtin_object_size(p,0)==sizeof(int),"size","warning")));
+void offset(void *p) __attribute__((diagnose_if(__builtin_object_size((char*)p+2,1)==5,"offset","warning")));
+void runtime(int *p) __attribute__((diagnose_if(__builtin_constant_p(p),"constant address","error")));
+void blocked(int *p) __attribute__((unavailable("blocked")));
+[[clang::unavailable("scoped")]] void scoped(int *p);
+void renamed(int *p) __attribute__((diagnose_if(p!=0,"renamed","warning")));
+void renamed(int *other);
+void test(void) {
+    int a __attribute__((cleanup(nonnull))) = 0;
+    int b __attribute__((cleanup(null))) = 0;
+    int c __attribute__((cleanup(constant))) = 0;
+    int d __attribute__((cleanup(known))) = 0;
+    char data[7] __attribute__((cleanup(offset)));
+    int e __attribute__((cleanup(runtime))) = 0;
+    int f __attribute__((cleanup(blocked))) = 0;
+    int g __attribute__((cleanup(scoped))) = 0;
+    int h __attribute__((cleanup(renamed))) = 0;
+}
+"#,
+        |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 7, "{errors:?}");
+            assert_eq!(sema.errors, 3, "{errors:?}");
+            let messages: Vec<_> = errors
+                .iter()
+                .map(|error| {
+                    let TranslationError::Semantic(error) = error else {
+                        panic!("{error:?}")
+                    };
+                    assert_eq!(error.kind, SemanticErrorKind::CallAttribute);
+                    assert!(error.previous.is_some());
+                    context.string_cache.at(error.name.unwrap())
+                })
+                .collect();
+            assert_eq!(
+                messages,
+                [
+                    "nonnull", "constant", "size", "offset", "blocked", "scoped", "renamed"
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn cleanup_rejects_distinct_overloads_without_selecting_a_candidate() {
+    for source in [
+        "void hook(int*) __attribute__((overloadable)); void hook(double*) \
+         __attribute__((overloadable)); void test(void){int n __attribute__((cleanup(hook)))=0;}",
+        "void hook(int*) __attribute__((overloadable)); void hook(void*) \
+         __attribute__((overloadable)); void test(void){int n __attribute__((cleanup(hook)))=0;}",
+        "void hook(int *p) __attribute__((overloadable,enable_if(p!=0,\"nonnull\"))); void \
+         hook(int *p) __attribute__((overloadable,enable_if(1,\"constant\"))); void \
+         test(void){int n __attribute__((cleanup(hook)))=0;}",
+    ] {
+        with_source(source, |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+            assert_eq!(sema.errors, 1, "{errors:?}");
+            assert!(
+                matches!(
+                    errors[0],
+                    TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::CleanupOverloadSet,
+                        previous: Some(_),
+                        ..
+                    })
+                ),
+                "{errors:?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn cleanup_accepts_single_overloads_redeclarations_and_disabled_enable_predicates() {
+    for source in [
+        "void hook(int*) __attribute__((overloadable)); void test(void){int n \
+         __attribute__((cleanup(hook)))=0;}",
+        "void hook(int*) __attribute__((overloadable)); void hook(int*) \
+         __attribute__((overloadable)); void test(void){int n __attribute__((cleanup(hook)))=0;}",
+        "void hook(int *p) __attribute__((enable_if(0,\"disabled\"))); void test(void){int n \
+         __attribute__((cleanup(hook)))=0;}",
+        "void hook(int *p) __attribute__((enable_if(p!=0,\"nonnull\"))); void hook(int *p) \
+         __attribute__((enable_if(1,\"constant\"))); void test(void){int n \
+         __attribute__((cleanup(hook)))=0;}",
+    ] {
+        with_source(source, |context, sema| {
+            let errors = context.take_pending_errors();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            assert_eq!(sema.errors, 0, "{errors:?}");
+        });
+    }
+}

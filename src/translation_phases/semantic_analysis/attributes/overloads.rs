@@ -235,7 +235,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             if let Some(message) = contract.unavailable {
-                self.call_attribute_diagnostic(expression, message, false);
+                self.call_attribute_diagnostic(expression.source_vectors, message, false);
             }
             for predicate in contract.predicates {
                 if predicate.kind != PredicateKind::Enable
@@ -248,7 +248,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .is_some_and(|value| value.value != 0)
                 {
                     self.call_attribute_diagnostic(
-                        expression,
+                        expression.source_vectors,
                         predicate.message,
                         predicate.kind == PredicateKind::Warning,
                     );
@@ -378,9 +378,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         a.map_or(0, |a| a.sizes.len()) > b.map_or(0, |b| b.sizes.len())
     }
 
-    fn call_attribute_diagnostic(
+    pub(super) fn call_attribute_diagnostic(
         &mut self,
-        call: &'tu Expression<'tu>,
+        source: crate::translation_phases::SourceVectors,
         message: super::super::AttributeMessage,
         warning: bool,
     ) {
@@ -394,7 +394,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         self.semantic_errors += usize::from(!warning);
         self.error_diagnostics += usize::from(!warning);
-        let source_vectors = self.context.file_location(call.source_vectors);
+        let source_vectors = self.context.file_location(source);
         if self.context.withholds(severity, false, source_vectors) {
             return;
         }
@@ -479,7 +479,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .function(binding)
                     .and_then(|contract| contract.unavailable)
             {
-                self.call_attribute_diagnostic(source.expression, message, false);
+                self.call_attribute_diagnostic(source.expression.source_vectors, message, false);
             }
             _ = self
                 .function_extensions

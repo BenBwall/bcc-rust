@@ -56,7 +56,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             .direct_callee(function)
             .map_err(|kind| at(kind, source))?;
         let signature = self.unit.module.function_signature(func);
-        let mut args = ArenaVec::with_capacity_in(2, self.scratch);
+        let mut args = ArenaVec::with_capacity_in(3, self.scratch);
         if let Some(ParamAbi::Result(layout)) = signature.result_param() {
             let object = self.fresh_object(layout.size, layout.align, source)?;
             args.push(object);

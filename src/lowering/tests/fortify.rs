@@ -342,3 +342,33 @@ int main(void) { { char data[13] __attribute__((cleanup(clean))); } return obser
     );
     assert!(text.contains("@clean.always_inline"), "{text}");
 }
+
+#[test]
+fn cleanup_enable_if_is_exempt_while_diagnose_if_warnings_allow_execution() {
+    let _text = returns(
+        r#"
+int observed;
+void clean(int *p) __attribute__((enable_if(0,"disabled"),diagnose_if(p!=0,"cleanup","warning"))) {
+    observed += *p;
+}
+int main(void) { { int n __attribute__((cleanup(clean))) = 7; } return observed; }
+"#,
+        7,
+    );
+}
+
+#[test]
+fn cleanup_hidden_sizes_follow_aggregate_result_storage() {
+    let _text = returns(
+        r"
+struct R { int value[4]; };
+unsigned long observed;
+struct R clean(void *const p __attribute__((pass_object_size(1)))) {
+    observed = __builtin_object_size(p,1);
+    struct R result = {0}; return result;
+}
+int main(void) { { char data[9] __attribute__((cleanup(clean))); } return observed; }
+",
+        9,
+    );
+}

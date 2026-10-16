@@ -35,6 +35,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         parameters: &[Option<usize>],
         arguments: &[&'tu Expression<'tu>],
     ) -> ObjectSize<'tu> {
+        self.object_size_substitution(expression, mode, dynamic, parameters, arguments, None)
+    }
+
+    pub(super) fn cleanup_object_size(
+        &self,
+        expression: &'tu Expression<'tu>,
+        mode: u8,
+        dynamic: bool,
+        parameters: &[Option<usize>],
+        variable: usize,
+    ) -> ObjectSize<'tu> {
+        self.object_size_substitution(expression, mode, dynamic, parameters, &[], Some(variable))
+    }
+
+    fn object_size_substitution(
+        &self,
+        expression: &'tu Expression<'tu>,
+        mode: u8,
+        dynamic: bool,
+        parameters: &[Option<usize>],
+        arguments: &[&'tu Expression<'tu>],
+        cleanup: Option<usize>,
+    ) -> ObjectSize<'tu> {
         let mut node = expression;
         let mut lvalue = false;
         let mut offset = 0_u64;
@@ -52,10 +75,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         if let Some(index) = parameters
                             .iter()
                             .position(|&p| p.is_some() && p == info.binding)
-                            && let Some(&actual) = arguments.get(index)
                         {
-                            node = actual;
-                            continue;
+                            if let Some(&actual) = arguments.get(index) {
+                                node = actual;
+                                continue;
+                            }
+                            if index == 0
+                                && let Some(variable) = cleanup
+                            {
+                                let ty = self.bindings[variable].ty;
+                                if !runtime_offset {
+                                    if let Some(layout) = self.types.layout(ty) {
+                                        return ObjectSize::Constant(
+                                            layout.size.saturating_sub(offset),
+                                        );
+                                    }
+                                    if dynamic && self.variably_modified(ty) {
+                                        return ObjectSize::Dynamic { ty, offset };
+                                    }
+                                }
+                                return ObjectSize::Unknown;
+                            }
                         }
                         if let Some(binding) = info.binding
                             && let Some(size) = self.extension_parameters.get(&binding)
