@@ -373,6 +373,65 @@ fn command_lines_follow_the_options() {
 }
 
 #[test]
+fn freestanding_commands_preserve_object_and_hosted_link_contracts() {
+    let Some(toolchain) = toolchain(Target::LinuxGnu) else {
+        return;
+    };
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for kind in [
+            OutputKind::Object,
+            OutputKind::Executable,
+            OutputKind::PositionDependentExecutable,
+            OutputKind::SharedLibrary,
+        ] {
+            let options = LlvmOptions {
+                opt: Some(OptLevel::O2),
+                disable_llvm_passes: false,
+                target,
+                kind,
+                code: CodeOptions::default(),
+            };
+            let hosted = toolchain.command(Path::new("in.o"), Path::new("out"), options);
+            let freestanding =
+                toolchain.freestanding_command(Path::new("in.o"), Path::new("out"), options);
+            let hosted: Vec<_> = hosted.get_args().collect();
+            let freestanding: Vec<_> = freestanding.get_args().collect();
+            let links = kind != OutputKind::Object;
+            assert_eq!(
+                hosted.iter().any(|&argument| argument == "-lm"),
+                links && matches!(target, Target::LinuxGnu | Target::LinuxMusl),
+                "{target:?} {kind:?}"
+            );
+            assert_eq!(
+                freestanding.iter().any(|&argument| argument == "-nostdlib"),
+                links,
+                "{target:?} {kind:?}"
+            );
+            assert!(
+                !freestanding.iter().any(|&argument| argument == "-lm"),
+                "{target:?} {kind:?}"
+            );
+            assert_eq!(
+                hosted
+                    .into_iter()
+                    .filter(|&argument| argument != "-lm")
+                    .collect::<Vec<_>>(),
+                freestanding
+                    .into_iter()
+                    .filter(|&argument| argument != "-nostdlib")
+                    .collect::<Vec<_>>(),
+                "{target:?} {kind:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn data_layouts_match_clang() {
     let targets = [
         Target::LinuxGnu,

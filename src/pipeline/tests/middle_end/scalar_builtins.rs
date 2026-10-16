@@ -568,9 +568,8 @@ void *memcpy(void *p,const void *q,unsigned long n){volatile unsigned char *a=p;
                 )
                 .unwrap();
             });
-            let mut link = toolchain.command(&object, &executable, options);
+            let mut link = toolchain.freestanding_command(&object, &executable, options);
             _ = link.args(["-x", "c"]).arg(&helper).args([
-                "-nostdlib",
                 "-static",
                 "-ffreestanding",
                 "-fno-stack-protector",

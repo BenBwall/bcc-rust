@@ -709,15 +709,13 @@ fn assert_object_conforms(
             code: crate::target::CodeOptions::default(),
         };
         compile(&object, options);
-        let mut command = toolchain.command(&object, &executable, options);
+        let mut command = match runner {
+            | Runner::Native => toolchain.command(&object, &executable, options),
+            | Runner::Wsl => toolchain.freestanding_command(&object, &executable, options),
+        };
         _ = command.args(["-x", "c"]).arg(&c_path);
         if runner == Runner::Wsl {
-            _ = command.args([
-                "-nostdlib",
-                "-static",
-                "-ffreestanding",
-                "-fno-stack-protector",
-            ]);
+            _ = command.args(["-static", "-ffreestanding", "-fno-stack-protector"]);
         }
         let output = command.output().unwrap();
         assert!(

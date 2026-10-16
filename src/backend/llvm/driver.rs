@@ -296,6 +296,29 @@ impl Toolchain {
 
     /// The external link command. No IR parsing or compilation takes place.
     pub(crate) fn command(&self, object: &Path, out_path: &Path, options: LlvmOptions) -> Command {
+        self.link_command(object, out_path, options, true)
+    }
+
+    /// A link whose caller supplies startup and runtime support. Clang's
+    /// `-nostdlib` suppresses its default libraries, but not an explicit
+    /// `-lm`, so this path also omits our automatic hosted libraries.
+    #[cfg(test)]
+    pub(crate) fn freestanding_command(
+        &self,
+        object: &Path,
+        out_path: &Path,
+        options: LlvmOptions,
+    ) -> Command {
+        self.link_command(object, out_path, options, false)
+    }
+
+    fn link_command(
+        &self,
+        object: &Path,
+        out_path: &Path,
+        options: LlvmOptions,
+        hosted: bool,
+    ) -> Command {
         let mut command = Command::new(&self.clang);
         _ = command
             .arg(concat_os("--target=", options.target.triple().as_ref()))
@@ -311,10 +334,12 @@ impl Toolchain {
             .arg(out_path);
         // C99 §7.12 real math is provided by a separate library on Linux.
         // The CLI links the hosted C runtime, including its math functions.
-        if options.kind != OutputKind::Object
-            && matches!(options.target, Target::LinuxGnu | Target::LinuxMusl)
-        {
-            _ = command.arg("-lm");
+        if options.kind != OutputKind::Object {
+            if !hosted {
+                _ = command.arg("-nostdlib");
+            } else if matches!(options.target, Target::LinuxGnu | Target::LinuxMusl) {
+                _ = command.arg("-lm");
+            }
         }
         command
     }
