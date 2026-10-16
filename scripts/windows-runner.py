@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -83,8 +84,17 @@ def main():
 
 
 def gh(*arguments, **options):
+    environment = os.environ.copy()
+    state = Path("/c/Users/benbw/Documents/GitRepo/bcc-rust/.git/windows-runner-state")
+    if os.name == "posix" and state.is_dir():
+        # Logs/artifact downloads remain usable when the sandbox overlay is full.
+        for variable, directory in (("TMPDIR", "tmp"), ("XDG_CACHE_HOME", "cache")):
+            location = state / directory
+            location.mkdir(exist_ok=True)
+            environment[variable] = str(location)
+    environment["GH_NO_UPDATE_NOTIFIER"] = "1"
     return subprocess.run(["gh", *arguments, "--repo", REPOSITORY] if arguments[0] != "api"
-                          else ["gh", *arguments], text=True, **options)
+                          else ["gh", *arguments], text=True, env=environment, **options)
 
 
 if __name__ == "__main__":

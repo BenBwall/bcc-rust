@@ -30,6 +30,7 @@ $wrapper = 'C:\bcc\runner\cargo_runner.py'
 $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = "python $wrapper"
 $env:RUSTUP_TOOLCHAIN = '1.99.0-x86_64-pc-windows-gnu'
 $env:PATH = "$env:MINGW_ROOT\bin;$env:PATH"
+$env:CRITERION_HOME = Join-Path $ResultsDirectory 'criterion'
 $checks = [Collections.Generic.List[object]]::new()
 $started = [DateTime]::UtcNow.ToString('o')
 $problem = $null

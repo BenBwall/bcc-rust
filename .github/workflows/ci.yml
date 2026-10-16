@@ -102,7 +102,5 @@ jobs:
           name: windows-${{ inputs.suite }}-${{ inputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.BCC_EVIDENCE }}
-            ${{ github.workspace }}/source/target/criterion
-            ${{ github.workspace }}/source/target/x86_64-pc-windows-gnu/criterion
           if-no-files-found: warn
           retention-days: 14
