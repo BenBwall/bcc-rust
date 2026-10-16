@@ -32,52 +32,56 @@ use crate::{
 /// A function in machine IR: blocks in layout order, the number of virtual
 /// registers, allocation hints, and the frame objects selection created.
 pub(crate) struct MFunction<'a> {
-    pub(crate) blocks:        ArenaVec<'a, MBlockData<'a>>,
+    pub(crate) blocks:           ArenaVec<'a, MBlockData<'a>>,
     /// One hint per virtual register: the register a copy connects it to.
-    pub(crate) hints:         ArenaVec<'a, Option<Reg>>,
+    pub(crate) hints:            ArenaVec<'a, Option<Reg>>,
     /// The class of each virtual register.
-    pub(crate) classes:       ArenaVec<'a, RegClass>,
+    pub(crate) classes:          ArenaVec<'a, RegClass>,
     /// IR stack slots first, by their index, then back-end temporaries.
-    pub(crate) slots:         ArenaVec<'a, FrameSlotData>,
+    pub(crate) slots:            ArenaVec<'a, FrameSlotData>,
     /// The function's read-only constants, 16 bytes each, addressed through
     /// [`Base::Constant`].
-    pub(crate) constants:     ArenaVec<'a, u128>,
+    pub(crate) constants:        ArenaVec<'a, u128>,
     /// Bytes of the outgoing argument area, including Win64's home area.
-    pub(crate) outgoing:      u32,
+    pub(crate) outgoing:         u32,
     /// Whether the function calls anything, which fixes its stack alignment.
-    pub(crate) calls:         bool,
+    pub(crate) calls:            bool,
     /// Whether `%rsp` moves after the prologue (`dyn_alloca`,
     /// `stack_restore`), so frame objects are addressed from `%rbp`.
-    pub(crate) dynamic:       bool,
+    pub(crate) dynamic:          bool,
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
-    pub(crate) register_save: bool,
+    pub(crate) register_save:    bool,
     /// A callee-saved register the prologue pushes first, written or not:
     /// `%rbp` when the function takes its frame address, so the caller's
     /// `%rbp` is where a frame pointer would save it.
-    pub(crate) first_push:    Option<PReg>,
+    pub(crate) first_push:       Option<PReg>,
     /// The targets of each [`MInst::JmpIndirect`], by its `dests` index.
-    pub(crate) indirect:      ArenaVec<'a, ArenaVec<'a, MBlock>>,
+    pub(crate) indirect:         ArenaVec<'a, ArenaVec<'a, MBlock>>,
     /// Each IR block label with the block its address names: the labeled
     /// block, or a landing block that assigns its parameters first.
-    pub(crate) labels:        ArenaVec<'a, (u32, MBlock)>,
+    pub(crate) labels:           ArenaVec<'a, (u32, MBlock)>,
+    /// The IR symbols the function reaches through their GOT entry or
+    /// `.refptr` stub, possibly repeated.
+    pub(crate) indirect_symbols: ArenaVec<'a, Symbol>,
 }
 
 impl<'a> MFunction<'a> {
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            blocks:        ArenaVec::new_in(arena),
-            hints:         ArenaVec::new_in(arena),
-            classes:       ArenaVec::new_in(arena),
-            slots:         ArenaVec::new_in(arena),
-            constants:     ArenaVec::new_in(arena),
-            outgoing:      0,
-            calls:         false,
-            dynamic:       false,
-            register_save: false,
-            first_push:    None,
-            indirect:      ArenaVec::new_in(arena),
-            labels:        ArenaVec::new_in(arena),
+            blocks:           ArenaVec::new_in(arena),
+            hints:            ArenaVec::new_in(arena),
+            classes:          ArenaVec::new_in(arena),
+            slots:            ArenaVec::new_in(arena),
+            constants:        ArenaVec::new_in(arena),
+            outgoing:         0,
+            calls:            false,
+            dynamic:          false,
+            register_save:    false,
+            first_push:       None,
+            indirect:         ArenaVec::new_in(arena),
+            labels:           ArenaVec::new_in(arena),
+            indirect_symbols: ArenaVec::new_in(arena),
         }
     }
 

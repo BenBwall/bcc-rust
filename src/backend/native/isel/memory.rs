@@ -51,7 +51,7 @@ use crate::{
             Width,
         },
         support::Construct,
-        weak_declaration,
+        through_stub,
     },
     ir::{
         GlobalId,
@@ -133,11 +133,11 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Whether `symbol` can be addressed RIP-relative: on ELF only if the
-    /// module defines it, on COFF unless it is a weak declaration, whose
-    /// address may be null and so is loaded from a `.refptr` stub.
+    /// module defines it, on COFF unless its address is loaded from a
+    /// `.refptr` stub ([`through_stub`]).
     pub(in crate::backend::native) fn direct(&self, symbol: Symbol) -> bool {
         if matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc) {
-            return !weak_declaration(self.module, symbol);
+            return !through_stub(self.module, self.target, symbol);
         }
         defines(self.module, symbol)
     }
@@ -159,6 +159,7 @@ impl Selector<'_, '_, '_> {
                 addr: Mem::new(Base::Symbol(SymbolRef::Ir(symbol)), folded),
             }),
             | AddrBase::Symbol(symbol) => {
+                self.func.indirect_symbols.push(symbol);
                 self.emit(MInst::Mov {
                     width: Width::B64,
                     dst,

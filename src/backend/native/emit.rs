@@ -32,8 +32,9 @@
 //! section and alignment, `.hidden`/`.protected` on ELF, and constructors
 //! and destructors in `.init_array`/`.fini_array` (ELF), `.ctors`/`.dtors`
 //! (MinGW) or `.CRT$XC*`/`.CRT$XT*` (MSVC), suffixed by priority. COFF
-//! reaches a weak declaration through a `.refptr` stub. `used` needs
-//! nothing, since every symbol is emitted.
+//! reaches a weak declaration, and MinGW data the module does not define,
+//! through a `.refptr` stub. `used` needs nothing, since every symbol is
+//! emitted.
 
 use std::fmt::{
     self,
@@ -57,6 +58,7 @@ use super::{
         SymbolRef,
         Width,
     },
+    through_stub,
     weak_declaration,
 };
 use crate::{
@@ -73,6 +75,10 @@ use crate::{
         Visibility,
     },
     target::Target,
+    util::bump::{
+        ArenaSet,
+        Bump,
+    },
 };
 
 /// Writes one module's assembly.
@@ -81,15 +87,24 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     pub(crate) out:    &'o mut dyn Write,
     elf:               bool,
     target:            Target,
+    /// The symbols code reaches through a `.refptr` stub on COFF, whose
+    /// stubs follow the data.
+    stubs:             ArenaSet<'o, Symbol>,
 }
 
 impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
-    pub(crate) fn new(module: &'m Module<'ir>, target: Target, out: &'o mut dyn Write) -> Self {
+    pub(crate) fn new(
+        module: &'m Module<'ir>,
+        target: Target,
+        out: &'o mut dyn Write,
+        arena: &'o Bump,
+    ) -> Self {
         Self {
             module,
             out,
             elf: matches!(target, Target::LinuxGnu | Target::LinuxMusl),
             target,
+            stubs: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena),
         }
     }
 
@@ -127,6 +142,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.p2align\t{align}, 0x90")?;
             writeln!(self.out, "{name}:")?;
             writeln!(self.out, "\t.seh_proc\t{name}")?;
+        }
+        if !self.elf {
+            self.stubs.extend(func.indirect_symbols.iter().copied());
         }
         self.prologue(frame)?;
         for (index, block) in func.blocks.iter().enumerate() {
@@ -826,17 +844,25 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     /// `.weak` for each weak declaration, and on COFF the `.refptr` stub
-    /// through which code reaches it, as Clang writes it.
+    /// through which code reaches it or MinGW data the module does not
+    /// define, as Clang writes them. A weak declaration's stub is written
+    /// whether or not code uses it; other data gets one only where code
+    /// uses it, since the stub refers to the data.
     fn weak_declarations(&mut self) -> fmt::Result {
         let module = self.module;
         let functions = module.functions().map(|(id, _)| Symbol::Function(id));
         let globals = module.globals().map(|(id, _)| Symbol::Global(id));
         for symbol in functions.chain(globals) {
-            if !weak_declaration(module, symbol) {
+            let weak = weak_declaration(module, symbol);
+            let imported =
+                !weak && self.stubs.contains(&symbol) && through_stub(module, self.target, symbol);
+            if !weak && !imported {
                 continue;
             }
             let name = module.symbol_name(symbol);
-            writeln!(self.out, "\t.weak\t{}", Name(name))?;
+            if weak {
+                writeln!(self.out, "\t.weak\t{}", Name(name))?;
+            }
             if !self.elf {
                 let stub = RefPtr(name);
                 writeln!(self.out, "\t.section\t.rdata${stub},\"dr\",discard,{stub}")?;
@@ -904,8 +930,8 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
 /// The priority of a constructor or destructor that names none.
 const DEFAULT_PRIORITY: u16 = 65535;
 
-/// The `.refptr` stub of a COFF weak declaration: a pointer-sized constant
-/// holding its address.
+/// The `.refptr` stub of a COFF weak declaration or imported datum: a
+/// pointer-sized constant holding its address.
 struct RefPtr<'a>(&'a str);
 
 impl fmt::Display for RefPtr<'_> {
@@ -1059,7 +1085,7 @@ impl fmt::Display for Op<'_, '_, '_> {
                         write!(f, "{}@GOTPCREL(%rip)", symbol_name(module, symbol)),
                     | Base::Got(symbol) => {
                         let SymbolRef::Ir(symbol) = symbol else {
-                            unreachable!("COFF reaches only weak declarations indirectly")
+                            unreachable!("COFF reaches only IR symbols through a stub")
                         };
                         write!(f, "{}(%rip)", RefPtr(module.symbol_name(symbol)))
                     },

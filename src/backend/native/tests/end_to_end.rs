@@ -700,3 +700,90 @@ fn ir_programs_match_the_interpreter() {
         }
     }
 }
+
+/// #69: MinGW code that reads a DLL's data links through LLD's auto-import
+/// without a 32-bit pseudo-relocation, which LLD warns "can fail at runtime
+/// depending on memory layout": the `.refptr` stub's 64-bit address becomes
+/// the import's address-table entry, so the link succeeds even with runtime
+/// pseudo-relocations disabled. A direct `sym(%rip)` reference fails that
+/// link. Linked freestanding, so it needs only the bundled toolchain.
+#[test]
+fn mingw_dll_data_links_without_narrow_pseudo_relocations() {
+    let Ok(toolchain) = crate::backend::llvm::Toolchain::bundled(Target::WindowsGnu) else {
+        eprintln!("skipping: no bundled toolchain");
+        return;
+    };
+    let directory = TempDir::new("native-dll-data");
+    let dll = directory.join("data.c");
+    std::fs::write(
+        &dll,
+        "__declspec(dllexport) int shared_value = 42;\n__declspec(dllexport) int \
+         shared_list[4];\nint DllMainCRTStartup(void *a, unsigned b, void *c) { return 1; }\n",
+    )
+    .unwrap();
+    let clang = |args: &[&str]| {
+        let output = run_native(
+            Command::new(toolchain.clang())
+                .args([
+                    "--target=x86_64-w64-windows-gnu",
+                    "-nostdlib",
+                    "-fuse-ld=lld",
+                ])
+                .args(args)
+                .current_dir(directory.path()),
+        )
+        .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let (built, stderr) = clang(&[
+        "-shared",
+        "-o",
+        "data.dll",
+        "data.c",
+        "-Wl,--out-implib,libdata.a",
+        "-Wl,-e,DllMainCRTStartup",
+    ]);
+    assert!(built, "{stderr}");
+    let source = "extern int shared_value; extern int shared_list[4];
+int start(void) { return shared_value + shared_list[3]; }";
+    for optimize in [false, true] {
+        let text = with_module(source, Target::WindowsGnu, optimize, |module| {
+            let mut text = String::new();
+            emit_assembly(module, Target::WindowsGnu, &mut text).unwrap();
+            text
+        });
+        std::fs::write(directory.join("start.s"), &text).unwrap();
+        let (linked, stderr) = clang(&[
+            "-o",
+            "start.exe",
+            "start.s",
+            "-L.",
+            "-ldata",
+            "-Wl,-e,start",
+            "-Wl,--disable-runtime-pseudo-reloc",
+        ]);
+        assert!(linked && !stderr.contains("too narrow"), "{stderr}\n{text}");
+    }
+    // The control: the direct reference this replaces does not link so.
+    std::fs::write(
+        directory.join("direct.s"),
+        "\t.text\n\t.globl\tstart\nstart:\n\tmovl\tshared_value(%rip), %eax\n\tretq\n",
+    )
+    .unwrap();
+    let (linked, stderr) = clang(&[
+        "-o",
+        "direct.exe",
+        "direct.s",
+        "-L.",
+        "-ldata",
+        "-Wl,-e,start",
+        "-Wl,--disable-runtime-pseudo-reloc",
+    ]);
+    assert!(
+        !linked && stderr.contains("requires pseudo relocations"),
+        "{stderr}"
+    );
+}
