@@ -304,7 +304,7 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
-            | Self::UnknownWarning | Self::ExtraWarnings => configuration,
+            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation => configuration,
             | Self::AllWarnings(enabled) => configuration.with_warning_option(
                 DiagnosticGroup::UnusedFunction,
                 WarningOption::Enable(enabled),
@@ -330,7 +330,6 @@ impl LanguageFlag {
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
-            | Self::Relocation => configuration,
         }
     }
 }
