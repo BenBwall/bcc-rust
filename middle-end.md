@@ -1210,7 +1210,7 @@ promoted and original types, so adjustment does not discard entry-time actions.
 Prototype/body parameter binding pairs are retained by semantic analysis;
 function entry visits only those pairs, without scanning unrelated bindings or
 matching source positions.
-C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.5.3.4p2, p. 80;
+C99 §6.7.5.2p5, p. 117; PDF p. 129; §6.5.3.4p2, p. 80;
 PDF p. 92; §6.9.1p10, p. 142; PDF p. 154.
 
 Each automatic VLA declaration saves the stack into an SSA variable keyed by

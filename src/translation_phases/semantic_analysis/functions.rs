@@ -1240,8 +1240,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Retains evaluation contexts for emission separately from definition
     /// constraints. GNU typeof executes an expression only for VM types;
-    /// alignof never evaluates its operand. C99: §6.7.5.2p5, pp. 116-117;
-    /// PDF pp. 128-129 (VM types); GCC manual, "Typeof".
+    /// alignof never evaluates its operand. C99: §6.7.5.2p5, p. 117;
+    /// PDF p. 129 (VM types); GCC manual, "Typeof".
     pub(super) fn enter_reference_context(
         &mut self,
         syntax: Option<&'tu super::ExtendedType<'tu>>,

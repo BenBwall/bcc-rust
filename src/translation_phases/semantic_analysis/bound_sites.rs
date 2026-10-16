@@ -46,7 +46,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Newly written bounds; a typedef's remembered extent is not an action.
-    /// C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129.
+    /// C99: §6.7.5.2p5, p. 117; PDF p. 129.
     pub(super) fn bound_actions(&self, mut ty: TypeId, start: usize) -> &'tu [usize] {
         if start == self.types.runtime_bounds.len() || !self.types.variably_modified(ty) {
             return &[];
@@ -101,8 +101,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Keep execution at the written type site: typedef reuse does not execute
     /// the original typeof operand again. Nested type operands copy their
     /// retained actions; expression operands execute only when their type is
-    /// VM. GNU extension: GCC Typeof; C99: §6.7.5.2p5, pp. 116-117;
-    /// PDF pp. 128-129 (remembered array extents).
+    /// VM. GNU extension: GCC Typeof; C99: §6.7.5.2p5, p. 117;
+    /// PDF p. 129 (remembered array extents).
     pub(super) fn finish_typeof(&mut self, syntax: &'tu ExtendedType<'tu>) {
         let ExtendedType::Typeof {
             operand,
