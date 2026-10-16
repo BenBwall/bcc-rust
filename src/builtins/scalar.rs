@@ -1320,6 +1320,160 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Parameter(T::Size))],
         1,
     ),
+    descriptor(
+        Id::Rotateleft8,
+        "__builtin_rotateleft8",
+        B::Rotate(8, false),
+        Signature {
+            result:     T::Scalar(S::UnsignedChar),
+            parameters: &[T::Scalar(S::UnsignedChar), T::Scalar(S::UnsignedChar)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedChar))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedChar))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Rotateright8,
+        "__builtin_rotateright8",
+        B::Rotate(8, true),
+        Signature {
+            result:     T::Scalar(S::UnsignedChar),
+            parameters: &[T::Scalar(S::UnsignedChar), T::Scalar(S::UnsignedChar)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedChar))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedChar))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Rotateleft16,
+        "__builtin_rotateleft16",
+        B::Rotate(16, false),
+        Signature {
+            result:     T::Scalar(S::UnsignedShort),
+            parameters: &[T::Scalar(S::UnsignedShort), T::Scalar(S::UnsignedShort)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedShort))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedShort))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Rotateright16,
+        "__builtin_rotateright16",
+        B::Rotate(16, true),
+        Signature {
+            result:     T::Scalar(S::UnsignedShort),
+            parameters: &[T::Scalar(S::UnsignedShort), T::Scalar(S::UnsignedShort)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedShort))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedShort))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Rotateleft32,
+        "__builtin_rotateleft32",
+        B::Rotate(32, false),
+        Signature {
+            result:     T::Unsigned(32),
+            parameters: &[T::Unsigned(32), T::Unsigned(32)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Unsigned(32))),
+            A::value(C::Parameter(T::Unsigned(32))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Rotateright32,
+        "__builtin_rotateright32",
+        B::Rotate(32, true),
+        Signature {
+            result:     T::Unsigned(32),
+            parameters: &[T::Unsigned(32), T::Unsigned(32)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Unsigned(32))),
+            A::value(C::Parameter(T::Unsigned(32))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Rotateleft64,
+        "__builtin_rotateleft64",
+        B::Rotate(64, false),
+        Signature {
+            result:     T::Unsigned(64),
+            parameters: &[T::Unsigned(64), T::Unsigned(64)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Unsigned(64))),
+            A::value(C::Parameter(T::Unsigned(64))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Rotateright64,
+        "__builtin_rotateright64",
+        B::Rotate(64, true),
+        Signature {
+            result:     T::Unsigned(64),
+            parameters: &[T::Unsigned(64), T::Unsigned(64)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Unsigned(64))),
+            A::value(C::Parameter(T::Unsigned(64))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Isnanf,
+        "__builtin_isnanf",
+        B::Float(FloatOperation::Isnan, Some(S::Float)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Float)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Float)))],
+        1,
+    ),
+    descriptor(
+        Id::Isnanl,
+        "__builtin_isnanl",
+        B::Float(FloatOperation::Isnan, Some(S::LongDouble)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::LongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::LongDouble)))],
+        1,
+    ),
 ];
 
 const fn descriptor(

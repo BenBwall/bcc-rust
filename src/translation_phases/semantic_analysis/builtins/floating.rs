@@ -6,8 +6,13 @@
 
 use crate::{
     builtins::FloatOperation,
+    float_parsing::LongDouble,
     translation_phases::{
-        parsing::syntax::Expression,
+        parsing::syntax::{
+            Expression,
+            ExpressionType,
+        },
+        preprocessing::StringTokenType,
         semantic_analysis::{
             Analyzer,
             ConstantClass,
@@ -24,6 +29,42 @@ use crate::{
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// GCC constructors implement the math-header constants as arithmetic
+    /// constant expressions. A dynamic NaN tag remains an ordinary libm call;
+    /// only a string literal may initialize a static object.
+    /// C99: §7.12p3-5, pp. 212-213; PDF pp. 224-225; §7.12.11.2p2,
+    /// p. 237; PDF p. 249; §6.6p10, p. 96; PDF p. 108 (GNU extension).
+    pub(in crate::translation_phases::semantic_analysis) fn floating_constant_builtin(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        args: &[&'tu Expression<'tu>],
+        scalar: Scalar,
+        nan: bool,
+    ) -> ExpressionInfo<'tu> {
+        let ty = self.types.scalar(scalar);
+        let mut result = Self::expression_result(expression, ty);
+        let value = if nan {
+            let mut literal = args[0];
+            while let ExpressionType::Parenthesized { expression } = literal.kind {
+                literal = expression;
+            }
+            let ExpressionType::StringLiteral(StringTokenType::String(tag)) = literal.kind else {
+                return result;
+            };
+            let tag = self
+                .context
+                .literal_text_in(self.scratch, tag, false)
+                .unwrap_or("");
+            let payload = nan_payload(tag.as_bytes());
+            LongDouble::quiet_nan(payload, self.floating_precision(scalar).unwrap_or(3))
+        } else {
+            LongDouble::from_double(f64::INFINITY)
+        };
+        result.floating = Some(Floating::real(value));
+        result.constant = ConstantClass::Arithmetic;
+        result
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn floating_builtin(
         &mut self,
         expression: &'tu Expression<'tu>,
@@ -235,4 +276,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FloatOperation::Copysign => return None,
         })
     }
+}
+
+/// GCC/glibc numeric NaN tags accept an unsigned integer in base 0. An empty
+/// or unrecognized n-char sequence selects the implementation's default NaN.
+/// C99: §7.12.11.2p2, p. 237; PDF p. 249 (implementation-defined payload).
+fn nan_payload(tag: &[u8]) -> u64 {
+    let tag = tag.split(|&byte| byte == 0).next().unwrap_or_default();
+    let (radix, digits) = if tag.starts_with(b"0x") || tag.starts_with(b"0X") {
+        (16, &tag[2..])
+    } else if tag.starts_with(b"0") {
+        (8, tag)
+    } else {
+        (10, tag)
+    };
+    let mut payload = 0_u64;
+    for &byte in digits {
+        let Some(digit) = char::from(byte).to_digit(radix) else {
+            return 0;
+        };
+        payload = payload
+            .saturating_mul(u64::from(radix))
+            .saturating_add(u64::from(digit));
+    }
+    payload
 }

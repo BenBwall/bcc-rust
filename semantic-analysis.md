@@ -2103,3 +2103,28 @@ constants. GNU `void *` arithmetic
 compound assignment and subscripts, and in address constants and constant
 differences; a `void` subscript is an rvalue that is never read, and `sizeof`
 of `void` is 1 in every mode.
+
+
+## C99 real math builtin contracts (issue #47)
+
+The neutral registry now covers the 57 C99 real math families in float, double
+and long-double precision, including output-pointer functions, target-width
+integer results and `nexttoward`'s long-double second argument. Existing `fabs`,
+`floor`, classification and sign-copy operations retain their implementations;
+the new aliases lower to C libm symbols. Hosted Linux executables link libm
+through both LLVM and native back ends.
+
+`__builtin_inf*`, `__builtin_huge_val*` and literal-tag `__builtin_nan*` produce
+arithmetic constants of their declared precision. Numeric NaN tags retain their
+payload bits; dynamic tags retain normal call conversions and evaluate once.
+The typed `isnanf`/`isnanl` aliases use the existing classification operation.
+Clang's left/right rotate builtins for 8, 16, 32 and 64 bits retain unsigned
+contracts and reduce counts modulo the width for constant and runtime operands.
+
+All f/d/l signatures are semantic contracts on all four targets. The interpreter
+executes binary32/64 and MSVC's binary64 long double; its existing binary80
+execution refusal remains. LLVM executes GNU binary80 math through libm, while
+the native x86-64 backend retains its binary32/64 support boundary.
+C99 §7.12p3-5, pp. 212-213 (PDF pp. 224-225), §7.12.4-§7.12.13,
+pp. 218-239 (PDF pp. 230-251), §7.12.11.2p2, p. 237 (PDF p. 249);
+GCC Library Builtins and Clang Language Extensions (rotate builtins).
