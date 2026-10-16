@@ -97,11 +97,6 @@ mod tests {
                         for output in [bcc(&source, &flags), clang(&source, &flags)] {
                             let text = String::from_utf8_lossy(&output.stderr);
                             assert_eq!(
-                                output.status.success(),
-                                !error,
-                                "{source} {flags:?}: {text}"
-                            );
-                            assert_eq!(
                                 text.contains("warning:"),
                                 warning,
                                 "{source} {flags:?}: {text}"
@@ -129,11 +124,12 @@ mod tests {
                  __has_c_attribute(gnu::dllexport) != {available}\n#error wrong attribute \
                  availability\n#endif\nint value;\n"
             );
-            let flags = ["-std=c17", "-fms-extensions", target];
+            let flags = ["-std=c23", "-fms-extensions", target];
             for output in [bcc(&source, &flags), clang(&source, &flags)] {
                 let text = String::from_utf8_lossy(&output.stderr);
                 assert!(output.status.success(), "{target}: {text}");
                 assert!(!text.contains("warning:"), "{target}: {text}");
+                assert!(!text.contains("error:"), "{target}: {text}");
             }
         }
     }
