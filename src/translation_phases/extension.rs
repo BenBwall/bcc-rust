@@ -37,95 +37,19 @@ use crate::{
     util::bump::Bump,
 };
 
-/// Baseline for a diagnostic controlled by the extension policy.
-/// C99: §5.1.1.3p1, p. 11; PDF p. 23 leaves severity to the implementation.
-#[derive(Clone, Copy)]
-pub(crate) enum DiagnosticPolicy {
-    Extension,
-    Warning,
-    /// Clang's object-like -Wexpansion-to-defined is not pedantic-promoted.
-    WarningOnly,
-    Error,
-}
-
-/// Shared severity for extensions and policy-governed constraints or quality.
-/// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
-pub(crate) fn policy_severity(
-    policy: ExtensionPolicy,
-    baseline: DiagnosticPolicy,
-) -> Option<ErrorSeverity> {
-    if matches!(baseline, DiagnosticPolicy::Error) {
-        return Some(ErrorSeverity::Error);
-    }
-    if matches!(baseline, DiagnosticPolicy::WarningOnly) {
-        return Some(ErrorSeverity::Warning);
-    }
-    match policy {
-        | ExtensionPolicy::Allow =>
-            matches!(baseline, DiagnosticPolicy::Warning).then_some(ErrorSeverity::Warning),
-        | ExtensionPolicy::Warn => Some(ErrorSeverity::Warning),
-        | ExtensionPolicy::Deny => Some(ErrorSeverity::Error),
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct ExtensionDiagnostic<'tu> {
-    /// Arena-stable suppression marker; FIFO diagnostics keep their order.
-    pub(crate) suppressed:     &'tu Cell<bool>,
-    spelling:                  &'tu str,
-    origin:                    FeatureOrigin,
-    severity:                  ErrorSeverity,
-    pub(super) source_vectors: SourceVectors,
-}
-impl<'tu> ExtensionDiagnostic<'tu> {
-    pub(crate) fn spelling(&self) -> &'tu str {
-        self.spelling
-    }
-}
-impl Display for ExtensionDiagnostic<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self.origin {
-            | FeatureOrigin::Standard(standard) =>
-                write!(f, "'{}' is a {} extension", self.spelling, standard.name()),
-            | FeatureOrigin::Removed { since, removed } => write!(
-                f,
-                "'{}' is a {} feature removed in {}",
-                self.spelling,
-                since.name(),
-                removed.name()
-            ),
-            | FeatureOrigin::Gnu => write!(f, "'{}' is a GNU extension", self.spelling),
-            | FeatureOrigin::Msvc(_) => write!(f, "'{}' is an MSVC extension", self.spelling),
-        }
-    }
-}
-impl std::error::Error for ExtensionDiagnostic<'_> {}
-impl GetSeverity for ExtensionDiagnostic<'_> {
-    fn severity(&self) -> ErrorSeverity {
-        self.severity
-    }
-}
-impl GetPosition for ExtensionDiagnostic<'_> {
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.source_vectors.position(context)
-    }
-}
-impl GetSourceVectors for ExtensionDiagnostic<'_> {
-    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
-        self.source_vectors
-    }
-}
-impl ToDiagnostic for ExtensionDiagnostic<'_> {
-    fn diagnostic_in<'d>(
-        &self,
-        _context: &Context<'_>,
-        source: SourceVectors,
-        arena: &'d Bump,
-    ) -> Diagnostic<'d> {
-        Explanation::new(arena, format_in!(arena, "{self}")).at(self.severity, source)
-    }
-}
 impl<'tu> Context<'tu> {
+    /// Feature-based adapter for lexer, preprocessor, and parser consumers.
+    /// A standard feature native to the selected revision has a native
+    /// origin, so the origin check alone decides whether it is reported.
+    pub(crate) fn report_extension(
+        &mut self,
+        feature: Feature,
+        spelling: &str,
+        source: SourceVectors,
+    ) {
+        self.report_extension_since(spelling, feature.origin(), source);
+    }
+
     /// Reports syntax from `origin` under the extension policy. GNU/MSVC
     /// extensions remain non-ISO even when enabled; standard features cease
     /// being extensions in a revision that has them.
@@ -141,6 +65,28 @@ impl<'tu> Context<'tu> {
             return;
         };
         self.emit_extension(spelling, origin, severity, source_vectors);
+    }
+
+    fn extension_severity(
+        &self,
+        origin: FeatureOrigin,
+        baseline: DiagnosticPolicy,
+        source: SourceVectors,
+    ) -> Option<ErrorSeverity> {
+        if matches!(
+            origin,
+            FeatureOrigin::Standard(_) | FeatureOrigin::Removed { .. }
+        ) && self.configuration.origin_is_native(origin)
+        {
+            return None;
+        }
+        let severity = policy_severity(self.configuration.extension_policy(), baseline)?;
+        (!self.withholds(
+            severity,
+            !matches!(baseline, DiagnosticPolicy::Error),
+            source,
+        ))
+        .then_some(severity)
     }
 
     /// Queues the diagnostic once the policy has asked for one. Callers
@@ -165,18 +111,6 @@ impl<'tu> Context<'tu> {
             }));
     }
 
-    /// Feature-based adapter for lexer, preprocessor, and parser consumers.
-    /// A standard feature native to the selected revision has a native
-    /// origin, so the origin check alone decides whether it is reported.
-    pub(crate) fn report_extension(
-        &mut self,
-        feature: Feature,
-        spelling: &str,
-        source: SourceVectors,
-    ) {
-        self.report_extension_since(spelling, feature.origin(), source);
-    }
-
     /// Retains a phase's typed explanation while sharing suppression and
     /// severity. Non-accepted features always diagnose as errors.
     /// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
@@ -195,28 +129,6 @@ impl<'tu> Context<'tu> {
         if let Some(severity) = self.extension_severity(feature.origin(), baseline, source) {
             self.pending_errors.push_back(diagnostic(severity));
         }
-    }
-
-    fn extension_severity(
-        &self,
-        origin: FeatureOrigin,
-        baseline: DiagnosticPolicy,
-        source: SourceVectors,
-    ) -> Option<ErrorSeverity> {
-        if matches!(
-            origin,
-            FeatureOrigin::Standard(_) | FeatureOrigin::Removed { .. }
-        ) && self.configuration.origin_is_native(origin)
-        {
-            return None;
-        }
-        let severity = policy_severity(self.configuration.extension_policy(), baseline)?;
-        (!self.withholds(
-            severity,
-            !matches!(baseline, DiagnosticPolicy::Error),
-            source,
-        ))
-        .then_some(severity)
     }
 
     /// Typed preprocessor adapter; payloads keep their labels, notes and help.
@@ -257,6 +169,102 @@ impl<'tu> Context<'tu> {
             source_vectors: SourceVectors::default(),
         });
         self.suppress_extension(suppressed);
+    }
+}
+
+/// Shared severity for extensions and policy-governed constraints or quality.
+/// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
+pub(crate) fn policy_severity(
+    policy: ExtensionPolicy,
+    baseline: DiagnosticPolicy,
+) -> Option<ErrorSeverity> {
+    if matches!(baseline, DiagnosticPolicy::Error) {
+        return Some(ErrorSeverity::Error);
+    }
+    if matches!(baseline, DiagnosticPolicy::WarningOnly) {
+        return Some(ErrorSeverity::Warning);
+    }
+    match policy {
+        | ExtensionPolicy::Allow =>
+            matches!(baseline, DiagnosticPolicy::Warning).then_some(ErrorSeverity::Warning),
+        | ExtensionPolicy::Warn => Some(ErrorSeverity::Warning),
+        | ExtensionPolicy::Deny => Some(ErrorSeverity::Error),
+    }
+}
+
+/// Baseline for a diagnostic controlled by the extension policy.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23 leaves severity to the implementation.
+#[derive(Clone, Copy)]
+pub(crate) enum DiagnosticPolicy {
+    Extension,
+    Warning,
+    /// Clang's object-like -Wexpansion-to-defined is not pedantic-promoted.
+    WarningOnly,
+    Error,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExtensionDiagnostic<'tu> {
+    /// Arena-stable suppression marker; FIFO diagnostics keep their order.
+    pub(crate) suppressed:     &'tu Cell<bool>,
+    spelling:                  &'tu str,
+    origin:                    FeatureOrigin,
+    severity:                  ErrorSeverity,
+    pub(super) source_vectors: SourceVectors,
+}
+
+impl<'tu> ExtensionDiagnostic<'tu> {
+    pub(crate) fn spelling(&self) -> &'tu str {
+        self.spelling
+    }
+}
+
+impl Display for ExtensionDiagnostic<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self.origin {
+            | FeatureOrigin::Standard(standard) =>
+                write!(f, "'{}' is a {} extension", self.spelling, standard.name()),
+            | FeatureOrigin::Removed { since, removed } => write!(
+                f,
+                "'{}' is a {} feature removed in {}",
+                self.spelling,
+                since.name(),
+                removed.name()
+            ),
+            | FeatureOrigin::Gnu => write!(f, "'{}' is a GNU extension", self.spelling),
+            | FeatureOrigin::Msvc(_) => write!(f, "'{}' is an MSVC extension", self.spelling),
+        }
+    }
+}
+
+impl std::error::Error for ExtensionDiagnostic<'_> {}
+
+impl GetSeverity for ExtensionDiagnostic<'_> {
+    fn severity(&self) -> ErrorSeverity {
+        self.severity
+    }
+}
+
+impl GetPosition for ExtensionDiagnostic<'_> {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for ExtensionDiagnostic<'_> {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
+        self.source_vectors
+    }
+}
+
+impl ToDiagnostic for ExtensionDiagnostic<'_> {
+    fn diagnostic_in<'d>(
+        &self,
+        _context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
+        Explanation::new(arena, format_in!(arena, "{self}")).at(self.severity, source)
     }
 }
 

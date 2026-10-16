@@ -20,6 +20,118 @@ use std::simd::{
     },
 };
 
+/// Returns the index of the first byte for which `class` is `wanted`, or the
+/// length of `bytes` when there is none.
+#[inline(always)]
+fn find<C: ByteClass, const WANTED: bool>(bytes: &[u8]) -> usize {
+    #[cfg(feature = "portable-simd")]
+    {
+        let (chunks, remainder) = bytes.as_chunks::<LANES>();
+        for (index, chunk) in chunks.iter().enumerate() {
+            let mask = C::contains_lanes(Lanes::from_array(*chunk));
+            let bits = if WANTED { mask } else { !mask }.to_bitmask();
+            if bits != 0 {
+                return index * LANES + bits.trailing_zeros() as usize;
+            }
+        }
+        chunks.len() * LANES
+            + remainder
+                .iter()
+                .position(|&byte| C::contains(byte) == WANTED)
+                .unwrap_or(remainder.len())
+    }
+    #[cfg(not(feature = "portable-simd"))]
+    {
+        bytes
+            .iter()
+            .position(|&byte| C::contains(byte) == WANTED)
+            .unwrap_or(bytes.len())
+    }
+}
+
+/// Counts the bytes of `bytes` in `class`.
+#[inline(always)]
+fn count<C: ByteClass>(bytes: &[u8]) -> usize {
+    #[cfg(feature = "portable-simd")]
+    {
+        let (chunks, remainder) = bytes.as_chunks::<LANES>();
+        chunks
+            .iter()
+            .map(|chunk| {
+                C::contains_lanes(Lanes::from_array(*chunk))
+                    .to_bitmask()
+                    .count_ones() as usize
+            })
+            .sum::<usize>()
+            + remainder.iter().filter(|&&byte| C::contains(byte)).count()
+    }
+    #[cfg(not(feature = "portable-simd"))]
+    {
+        bytes.iter().filter(|&&byte| C::contains(byte)).count()
+    }
+}
+
+/// Length of the leading run of ASCII identifier characters.
+#[inline(always)]
+pub(crate) fn identifier_run(bytes: &[u8]) -> usize {
+    find::<Identifier, false>(bytes)
+}
+
+/// Length of the leading run of ASCII preprocessing-number characters,
+/// excluding exponent signs.
+#[inline(always)]
+pub(crate) fn number_run(bytes: &[u8]) -> usize {
+    find::<NumberBody, false>(bytes)
+}
+
+/// Length of the leading run of space, tab, vertical tab, and form feed.
+#[inline(always)]
+pub(crate) fn horizontal_space_run(bytes: &[u8]) -> usize {
+    find::<HorizontalSpace, false>(bytes)
+}
+
+/// Index of the first byte that translation phases 1-2 may rewrite.
+#[inline(always)]
+pub(crate) fn find_phase2_special(bytes: &[u8]) -> usize {
+    find::<Phase2Special, true>(bytes)
+}
+
+/// Length of the leading run of a spliced literal body: no quote, escape,
+/// or line feed.
+#[inline(always)]
+pub(crate) fn literal_run(bytes: &[u8]) -> usize {
+    find::<LiteralBreak, true>(bytes)
+}
+
+/// Length of the leading run of spliced block-comment text before `*` or a
+/// line feed.
+#[inline(always)]
+pub(crate) fn block_comment_run(bytes: &[u8]) -> usize {
+    find::<BlockCommentBreak, true>(bytes)
+}
+
+/// Index of the first line feed.
+#[inline(always)]
+pub(crate) fn find_line_feed(bytes: &[u8]) -> usize {
+    find::<LineFeed, true>(bytes)
+}
+
+/// Number of line feeds.
+#[inline(always)]
+pub(crate) fn count_line_feeds(bytes: &[u8]) -> usize {
+    count::<LineFeed>(bytes)
+}
+
+/// Number of characters in valid UTF-8 `bytes`.
+#[inline(always)]
+pub(crate) fn count_chars(bytes: &[u8]) -> usize {
+    if bytes.is_ascii() {
+        bytes.len()
+    } else {
+        bytes.len() - count::<Continuation>(bytes)
+    }
+}
+
 // Portable SIMD fixes the lane count in the vector type. Choose a byte-vector
 // width that fits the integer SIMD instructions enabled for this build target.
 // AVX alone has no 256-bit byte comparisons, so it uses the 128-bit fallback.
@@ -169,118 +281,6 @@ byte_class!(
     0x80..=0xBF,
     |bytes| (bytes & splat(0xC0)).simd_eq(splat(0x80))
 );
-
-/// Returns the index of the first byte for which `class` is `wanted`, or the
-/// length of `bytes` when there is none.
-#[inline(always)]
-fn find<C: ByteClass, const WANTED: bool>(bytes: &[u8]) -> usize {
-    #[cfg(feature = "portable-simd")]
-    {
-        let (chunks, remainder) = bytes.as_chunks::<LANES>();
-        for (index, chunk) in chunks.iter().enumerate() {
-            let mask = C::contains_lanes(Lanes::from_array(*chunk));
-            let bits = if WANTED { mask } else { !mask }.to_bitmask();
-            if bits != 0 {
-                return index * LANES + bits.trailing_zeros() as usize;
-            }
-        }
-        chunks.len() * LANES
-            + remainder
-                .iter()
-                .position(|&byte| C::contains(byte) == WANTED)
-                .unwrap_or(remainder.len())
-    }
-    #[cfg(not(feature = "portable-simd"))]
-    {
-        bytes
-            .iter()
-            .position(|&byte| C::contains(byte) == WANTED)
-            .unwrap_or(bytes.len())
-    }
-}
-
-/// Counts the bytes of `bytes` in `class`.
-#[inline(always)]
-fn count<C: ByteClass>(bytes: &[u8]) -> usize {
-    #[cfg(feature = "portable-simd")]
-    {
-        let (chunks, remainder) = bytes.as_chunks::<LANES>();
-        chunks
-            .iter()
-            .map(|chunk| {
-                C::contains_lanes(Lanes::from_array(*chunk))
-                    .to_bitmask()
-                    .count_ones() as usize
-            })
-            .sum::<usize>()
-            + remainder.iter().filter(|&&byte| C::contains(byte)).count()
-    }
-    #[cfg(not(feature = "portable-simd"))]
-    {
-        bytes.iter().filter(|&&byte| C::contains(byte)).count()
-    }
-}
-
-/// Length of the leading run of ASCII identifier characters.
-#[inline(always)]
-pub(crate) fn identifier_run(bytes: &[u8]) -> usize {
-    find::<Identifier, false>(bytes)
-}
-
-/// Length of the leading run of ASCII preprocessing-number characters,
-/// excluding exponent signs.
-#[inline(always)]
-pub(crate) fn number_run(bytes: &[u8]) -> usize {
-    find::<NumberBody, false>(bytes)
-}
-
-/// Length of the leading run of space, tab, vertical tab, and form feed.
-#[inline(always)]
-pub(crate) fn horizontal_space_run(bytes: &[u8]) -> usize {
-    find::<HorizontalSpace, false>(bytes)
-}
-
-/// Index of the first byte that translation phases 1-2 may rewrite.
-#[inline(always)]
-pub(crate) fn find_phase2_special(bytes: &[u8]) -> usize {
-    find::<Phase2Special, true>(bytes)
-}
-
-/// Length of the leading run of a spliced literal body: no quote, escape,
-/// or line feed.
-#[inline(always)]
-pub(crate) fn literal_run(bytes: &[u8]) -> usize {
-    find::<LiteralBreak, true>(bytes)
-}
-
-/// Length of the leading run of spliced block-comment text before `*` or a
-/// line feed.
-#[inline(always)]
-pub(crate) fn block_comment_run(bytes: &[u8]) -> usize {
-    find::<BlockCommentBreak, true>(bytes)
-}
-
-/// Index of the first line feed.
-#[inline(always)]
-pub(crate) fn find_line_feed(bytes: &[u8]) -> usize {
-    find::<LineFeed, true>(bytes)
-}
-
-/// Number of line feeds.
-#[inline(always)]
-pub(crate) fn count_line_feeds(bytes: &[u8]) -> usize {
-    count::<LineFeed>(bytes)
-}
-
-/// Number of characters in valid UTF-8 `bytes`.
-#[inline(always)]
-pub(crate) fn count_chars(bytes: &[u8]) -> usize {
-    if bytes.is_ascii() {
-        bytes.len()
-    } else {
-        bytes.len() - count::<Continuation>(bytes)
-    }
-}
 
 #[cfg(test)]
 #[expect(

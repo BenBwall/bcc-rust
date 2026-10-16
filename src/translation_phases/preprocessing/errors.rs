@@ -61,250 +61,6 @@ pub(crate) struct PreprocessorError<'tu> {
     pub(crate) source_vectors: SourceVectors,
 }
 
-/// Owned related locations for Clang's implementation-defined pragma warning.
-/// C99: §6.10.6p1, p. 159; PDF p. 171; macro rescanning §6.10.3.4p1,
-/// p. 155; PDF p. 167.
-#[derive(Debug)]
-pub(crate) struct DeprecatedMacroDiagnostic<'tu> {
-    pub(super) name:       &'tu str,
-    pub(super) message:    Option<&'tu str>,
-    pub(super) marked_at:  SourceVector,
-    pub(super) expansions: &'tu [MacroExpansionNote<'tu>],
-}
-
-/// A macro replacement's spelling location, retained independently of frames.
-/// C99: §6.10.3.4p1, p. 155; PDF p. 167.
-#[derive(Debug, Clone)]
-pub(super) struct MacroExpansionNote<'tu> {
-    pub(super) name:     &'tu str,
-    pub(super) location: SourceVector,
-}
-
-impl Display for PreprocessorError<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{}", self.error_type)
-    }
-}
-
-impl ToDiagnostic for PreprocessorError<'_> {
-    fn diagnostic_in<'d>(
-        &self,
-        context: &Context<'_>,
-        source: SourceVectors,
-        arena: &'d Bump,
-    ) -> Diagnostic<'d> {
-        let mut diagnostic = self
-            .error_type
-            .explain_in(arena, context.source_spelling(source))
-            .at(self.severity(), source);
-        if let PreprocessorErrorType::DeprecatedMacro(deprecation) = &self.error_type {
-            for expansion in deprecation.expansions {
-                diagnostic = diagnostic.secondary_segments(
-                    arena.alloc_slice_fill_iter([expansion.location.clone()]),
-                    format_in!(arena, "expanded from macro `{}`", expansion.name),
-                );
-            }
-            diagnostic = diagnostic.secondary_segments(
-                arena.alloc_slice_fill_iter([deprecation.marked_at.clone()]),
-                "macro marked deprecated here",
-            );
-        }
-        diagnostic
-    }
-}
-
-impl std::error::Error for PreprocessorError<'_> {}
-
-impl GetPosition for PreprocessorError<'_> {
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.source_vectors.position(context)
-    }
-}
-
-impl GetSourceVectors for PreprocessorError<'_> {
-    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
-        self.source_vectors
-    }
-}
-
-impl GetSeverity for PreprocessorError<'_> {
-    fn severity(&self) -> ErrorSeverity {
-        match self.error_type {
-            | PreprocessorErrorType::UnexpectedEndOfInput(_)
-            | PreprocessorErrorType::InvalidHexadecimalFloatLiteral
-            | PreprocessorErrorType::InvalidDecimalFloatLiteral
-            | PreprocessorErrorType::InvalidHexadecimalIntegerLiteral
-            | PreprocessorErrorType::InvalidBinaryIntegerLiteral
-            | PreprocessorErrorType::InvalidOctalIntegerLiteral
-            | PreprocessorErrorType::InvalidDecimalIntegerLiteral
-            | PreprocessorErrorType::IntegerLiteralOverflow
-            | PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression
-            | PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
-                ..
-            }
-            | PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(
-                ..,
-            )
-            | PreprocessorErrorType::MissingIdentifierInDefinedDirective(..)
-            | PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(..)
-            | PreprocessorErrorType::NoConditionInIfDirective
-            | PreprocessorErrorType::NoConditionInElifDirective
-            | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
-            | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
-            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective(_)
-            | PreprocessorErrorType::ConditionalArmAfterElse(_)
-            | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
-            | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
-            | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
-            | PreprocessorErrorType::ExpectedIdentifierInDefineDirective(..)
-            | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
-            | PreprocessorErrorType::InvalidCharacterInHeaderName(..)
-            | PreprocessorErrorType::UnterminatedHeaderName(..)
-            | PreprocessorErrorType::HeaderNotFound { .. }
-            | PreprocessorErrorType::HeaderFileInaccessible(..)
-            | PreprocessorErrorType::IncludeNestingLimitExceeded(..)
-            | PreprocessorErrorType::HashHashUsedOutsideOfMacro
-            | PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
-            | PreprocessorErrorType::InvalidLineFilename
-            | PreprocessorErrorType::InvalidEscapeSequence
-            | PreprocessorErrorType::UnterminatedEscapeSequence
-            | PreprocessorErrorType::InvalidHexEscapeSequence
-            | PreprocessorErrorType::HexEscapeSequenceTooLarge
-            | PreprocessorErrorType::OctalEscapeSequenceTooLarge
-            | PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence
-            | PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
-            | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
-            | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
-            | PreprocessorErrorType::MultiCharacterLiteralsUnsupported
-            | PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(..)
-            | PreprocessorErrorType::VariadicMacroMustBeLastParameter(..)
-            | PreprocessorErrorType::DuplicateMacroParameter(..)
-            | PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(..)
-            | PreprocessorErrorType::ExpectedIdentifierInUndefDirective(..)
-            | PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
-            | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
-            | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..)
-            | PreprocessorErrorType::MissingRightHandSideOfHashHashOperator
-            | PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator
-            | PreprocessorErrorType::TokenMergingError(..)
-            | PreprocessorErrorType::MissingNumberInLineDirective(..)
-            | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
-            | PreprocessorErrorType::WideStringInLineDirective
-            | PreprocessorErrorType::EncodedStringInLineDirective(..)
-            | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
-            | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
-            | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
-            | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
-            | PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument
-            | PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch
-            | PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(..)
-            | PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression
-            | PreprocessorErrorType::DereferenceOperatorNotSupportedInPreprocessorExpression
-            | PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression
-            | PreprocessorErrorType::BinaryPlusOverflow
-            | PreprocessorErrorType::BinaryMinusOverflow
-            | PreprocessorErrorType::DivideOverflow
-            | PreprocessorErrorType::DivideByZero
-            | PreprocessorErrorType::ModuloOverflow
-            | PreprocessorErrorType::ModuloByZero
-            | PreprocessorErrorType::MultiplyOverflow
-            | PreprocessorErrorType::UnaryMinusOverflow
-            | PreprocessorErrorType::LeftShiftOverflow
-            | PreprocessorErrorType::RightShiftOverflow
-            | PreprocessorErrorType::BitwiseNotWithoutOperand
-            | PreprocessorErrorType::LogicalNotWithoutOperand
-            | PreprocessorErrorType::UnaryMinusWithoutOperand
-            | PreprocessorErrorType::UnaryPlusWithoutOperand
-            | PreprocessorErrorType::BinaryPlusWithoutRhs
-            | PreprocessorErrorType::BinaryMinusWithoutRhs
-            | PreprocessorErrorType::MultiplyWithoutRhs
-            | PreprocessorErrorType::DivideWithoutRhs
-            | PreprocessorErrorType::ModuloWithoutRhs
-            | PreprocessorErrorType::BitwiseOrWithoutRhs
-            | PreprocessorErrorType::BitwiseAndWithoutRhs
-            | PreprocessorErrorType::BitwiseXorWithoutRhs
-            | PreprocessorErrorType::LogicalAndWithoutRhs
-            | PreprocessorErrorType::LogicalOrWithoutRhs
-            | PreprocessorErrorType::LessThanWithoutRhs
-            | PreprocessorErrorType::LessThanEqualsWithoutRhs
-            | PreprocessorErrorType::GreaterThanWithoutRhs
-            | PreprocessorErrorType::GreaterThanEqualsWithoutRhs
-            | PreprocessorErrorType::EqualsWithoutRhs
-            | PreprocessorErrorType::NotEqualsWithoutRhs
-            | PreprocessorErrorType::LeftShiftWithoutRhs
-            | PreprocessorErrorType::RightShiftWithoutRhs
-            | PreprocessorErrorType::TernaryOperatorWithoutRhs
-            | PreprocessorErrorType::TernaryOperatorWithoutColon
-            | PreprocessorErrorType::TernaryOperatorWithoutMhs
-            | PreprocessorErrorType::ColonWithoutMatchingQuestionMark
-            | PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression
-            | PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(_)
-            | PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression
-            | PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression
-            | PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression
-            | PreprocessorErrorType::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression
-            | PreprocessorErrorType::CharacterInsteadOfBinaryOperatorInPreprocessorExpression
-            | PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression
-            | PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression
-            | PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression
-            | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
-            | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
-            | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
-            | PreprocessorErrorType::LanguageConstraint(..)
-            | PreprocessorErrorType::WideCharacterOutOfRange
-            | PreprocessorErrorType::EmbeddedResourceNotFound(..)
-            | PreprocessorErrorType::EmbeddedResourceUnreadable { .. }
-            | PreprocessorErrorType::EmbeddedResourceTooLarge(..)
-            | PreprocessorErrorType::VaOptUnavailable
-            | PreprocessorErrorType::MissingOpeningParenthesisAfterVaOpt
-            | PreprocessorErrorType::NestedVaOpt
-            | PreprocessorErrorType::UnterminatedVaOpt
-            | PreprocessorErrorType::HashHashAtVaOptBoundary
-            | PreprocessorErrorType::ErrorDirective(..)
-             => ErrorSeverity::Error,
-            | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(severity)
-            | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(severity)
-            | PreprocessorErrorType::MissingVariadicArgument(severity)
-            | PreprocessorErrorType::BackslashInQuotedHeaderName(severity)
-            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion(severity) => severity,
-            | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy)
-            | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy)
-            | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(_, policy)
-            | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(_, policy)
-            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_, policy) =>
-                crate::translation_phases::policy_severity(policy, crate::translation_phases::DiagnosticPolicy::Warning)
-                    .unwrap_or(ErrorSeverity::Warning),
-            | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
-            | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
-            | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
-            | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
-            | PreprocessorErrorType::FloatConstantOutOfRange { .. }
-            | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
-            | PreprocessorErrorType::ForcedUnsignedPromotion { .. }
-            | PreprocessorErrorType::ForcedSignedPromotion { .. }
-            | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
-            | PreprocessorErrorType::UnknownDirective
-            | PreprocessorErrorType::HashMustBeFollowedByIdentifier
-            | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
-            | PreprocessorErrorType::LineDirectiveNumberTooLarge(..)
-            | PreprocessorErrorType::LineDirectiveNumberZero(..)
-            | PreprocessorErrorType::UnknownPragmaDirective
-            | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
-            | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
-            | PreprocessorErrorType::ExtraTokensAfterIncludeDirective
-            | PreprocessorErrorType::ExtraTokensAfterConditionalDirective(_)
-            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
-            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
-            | PreprocessorErrorType::WarningDirective(..)
-            | PreprocessorErrorType::DeprecatedMacro(..)
-            | PreprocessorErrorType::PragmaOnceInNonHeader
-            | PreprocessorErrorType::SystemHeaderPragmaInMainFile
-            | PreprocessorErrorType::IncludeNextInPrimarySource(..)
-            | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: implementation-defined wide encoding §6.4.4.4p11, p. 61;
@@ -757,6 +513,25 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: implementation-defined pragma behavior, §6.10.6p1, p. 159;
     /// PDF p. 171.
     DeprecatedMacro(&'tu DeprecatedMacroDiagnostic<'tu>),
+}
+
+/// Owned related locations for Clang's implementation-defined pragma warning.
+/// C99: §6.10.6p1, p. 159; PDF p. 171; macro rescanning §6.10.3.4p1,
+/// p. 155; PDF p. 167.
+#[derive(Debug)]
+pub(crate) struct DeprecatedMacroDiagnostic<'tu> {
+    pub(super) name:       &'tu str,
+    pub(super) message:    Option<&'tu str>,
+    pub(super) marked_at:  SourceVector,
+    pub(super) expansions: &'tu [MacroExpansionNote<'tu>],
+}
+
+/// A macro replacement's spelling location, retained independently of frames.
+/// C99: §6.10.3.4p1, p. 155; PDF p. 167.
+#[derive(Debug, Clone)]
+pub(super) struct MacroExpansionNote<'tu> {
+    pub(super) name:     &'tu str,
+    pub(super) location: SourceVector,
 }
 
 /// The directives of C99 §6.10, for suggestions.
@@ -1622,6 +1397,231 @@ impl PreprocessorErrorType<'_> {
                 | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
                 | Self::MacroRedefinedWithDifferentDefinition(..)
         )
+    }
+}
+
+impl Display for PreprocessorError<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{}", self.error_type)
+    }
+}
+
+impl ToDiagnostic for PreprocessorError<'_> {
+    fn diagnostic_in<'d>(
+        &self,
+        context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
+        let mut diagnostic = self
+            .error_type
+            .explain_in(arena, context.source_spelling(source))
+            .at(self.severity(), source);
+        if let PreprocessorErrorType::DeprecatedMacro(deprecation) = &self.error_type {
+            for expansion in deprecation.expansions {
+                diagnostic = diagnostic.secondary_segments(
+                    arena.alloc_slice_fill_iter([expansion.location.clone()]),
+                    format_in!(arena, "expanded from macro `{}`", expansion.name),
+                );
+            }
+            diagnostic = diagnostic.secondary_segments(
+                arena.alloc_slice_fill_iter([deprecation.marked_at.clone()]),
+                "macro marked deprecated here",
+            );
+        }
+        diagnostic
+    }
+}
+
+impl std::error::Error for PreprocessorError<'_> {}
+
+impl GetPosition for PreprocessorError<'_> {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for PreprocessorError<'_> {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
+        self.source_vectors
+    }
+}
+
+impl GetSeverity for PreprocessorError<'_> {
+    fn severity(&self) -> ErrorSeverity {
+        match self.error_type {
+            | PreprocessorErrorType::UnexpectedEndOfInput(_)
+            | PreprocessorErrorType::InvalidHexadecimalFloatLiteral
+            | PreprocessorErrorType::InvalidDecimalFloatLiteral
+            | PreprocessorErrorType::InvalidHexadecimalIntegerLiteral
+            | PreprocessorErrorType::InvalidBinaryIntegerLiteral
+            | PreprocessorErrorType::InvalidOctalIntegerLiteral
+            | PreprocessorErrorType::InvalidDecimalIntegerLiteral
+            | PreprocessorErrorType::IntegerLiteralOverflow
+            | PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression
+            | PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
+                ..
+            }
+            | PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(
+                ..,
+            )
+            | PreprocessorErrorType::MissingIdentifierInDefinedDirective(..)
+            | PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(..)
+            | PreprocessorErrorType::NoConditionInIfDirective
+            | PreprocessorErrorType::NoConditionInElifDirective
+            | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
+            | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
+            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective(_)
+            | PreprocessorErrorType::ConditionalArmAfterElse(_)
+            | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
+            | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
+            | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
+            | PreprocessorErrorType::ExpectedIdentifierInDefineDirective(..)
+            | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
+            | PreprocessorErrorType::InvalidCharacterInHeaderName(..)
+            | PreprocessorErrorType::UnterminatedHeaderName(..)
+            | PreprocessorErrorType::HeaderNotFound { .. }
+            | PreprocessorErrorType::HeaderFileInaccessible(..)
+            | PreprocessorErrorType::IncludeNestingLimitExceeded(..)
+            | PreprocessorErrorType::HashHashUsedOutsideOfMacro
+            | PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
+            | PreprocessorErrorType::InvalidLineFilename
+            | PreprocessorErrorType::InvalidEscapeSequence
+            | PreprocessorErrorType::UnterminatedEscapeSequence
+            | PreprocessorErrorType::InvalidHexEscapeSequence
+            | PreprocessorErrorType::HexEscapeSequenceTooLarge
+            | PreprocessorErrorType::OctalEscapeSequenceTooLarge
+            | PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence
+            | PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
+            | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
+            | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
+            | PreprocessorErrorType::MultiCharacterLiteralsUnsupported
+            | PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(..)
+            | PreprocessorErrorType::VariadicMacroMustBeLastParameter(..)
+            | PreprocessorErrorType::DuplicateMacroParameter(..)
+            | PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(..)
+            | PreprocessorErrorType::ExpectedIdentifierInUndefDirective(..)
+            | PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
+            | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
+            | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..)
+            | PreprocessorErrorType::MissingRightHandSideOfHashHashOperator
+            | PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator
+            | PreprocessorErrorType::TokenMergingError(..)
+            | PreprocessorErrorType::MissingNumberInLineDirective(..)
+            | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
+            | PreprocessorErrorType::WideStringInLineDirective
+            | PreprocessorErrorType::EncodedStringInLineDirective(..)
+            | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
+            | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
+            | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
+            | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
+            | PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument
+            | PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch
+            | PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(..)
+            | PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression
+            | PreprocessorErrorType::DereferenceOperatorNotSupportedInPreprocessorExpression
+            | PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression
+            | PreprocessorErrorType::BinaryPlusOverflow
+            | PreprocessorErrorType::BinaryMinusOverflow
+            | PreprocessorErrorType::DivideOverflow
+            | PreprocessorErrorType::DivideByZero
+            | PreprocessorErrorType::ModuloOverflow
+            | PreprocessorErrorType::ModuloByZero
+            | PreprocessorErrorType::MultiplyOverflow
+            | PreprocessorErrorType::UnaryMinusOverflow
+            | PreprocessorErrorType::LeftShiftOverflow
+            | PreprocessorErrorType::RightShiftOverflow
+            | PreprocessorErrorType::BitwiseNotWithoutOperand
+            | PreprocessorErrorType::LogicalNotWithoutOperand
+            | PreprocessorErrorType::UnaryMinusWithoutOperand
+            | PreprocessorErrorType::UnaryPlusWithoutOperand
+            | PreprocessorErrorType::BinaryPlusWithoutRhs
+            | PreprocessorErrorType::BinaryMinusWithoutRhs
+            | PreprocessorErrorType::MultiplyWithoutRhs
+            | PreprocessorErrorType::DivideWithoutRhs
+            | PreprocessorErrorType::ModuloWithoutRhs
+            | PreprocessorErrorType::BitwiseOrWithoutRhs
+            | PreprocessorErrorType::BitwiseAndWithoutRhs
+            | PreprocessorErrorType::BitwiseXorWithoutRhs
+            | PreprocessorErrorType::LogicalAndWithoutRhs
+            | PreprocessorErrorType::LogicalOrWithoutRhs
+            | PreprocessorErrorType::LessThanWithoutRhs
+            | PreprocessorErrorType::LessThanEqualsWithoutRhs
+            | PreprocessorErrorType::GreaterThanWithoutRhs
+            | PreprocessorErrorType::GreaterThanEqualsWithoutRhs
+            | PreprocessorErrorType::EqualsWithoutRhs
+            | PreprocessorErrorType::NotEqualsWithoutRhs
+            | PreprocessorErrorType::LeftShiftWithoutRhs
+            | PreprocessorErrorType::RightShiftWithoutRhs
+            | PreprocessorErrorType::TernaryOperatorWithoutRhs
+            | PreprocessorErrorType::TernaryOperatorWithoutColon
+            | PreprocessorErrorType::TernaryOperatorWithoutMhs
+            | PreprocessorErrorType::ColonWithoutMatchingQuestionMark
+            | PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression
+            | PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(_)
+            | PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::CharacterInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression
+            | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
+            | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
+            | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
+            | PreprocessorErrorType::LanguageConstraint(..)
+            | PreprocessorErrorType::WideCharacterOutOfRange
+            | PreprocessorErrorType::EmbeddedResourceNotFound(..)
+            | PreprocessorErrorType::EmbeddedResourceUnreadable { .. }
+            | PreprocessorErrorType::EmbeddedResourceTooLarge(..)
+            | PreprocessorErrorType::VaOptUnavailable
+            | PreprocessorErrorType::MissingOpeningParenthesisAfterVaOpt
+            | PreprocessorErrorType::NestedVaOpt
+            | PreprocessorErrorType::UnterminatedVaOpt
+            | PreprocessorErrorType::HashHashAtVaOptBoundary
+            | PreprocessorErrorType::ErrorDirective(..)
+             => ErrorSeverity::Error,
+            | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(severity)
+            | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(severity)
+            | PreprocessorErrorType::MissingVariadicArgument(severity)
+            | PreprocessorErrorType::BackslashInQuotedHeaderName(severity)
+            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion(severity) => severity,
+            | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy)
+            | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy)
+            | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(_, policy)
+            | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(_, policy)
+            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_, policy) =>
+                crate::translation_phases::policy_severity(policy, crate::translation_phases::DiagnosticPolicy::Warning)
+                    .unwrap_or(ErrorSeverity::Warning),
+            | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
+            | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
+            | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
+            | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
+            | PreprocessorErrorType::FloatConstantOutOfRange { .. }
+            | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
+            | PreprocessorErrorType::ForcedUnsignedPromotion { .. }
+            | PreprocessorErrorType::ForcedSignedPromotion { .. }
+            | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
+            | PreprocessorErrorType::UnknownDirective
+            | PreprocessorErrorType::HashMustBeFollowedByIdentifier
+            | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
+            | PreprocessorErrorType::LineDirectiveNumberTooLarge(..)
+            | PreprocessorErrorType::LineDirectiveNumberZero(..)
+            | PreprocessorErrorType::UnknownPragmaDirective
+            | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
+            | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
+            | PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+            | PreprocessorErrorType::ExtraTokensAfterConditionalDirective(_)
+            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
+            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
+            | PreprocessorErrorType::WarningDirective(..)
+            | PreprocessorErrorType::DeprecatedMacro(..)
+            | PreprocessorErrorType::PragmaOnceInNonHeader
+            | PreprocessorErrorType::SystemHeaderPragmaInMainFile
+            | PreprocessorErrorType::IncludeNextInPrimarySource(..)
+            | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
+        }
     }
 }
 

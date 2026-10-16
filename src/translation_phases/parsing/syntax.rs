@@ -61,19 +61,6 @@ pub(crate) enum ExternalDeclaration<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct ConstantExpression<'tu>(pub(super) &'tu Expression<'tu>);
 
-impl<'tu> ConstantExpression<'tu> {
-    /// The expression this constant expression is.
-    pub(crate) fn expression(self) -> &'tu Expression<'tu> {
-        self.0
-    }
-}
-
-impl<'tu> From<ConstantExpression<'tu>> for &'tu Expression<'tu> {
-    fn from(expression: ConstantExpression<'tu>) -> Self {
-        expression.0
-    }
-}
-
 /// Complete function-definition syntax produced at file scope.
 ///
 /// C99: `function-definition` and `declaration-list` are §6.9.1
@@ -200,6 +187,7 @@ pub(crate) struct SelectionHeader<'tu> {
     pub(crate) declaration: &'tu Declaration<'tu>,
     pub(crate) expression:  Option<ExpressionSlot<'tu>>,
 }
+
 /// C23: attributes precede any statement; C99's statement children remain
 /// immutable.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -207,6 +195,7 @@ pub(crate) struct AttributedStatement<'tu> {
     pub(crate) attributes: &'tu super::modern::AttributeSpecifier<'tu>,
     pub(crate) statement:  &'tu Statement<'tu>,
 }
+
 /// C2y: inclusive case-label ranges extend C99 §6.8.1, p. 131; PDF p. 143.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct CaseRange<'tu> {
@@ -445,19 +434,6 @@ pub(crate) struct Identifier {
     pub(crate) source_vectors: SourceVectors,
 }
 
-impl Identifier {
-    pub(crate) fn new(name: StringCacheId, source_vectors: SourceVectors) -> Self {
-        Self {
-            name,
-            source_vectors,
-        }
-    }
-
-    pub(super) fn from_token(token: Token) -> Self {
-        Self::new(token.contents, token.source_vectors)
-    }
-}
-
 /// storage-class-specifier:
 /// typedef
 /// extern
@@ -476,6 +452,26 @@ pub(crate) enum StorageClass {
     Typedef,
 }
 
+impl<'tu> ConstantExpression<'tu> {
+    /// The expression this constant expression is.
+    pub(crate) fn expression(self) -> &'tu Expression<'tu> {
+        self.0
+    }
+}
+
+impl Identifier {
+    pub(crate) fn new(name: StringCacheId, source_vectors: SourceVectors) -> Self {
+        Self {
+            name,
+            source_vectors,
+        }
+    }
+
+    pub(super) fn from_token(token: Token) -> Self {
+        Self::new(token.contents, token.source_vectors)
+    }
+}
+
 impl StorageClass {
     /// The storage-class keyword as written in C source.
     pub(super) fn spelling(self) -> &'static str {
@@ -486,5 +482,11 @@ impl StorageClass {
             | Self::Extern => "extern",
             | Self::Typedef => "typedef",
         }
+    }
+}
+
+impl<'tu> From<ConstantExpression<'tu>> for &'tu Expression<'tu> {
+    fn from(expression: ConstantExpression<'tu>) -> Self {
+        expression.0
     }
 }

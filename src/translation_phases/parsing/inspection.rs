@@ -1,9 +1,30 @@
-//! Deterministic, source-oriented syntax-tree inspection.
+//! Syntax inspection renders the retained tree in source order without
+//! recursion. [`ParsedTranslationUnit::inspect`] visits nodes from an explicit
+//! work stack, prints their labels, and pushes their children in reverse order.
+//! A visit table identifies shared syntax so it can be referenced rather than
+//! printed repeatedly. Locations are optional, and the output format is
+//! specific to this compiler.
 //!
-//! Renders the syntax tree that translation phase 7 builds (§5.1.1.2
-//! paragraph 1, p. 10; PDF p. 22) for the inspection CLI and tests. The
-//! output format is bcc-rust's own; it encodes no rule of the standard
-//! beyond the constant types it prints.
+//! For `int x = 1;`, inspection visits the declaration root, its declarator and
+//! initializer, then the initializer's constant expression. Their labels form
+//! an indented tree, with source locations when the caller enables them.
+//!
+//! Read [`ParsedTranslationUnit::inspect`] first, then [`Work`] for the pending
+//! visits and [`InspectionOptions`] for the caller's choices. Continue with
+//! [`ParsedTranslationUnit::push_statement_children`],
+//! [`ParsedTranslationUnit::push_expression_children`], and
+//! [`ParsedTranslationUnit::expression_label`] to follow child order and
+//! labels.
+//!
+//! Files are grouped by role:
+//!
+//! - `inspection.rs`: traversal, visit tracking, and output assembly.
+//! - `inspection/labels.rs`: C spellings for types, statements, expressions,
+//!   operators, constants, and qualifiers.
+//!
+//! C99: the inspected syntax is built in translation phase 7, §5.1.1.2
+//! paragraph 1, p. 10; PDF p. 22. Rendering encodes no additional language rule
+//! beyond the constant types that `inspection/labels.rs` cites.
 
 use std::fmt::{
     self,
@@ -14,6 +35,7 @@ use std::fmt::{
 use hashbrown::hash_map::Entry;
 use rustc_hash::FxBuildHasher;
 
+// Node labels
 mod labels;
 
 use labels::{
@@ -75,51 +97,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct InspectionOptions {
-    pub(crate) show_locations: bool,
-}
-
-enum Work<'tu> {
-    Asm(&'tu super::gnu::Asm<'tu>, usize),
-    MsAsm(&'tu super::msvc::MsAsm<'tu>, usize),
-    AsmOperand(super::gnu::AsmOperand<'tu>, usize),
-    AsmString(
-        crate::translation_phases::preprocessing::Token,
-        usize,
-        &'static str,
-    ),
-    OffsetMember(super::gnu::OffsetMember<'tu>, usize),
-    SpecifierExtensionItem(&'tu super::modern::SpecifierExtension<'tu>, usize),
-    GenericAssociation(super::modern::GenericAssociation<'tu>, usize),
-    Attributes(&'tu super::modern::AttributeSpecifier<'tu>, usize),
-    Assertion(&'tu super::modern::StaticAssertion<'tu>, usize),
-    SpecifierExtension(&'tu super::modern::SpecifierExtension<'tu>, usize),
-    Root(ExternalDeclaration<'tu>, usize),
-    Declaration(&'tu Declaration<'tu>, usize, &'static str),
-    InitDeclarator(InitDeclarator<'tu>, usize),
-    Function(&'tu FunctionDefinition<'tu>, usize, &'static str),
-    Declarator(Declarator<'tu>, usize, &'static str),
-    DirectDeclarator(DirectDeclarator<'tu>, usize),
-    PointerLevel(usize, super::declaration_syntax::PointerLevel<'tu>, usize),
-    Identifier(Identifier, usize, &'static str),
-    Parameter(ParameterDeclaration<'tu>, usize),
-    StructOrUnion(&'tu StructOrUnionSpecifier<'tu>, usize),
-    StructDeclaration(StructDeclaration<'tu>, usize),
-    StructDeclarator(StructDeclarator<'tu>, usize),
-    Enum(&'tu EnumSpecifier<'tu>, usize),
-    Enumerator(Enumerator<'tu>, usize),
-    Statement(&'tu Statement<'tu>, usize, &'static str),
-    Expression(&'tu Expression<'tu>, usize, &'static str),
-    Missing(SourceVectors, usize, &'static str),
-    Initializer(&'tu Initializer<'tu>, usize, &'static str),
-    InitializerElement(InitializerElement<'tu>, usize),
-    Designation(&'tu Designation<'tu>, usize),
-    Designator(Designator<'tu>, usize),
-    TypeName(&'tu TypeName<'tu>, usize, &'static str),
-}
-
-impl<'tu> ParsedTranslationUnit<'tu> {
+impl ParsedTranslationUnit<'_> {
     #[expect(
         clippy::too_many_lines,
         reason = "One iterative dispatcher keeps traversal order and cycle handling centralized."
@@ -1129,7 +1107,68 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         }
         output.into_str()
     }
+}
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct InspectionOptions {
+    pub(crate) show_locations: bool,
+}
+
+enum Work<'tu> {
+    Asm(&'tu super::gnu::Asm<'tu>, usize),
+    MsAsm(&'tu super::msvc::MsAsm<'tu>, usize),
+    AsmOperand(super::gnu::AsmOperand<'tu>, usize),
+    AsmString(
+        crate::translation_phases::preprocessing::Token,
+        usize,
+        &'static str,
+    ),
+    OffsetMember(super::gnu::OffsetMember<'tu>, usize),
+    SpecifierExtensionItem(&'tu super::modern::SpecifierExtension<'tu>, usize),
+    GenericAssociation(super::modern::GenericAssociation<'tu>, usize),
+    Attributes(&'tu super::modern::AttributeSpecifier<'tu>, usize),
+    Assertion(&'tu super::modern::StaticAssertion<'tu>, usize),
+    SpecifierExtension(&'tu super::modern::SpecifierExtension<'tu>, usize),
+    Root(ExternalDeclaration<'tu>, usize),
+    Declaration(&'tu Declaration<'tu>, usize, &'static str),
+    InitDeclarator(InitDeclarator<'tu>, usize),
+    Function(&'tu FunctionDefinition<'tu>, usize, &'static str),
+    Declarator(Declarator<'tu>, usize, &'static str),
+    DirectDeclarator(DirectDeclarator<'tu>, usize),
+    PointerLevel(usize, super::declaration_syntax::PointerLevel<'tu>, usize),
+    Identifier(Identifier, usize, &'static str),
+    Parameter(ParameterDeclaration<'tu>, usize),
+    StructOrUnion(&'tu StructOrUnionSpecifier<'tu>, usize),
+    StructDeclaration(StructDeclaration<'tu>, usize),
+    StructDeclarator(StructDeclarator<'tu>, usize),
+    Enum(&'tu EnumSpecifier<'tu>, usize),
+    Enumerator(Enumerator<'tu>, usize),
+    Statement(&'tu Statement<'tu>, usize, &'static str),
+    Expression(&'tu Expression<'tu>, usize, &'static str),
+    Missing(SourceVectors, usize, &'static str),
+    Initializer(&'tu Initializer<'tu>, usize, &'static str),
+    InitializerElement(InitializerElement<'tu>, usize),
+    Designation(&'tu Designation<'tu>, usize),
+    Designator(Designator<'tu>, usize),
+    TypeName(&'tu TypeName<'tu>, usize, &'static str),
+}
+
+/// The kind of a shared node, which keeps nodes of different kinds at one
+/// address apart in the visited map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum VisitKind {
+    Declaration,
+    FunctionDefinition,
+    Statement,
+    Expression,
+    Initializer,
+    TypeName,
+    StructOrUnion,
+    Enum,
+    Designation,
+}
+
+impl<'tu> ParsedTranslationUnit<'tu> {
     fn push_type_details(
         work: &mut ArenaVec<'_, Work<'tu>>,
         specifiers: TypeSpecifiers<'tu>,
@@ -1496,21 +1535,6 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         }
         output.push('\n');
     }
-}
-
-/// The kind of a shared node, which keeps nodes of different kinds at one
-/// address apart in the visited map.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum VisitKind {
-    Declaration,
-    FunctionDefinition,
-    Statement,
-    Expression,
-    Initializer,
-    TypeName,
-    StructOrUnion,
-    Enum,
-    Designation,
 }
 
 /// Records a node reached through a reference. Returns `None` on the first

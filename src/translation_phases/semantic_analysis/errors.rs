@@ -26,6 +26,17 @@ use crate::{
     },
 };
 
+/// Semantic error with primary and optional prior-declaration provenance.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SemanticError {
+    pub(crate) extension_severity: Option<ErrorSeverity>,
+    pub(crate) kind:               SemanticErrorKind,
+    pub(crate) source_vectors:     SourceVectors,
+    pub(crate) name:               Option<StringCacheId>,
+    pub(crate) previous:           Option<SourceVectors>,
+}
+
 /// Symbolic semantic diagnostic, independent of rendered text.
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -892,56 +903,6 @@ impl SemanticErrorKind {
     }
 }
 
-/// Semantic error with primary and optional prior-declaration provenance.
-/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SemanticError {
-    pub(crate) extension_severity: Option<ErrorSeverity>,
-    pub(crate) kind:               SemanticErrorKind,
-    pub(crate) source_vectors:     SourceVectors,
-    pub(crate) name:               Option<StringCacheId>,
-    pub(crate) previous:           Option<SourceVectors>,
-}
-
-impl fmt::Display for SemanticError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.kind.explanation().0)
-    }
-}
-impl std::error::Error for SemanticError {}
-impl GetSeverity for SemanticError {
-    fn severity(&self) -> ErrorSeverity {
-        if let Some(severity) = self.extension_severity {
-            return severity;
-        }
-        if matches!(
-            self.kind,
-            SemanticErrorKind::QualifiedFunction
-                | SemanticErrorKind::MainSignature
-                | SemanticErrorKind::TentativeArrayAssumedOne
-                | SemanticErrorKind::UnusedStaticFunction
-                | SemanticErrorKind::EmptyCaseRange
-                | SemanticErrorKind::MissingReturnValueWarning
-                | SemanticErrorKind::InvalidAtomicOrder
-                | SemanticErrorKind::InvalidAtomicFailureOrder
-                | SemanticErrorKind::AtomicBufferQualifiers
-        ) {
-            ErrorSeverity::Warning
-        } else {
-            ErrorSeverity::Error
-        }
-    }
-}
-impl GetPosition for SemanticError {
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.source_vectors.position(context)
-    }
-}
-impl GetSourceVectors for SemanticError {
-    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
-        self.source_vectors
-    }
-}
 impl ToDiagnostic for SemanticError {
     fn diagnostic_in<'d>(
         &self,
@@ -975,5 +936,49 @@ impl ToDiagnostic for SemanticError {
             diagnostic = diagnostic.secondary(previous, label);
         }
         diagnostic
+    }
+}
+
+impl fmt::Display for SemanticError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.kind.explanation().0)
+    }
+}
+
+impl std::error::Error for SemanticError {}
+
+impl GetSeverity for SemanticError {
+    fn severity(&self) -> ErrorSeverity {
+        if let Some(severity) = self.extension_severity {
+            return severity;
+        }
+        if matches!(
+            self.kind,
+            SemanticErrorKind::QualifiedFunction
+                | SemanticErrorKind::MainSignature
+                | SemanticErrorKind::TentativeArrayAssumedOne
+                | SemanticErrorKind::UnusedStaticFunction
+                | SemanticErrorKind::EmptyCaseRange
+                | SemanticErrorKind::MissingReturnValueWarning
+                | SemanticErrorKind::InvalidAtomicOrder
+                | SemanticErrorKind::InvalidAtomicFailureOrder
+                | SemanticErrorKind::AtomicBufferQualifiers
+        ) {
+            ErrorSeverity::Warning
+        } else {
+            ErrorSeverity::Error
+        }
+    }
+}
+
+impl GetPosition for SemanticError {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for SemanticError {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
+        self.source_vectors
     }
 }

@@ -25,24 +25,26 @@ use super::{
         StructOrUnionSpecifier,
         TypeName,
     },
-    gnu::{
-        Asm,
-        AsmOperand,
-        Builtin,
-        OffsetMember,
-    },
-    modern::{
-        AttributeSpecifier,
-        ExtendedType,
-        GenericAssociation,
-        GenericSelection,
-        SpecifierExtension,
-        StaticAssertion,
-        SyntaxOperand,
-    },
-    msvc::{
-        MsAsm,
-        Seh,
+    extensions::{
+        gnu::{
+            Asm,
+            AsmOperand,
+            Builtin,
+            OffsetMember,
+        },
+        modern::{
+            AttributeSpecifier,
+            ExtendedType,
+            GenericAssociation,
+            GenericSelection,
+            SpecifierExtension,
+            StaticAssertion,
+            SyntaxOperand,
+        },
+        msvc::{
+            MsAsm,
+            Seh,
+        },
     },
     syntax::{
         AttributedStatement,
@@ -66,6 +68,32 @@ pub(super) trait TreeNode<'tu>: Sized + 'tu {
     /// Records `node` in the test log.
     #[cfg(test)]
     fn log(log: &mut SyntaxLog<'tu>, node: &'tu Self);
+}
+
+#[cfg(test)]
+impl<'tu> SyntaxLog<'tu> {
+    /// Counts `node` and logs it by kind.
+    pub(super) fn record<T: TreeNode<'tu>>(&mut self, node: &'tu T) {
+        self.nodes += 1;
+        T::log(self, node);
+    }
+
+    /// Puts `new` where the log holds `old`, which it replaces in the tree.
+    /// The node count does not change.
+    pub(super) fn replace_expression(
+        &mut self,
+        old: &'tu Expression<'tu>,
+        new: &'tu Expression<'tu>,
+    ) {
+        if let Some(slot) = self
+            .expressions
+            .iter_mut()
+            .rev()
+            .find(|logged| std::ptr::eq(**logged, old))
+        {
+            *slot = new;
+        }
+    }
 }
 
 /// Every syntax node the parser allocated, by kind and in allocation order,
@@ -209,49 +237,8 @@ plain_tree_nodes! {
     Identifier => identifiers,
 }
 
-impl TreeNode<'_> for Token {
-    #[cfg(test)]
-    fn log(_: &mut SyntaxLog<'_>, _: &Self) {}
-}
-
-/// Call arguments are lists of expression references; the expressions
-/// themselves are logged when allocated.
-impl<'tu> TreeNode<'tu> for &'tu Expression<'tu> {
-    #[cfg(test)]
-    fn log(_: &mut SyntaxLog<'tu>, _: &'tu Self) {}
-}
-
-/// Old-style declaration lists are lists of declaration references.
-impl<'tu> TreeNode<'tu> for &'tu Declaration<'tu> {
-    #[cfg(test)]
-    fn log(_: &mut SyntaxLog<'tu>, _: &'tu Self) {}
-}
-
 #[cfg(test)]
 impl<'tu> SyntaxLog<'tu> {
-    /// Counts `node` and logs it by kind.
-    pub(super) fn record<T: TreeNode<'tu>>(&mut self, node: &'tu T) {
-        self.nodes += 1;
-        T::log(self, node);
-    }
-
-    /// Puts `new` where the log holds `old`, which it replaces in the tree.
-    /// The node count does not change.
-    pub(super) fn replace_expression(
-        &mut self,
-        old: &'tu Expression<'tu>,
-        new: &'tu Expression<'tu>,
-    ) {
-        if let Some(slot) = self
-            .expressions
-            .iter_mut()
-            .rev()
-            .find(|logged| std::ptr::eq(**logged, old))
-        {
-            *slot = new;
-        }
-    }
-
     /// Nodes of every kind.
     pub(super) fn node_count(&self) -> usize {
         self.nodes
@@ -274,4 +261,22 @@ impl<'tu> SyntaxLog<'tu> {
             .copied()
             .expect("the syntax log holds that many nodes of this kind")
     }
+}
+
+impl TreeNode<'_> for Token {
+    #[cfg(test)]
+    fn log(_: &mut SyntaxLog<'_>, _: &Self) {}
+}
+
+/// Call arguments are lists of expression references; the expressions
+/// themselves are logged when allocated.
+impl<'tu> TreeNode<'tu> for &'tu Expression<'tu> {
+    #[cfg(test)]
+    fn log(_: &mut SyntaxLog<'tu>, _: &'tu Self) {}
+}
+
+/// Old-style declaration lists are lists of declaration references.
+impl<'tu> TreeNode<'tu> for &'tu Declaration<'tu> {
+    #[cfg(test)]
+    fn log(_: &mut SyntaxLog<'tu>, _: &'tu Self) {}
 }

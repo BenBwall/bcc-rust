@@ -10,44 +10,34 @@
 use std::fmt::Write as _;
 
 use super::{
-    ArenaVec,
-    ArrayBound,
     BindingKind,
-    Bump,
-    Context,
     Duration,
     Linkage,
     ScopeKind,
     SemanticTranslationUnit,
-    TagKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
     expressions::{
         ConstantClass,
         ConversionKind,
         ValueCategory,
     },
+    types::{
+        ArrayBound,
+        TagKind,
+        TypeId,
+        TypeKind,
+    },
 };
-use crate::util::bump::ArenaString;
-
-#[derive(Clone, Copy)]
-enum Part<'tu> {
-    Text(&'tu str),
-    Type(TypeId),
-    Function(&'tu [TypeId], bool, bool),
-}
-
-/// One inspected item of a scope, in discovery order within its table.
-#[derive(Clone, Copy)]
-enum Item {
-    Tag(usize),
-    Binding(usize),
-}
-
-/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
-/// as in syntax inspection, so output stays linear in the item count.
-const MAXIMUM_INDENT: usize = 32;
+use crate::{
+    translation_phases::{
+        Context,
+        parsing::declaration_syntax::TypeQualifiers,
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
+};
 
 impl<'tu> SemanticTranslationUnit<'tu> {
     pub(crate) fn inspect<'d>(&self, context: &Context<'tu>, arena: &'d Bump) -> &'d str {
@@ -474,6 +464,24 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         }
     }
 }
+
+/// One inspected item of a scope, in discovery order within its table.
+#[derive(Clone, Copy)]
+enum Item {
+    Tag(usize),
+    Binding(usize),
+}
+
+#[derive(Clone, Copy)]
+enum Part<'tu> {
+    Text(&'tu str),
+    Type(TypeId),
+    Function(&'tu [TypeId], bool, bool),
+}
+
+/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
+/// as in syntax inspection, so output stays linear in the item count.
+const MAXIMUM_INDENT: usize = 32;
 
 fn indent(out: &mut ArenaString<'_>, depth: usize) {
     for _ in 0..depth.min(MAXIMUM_INDENT) {

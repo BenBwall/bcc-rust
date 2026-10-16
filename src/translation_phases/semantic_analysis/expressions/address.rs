@@ -4,41 +4,26 @@
 use super::{
     super::{
         Analyzer,
-        BinaryOperator,
-        Expression,
-        ExpressionType,
-        Integer,
-        TypeId,
-        TypeKind,
-        UnaryOperator,
+        integer::Integer,
+        types::{
+            TypeId,
+            TypeKind,
+        },
     },
     ConstantClass,
     ExpressionInfo,
 };
-use crate::translation_phases::preprocessing::StringTokenType;
-
-/// The object an address constant is based on. C99: §6.6p9, p. 96; PDF
-/// p. 108.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum AddressBase<'tu> {
-    /// An integer-valued pointer constant such as a null pointer.
-    Absolute,
-    Binding(usize),
-    String(&'tu Expression<'tu>),
-}
+use crate::translation_phases::{
+    parsing::syntax::{
+        BinaryOperator,
+        Expression,
+        ExpressionType,
+        UnaryOperator,
+    },
+    preprocessing::StringTokenType,
+};
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
-    /// Implementation-defined pointer-to-integer folding for the address of
-    /// an lvalue reached from an integer-valued pointer constant, as in the
-    /// classic `offsetof` macro.
-    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59.
-    pub(super) fn integer_address(&self, e: &'tu Expression<'tu>) -> Option<i128> {
-        match self.address_parts(e, true)? {
-            | (AddressBase::Absolute, offset) => Some(offset),
-            | _ => None,
-        }
-    }
-
     /// Splits an address into its base object and byte offset, following
     /// member, subscript, cast and integer-offset steps without recursion.
     /// Implementation choice: GCC-style address differences are accepted as
@@ -187,28 +172,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether two address bases designate the same object; the implementation
-    /// chooses to merge identical string literals, as GCC does.
-    /// C99: §6.4.5 paragraph 6, p. 63; PDF p. 75.
-    fn same_address_base(&self, left: AddressBase<'tu>, right: AddressBase<'tu>) -> bool {
-        match (left, right) {
-            | (AddressBase::Absolute, AddressBase::Absolute) => true,
-            | (AddressBase::Binding(l), AddressBase::Binding(r)) => l == r,
-            | (AddressBase::String(l), AddressBase::String(r)) => match (l.kind, r.kind) {
-                | (
-                    ExpressionType::StringLiteral(StringTokenType::String(l)),
-                    ExpressionType::StringLiteral(StringTokenType::String(r)),
-                )
-                | (
-                    ExpressionType::StringLiteral(StringTokenType::WideString(l)),
-                    ExpressionType::StringLiteral(StringTokenType::WideString(r)),
-                ) => self.context.literal_units(l) == self.context.literal_units(r),
-                | _ => false,
-            },
-            | _ => false,
-        }
-    }
-
     /// The element distance between two addresses of one object.
     /// C99: §6.5.6p9, pp. 83-84; PDF pp. 95-96.
     pub(super) fn address_difference(
@@ -231,13 +194,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(Integer::int(if bytes < 0 { -elements } else { elements }).cast(64, true))
     }
 
-    pub(super) fn pointer_value(info: ExpressionInfo<'tu>) -> Option<i128> {
-        (info.constant == ConstantClass::Address)
-            .then_some(info.integer)
-            .flatten()
-            .map(|v| v.value)
-    }
-
     /// Determines whether an expression forms an address constant without
     /// reading an object.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
@@ -249,4 +205,54 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     TypeKind::Array(..) | TypeKind::Function { .. }
                 ))
     }
+
+    pub(super) fn pointer_value(info: ExpressionInfo<'tu>) -> Option<i128> {
+        (info.constant == ConstantClass::Address)
+            .then_some(info.integer)
+            .flatten()
+            .map(|v| v.value)
+    }
+
+    /// Implementation-defined pointer-to-integer folding for the address of
+    /// an lvalue reached from an integer-valued pointer constant, as in the
+    /// classic `offsetof` macro.
+    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59.
+    pub(super) fn integer_address(&self, e: &'tu Expression<'tu>) -> Option<i128> {
+        match self.address_parts(e, true)? {
+            | (AddressBase::Absolute, offset) => Some(offset),
+            | _ => None,
+        }
+    }
+
+    /// Whether two address bases designate the same object; the implementation
+    /// chooses to merge identical string literals, as GCC does.
+    /// C99: §6.4.5 paragraph 6, p. 63; PDF p. 75.
+    fn same_address_base(&self, left: AddressBase<'tu>, right: AddressBase<'tu>) -> bool {
+        match (left, right) {
+            | (AddressBase::Absolute, AddressBase::Absolute) => true,
+            | (AddressBase::Binding(l), AddressBase::Binding(r)) => l == r,
+            | (AddressBase::String(l), AddressBase::String(r)) => match (l.kind, r.kind) {
+                | (
+                    ExpressionType::StringLiteral(StringTokenType::String(l)),
+                    ExpressionType::StringLiteral(StringTokenType::String(r)),
+                )
+                | (
+                    ExpressionType::StringLiteral(StringTokenType::WideString(l)),
+                    ExpressionType::StringLiteral(StringTokenType::WideString(r)),
+                ) => self.context.literal_units(l) == self.context.literal_units(r),
+                | _ => false,
+            },
+            | _ => false,
+        }
+    }
+}
+
+/// The object an address constant is based on. C99: §6.6p9, p. 96; PDF
+/// p. 108.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AddressBase<'tu> {
+    /// An integer-valued pointer constant such as a null pointer.
+    Absolute,
+    Binding(usize),
+    String(&'tu Expression<'tu>),
 }

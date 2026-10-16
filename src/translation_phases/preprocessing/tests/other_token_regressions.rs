@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use super::Preprocessor;
 use crate::{
     diagnostics::ToDiagnostic,
     translation_phases::{
@@ -13,6 +12,7 @@ use crate::{
         SourceVector,
         TranslationPhase,
         preprocessing::{
+            Preprocessor,
             StringTokenType,
             Token,
             TokenType,

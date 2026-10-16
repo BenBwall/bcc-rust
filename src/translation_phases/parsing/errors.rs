@@ -17,6 +17,7 @@ use std::fmt::{
 };
 
 use super::{
+    Parser,
     machine::ParseFrameKind,
     syntax::StorageClass,
 };
@@ -33,18 +34,257 @@ use crate::{
         ErrorSeverity,
         GetPosition,
         GetSeverity,
+        GetSourceFileIndex,
         GetSourceVectors,
         SourcePosition,
         SourceVector,
         SourceVectors,
+        TranslationError,
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,
+            StringTokenType,
+            Token,
             TokenType,
         },
     },
     util::bump::Bump,
 };
+
+impl<'tu> Parser<'_, 'tu, '_> {
+    /// Emits one structured diagnostic and records whether it was a hard error.
+    ///
+    /// C99: syntax-rule and constraint violations require at least one
+    /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
+    /// “produce at least one diagnostic message”.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn report(&mut self, error_type: ParserErrorType<'tu>, token: Option<Token>) {
+        self.report_with_feature(error_type, token, None);
+    }
+
+    /// Typed extension diagnostic, including non-accepted syntax.
+    /// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn extension_diagnostic(
+        &mut self,
+        feature: crate::configuration::Feature,
+        error_type: ParserErrorType<'tu>,
+        token: Option<Token>,
+    ) {
+        self.report_with_feature(error_type, token, Some(feature));
+    }
+
+    fn report_with_feature(
+        &mut self,
+        error_type: ParserErrorType<'tu>,
+        token: Option<Token>,
+        feature: Option<crate::configuration::Feature>,
+    ) {
+        let warning_group = error_type.warning_group();
+        if warning_group == Some(ParserWarningGroup::RepeatedSpecifiers)
+            && !self.context.configuration.repeated_specifier_warnings()
+        {
+            return;
+        }
+        if error_type.severity() == ErrorSeverity::Error && !error_type.leaves_syntax_intact() {
+            self.hard_error_count += 1;
+        }
+        let found_spelling = token.map(|token| -> &str {
+            match token.kind {
+                | TokenType::String(StringTokenType::String(contents)) => self
+                    .context
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, ""),
+                | TokenType::String(StringTokenType::WideString(contents)) => self
+                    .context
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, "L"),
+                | _ => self.context.diagnostic_text(
+                    self.context
+                        .string_cache
+                        .at(token.contents)
+                        .trim_end_matches('\0'),
+                ),
+            }
+        });
+        let source_vectors = match token {
+            | Some(token) => token.source_vectors,
+            | None => self.missing_syntax_source(),
+        };
+        // Clang's missing-declarations warning remains suppressible in system
+        // headers even when -pedantic-errors promotes it to an error.
+        if matches!(error_type, ParserErrorType::MemberDeclaresNothing)
+            && self
+                .context
+                .withholds(ErrorSeverity::Warning, false, source_vectors)
+        {
+            return;
+        }
+        let insertion_point = if error_type.expects_terminating_semicolon() {
+            self.semicolon_insertion_point(token)
+        } else {
+            None
+        };
+        let error = ParserError {
+            code: error_type.code(),
+            severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing) {
+                crate::translation_phases::policy_severity(
+                    self.context.configuration.extension_policy(),
+                    crate::translation_phases::DiagnosticPolicy::Warning,
+                )
+                .unwrap_or(ErrorSeverity::Warning)
+            } else {
+                error_type.severity()
+            },
+            warning_group,
+            frame: self.active_frame,
+            expected: error_type.expected_syntax(),
+            found: token.map(|token| token.kind),
+            found_spelling,
+            insertion_point,
+            error_type,
+            source_vectors,
+            ranges: &mut [],
+            related: &mut [],
+            recovery: None,
+            consumed_tokens: self.cursor.consumed,
+            ordering_location: self
+                .context
+                .user_source_end(source_vectors)
+                .map(|location| (location.source_file_index, location.index)),
+        };
+        if let Some(feature) = feature {
+            self.context.report_extension_diagnostic(
+                feature,
+                crate::translation_phases::DiagnosticPolicy::Extension,
+                source_vectors,
+                |severity| TranslationError::Parsing(ParserError { severity, ..error }),
+            );
+        } else {
+            self.context.parser_error(error);
+        }
+    }
+
+    /// Attaches a "missing `;`" suggestion after `source` to the diagnostic
+    /// just reported, explaining why the following input was misread.
+    pub(super) fn suggest_semicolon_after(&mut self, source: SourceVectors) {
+        let Some(last) = self.context.user_source_end(source) else {
+            return;
+        };
+        let insertion_point = self.context.retain_source_end(&last);
+        let related = self.context.diagnostic_slice(&[RelatedParserDiagnostic {
+            message:        "not a function, so later declarations were read as its parameters",
+            source_vectors: source,
+        }]);
+        if let Some(TranslationError::Parsing(error)) = self.context.pending_errors.back_mut() {
+            error.insertion_point = Some(insertion_point);
+            error.related = related;
+        }
+    }
+
+    /// Returns a zero-width anchor just after the previous token when `found`
+    /// starts a later line of the same file: the likely place of a missing
+    /// `;`.
+    fn semicolon_insertion_point(&mut self, found: Option<Token>) -> Option<SourceVectors> {
+        let previous = self.cursor.previous?;
+        let previous = self.context.user_source_end(previous.source_vectors)?;
+        let next = self
+            .context
+            .get_source_vectors(found?.source_vectors)
+            .first()?
+            .clone();
+        if previous.source_file_index != next.source_file_index || previous.line >= next.line {
+            return None;
+        }
+        Some(self.context.retain_source_end(&previous))
+    }
+
+    /// Returns a zero-width location for syntax the input left out: the start
+    /// of the current token, or the end of input when no token remains.
+    ///
+    /// Unlike the upstream position, this does not depend on how far the
+    /// preprocessor has read ahead, so every preprocessing strategy places
+    /// recovered and missing nodes identically.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn missing_syntax_source(&mut self) -> SourceVectors {
+        if let Some(token) = self.cursor.current()
+            && let Some(first) = self
+                .context
+                .get_source_vectors(token.source_vectors)
+                .first()
+        {
+            let (position, source_file_index) =
+                (first.position(self.context), first.source_file_index);
+            return self
+                .context
+                .create_retained_source_vectors(position, source_file_index, 0);
+        }
+        self.context
+            .create_retained_source_vectors(self.position(), self.source_file_index(), 0)
+    }
+
+    /// Adds a token's provenance to an optional accumulated source range.
+    ///
+    /// C99: diagnostics should identify the violation where possible under
+    /// §5.1.1.3 and footnote 8, p. 11; PDF p. 23. `SourceVectors` is the
+    /// implementation's macro/include provenance mechanism.
+    pub(super) fn merge_source(&mut self, existing: &mut Option<SourceVectors>, token: Token) {
+        self.context.merge_into(existing, token.source_vectors);
+    }
+}
+
+/// Structured parser diagnostic paired with original-source provenance.
+///
+/// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+pub(crate) struct ParserError<'tu> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Only parser tests assert on this diagnostic field."
+        )
+    )]
+    pub(crate) code:              ParserDiagnosticCode,
+    pub(crate) severity:          ErrorSeverity,
+    pub(crate) warning_group:     Option<ParserWarningGroup>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Only parser tests assert on this diagnostic field."
+        )
+    )]
+    pub(crate) frame:             ParseFrameKind,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Only parser tests assert on this diagnostic field."
+        )
+    )]
+    pub(crate) expected:          ExpectedSyntax,
+    pub(crate) found:             Option<TokenType>,
+    /// Source spelling of the found token, captured when the diagnostic is
+    /// reported so messages can quote what was written.
+    pub(crate) found_spelling:    Option<&'tu str>,
+    /// Where a missing `;` most likely belongs, when the found token starts
+    /// a new line.
+    pub(crate) insertion_point:   Option<SourceVectors>,
+    /// Dedicated diagnostic kind and its grammar-specific payload.
+    pub(crate) error_type:        ParserErrorType<'tu>,
+    /// Source segments to underline when the diagnostic is rendered.
+    pub(crate) source_vectors:    SourceVectors,
+    pub(crate) ranges:            &'tu mut [SourceVectors],
+    pub(crate) related:           &'tu mut [RelatedParserDiagnostic],
+    pub(crate) recovery:          Option<RecoverySummary>,
+    /// Tokens the parser had consumed when it reported this diagnostic. Two
+    /// errors at one place with no input consumed between them come from one
+    /// mistake; equal locations alone can also be two uses of one macro.
+    pub(crate) consumed_tokens:   usize,
+    /// Physical use-site position captured before macro metadata is reclaimed.
+    pub(crate) ordering_location: Option<(u32, u32)>,
+}
 
 /// Which requirement a parser diagnostic reports: a syntax rule, a
 /// constraint, or neither.
@@ -136,59 +376,6 @@ pub(crate) struct DeclarationContinuation {
     pub(crate) function_body: bool,
 }
 
-impl DeclarationContinuation {
-    /// Returns the "expected ..." phrase and the primary label.
-    fn expected(self, arena: &Bump) -> (&str, &str) {
-        let mut phrases = ["`,`"; 4];
-        let mut tokens = ["`,`"; 4];
-        let mut count = 1;
-        let mut offer = |phrase, token| {
-            phrases[count] = phrase;
-            tokens[count] = token;
-            count += 1;
-        };
-        if self.initializer {
-            offer("`=`", "`=`");
-        }
-        // In a `for` header, `)` only ends recovery: the declaration still
-        // needs its `;` (C99 6.8.5p1), so it is not offered here.
-        offer("`;`", "`;`");
-        if self.function_body {
-            offer("a function body", "`{`");
-        }
-        let (phrases, tokens) = (&phrases[..count], &tokens[..count]);
-        let label = if tokens.len() == 2 {
-            format_in!(arena, "expected {}", alternatives(tokens))
-        } else {
-            format_in!(arena, "expected one of {}", alternatives(tokens))
-        };
-        (
-            format_in!(arena, "{} after the declarator", alternatives(phrases)),
-            label,
-        )
-    }
-
-    /// Explains why a found `{` cannot begin a function body here.
-    fn function_body_note(self, found: Option<TokenType>) -> Option<&'static str> {
-        if self.function_body
-            || !matches!(
-                found,
-                Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace))
-            )
-        {
-            return None;
-        }
-        Some(match self.place {
-            | DeclarationPlace::OldStyleParameter =>
-                "C99 §6.9.1: each declaration before an old-style function body ends with `;`",
-            | DeclarationPlace::Block | DeclarationPlace::ForInitializer =>
-                "C99 §6.9.1: functions can only be defined at file scope",
-            | DeclarationPlace::External =>
-                "C99 §6.9.1: a function definition has exactly one declarator and no initializer",
-        })
-    }
-}
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct RelatedParserDiagnostic {
     pub(crate) message:        &'static str,
@@ -211,194 +398,6 @@ pub(crate) struct RecoverySummary {
     )]
     pub(crate) stopped_at:       Option<TokenType>,
 }
-
-/// Structured parser diagnostic paired with original-source provenance.
-///
-/// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
-#[derive(Debug)]
-#[cfg_attr(test, derive(PartialEq))]
-pub(crate) struct ParserError<'tu> {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Only parser tests assert on this diagnostic field."
-        )
-    )]
-    pub(crate) code:              ParserDiagnosticCode,
-    pub(crate) severity:          ErrorSeverity,
-    pub(crate) warning_group:     Option<ParserWarningGroup>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Only parser tests assert on this diagnostic field."
-        )
-    )]
-    pub(crate) frame:             ParseFrameKind,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Only parser tests assert on this diagnostic field."
-        )
-    )]
-    pub(crate) expected:          ExpectedSyntax,
-    pub(crate) found:             Option<TokenType>,
-    /// Source spelling of the found token, captured when the diagnostic is
-    /// reported so messages can quote what was written.
-    pub(crate) found_spelling:    Option<&'tu str>,
-    /// Where a missing `;` most likely belongs, when the found token starts
-    /// a new line.
-    pub(crate) insertion_point:   Option<SourceVectors>,
-    /// Dedicated diagnostic kind and its grammar-specific payload.
-    pub(crate) error_type:        ParserErrorType<'tu>,
-    /// Source segments to underline when the diagnostic is rendered.
-    pub(crate) source_vectors:    SourceVectors,
-    pub(crate) ranges:            &'tu mut [SourceVectors],
-    pub(crate) related:           &'tu mut [RelatedParserDiagnostic],
-    pub(crate) recovery:          Option<RecoverySummary>,
-    /// Tokens the parser had consumed when it reported this diagnostic. Two
-    /// errors at one place with no input consumed between them come from one
-    /// mistake; equal locations alone can also be two uses of one macro.
-    pub(crate) consumed_tokens:   usize,
-    /// Physical use-site position captured before macro metadata is reclaimed.
-    pub(crate) ordering_location: Option<(u32, u32)>,
-}
-
-impl ParserError<'_> {
-    /// Whether a later error at the same place may be folded into this one,
-    /// or this one into an earlier error. A resource limit always shows,
-    /// because it explains why the rest of the input was not parsed.
-    pub(crate) fn may_fold(&self) -> bool {
-        !matches!(
-            self.error_type,
-            ParserErrorType::ResourceLimitExceeded { .. }
-        )
-    }
-
-    pub(crate) fn is_empty_translation_unit(&self) -> bool {
-        matches!(self.error_type, ParserErrorType::EmptyTranslationUnit)
-    }
-
-    /// Visits every provenance range this diagnostic reads from a context
-    /// arena.
-    pub(crate) fn for_each_source_vectors_mut(
-        &mut self,
-        visit: &mut impl FnMut(&mut SourceVectors),
-    ) {
-        visit(&mut self.source_vectors);
-        if let Some(insertion_point) = &mut self.insertion_point {
-            visit(insertion_point);
-        }
-        for range in self.ranges.iter_mut() {
-            visit(range);
-        }
-        for related in self.related.iter_mut() {
-            visit(&mut related.source_vectors);
-        }
-        if let Some(discarded) = self
-            .recovery
-            .as_mut()
-            .and_then(|recovery| recovery.discarded.as_mut())
-        {
-            visit(discarded);
-        }
-    }
-}
-
-impl Display for ParserError<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{}", self.error_type)
-    }
-}
-
-impl ToDiagnostic for ParserError<'_> {
-    fn diagnostic_in<'d>(
-        &self,
-        context: &Context<'_>,
-        source: SourceVectors,
-        arena: &'d Bump,
-    ) -> Diagnostic<'d> {
-        let mut explanation = self.error_type.explain_in(arena, self.found_spelling);
-        if self.insertion_point.is_some() {
-            if self.error_type.expects_terminating_semicolon() {
-                // The likely fix is known, so lead with it.
-                explanation.message = format_in!(
-                    arena,
-                    "expected `;`, found {}",
-                    found_token(self.found, self.found_spelling)
-                );
-            }
-            explanation.help.clear();
-        }
-        if self.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) {
-            explanation = explanation.note(
-                "`repeated-specifiers` warnings are on by default; pass \
-                 `--no-repeated-specifier-warnings` to silence them",
-            );
-        }
-        let mut diagnostic = explanation.at(self.severity, source);
-        let primary = context.get_source_vectors(source);
-        for range in self.ranges.iter() {
-            // Show only input skipped beyond the token the error is about.
-            let skipped: &[SourceVector] = arena.alloc_slice_fill_iter(
-                context
-                    .get_source_vectors(*range)
-                    .iter()
-                    .filter(|vector| !primary.contains(vector))
-                    .cloned(),
-            );
-            if !skipped.is_empty() {
-                diagnostic = diagnostic.secondary_segments(skipped, "skipped to recover");
-            }
-        }
-        if let Some(insertion_point) = self.insertion_point {
-            diagnostic = diagnostic.secondary(insertion_point, "help: add `;` here");
-        }
-        // Where parsing resumes is only worth showing when it is on another
-        // line than the error.
-        let primary_line = primary
-            .first()
-            .map(|vector| (vector.source_file_index, vector.line));
-        if self.insertion_point.is_some()
-            || self
-                .recovery
-                .is_some_and(|recovery| recovery.discarded_tokens > 0)
-        {
-            for related in self.related.iter() {
-                let related_line = context
-                    .get_source_vectors(related.source_vectors)
-                    .first()
-                    .map(|vector| (vector.source_file_index, vector.line));
-                if related_line != primary_line {
-                    diagnostic = diagnostic.secondary(related.source_vectors, related.message);
-                }
-            }
-        }
-        diagnostic
-    }
-}
-
-impl GetSeverity for ParserError<'_> {
-    fn severity(&self) -> ErrorSeverity {
-        self.severity
-    }
-}
-
-impl GetPosition for ParserError<'_> {
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.source_vectors.position(context)
-    }
-}
-
-impl GetSourceVectors for ParserError<'_> {
-    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
-        self.source_vectors
-    }
-}
-
-impl std::error::Error for ParserError<'_> {}
 
 /// Every diagnostic produced by the language parser.
 ///
@@ -718,16 +717,99 @@ pub(crate) enum ParserErrorType<'tu> {
     MemberDeclaresNothing,
 }
 
-impl GetSeverity for ParserErrorType<'_> {
-    /// Quality diagnostics, which C99 does not require, are warnings; every
-    /// other parser diagnostic is an error.
-    fn severity(&self) -> ErrorSeverity {
-        match self.code() {
-            | ParserDiagnosticCode::Quality => ErrorSeverity::Warning,
-            | ParserDiagnosticCode::Syntax
-            | ParserDiagnosticCode::Constraint
-            | ParserDiagnosticCode::ResourceLimit
-            | ParserDiagnosticCode::InternalInvariant => ErrorSeverity::Error,
+const SPECIFIER_COMBINATIONS_NOTE: &str =
+    "C99 §6.7.2p2 lists every valid combination of type specifiers";
+
+impl DeclarationContinuation {
+    /// Returns the "expected ..." phrase and the primary label.
+    fn expected(self, arena: &Bump) -> (&str, &str) {
+        let mut phrases = ["`,`"; 4];
+        let mut tokens = ["`,`"; 4];
+        let mut count = 1;
+        let mut offer = |phrase, token| {
+            phrases[count] = phrase;
+            tokens[count] = token;
+            count += 1;
+        };
+        if self.initializer {
+            offer("`=`", "`=`");
+        }
+        // In a `for` header, `)` only ends recovery: the declaration still
+        // needs its `;` (C99 6.8.5p1), so it is not offered here.
+        offer("`;`", "`;`");
+        if self.function_body {
+            offer("a function body", "`{`");
+        }
+        let (phrases, tokens) = (&phrases[..count], &tokens[..count]);
+        let label = if tokens.len() == 2 {
+            format_in!(arena, "expected {}", alternatives(tokens))
+        } else {
+            format_in!(arena, "expected one of {}", alternatives(tokens))
+        };
+        (
+            format_in!(arena, "{} after the declarator", alternatives(phrases)),
+            label,
+        )
+    }
+
+    /// Explains why a found `{` cannot begin a function body here.
+    fn function_body_note(self, found: Option<TokenType>) -> Option<&'static str> {
+        if self.function_body
+            || !matches!(
+                found,
+                Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace))
+            )
+        {
+            return None;
+        }
+        Some(match self.place {
+            | DeclarationPlace::OldStyleParameter =>
+                "C99 §6.9.1: each declaration before an old-style function body ends with `;`",
+            | DeclarationPlace::Block | DeclarationPlace::ForInitializer =>
+                "C99 §6.9.1: functions can only be defined at file scope",
+            | DeclarationPlace::External =>
+                "C99 §6.9.1: a function definition has exactly one declarator and no initializer",
+        })
+    }
+}
+
+impl ParserError<'_> {
+    /// Whether a later error at the same place may be folded into this one,
+    /// or this one into an earlier error. A resource limit always shows,
+    /// because it explains why the rest of the input was not parsed.
+    pub(crate) fn may_fold(&self) -> bool {
+        !matches!(
+            self.error_type,
+            ParserErrorType::ResourceLimitExceeded { .. }
+        )
+    }
+
+    pub(crate) fn is_empty_translation_unit(&self) -> bool {
+        matches!(self.error_type, ParserErrorType::EmptyTranslationUnit)
+    }
+
+    /// Visits every provenance range this diagnostic reads from a context
+    /// arena.
+    pub(crate) fn for_each_source_vectors_mut(
+        &mut self,
+        visit: &mut impl FnMut(&mut SourceVectors),
+    ) {
+        visit(&mut self.source_vectors);
+        if let Some(insertion_point) = &mut self.insertion_point {
+            visit(insertion_point);
+        }
+        for range in self.ranges.iter_mut() {
+            visit(range);
+        }
+        for related in self.related.iter_mut() {
+            visit(&mut related.source_vectors);
+        }
+        if let Some(discarded) = self
+            .recovery
+            .as_mut()
+            .and_then(|recovery| recovery.discarded.as_mut())
+        {
+            visit(discarded);
         }
     }
 }
@@ -788,9 +870,6 @@ fn found_token(token: Option<TokenType>, spelling: Option<&str>) -> impl Display
         | None => f.write_str("end of file"),
     })
 }
-
-const SPECIFIER_COMBINATIONS_NOTE: &str =
-    "C99 §6.7.2p2 lists every valid combination of type specifiers";
 
 impl ParserErrorType<'_> {
     /// Classifies the diagnostic: `Constraint` for a rule stated in a
@@ -1443,6 +1522,113 @@ impl ParserErrorType<'_> {
     pub(super) fn explain(&self, spelling: Option<&str>) -> crate::diagnostics::OwnedExplanation {
         let arena = Bump::new();
         self.explain_in(&arena, spelling).to_owned_explanation()
+    }
+}
+
+impl Display for ParserError<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{}", self.error_type)
+    }
+}
+
+impl ToDiagnostic for ParserError<'_> {
+    fn diagnostic_in<'d>(
+        &self,
+        context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
+        let mut explanation = self.error_type.explain_in(arena, self.found_spelling);
+        if self.insertion_point.is_some() {
+            if self.error_type.expects_terminating_semicolon() {
+                // The likely fix is known, so lead with it.
+                explanation.message = format_in!(
+                    arena,
+                    "expected `;`, found {}",
+                    found_token(self.found, self.found_spelling)
+                );
+            }
+            explanation.help.clear();
+        }
+        if self.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) {
+            explanation = explanation.note(
+                "`repeated-specifiers` warnings are on by default; pass \
+                 `--no-repeated-specifier-warnings` to silence them",
+            );
+        }
+        let mut diagnostic = explanation.at(self.severity, source);
+        let primary = context.get_source_vectors(source);
+        for range in self.ranges.iter() {
+            // Show only input skipped beyond the token the error is about.
+            let skipped: &[SourceVector] = arena.alloc_slice_fill_iter(
+                context
+                    .get_source_vectors(*range)
+                    .iter()
+                    .filter(|vector| !primary.contains(vector))
+                    .cloned(),
+            );
+            if !skipped.is_empty() {
+                diagnostic = diagnostic.secondary_segments(skipped, "skipped to recover");
+            }
+        }
+        if let Some(insertion_point) = self.insertion_point {
+            diagnostic = diagnostic.secondary(insertion_point, "help: add `;` here");
+        }
+        // Where parsing resumes is only worth showing when it is on another
+        // line than the error.
+        let primary_line = primary
+            .first()
+            .map(|vector| (vector.source_file_index, vector.line));
+        if self.insertion_point.is_some()
+            || self
+                .recovery
+                .is_some_and(|recovery| recovery.discarded_tokens > 0)
+        {
+            for related in self.related.iter() {
+                let related_line = context
+                    .get_source_vectors(related.source_vectors)
+                    .first()
+                    .map(|vector| (vector.source_file_index, vector.line));
+                if related_line != primary_line {
+                    diagnostic = diagnostic.secondary(related.source_vectors, related.message);
+                }
+            }
+        }
+        diagnostic
+    }
+}
+
+impl GetSeverity for ParserError<'_> {
+    fn severity(&self) -> ErrorSeverity {
+        self.severity
+    }
+}
+
+impl GetPosition for ParserError<'_> {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for ParserError<'_> {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
+        self.source_vectors
+    }
+}
+
+impl std::error::Error for ParserError<'_> {}
+
+impl GetSeverity for ParserErrorType<'_> {
+    /// Quality diagnostics, which C99 does not require, are warnings; every
+    /// other parser diagnostic is an error.
+    fn severity(&self) -> ErrorSeverity {
+        match self.code() {
+            | ParserDiagnosticCode::Quality => ErrorSeverity::Warning,
+            | ParserDiagnosticCode::Syntax
+            | ParserDiagnosticCode::Constraint
+            | ParserDiagnosticCode::ResourceLimit
+            | ParserDiagnosticCode::InternalInvariant => ErrorSeverity::Error,
+        }
     }
 }
 

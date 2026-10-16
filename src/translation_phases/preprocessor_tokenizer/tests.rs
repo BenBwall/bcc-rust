@@ -732,7 +732,7 @@ fn lexed_files_grow_in_place_and_keep_exact_storage() {
     // One entry per byte, three times the up-front estimate.
     let text = "a+b;\n".repeat(4096);
     let pp = crate::util::bump::Bump::new();
-    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    let lexed = super::LexedFile::lex(&mut context, &pp, file, &text);
     assert_eq!(lexed.len(), text.len());
     // Exactly the 16-byte aligned entries: growing left no copies behind,
     // and the unused capacity went back to the arena.
@@ -749,7 +749,7 @@ fn lexing_commits_the_entries_written_not_a_capacity() {
     // Over five mebibytes of entries, far past any one commit step.
     let text = "a+b;\n".repeat(64 * 1024);
     let pp = crate::util::bump::Bump::new();
-    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    let lexed = super::LexedFile::lex(&mut context, &pp, file, &text);
     assert_eq!(lexed.len(), text.len());
     assert_eq!(pp.used(), 16 * text.len());
     assert_eq!(pp.high_water(), pp.used());

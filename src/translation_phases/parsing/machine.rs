@@ -11,9 +11,6 @@ use std::fmt::Debug;
 
 use super::{
     Parser,
-    compound_statement::CompoundStatementFrame,
-    declaration::DeclarationFrame,
-    declaration_specifiers::DeclarationSpecifiersFrame,
     declaration_syntax::{
         Declaration,
         DeclarationSpecifiers,
@@ -24,28 +21,36 @@ use super::{
         StructOrUnionSpecifier,
         TypeName,
     },
-    declarator::DeclaratorFrame,
-    enum_specifier::EnumSpecifierFrame,
-    expression::ExpressionFrame,
-    external_declaration::ExternalDeclarationFrame,
+    extensions::{
+        gnu::{
+            GnuFrame,
+            GnuValue,
+        },
+        modern::{
+            ModernFrame,
+            ModernValue,
+        },
+    },
     frame_pool::{
         FramePools,
         PoolBox,
     },
-    function_definition::FunctionDefinitionFrame,
-    gnu::{
-        GnuFrame,
-        GnuValue,
+    frames::{
+        compound_statement::CompoundStatementFrame,
+        declaration::DeclarationFrame,
+        declaration_specifiers::DeclarationSpecifiersFrame,
+        declarator::DeclaratorFrame,
+        enum_specifier::EnumSpecifierFrame,
+        expression::ExpressionFrame,
+        external_declaration::ExternalDeclarationFrame,
+        function_definition::FunctionDefinitionFrame,
+        initializer::InitializerFrame,
+        parameter_list::ParameterListFrame,
+        statement::StatementFrame,
+        struct_or_union::StructOrUnionSpecifierFrame,
+        type_name::TypeNameFrame,
     },
-    initializer::InitializerFrame,
-    modern::{
-        ModernFrame,
-        ModernValue,
-    },
-    parameter_list::ParameterListFrame,
     recovery::SynchronizationSet,
-    statement::StatementFrame,
-    struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
         ConstantExpression,
         Expression,
@@ -53,7 +58,6 @@ use super::{
         FunctionDefinition,
         Statement,
     },
-    type_name::TypeNameFrame,
 };
 #[cfg(test)]
 use crate::translation_phases::preprocessing::TokenType;
@@ -63,68 +67,32 @@ use crate::translation_phases::{
     preprocessing::Token,
 };
 
-/// Stable identity for a frame family, used by traces, recovery, and internal
-/// invariant diagnostics instead of free-form strings.
+/// Sum type for every grammar frame currently implemented by the parser.
 ///
-/// C99: frame families partition the clause-6 grammar described using the
-/// notation of §6.1, p. 29; PDF p. 41. Frame identity itself is an
-/// implementation mechanism.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ParseFrameKind {
-    Modern,
-    Gnu,
-    Msvc,
-    /// Translation-unit entry for one external declaration.
-    ExternalDeclaration,
-    /// Declaration shell and init-declarator list.
-    Declaration,
-    /// Declaration-specifier or specifier-qualifier sequence.
-    DeclarationSpecifiers,
-    /// Named, abstract, or maybe-abstract declarator.
-    Declarator,
-    /// Prototype or K&R parameter list.
-    ParameterList,
-    /// Struct or union tag specifier and optional member body.
-    StructOrUnionSpecifier,
-    /// Enum tag specifier and optional enumerator body.
-    EnumSpecifier,
-    /// Specifier-qualifier list and optional abstract declarator.
-    TypeName,
-    /// C99 expression with a caller-selected grammar entry and boundary.
-    Expression,
-    /// Scalar or brace-enclosed initializer.
-    Initializer,
-    /// Function definition continuation after a completed declaration head.
-    FunctionDefinition,
-    /// Brace-delimited ordered block-item sequence.
-    CompoundStatement,
-    /// One labeled, compound, expression, selection, iteration, or jump
-    /// statement.
-    Statement,
-}
-
-impl ParseFrameKind {
-    /// Returns the stable kebab-case label used in traces and diagnostics.
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            | Self::Modern => "iso-construct",
-            | Self::Gnu => "gnu-construct",
-            | Self::Msvc => "msvc-construct",
-            | Self::ExternalDeclaration => "external-declaration",
-            | Self::Declaration => "declaration",
-            | Self::DeclarationSpecifiers => "declaration-specifiers",
-            | Self::Declarator => "declarator",
-            | Self::ParameterList => "parameter-list",
-            | Self::StructOrUnionSpecifier => "struct-or-union-specifier",
-            | Self::EnumSpecifier => "enum-specifier",
-            | Self::TypeName => "type-name",
-            | Self::Expression => "expression",
-            | Self::Initializer => "initializer",
-            | Self::FunctionDefinition => "function-definition",
-            | Self::CompoundStatement => "compound-statement",
-            | Self::Statement => "statement",
-        }
-    }
+/// C99: the represented grammar families cover expressions through external
+/// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156.
+#[derive(Debug)]
+pub(super) enum ParseFrame<'tu, 'p> {
+    // Keep rare extension frames out of the common frame/action payload.
+    Modern(PoolBox<'p, ModernFrame<'tu, 'p>>),
+    Msvc(PoolBox<'p, super::msvc::MsvcFrame<'tu, 'p>>),
+    Gnu(PoolBox<'p, GnuFrame<'tu, 'p>>),
+    ExternalDeclaration(ExternalDeclarationFrame),
+    Declaration(DeclarationFrame<'tu, 'p>),
+    DeclarationSpecifiers(DeclarationSpecifiersFrame<'tu>),
+    Declarator(DeclaratorFrame<'tu, 'p>),
+    // Parameter lists and struct/union bodies already own growing lists, so
+    // boxing them keeps every other frame push small. The boxes are pooled,
+    // so a popped frame's box serves the next one.
+    ParameterList(PoolBox<'p, ParameterListFrame<'tu, 'p>>),
+    StructOrUnionSpecifier(PoolBox<'p, StructOrUnionSpecifierFrame<'tu, 'p>>),
+    EnumSpecifier(EnumSpecifierFrame<'tu, 'p>),
+    TypeName(TypeNameFrame<'tu>),
+    Expression(ExpressionFrame<'tu, 'p>),
+    Initializer(InitializerFrame<'tu, 'p>),
+    FunctionDefinition(FunctionDefinitionFrame<'tu, 'p>),
+    CompoundStatement(CompoundStatementFrame<'tu, 'p>),
+    Statement(StatementFrame<'tu>),
 }
 
 /// Instruction returned by the active frame to the parser driver.
@@ -183,6 +151,93 @@ pub(super) enum ParseValue<'tu> {
     ExternalDeclaration(ExternalDeclaration<'tu>),
 }
 
+impl<'tu, 'p> ParseFrame<'tu, 'p> {
+    /// Runs the active frame until it returns an action for the driver,
+    /// repeating [`ParseAction::Continue`] transitions in place.
+    pub(super) fn step(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
+        let mut returned = returned;
+        loop {
+            let action = self.step_once(parser, token, returned.take());
+            if !matches!(action, ParseAction::Continue) {
+                return action;
+            }
+        }
+    }
+
+    /// Dispatches one transition to the concrete active frame. The frame's
+    /// kind cannot change during a step, so the driver reads it beforehand.
+    fn step_once(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
+        match self {
+            | Self::Modern(frame) => frame.step(parser, token, returned),
+            | Self::Msvc(frame) => frame.step(parser, token, returned),
+            | Self::Gnu(frame) => frame.step(parser, token, returned),
+            | Self::ExternalDeclaration(frame) => frame.step(parser, token, returned),
+            | Self::Declaration(frame) => frame.step(parser, token, returned),
+            | Self::DeclarationSpecifiers(frame) => frame.step(parser, token, returned),
+            | Self::Declarator(frame) => frame.step(parser, token, returned),
+            | Self::ParameterList(frame) => frame.step(parser, token, returned),
+            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, token, returned),
+            | Self::EnumSpecifier(frame) => frame.step(parser, token, returned),
+            | Self::TypeName(frame) => frame.step(parser, token, returned),
+            | Self::Expression(frame) => frame.step(parser, token, returned),
+            | Self::Initializer(frame) => frame.step(parser, token, returned),
+            | Self::FunctionDefinition(frame) => frame.step(parser, token, returned),
+            | Self::CompoundStatement(frame) => frame.step(parser, token, returned),
+            | Self::Statement(frame) => frame.step(parser, token, returned),
+        }
+    }
+}
+
+/// Stable identity for a frame family, used by traces, recovery, and internal
+/// invariant diagnostics instead of free-form strings.
+///
+/// C99: frame families partition the clause-6 grammar described using the
+/// notation of §6.1, p. 29; PDF p. 41. Frame identity itself is an
+/// implementation mechanism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParseFrameKind {
+    Modern,
+    Gnu,
+    Msvc,
+    /// Translation-unit entry for one external declaration.
+    ExternalDeclaration,
+    /// Declaration shell and init-declarator list.
+    Declaration,
+    /// Declaration-specifier or specifier-qualifier sequence.
+    DeclarationSpecifiers,
+    /// Named, abstract, or maybe-abstract declarator.
+    Declarator,
+    /// Prototype or K&R parameter list.
+    ParameterList,
+    /// Struct or union tag specifier and optional member body.
+    StructOrUnionSpecifier,
+    /// Enum tag specifier and optional enumerator body.
+    EnumSpecifier,
+    /// Specifier-qualifier list and optional abstract declarator.
+    TypeName,
+    /// C99 expression with a caller-selected grammar entry and boundary.
+    Expression,
+    /// Scalar or brace-enclosed initializer.
+    Initializer,
+    /// Function definition continuation after a completed declaration head.
+    FunctionDefinition,
+    /// Brace-delimited ordered block-item sequence.
+    CompoundStatement,
+    /// One labeled, compound, expression, selection, iteration, or jump
+    /// statement.
+    Statement,
+}
+
 /// Parameter-list child result before it is appended to a declarator frame.
 ///
 /// C99: parameter-type-list, parameter-list, and identifier-list are specified
@@ -223,34 +278,6 @@ pub(super) struct InitializerResult<'tu> {
     pub(super) recovered:   bool,
 }
 
-/// Sum type for every grammar frame currently implemented by the parser.
-///
-/// C99: the represented grammar families cover expressions through external
-/// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156.
-#[derive(Debug)]
-pub(super) enum ParseFrame<'tu, 'p> {
-    // Keep rare extension frames out of the common frame/action payload.
-    Modern(PoolBox<'p, ModernFrame<'tu, 'p>>),
-    Msvc(PoolBox<'p, super::msvc::MsvcFrame<'tu, 'p>>),
-    Gnu(PoolBox<'p, GnuFrame<'tu, 'p>>),
-    ExternalDeclaration(ExternalDeclarationFrame),
-    Declaration(DeclarationFrame<'tu, 'p>),
-    DeclarationSpecifiers(DeclarationSpecifiersFrame<'tu>),
-    Declarator(DeclaratorFrame<'tu, 'p>),
-    // Parameter lists and struct/union bodies already own growing lists, so
-    // boxing them keeps every other frame push small. The boxes are pooled,
-    // so a popped frame's box serves the next one.
-    ParameterList(PoolBox<'p, ParameterListFrame<'tu, 'p>>),
-    StructOrUnionSpecifier(PoolBox<'p, StructOrUnionSpecifierFrame<'tu, 'p>>),
-    EnumSpecifier(EnumSpecifierFrame<'tu, 'p>),
-    TypeName(TypeNameFrame<'tu>),
-    Expression(ExpressionFrame<'tu, 'p>),
-    Initializer(InitializerFrame<'tu, 'p>),
-    FunctionDefinition(FunctionDefinitionFrame<'tu, 'p>),
-    CompoundStatement(CompoundStatementFrame<'tu, 'p>),
-    Statement(StatementFrame<'tu>),
-}
-
 #[cfg(test)]
 /// One observable driver action used to prove ownership and progress in tests.
 ///
@@ -262,6 +289,57 @@ pub(super) struct FrameTraceEvent {
     pub(super) action: &'static str,
     pub(super) token:  Option<TokenType>,
     pub(super) depth:  usize,
+}
+
+/// Driver actions, recorded only by test builds.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "A test-only trace, compiled only under `cfg(test)`."
+)]
+pub(super) type FrameTrace = Vec<FrameTraceEvent>;
+
+/// Panics on a child result that the parent frame's protocol never produces.
+///
+/// Takes `panic!`'s format arguments. Frame steps are inlined into the driver
+/// loop, so each use generates its own cold, never-inlined function,
+/// instantiated for exactly the values that use formats; the arguments are
+/// formatted inside it, and the step keeps only the call.
+macro_rules! unexpected_return {
+    ($($format:tt)+) => {{
+        #[cold]
+        #[inline(never)]
+        fn unexpected_return<F: FnOnce() -> ::std::convert::Infallible>(report: F) -> ! {
+            match report() {}
+        }
+        unexpected_return(|| -> ::std::convert::Infallible { panic!($($format)+) })
+    }};
+}
+
+pub(super) use unexpected_return;
+
+impl ParseFrameKind {
+    /// Returns the stable kebab-case label used in traces and diagnostics.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            | Self::Modern => "iso-construct",
+            | Self::Gnu => "gnu-construct",
+            | Self::Msvc => "msvc-construct",
+            | Self::ExternalDeclaration => "external-declaration",
+            | Self::Declaration => "declaration",
+            | Self::DeclarationSpecifiers => "declaration-specifiers",
+            | Self::Declarator => "declarator",
+            | Self::ParameterList => "parameter-list",
+            | Self::StructOrUnionSpecifier => "struct-or-union-specifier",
+            | Self::EnumSpecifier => "enum-specifier",
+            | Self::TypeName => "type-name",
+            | Self::Expression => "expression",
+            | Self::Initializer => "initializer",
+            | Self::FunctionDefinition => "function-definition",
+            | Self::CompoundStatement => "compound-statement",
+            | Self::Statement => "statement",
+        }
+    }
 }
 
 impl ParseAction<'_, '_> {
@@ -452,27 +530,6 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
         }
     }
 
-    pub(super) fn kind(&self) -> ParseFrameKind {
-        match self {
-            | Self::Msvc(_) => ParseFrameKind::Msvc,
-            | Self::Modern(_) => ParseFrameKind::Modern,
-            | Self::Gnu(_) => ParseFrameKind::Gnu,
-            | Self::ExternalDeclaration(_) => ParseFrameKind::ExternalDeclaration,
-            | Self::Declaration(_) => ParseFrameKind::Declaration,
-            | Self::DeclarationSpecifiers(_) => ParseFrameKind::DeclarationSpecifiers,
-            | Self::Declarator(_) => ParseFrameKind::Declarator,
-            | Self::ParameterList(_) => ParseFrameKind::ParameterList,
-            | Self::StructOrUnionSpecifier(_) => ParseFrameKind::StructOrUnionSpecifier,
-            | Self::EnumSpecifier(_) => ParseFrameKind::EnumSpecifier,
-            | Self::TypeName(_) => ParseFrameKind::TypeName,
-            | Self::Expression(_) => ParseFrameKind::Expression,
-            | Self::Initializer(_) => ParseFrameKind::Initializer,
-            | Self::FunctionDefinition(_) => ParseFrameKind::FunctionDefinition,
-            | Self::CompoundStatement(_) => ParseFrameKind::CompoundStatement,
-            | Self::Statement(_) => ParseFrameKind::Statement,
-        }
-    }
-
     /// Adds tokens consumed by recovery to the syntax object owned by this
     /// frame; frames without an owned syntax range intentionally ignore them.
     pub(super) fn merge_recovered_sources(
@@ -522,69 +579,27 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
         context.merge_into(destination, recovered);
     }
 
-    /// Runs the active frame until it returns an action for the driver,
-    /// repeating [`ParseAction::Continue`] transitions in place.
-    pub(super) fn step(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-        returned: Option<ParseValue<'tu>>,
-    ) -> ParseAction<'tu, 'p> {
-        let mut returned = returned;
-        loop {
-            let action = self.step_once(parser, token, returned.take());
-            if !matches!(action, ParseAction::Continue) {
-                return action;
-            }
-        }
-    }
-
-    /// Dispatches one transition to the concrete active frame. The frame's
-    /// kind cannot change during a step, so the driver reads it beforehand.
-    fn step_once(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-        returned: Option<ParseValue<'tu>>,
-    ) -> ParseAction<'tu, 'p> {
+    pub(super) fn kind(&self) -> ParseFrameKind {
         match self {
-            | Self::Modern(frame) => frame.step(parser, token, returned),
-            | Self::Msvc(frame) => frame.step(parser, token, returned),
-            | Self::Gnu(frame) => frame.step(parser, token, returned),
-            | Self::ExternalDeclaration(frame) => frame.step(parser, token, returned),
-            | Self::Declaration(frame) => frame.step(parser, token, returned),
-            | Self::DeclarationSpecifiers(frame) => frame.step(parser, token, returned),
-            | Self::Declarator(frame) => frame.step(parser, token, returned),
-            | Self::ParameterList(frame) => frame.step(parser, token, returned),
-            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, token, returned),
-            | Self::EnumSpecifier(frame) => frame.step(parser, token, returned),
-            | Self::TypeName(frame) => frame.step(parser, token, returned),
-            | Self::Expression(frame) => frame.step(parser, token, returned),
-            | Self::Initializer(frame) => frame.step(parser, token, returned),
-            | Self::FunctionDefinition(frame) => frame.step(parser, token, returned),
-            | Self::CompoundStatement(frame) => frame.step(parser, token, returned),
-            | Self::Statement(frame) => frame.step(parser, token, returned),
+            | Self::Msvc(_) => ParseFrameKind::Msvc,
+            | Self::Modern(_) => ParseFrameKind::Modern,
+            | Self::Gnu(_) => ParseFrameKind::Gnu,
+            | Self::ExternalDeclaration(_) => ParseFrameKind::ExternalDeclaration,
+            | Self::Declaration(_) => ParseFrameKind::Declaration,
+            | Self::DeclarationSpecifiers(_) => ParseFrameKind::DeclarationSpecifiers,
+            | Self::Declarator(_) => ParseFrameKind::Declarator,
+            | Self::ParameterList(_) => ParseFrameKind::ParameterList,
+            | Self::StructOrUnionSpecifier(_) => ParseFrameKind::StructOrUnionSpecifier,
+            | Self::EnumSpecifier(_) => ParseFrameKind::EnumSpecifier,
+            | Self::TypeName(_) => ParseFrameKind::TypeName,
+            | Self::Expression(_) => ParseFrameKind::Expression,
+            | Self::Initializer(_) => ParseFrameKind::Initializer,
+            | Self::FunctionDefinition(_) => ParseFrameKind::FunctionDefinition,
+            | Self::CompoundStatement(_) => ParseFrameKind::CompoundStatement,
+            | Self::Statement(_) => ParseFrameKind::Statement,
         }
     }
 }
-
-/// Panics on a child result that the parent frame's protocol never produces.
-///
-/// Takes `panic!`'s format arguments. Frame steps are inlined into the driver
-/// loop, so each use generates its own cold, never-inlined function,
-/// instantiated for exactly the values that use formats; the arguments are
-/// formatted inside it, and the step keeps only the call.
-macro_rules! unexpected_return {
-    ($($format:tt)+) => {{
-        #[cold]
-        #[inline(never)]
-        fn unexpected_return<F: FnOnce() -> ::std::convert::Infallible>(report: F) -> ! {
-            match report() {}
-        }
-        unexpected_return(|| -> ::std::convert::Infallible { panic!($($format)+) })
-    }};
-}
-pub(super) use unexpected_return;
 
 pub(super) fn expression_value(returned: Option<ParseValue<'_>>) -> &Expression<'_> {
     let Some(ParseValue::Expression(ExpressionResult { expression, .. })) = returned else {

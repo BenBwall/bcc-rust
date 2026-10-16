@@ -2,197 +2,55 @@
 //! C99: §6.9-§6.9.2, pp. 140-143; PDF pp. 152-155; inline definitions
 //! §6.7.4p3, p. 112; PDF p. 124. This validates bodies without lowering them.
 
+use rustc_hash::FxBuildHasher;
+
 use super::{
     Analyzer,
-    ArenaMap,
-    ArenaVec,
-    ArrayBound,
     BindingKind,
-    Bump,
-    CStandard,
-    Declaration,
-    DeclarationSpecifiers,
-    Declarator,
-    DirectDeclarator,
     Duration,
-    Expression,
-    FunctionDefinition,
-    FxBuildHasher,
-    Identifier,
     Linkage,
-    Namespace,
-    Parameter,
-    Scalar,
     ScopeKind,
     SemanticErrorKind,
-    SourceVectors,
-    StorageClass,
-    StringCacheId,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
-    TypeSpecifiers,
     Work,
+    scopes::Namespace,
+    types::{
+        ArrayBound,
+        Parameter,
+        Scalar,
+        TypeId,
+        TypeKind,
+    },
 };
-
-/// Finalized definitions, separate from declaration occurrences. The implicit
-/// function-name object retains its string contents for future lowering.
-/// C99: §6.9.1-§6.9.2, pp. 141-143; PDF pp. 153-155; §6.4.2.2p1,
-/// p. 52; PDF p. 64.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DefinitionKind {
-    Object,
-    Function,
-    Inline,
-    Tentative,
-    FunctionName(StringCacheId),
-}
-
-/// A completed object or function definition and its declaration binding.
-/// C99: §6.9 paragraph 5, p. 140; PDF p. 152.
-/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Definition {
-    pub(crate) binding: usize,
-    pub(crate) kind:    DefinitionKind,
-}
-
-/// The active function definition, result type and adjusted parameters.
-/// C99: §6.9.1 paragraphs 2-7, pp. 141-142; PDF pp. 153-154.
-#[derive(Clone, Copy)]
-pub(super) struct FunctionContext<'tu> {
-    pub(super) id:         usize,
-    pub(super) syntax:     &'tu FunctionDefinition<'tu>,
-    pub(super) binding:    Option<usize>,
-    pub(super) result:     TypeId,
-    pub(super) parameters: &'tu [Parameter],
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum FunctionWork<'tu> {
-    Finish(
-        Option<FunctionContext<'tu>>,
-        usize,
-        Option<usize>,
-        Option<usize>,
-    ),
-    RestoreSizeof(Option<usize>),
-}
-
-/// Definition and tentative-definition state for an identifier with linkage.
-/// GNU extension: GCC manual, "Inline".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
-/// C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
-/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
-#[derive(Clone, Copy, Default)]
-pub(super) struct Entity {
-    latest:        usize,
-    definition:    Option<SourceVectors>,
-    tentative:     Option<usize>,
-    non_inline:    bool,
-    function_body: Option<FunctionBody>,
-    /// Clang's canRedefineFunction: GNU extern inline declarations permit
-    /// a later static declaration and a replacement function body.
-    can_redefine:  bool,
-    gnu_inline:    bool,
-}
-
-/// GNU extern inline bodies may be replaced; ordinary definitions may not.
-/// Extension: Clang's canRedefineFunction; C99: §6.9p5, p. 140; PDF p. 152.
-#[derive(Clone, Copy)]
-enum FunctionBody {
-    Replaceable(SourceVectors),
-    Unique(SourceVectors),
-}
-
-#[derive(Clone, Copy)]
-struct Use {
-    binding:         usize,
-    name:            Identifier,
-    sizeof:          Option<usize>,
-    inline_function: Option<usize>,
-}
-
-#[derive(Clone, Copy)]
-struct SizeofContext<'tu> {
-    expression: &'tu Expression<'tu>,
-    parent:     Option<usize>,
-}
-
-/// A static object whose declaration is checked against inline restrictions.
-/// C99: §6.7.4 paragraph 3, p. 112; PDF p. 124.
-#[derive(Clone, Copy)]
-struct InlineObject {
-    function: usize,
-    binding:  usize,
-}
-
-pub(super) struct State<'tu, 's> {
-    pub(super) current: Option<FunctionContext<'tu>>,
-    next_function:      usize,
-    old_names:          ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
-    entities:           ArenaMap<'s, StringCacheId, Entity>,
-    previous:           ArenaMap<'s, usize, SourceVectors>,
-    uses:               ArenaVec<'s, Use>,
-    sizeof_contexts:    ArenaVec<'s, SizeofContext<'tu>>,
-    pub(super) sizeof:  Option<usize>,
-    inline_objects:     ArenaVec<'s, InlineObject>,
-}
-
-impl<'s> State<'_, 's> {
-    pub(super) fn new(scratch: &'s Bump) -> Self {
-        Self {
-            current:         None,
-            next_function:   0,
-            old_names:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:            ArenaVec::new_in(scratch),
-            sizeof_contexts: ArenaVec::new_in(scratch),
-            sizeof:          None,
-            inline_objects:  ArenaVec::new_in(scratch),
-        }
-    }
-}
-
-/// Finds the first derivation outward from the identifier, including grouping.
-/// A function typedef supplies no such derivation. Identity is the immutable
-/// suffix node, not the source span of its containing declarator.
-/// C99: §6.7.5p4-6, p. 115; PDF p. 127; §6.9.1p2, p. 141;
-/// PDF p. 153.
-pub(super) fn function_derivation<'tu>(
-    declarator: Declarator<'tu>,
-    scratch: &Bump,
-) -> Option<&'tu DirectDeclarator<'tu>> {
-    enum Step<'tu> {
-        Declarator(Declarator<'tu>),
-        Direct(&'tu DirectDeclarator<'tu>),
-        Pointer,
-    }
-    let mut work = ArenaVec::new_in(scratch);
-    work.push(Step::Declarator(declarator));
-    while let Some(step) = work.pop() {
-        match step {
-            | Step::Declarator(d) => {
-                if !d.pointer.levels.is_empty() {
-                    work.push(Step::Pointer);
-                }
-                for direct in d.kind.as_slice().iter().rev() {
-                    work.push(Step::Direct(direct));
-                }
+use crate::{
+    configuration::CStandard,
+    translation_phases::{
+        SourceVectors,
+        parsing::{
+            declaration_syntax::{
+                Declaration,
+                DeclarationSpecifiers,
+                Declarator,
+                DirectDeclarator,
+                TypeQualifiers,
+                TypeSpecifiers,
             },
-            | Step::Direct(direct) => match direct {
-                | DirectDeclarator::Parenthesized(p) => work.push(Step::Declarator(p.declarator)),
-                | DirectDeclarator::Function { .. }
-                | DirectDeclarator::KAndRStyleFunction { .. } => return Some(direct),
-                | DirectDeclarator::Array { .. } => return None,
-                | _ => {},
+            syntax::{
+                Expression,
+                FunctionDefinition,
+                Identifier,
+                StorageClass,
             },
-            | Step::Pointer => return None,
-        }
-    }
-    None
-}
+        },
+    },
+    util::{
+        bump::{
+            ArenaMap,
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
+};
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn prepare_function(&mut self, f: &'tu FunctionDefinition<'tu>) {
@@ -473,6 +331,132 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
         }
+    }
+
+    /// Translation-unit completion is deterministic in declaration order.
+    /// C99: §6.9p3,p5, p. 140; PDF p. 152; §6.9.2p2-3, p. 143;
+    /// PDF p. 155; inline definitions §6.7.4p3,p6, p. 112; PDF p. 124.
+    pub(super) fn finish_translation_unit(&mut self) {
+        self.finish_labels();
+        let mut entities = ArenaVec::new_in(self.scratch);
+        entities.extend(self.functions.entities.values().copied());
+        entities.sort_unstable_by_key(|entity| entity.latest);
+        for mut entity in entities {
+            let index = entity.latest;
+            let b = self.bindings[index];
+            if entity.definition.is_none()
+                && entity.tentative.is_some()
+                && !matches!(self.types.nodes[b.ty.index], TypeKind::Scalar(Scalar::Void))
+            {
+                let mut ty = b.ty;
+                if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index]
+                    && b.linkage == Linkage::External
+                    && !self.types.unanalyzed(ty)
+                {
+                    self.error(
+                        SemanticErrorKind::TentativeArrayAssumedOne,
+                        b.name.source_vectors,
+                        Some(b.name.name),
+                        None,
+                    );
+                    ty = self
+                        .types
+                        .intern(TypeKind::Array(element, ArrayBound::Constant(1)))
+                        .qualified(ty.qualifiers);
+                    self.bindings[index].ty = ty;
+                }
+                if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
+                    if b.linkage != Linkage::Internal {
+                        self.error(
+                            SemanticErrorKind::IncompleteTentativeDefinition,
+                            b.name.source_vectors,
+                            Some(b.name.name),
+                            None,
+                        );
+                    }
+                } else {
+                    entity.definition = Some(b.name.source_vectors);
+                    self.definitions.push(Definition {
+                        binding: index,
+                        kind:    DefinitionKind::Tentative,
+                    });
+                }
+                _ = self.functions.entities.insert(b.name.name, entity);
+            }
+        }
+        let mut ignored = ArenaVec::new_in(self.scratch);
+        for context in &self.functions.sizeof_contexts {
+            let info = self.expression_info(context.expression);
+            let constant = info.ice || self.types.unanalyzed(info.ty);
+            ignored.push(constant || context.parent.is_some_and(|p| ignored[p]));
+        }
+        let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for i in 0..self.functions.uses.len() {
+            let usage = self.functions.uses[i];
+            let b = self.bindings[usage.binding];
+            if let Some(function) = usage.inline_function
+                && b.linkage == Linkage::Internal
+                && self.is_inline_definition(function)
+            {
+                self.error(
+                    SemanticErrorKind::InlineInternalReference,
+                    usage.name.source_vectors,
+                    Some(usage.name.name),
+                    Some(b.name.source_vectors),
+                );
+            }
+            if b.linkage == Linkage::Internal && !usage.sizeof.is_some_and(|s| ignored[s]) {
+                _ = used.entry(b.name.name).or_insert(usage.name);
+            }
+        }
+        for i in 0..self.functions.inline_objects.len() {
+            let object = self.functions.inline_objects[i];
+            if self.is_inline_definition(object.function) {
+                let b = self.bindings[object.binding];
+                self.error(
+                    SemanticErrorKind::InlineStaticObject,
+                    b.name.source_vectors,
+                    Some(b.name.name),
+                    None,
+                );
+            }
+        }
+        let mut entities = ArenaVec::new_in(self.scratch);
+        entities.extend(self.functions.entities.values().copied());
+        entities.sort_unstable_by_key(|entity| entity.latest);
+        for entity in entities {
+            let b = self.bindings[entity.latest];
+            if b.linkage == Linkage::Internal
+                && entity.definition.is_none()
+                && !self.types.unanalyzed(b.ty)
+            {
+                if let Some(&usage) = used.get(&b.name.name) {
+                    self.error(
+                        SemanticErrorKind::UndefinedInternal,
+                        usage.source_vectors,
+                        Some(b.name.name),
+                        Some(b.name.source_vectors),
+                    );
+                } else if b.kind == BindingKind::Function {
+                    self.error(
+                        SemanticErrorKind::UnusedStaticFunction,
+                        b.name.source_vectors,
+                        Some(b.name.name),
+                        None,
+                    );
+                }
+            }
+        }
+        for i in 0..self.definitions.len() {
+            let definition = self.definitions[i];
+            if definition.kind == DefinitionKind::Function
+                && self.bindings[definition.binding].linkage == Linkage::External
+                && self.is_inline_definition(definition.binding)
+            {
+                self.definitions[i].kind = DefinitionKind::Inline;
+            }
+        }
+        self.definitions.sort_unstable_by_key(|d| d.binding);
     }
 
     /// Definition parameters have complete adjusted object types.
@@ -1006,132 +990,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.functions.sizeof = Some(index);
     }
 
-    /// Translation-unit completion is deterministic in declaration order.
-    /// C99: §6.9p3,p5, p. 140; PDF p. 152; §6.9.2p2-3, p. 143;
-    /// PDF p. 155; inline definitions §6.7.4p3,p6, p. 112; PDF p. 124.
-    pub(super) fn finish_translation_unit(&mut self) {
-        self.finish_labels();
-        let mut entities = ArenaVec::new_in(self.scratch);
-        entities.extend(self.functions.entities.values().copied());
-        entities.sort_unstable_by_key(|entity| entity.latest);
-        for mut entity in entities {
-            let index = entity.latest;
-            let b = self.bindings[index];
-            if entity.definition.is_none()
-                && entity.tentative.is_some()
-                && !matches!(self.types.nodes[b.ty.index], TypeKind::Scalar(Scalar::Void))
-            {
-                let mut ty = b.ty;
-                if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index]
-                    && b.linkage == Linkage::External
-                    && !self.types.unanalyzed(ty)
-                {
-                    self.error(
-                        SemanticErrorKind::TentativeArrayAssumedOne,
-                        b.name.source_vectors,
-                        Some(b.name.name),
-                        None,
-                    );
-                    ty = self
-                        .types
-                        .intern(TypeKind::Array(element, ArrayBound::Constant(1)))
-                        .qualified(ty.qualifiers);
-                    self.bindings[index].ty = ty;
-                }
-                if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
-                    if b.linkage != Linkage::Internal {
-                        self.error(
-                            SemanticErrorKind::IncompleteTentativeDefinition,
-                            b.name.source_vectors,
-                            Some(b.name.name),
-                            None,
-                        );
-                    }
-                } else {
-                    entity.definition = Some(b.name.source_vectors);
-                    self.definitions.push(Definition {
-                        binding: index,
-                        kind:    DefinitionKind::Tentative,
-                    });
-                }
-                _ = self.functions.entities.insert(b.name.name, entity);
-            }
-        }
-        let mut ignored = ArenaVec::new_in(self.scratch);
-        for context in &self.functions.sizeof_contexts {
-            let info = self.expression_info(context.expression);
-            let constant = info.ice || self.types.unanalyzed(info.ty);
-            ignored.push(constant || context.parent.is_some_and(|p| ignored[p]));
-        }
-        let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
-        for i in 0..self.functions.uses.len() {
-            let usage = self.functions.uses[i];
-            let b = self.bindings[usage.binding];
-            if let Some(function) = usage.inline_function
-                && b.linkage == Linkage::Internal
-                && self.is_inline_definition(function)
-            {
-                self.error(
-                    SemanticErrorKind::InlineInternalReference,
-                    usage.name.source_vectors,
-                    Some(usage.name.name),
-                    Some(b.name.source_vectors),
-                );
-            }
-            if b.linkage == Linkage::Internal && !usage.sizeof.is_some_and(|s| ignored[s]) {
-                _ = used.entry(b.name.name).or_insert(usage.name);
-            }
-        }
-        for i in 0..self.functions.inline_objects.len() {
-            let object = self.functions.inline_objects[i];
-            if self.is_inline_definition(object.function) {
-                let b = self.bindings[object.binding];
-                self.error(
-                    SemanticErrorKind::InlineStaticObject,
-                    b.name.source_vectors,
-                    Some(b.name.name),
-                    None,
-                );
-            }
-        }
-        let mut entities = ArenaVec::new_in(self.scratch);
-        entities.extend(self.functions.entities.values().copied());
-        entities.sort_unstable_by_key(|entity| entity.latest);
-        for entity in entities {
-            let b = self.bindings[entity.latest];
-            if b.linkage == Linkage::Internal
-                && entity.definition.is_none()
-                && !self.types.unanalyzed(b.ty)
-            {
-                if let Some(&usage) = used.get(&b.name.name) {
-                    self.error(
-                        SemanticErrorKind::UndefinedInternal,
-                        usage.source_vectors,
-                        Some(b.name.name),
-                        Some(b.name.source_vectors),
-                    );
-                } else if b.kind == BindingKind::Function {
-                    self.error(
-                        SemanticErrorKind::UnusedStaticFunction,
-                        b.name.source_vectors,
-                        Some(b.name.name),
-                        None,
-                    );
-                }
-            }
-        }
-        for i in 0..self.definitions.len() {
-            let definition = self.definitions[i];
-            if definition.kind == DefinitionKind::Function
-                && self.bindings[definition.binding].linkage == Linkage::External
-                && self.is_inline_definition(definition.binding)
-            {
-                self.definitions[i].kind = DefinitionKind::Inline;
-            }
-        }
-        self.definitions.sort_unstable_by_key(|d| d.binding);
-    }
-
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125, unless the target's ABI
     /// emits inline functions as external definitions.
     fn is_inline_definition(&self, binding: usize) -> bool {
@@ -1206,4 +1064,163 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .iter()
             .any(|direct| matches!(direct, DirectDeclarator::Attributes(a) if attribute_has(a)))
     }
+}
+
+/// Finalized definitions, separate from declaration occurrences. The implicit
+/// function-name object retains its string contents for future lowering.
+/// C99: §6.9.1-§6.9.2, pp. 141-143; PDF pp. 153-155; §6.4.2.2p1,
+/// p. 52; PDF p. 64.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DefinitionKind {
+    Object,
+    Function,
+    Inline,
+    Tentative,
+    FunctionName(StringCacheId),
+}
+
+/// A completed object or function definition and its declaration binding.
+/// C99: §6.9 paragraph 5, p. 140; PDF p. 152.
+/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Definition {
+    pub(crate) binding: usize,
+    pub(crate) kind:    DefinitionKind,
+}
+
+/// The active function definition, result type and adjusted parameters.
+/// C99: §6.9.1 paragraphs 2-7, pp. 141-142; PDF pp. 153-154.
+#[derive(Clone, Copy)]
+pub(super) struct FunctionContext<'tu> {
+    pub(super) id:         usize,
+    pub(super) syntax:     &'tu FunctionDefinition<'tu>,
+    pub(super) binding:    Option<usize>,
+    pub(super) result:     TypeId,
+    pub(super) parameters: &'tu [Parameter],
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum FunctionWork<'tu> {
+    Finish(
+        Option<FunctionContext<'tu>>,
+        usize,
+        Option<usize>,
+        Option<usize>,
+    ),
+    RestoreSizeof(Option<usize>),
+}
+
+/// Definition and tentative-definition state for an identifier with linkage.
+/// GNU extension: GCC manual, "Inline".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
+/// C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
+/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Entity {
+    latest:        usize,
+    definition:    Option<SourceVectors>,
+    tentative:     Option<usize>,
+    non_inline:    bool,
+    function_body: Option<FunctionBody>,
+    /// Clang's canRedefineFunction: GNU extern inline declarations permit
+    /// a later static declaration and a replacement function body.
+    can_redefine:  bool,
+    gnu_inline:    bool,
+}
+
+/// GNU extern inline bodies may be replaced; ordinary definitions may not.
+/// Extension: Clang's canRedefineFunction; C99: §6.9p5, p. 140; PDF p. 152.
+#[derive(Clone, Copy)]
+enum FunctionBody {
+    Replaceable(SourceVectors),
+    Unique(SourceVectors),
+}
+
+#[derive(Clone, Copy)]
+struct Use {
+    binding:         usize,
+    name:            Identifier,
+    sizeof:          Option<usize>,
+    inline_function: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct SizeofContext<'tu> {
+    expression: &'tu Expression<'tu>,
+    parent:     Option<usize>,
+}
+
+/// A static object whose declaration is checked against inline restrictions.
+/// C99: §6.7.4 paragraph 3, p. 112; PDF p. 124.
+#[derive(Clone, Copy)]
+struct InlineObject {
+    function: usize,
+    binding:  usize,
+}
+
+pub(super) struct State<'tu, 's> {
+    pub(super) current: Option<FunctionContext<'tu>>,
+    next_function:      usize,
+    old_names:          ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
+    entities:           ArenaMap<'s, StringCacheId, Entity>,
+    previous:           ArenaMap<'s, usize, SourceVectors>,
+    uses:               ArenaVec<'s, Use>,
+    sizeof_contexts:    ArenaVec<'s, SizeofContext<'tu>>,
+    pub(super) sizeof:  Option<usize>,
+    inline_objects:     ArenaVec<'s, InlineObject>,
+}
+
+impl<'s> State<'_, 's> {
+    pub(super) fn new(scratch: &'s Bump) -> Self {
+        Self {
+            current:         None,
+            next_function:   0,
+            old_names:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses:            ArenaVec::new_in(scratch),
+            sizeof_contexts: ArenaVec::new_in(scratch),
+            sizeof:          None,
+            inline_objects:  ArenaVec::new_in(scratch),
+        }
+    }
+}
+
+/// Finds the first derivation outward from the identifier, including grouping.
+/// A function typedef supplies no such derivation. Identity is the immutable
+/// suffix node, not the source span of its containing declarator.
+/// C99: §6.7.5p4-6, p. 115; PDF p. 127; §6.9.1p2, p. 141;
+/// PDF p. 153.
+pub(super) fn function_derivation<'tu>(
+    declarator: Declarator<'tu>,
+    scratch: &Bump,
+) -> Option<&'tu DirectDeclarator<'tu>> {
+    enum Step<'tu> {
+        Declarator(Declarator<'tu>),
+        Direct(&'tu DirectDeclarator<'tu>),
+        Pointer,
+    }
+    let mut work = ArenaVec::new_in(scratch);
+    work.push(Step::Declarator(declarator));
+    while let Some(step) = work.pop() {
+        match step {
+            | Step::Declarator(d) => {
+                if !d.pointer.levels.is_empty() {
+                    work.push(Step::Pointer);
+                }
+                for direct in d.kind.as_slice().iter().rev() {
+                    work.push(Step::Direct(direct));
+                }
+            },
+            | Step::Direct(direct) => match direct {
+                | DirectDeclarator::Parenthesized(p) => work.push(Step::Declarator(p.declarator)),
+                | DirectDeclarator::Function { .. }
+                | DirectDeclarator::KAndRStyleFunction { .. } => return Some(direct),
+                | DirectDeclarator::Array { .. } => return None,
+                | _ => {},
+            },
+            | Step::Pointer => return None,
+        }
+    }
+    None
 }

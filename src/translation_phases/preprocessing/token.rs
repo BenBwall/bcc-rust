@@ -39,42 +39,6 @@ use crate::{
     },
 };
 
-/// A signed type an integer-constant widening warning names.
-///
-/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum SignedIntegerLiteralType {
-    Int,
-    Long,
-}
-
-/// An unsigned type an integer constant can have.
-///
-/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[expect(
-    clippy::enum_variant_names,
-    reason = "We are repeating the word 'unsigned' a lot here, but I think it's clearer this way."
-)]
-pub(crate) enum UnsignedIntegerLiteralType {
-    UnsignedInt,
-    UnsignedLong,
-    UnsignedLongLong,
-}
-
-/// An `integer-suffix`; `u` and `l` may come in either order and case,
-/// but `ll` and `LL` may not mix cases.
-///
-/// C99: §6.4.4.1 paragraph 1, p. 55; PDF p. 67.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum IntegerSuffix {
-    Unsigned,
-    Long,
-    LongLong,
-    UnsignedLong,
-    UnsignedLongLong,
-}
-
 /// A phase-7 `token`, with its spelling and provenance.
 ///
 /// C99: §6.4 paragraph 1, p. 49; PDF p. 61.
@@ -85,150 +49,22 @@ pub(crate) struct Token {
     pub(crate) contents:       StringCacheId,
 }
 
-// Syntax and diagnostic structures compare complete tokens; parser dispatch
-// compares the scalar kind directly instead of invoking this full comparison.
-impl PartialEq for Token {
-    fn eq(&self, other: &Self) -> bool {
-        let same_kind = match (self.kind, other.kind) {
-            | (TokenType::Integer(left), TokenType::Integer(right)) => left == right,
-            | (TokenType::Float(left), TokenType::Float(right)) => left == right,
-            | (TokenType::Identifier, TokenType::Identifier) => true,
-            | (TokenType::Keyword(left), TokenType::Keyword(right)) => left == right,
-            | (TokenType::Operator(left), TokenType::Operator(right)) => left == right,
-            | (TokenType::String(left), TokenType::String(right)) => left == right,
-            | (TokenType::Character(left), TokenType::Character(right)) => left == right,
-            | _ => false,
-        };
-        same_kind && self.source_vectors == other.source_vectors && self.contents == other.contents
-    }
-}
-
-impl Token {
-    /// Takes written assembly role from shared keyword metadata.
-    /// GNU/MSVC extensions to C99 §6.8p1, p. 131; PDF p. 143.
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Alternate-Keywords.html>
-    /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
-    pub(crate) fn uses_ambiguous_asm(self, configuration: CompilerConfiguration) -> bool {
-        KeywordTokenType::classify(self.contents, configuration)
-            .is_some_and(|keyword| keyword.ambiguous_asm)
-    }
-}
-
-impl GetPosition for Token {
-    #[inline(always)]
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.source_vectors.position(context)
-    }
-}
-
-impl GetSourceVectors for Token {
-    #[inline(always)]
-    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
-        self.source_vectors
-    }
-}
-
-/// An `integer-constant` with the type its value and suffix give it.
+/// The category of a phase-7 token.
 ///
-/// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
-///
-/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum IntegerTokenType {
-    Int(i32),
-    Long(Packed<i64>),
-    LongLong(Packed<i64>),
-    UnsignedInt(u32),
-    UnsignedLong(Packed<u64>),
-    UnsignedLongLong(Packed<u64>),
-    /// C23 bit-precise suffix: magnitude, minimum width, unsignedness.
-    BitInt(Packed<u64>, u8, bool),
-    /// GNU imaginary integer constant.
-    Imaginary(Packed<u64>, ImaginaryIntegerKind),
-}
-
-/// GNU imaginary integer component types (extension to C99 §6.4.4.1).
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum ImaginaryIntegerKind {
-    Int,
-    Long,
-    LongLong,
-    UnsignedInt,
-    UnsignedLong,
-    UnsignedLongLong,
-}
-impl ImaginaryIntegerKind {
-    pub(crate) fn type_name(self) -> &'static str {
-        match self {
-            | Self::Int => "int _Complex",
-            | Self::Long => "long _Complex",
-            | Self::LongLong => "long long _Complex",
-            | Self::UnsignedInt => "unsigned int _Complex",
-            | Self::UnsignedLong => "unsigned long _Complex",
-            | Self::UnsignedLongLong => "unsigned long long _Complex",
-        }
-    }
-}
-impl From<IntegerTokenType> for i128 {
-    fn from(v: IntegerTokenType) -> Self {
-        match v {
-            | IntegerTokenType::UnsignedLong(v)
-            | IntegerTokenType::UnsignedLongLong(v)
-            | IntegerTokenType::BitInt(v, _, _)
-            | IntegerTokenType::Imaginary(v, _) => i128::from(v.get()),
-            | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v.get()),
-            | IntegerTokenType::UnsignedInt(v) => i128::from(v),
-            | IntegerTokenType::Int(v) => i128::from(v),
-        }
-    }
-}
-
-/// A `floating-constant`: `double` unsuffixed, `float` with `f` or `F`, and
-/// `long double` with `l` or `L`.
-///
-/// C99: §6.4.4.2 paragraph 4, p. 58; PDF p. 70.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum FloatTokenType {
-    Float(f32),
-    Double(Packed<f64>),
-    LongDouble(LongDouble),
-    /// GNU imaginary floating constants preserve their component precision.
-    ImaginaryFloat(f32),
-    ImaginaryDouble(Packed<f64>),
-    ImaginaryLongDouble(LongDouble),
-    Float128(crate::binary128::Binary128),
-    ImaginaryFloat128(crate::binary128::Binary128),
-}
-
-impl FloatTokenType {
-    /// The C type named by this constant's suffix.
-    pub(crate) fn type_name(&self) -> &'static str {
-        match self {
-            | Self::Float(_) => "float",
-            | Self::Double(_) => "double",
-            | Self::LongDouble(_) => "long double",
-            | Self::Float128(_) => "__float128",
-            | Self::ImaginaryFloat128(_) => "__float128 _Complex",
-            | Self::ImaginaryFloat(_) => "float _Complex",
-            | Self::ImaginaryDouble(_) => "double _Complex",
-            | Self::ImaginaryLongDouble(_) => "long double _Complex",
-        }
-    }
-}
-
-impl Display for FloatTokenType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            | Self::Float(v) => write!(f, "{v}"),
-            | Self::ImaginaryFloat(v) => write!(f, "{v}i"),
-            | Self::Double(v) => write!(f, "{v}"),
-            | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
-            | Self::LongDouble(v) => write!(f, "{v}"),
-            | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
-            | Self::Float128(v) => write!(f, "{v}"),
-            | Self::ImaginaryFloat128(v) => write!(f, "{v}i"),
-        }
-    }
+/// C99: §6.4 paragraph 3, p. 49; PDF p. 61. An `enumeration-constant` is an
+/// identifier until declarations are analyzed (§6.4.4.3, p. 59; PDF p. 71).
+// Structural equality remains available to unit tests, but production parser
+// code must name the particular category and payload it needs to inspect.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq))]
+pub(crate) enum TokenType {
+    Integer(IntegerTokenType),
+    Float(FloatTokenType),
+    Identifier,
+    Keyword(KeywordTokenType),
+    Operator(OperatorTokenType),
+    String(StringTokenType),
+    Character(CharacterTokenType),
 }
 
 /// A `keyword`.
@@ -391,6 +227,70 @@ pub(crate) enum OperatorTokenType {
     Ellipsis,
 }
 
+/// An `integer-constant` with the type its value and suffix give it.
+///
+/// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum IntegerTokenType {
+    Int(i32),
+    Long(Packed<i64>),
+    LongLong(Packed<i64>),
+    UnsignedInt(u32),
+    UnsignedLong(Packed<u64>),
+    UnsignedLongLong(Packed<u64>),
+    /// C23 bit-precise suffix: magnitude, minimum width, unsignedness.
+    BitInt(Packed<u64>, u8, bool),
+    /// GNU imaginary integer constant.
+    Imaginary(Packed<u64>, ImaginaryIntegerKind),
+}
+
+/// A `floating-constant`: `double` unsuffixed, `float` with `f` or `F`, and
+/// `long double` with `l` or `L`.
+///
+/// C99: §6.4.4.2 paragraph 4, p. 58; PDF p. 70.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum FloatTokenType {
+    Float(f32),
+    Double(Packed<f64>),
+    LongDouble(LongDouble),
+    /// GNU imaginary floating constants preserve their component precision.
+    ImaginaryFloat(f32),
+    ImaginaryDouble(Packed<f64>),
+    ImaginaryLongDouble(LongDouble),
+    Float128(crate::binary128::Binary128),
+    ImaginaryFloat128(crate::binary128::Binary128),
+}
+
+/// A `character-constant` and its value.
+///
+/// C99: §6.4.4.4 paragraphs 1-2, pp. 59-60; PDF pp. 71-72, with values from
+/// paragraphs 10-11, p. 61; PDF p. 73.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum CharacterTokenType {
+    /// A narrow constant of one byte, held as that byte.
+    Char(char),
+    WideChar(u32),
+    EncodedChar(u32, LiteralEncoding),
+    /// Packed integer value of an ordinary multi-character constant.
+    ///
+    /// The value is implementation-defined (§6.4.4.4 paragraph 10): each
+    /// byte is shifted in after the ones before it, as GCC does.
+    MultiChar(i32),
+}
+
+/// A character or wide `string-literal`, decoded into literal units.
+///
+/// C99: §6.4.5 paragraphs 1-2, p. 62; PDF p. 74.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum StringTokenType {
+    String(LiteralId),
+    WideString(LiteralId),
+    /// C11/C23 encoding-prefixed literal, retaining code-point/numeric units.
+    EncodedString(LiteralId, LiteralEncoding),
+}
+
 /// Literal values live outside the UTF-8 source-spelling interner.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct LiteralId(pub(crate) u32);
@@ -414,6 +314,107 @@ pub(crate) enum LiteralEncoding {
     Utf16,
     Utf32,
 }
+
+/// GNU imaginary integer component types (extension to C99 §6.4.4.1).
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum ImaginaryIntegerKind {
+    Int,
+    Long,
+    LongLong,
+    UnsignedInt,
+    UnsignedLong,
+    UnsignedLongLong,
+}
+
+/// A signed type an integer-constant widening warning names.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum SignedIntegerLiteralType {
+    Int,
+    Long,
+}
+
+/// An unsigned type an integer constant can have.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "We are repeating the word 'unsigned' a lot here, but I think it's clearer this way."
+)]
+pub(crate) enum UnsignedIntegerLiteralType {
+    UnsignedInt,
+    UnsignedLong,
+    UnsignedLongLong,
+}
+
+/// An `integer-suffix`; `u` and `l` may come in either order and case,
+/// but `ll` and `LL` may not mix cases.
+///
+/// C99: §6.4.4.1 paragraph 1, p. 55; PDF p. 67.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum IntegerSuffix {
+    Unsigned,
+    Long,
+    LongLong,
+    UnsignedLong,
+    UnsignedLongLong,
+}
+
+/// Classification retains spelling origin independently of the parser kind.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct KeywordClassification {
+    /// Reserved __asm can introduce either GNU or MSVC assembly.
+    /// GNU/MSVC extensions to C99 §6.8p1, p. 131; PDF p. 143.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Alternate-Keywords.html>
+    /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
+    pub(crate) ambiguous_asm: bool,
+    pub(crate) spelling:      &'static str,
+    pub(crate) kind:          KeywordTokenType,
+    pub(crate) origin:        Option<FeatureOrigin>,
+}
+
+impl Token {
+    /// Takes written assembly role from shared keyword metadata.
+    /// GNU/MSVC extensions to C99 §6.8p1, p. 131; PDF p. 143.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Alternate-Keywords.html>
+    /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
+    pub(crate) fn uses_ambiguous_asm(self, configuration: CompilerConfiguration) -> bool {
+        KeywordTokenType::classify(self.contents, configuration)
+            .is_some_and(|keyword| keyword.ambiguous_asm)
+    }
+}
+
+impl ImaginaryIntegerKind {
+    pub(crate) fn type_name(self) -> &'static str {
+        match self {
+            | Self::Int => "int _Complex",
+            | Self::Long => "long _Complex",
+            | Self::LongLong => "long long _Complex",
+            | Self::UnsignedInt => "unsigned int _Complex",
+            | Self::UnsignedLong => "unsigned long _Complex",
+            | Self::UnsignedLongLong => "unsigned long long _Complex",
+        }
+    }
+}
+
+impl FloatTokenType {
+    /// The C type named by this constant's suffix.
+    pub(crate) fn type_name(&self) -> &'static str {
+        match self {
+            | Self::Float(_) => "float",
+            | Self::Double(_) => "double",
+            | Self::LongDouble(_) => "long double",
+            | Self::Float128(_) => "__float128",
+            | Self::ImaginaryFloat128(_) => "__float128 _Complex",
+            | Self::ImaginaryFloat(_) => "float _Complex",
+            | Self::ImaginaryDouble(_) => "double _Complex",
+            | Self::ImaginaryLongDouble(_) => "long double _Complex",
+        }
+    }
+}
+
 impl LiteralEncoding {
     pub(crate) fn prefix(self) -> &'static str {
         match self {
@@ -432,34 +433,6 @@ impl LiteralEncoding {
     }
 }
 
-/// A character or wide `string-literal`, decoded into literal units.
-///
-/// C99: §6.4.5 paragraphs 1-2, p. 62; PDF p. 74.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum StringTokenType {
-    String(LiteralId),
-    WideString(LiteralId),
-    /// C11/C23 encoding-prefixed literal, retaining code-point/numeric units.
-    EncodedString(LiteralId, LiteralEncoding),
-}
-
-/// A `character-constant` and its value.
-///
-/// C99: §6.4.4.4 paragraphs 1-2, pp. 59-60; PDF pp. 71-72, with values from
-/// paragraphs 10-11, p. 61; PDF p. 73.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum CharacterTokenType {
-    /// A narrow constant of one byte, held as that byte.
-    Char(char),
-    WideChar(u32),
-    EncodedChar(u32, LiteralEncoding),
-    /// Packed integer value of an ordinary multi-character constant.
-    ///
-    /// The value is implementation-defined (§6.4.4.4 paragraph 10): each
-    /// byte is shifted in after the ones before it, as GCC does.
-    MultiChar(i32),
-}
-
 impl CharacterTokenType {
     /// Interpret a wide code unit in the target's `wchar_t` representation.
     /// Narrow preprocessing values retain the existing implementation choice.
@@ -476,41 +449,6 @@ impl CharacterTokenType {
             value
         }
     }
-}
-
-/// The stored value before target-wide signedness is applied. A one-byte
-/// narrow constant is
-/// never negative here, which C99 leaves implementation-defined (§6.10.1
-/// paragraph 4, p. 148; PDF p. 160). Whether plain `char` is signed in
-/// phase 7 (§6.2.5 paragraph 15, p. 35; PDF p. 47) is left to semantic
-/// analysis.
-impl From<CharacterTokenType> for i64 {
-    fn from(v: CharacterTokenType) -> Self {
-        match v {
-            | CharacterTokenType::Char(c) => i64::from(u32::from(c)),
-            | CharacterTokenType::WideChar(c) | CharacterTokenType::EncodedChar(c, _) =>
-                i64::from(c),
-            | CharacterTokenType::MultiChar(value) => i64::from(value),
-        }
-    }
-}
-
-/// The category of a phase-7 token.
-///
-/// C99: §6.4 paragraph 3, p. 49; PDF p. 61. An `enumeration-constant` is an
-/// identifier until declarations are analyzed (§6.4.4.3, p. 59; PDF p. 71).
-// Structural equality remains available to unit tests, but production parser
-// code must name the particular category and payload it needs to inspect.
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(test, derive(PartialEq))]
-pub(crate) enum TokenType {
-    Integer(IntegerTokenType),
-    Float(FloatTokenType),
-    Identifier,
-    Keyword(KeywordTokenType),
-    Operator(OperatorTokenType),
-    String(StringTokenType),
-    Character(CharacterTokenType),
 }
 
 /// When an alternate keyword spelling is a keyword.
@@ -1147,15 +1085,80 @@ impl UnsignedIntegerLiteralType {
     }
 }
 
-/// Classification retains spelling origin independently of the parser kind.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct KeywordClassification {
-    /// Reserved __asm can introduce either GNU or MSVC assembly.
-    /// GNU/MSVC extensions to C99 §6.8p1, p. 131; PDF p. 143.
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Alternate-Keywords.html>
-    /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
-    pub(crate) ambiguous_asm: bool,
-    pub(crate) spelling:      &'static str,
-    pub(crate) kind:          KeywordTokenType,
-    pub(crate) origin:        Option<FeatureOrigin>,
+// Syntax and diagnostic structures compare complete tokens; parser dispatch
+// compares the scalar kind directly instead of invoking this full comparison.
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        let same_kind = match (self.kind, other.kind) {
+            | (TokenType::Integer(left), TokenType::Integer(right)) => left == right,
+            | (TokenType::Float(left), TokenType::Float(right)) => left == right,
+            | (TokenType::Identifier, TokenType::Identifier) => true,
+            | (TokenType::Keyword(left), TokenType::Keyword(right)) => left == right,
+            | (TokenType::Operator(left), TokenType::Operator(right)) => left == right,
+            | (TokenType::String(left), TokenType::String(right)) => left == right,
+            | (TokenType::Character(left), TokenType::Character(right)) => left == right,
+            | _ => false,
+        };
+        same_kind && self.source_vectors == other.source_vectors && self.contents == other.contents
+    }
+}
+
+impl GetPosition for Token {
+    #[inline(always)]
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for Token {
+    #[inline(always)]
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
+        self.source_vectors
+    }
+}
+
+impl From<IntegerTokenType> for i128 {
+    fn from(v: IntegerTokenType) -> Self {
+        match v {
+            | IntegerTokenType::UnsignedLong(v)
+            | IntegerTokenType::UnsignedLongLong(v)
+            | IntegerTokenType::BitInt(v, _, _)
+            | IntegerTokenType::Imaginary(v, _) => i128::from(v.get()),
+            | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v.get()),
+            | IntegerTokenType::UnsignedInt(v) => i128::from(v),
+            | IntegerTokenType::Int(v) => i128::from(v),
+        }
+    }
+}
+
+impl Display for FloatTokenType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            | Self::Float(v) => write!(f, "{v}"),
+            | Self::ImaginaryFloat(v) => write!(f, "{v}i"),
+            | Self::Double(v) => write!(f, "{v}"),
+            | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
+            | Self::LongDouble(v) => write!(f, "{v}"),
+            | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
+            | Self::Float128(v) => write!(f, "{v}"),
+            | Self::ImaginaryFloat128(v) => write!(f, "{v}i"),
+        }
+    }
+}
+
+/// The stored value before target-wide signedness is applied. A one-byte
+/// narrow constant is
+/// never negative here, which C99 leaves implementation-defined (§6.10.1
+/// paragraph 4, p. 148; PDF p. 160). Whether plain `char` is signed in
+/// phase 7 (§6.2.5 paragraph 15, p. 35; PDF p. 47) is left to semantic
+/// analysis.
+impl From<CharacterTokenType> for i64 {
+    fn from(v: CharacterTokenType) -> Self {
+        match v {
+            | CharacterTokenType::Char(c) => i64::from(u32::from(c)),
+            | CharacterTokenType::WideChar(c) | CharacterTokenType::EncodedChar(c, _) =>
+                i64::from(c),
+            | CharacterTokenType::MultiChar(value) => i64::from(value),
+        }
+    }
 }
