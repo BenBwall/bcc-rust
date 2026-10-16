@@ -5,6 +5,8 @@
 //! PDF pp. 101-102 (arithmetic and short circuit evaluation).
 //! C99: §6.3.1.2p1 and §6.3.1.4p1, p. 43; PDF p. 55
 //! (Boolean normalization and floating-to-integer parameter conversions).
+//! C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57 (common real precision
+//! preserves the real or complex domain of each operand).
 //! <https://clang.llvm.org/docs/AttributeReference.html#diagnose-if>
 
 use super::super::{
@@ -133,6 +135,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         expression: &'tu Expression<'tu>,
         arguments: &[&'tu Expression<'tu>],
     ) -> Option<Integer> {
+        self.predicate_value_for(parameters, expression, arguments, None)
+    }
+
+    /// Cleanup supplies the address of an automatic object without adding a
+    /// synthetic expression to the immutable syntax tree.
+    pub(super) fn cleanup_predicate_value(
+        &self,
+        parameters: &[Option<usize>],
+        expression: &'tu Expression<'tu>,
+        variable: usize,
+    ) -> Option<Integer> {
+        self.predicate_value_for(parameters, expression, &[], Some(variable))
+    }
+
+    fn predicate_value_for(
+        &self,
+        parameters: &[Option<usize>],
+        expression: &'tu Expression<'tu>,
+        arguments: &[&'tu Expression<'tu>],
+        cleanup: Option<usize>,
+    ) -> Option<Integer> {
         let mut work = ArenaVec::new_in(self.scratch);
         let mut values: ArenaVec<'_, Option<PredicateConstant>> = ArenaVec::new_in(self.scratch);
         work.push(Step::Eval(expression));
@@ -151,13 +174,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 .iter()
                                 .position(|&binding| binding.is_some() && binding == info.binding)
                             {
-                                let argument = arguments
-                                    .get(index)
-                                    .map(|&argument| self.expression_info(argument));
-                                self.predicate_convert(
-                                    argument.and_then(|info| self.predicate_known(info)),
-                                    info.ty,
-                                )
+                                let argument = if cleanup.is_some() && index == 0 {
+                                    Some(PredicateConstant::NonNullAddress(false))
+                                } else {
+                                    arguments.get(index).and_then(|&argument| {
+                                        self.predicate_known(self.expression_info(argument))
+                                    })
+                                };
+                                self.predicate_convert(argument, info.ty)
                             } else {
                                 known()
                             };
@@ -248,13 +272,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                         .and_then(Integer::to_u64)
                                         .and_then(|mode| u8::try_from(mode).ok())
                                         .unwrap_or(0);
-                                    let value = match self.substituted_object_size(
-                                        operands[0],
-                                        mode,
-                                        dynamic,
-                                        parameters,
-                                        arguments,
-                                    ) {
+                                    let size = if let Some(variable) = cleanup {
+                                        self.cleanup_object_size(
+                                            operands[0],
+                                            mode,
+                                            dynamic,
+                                            parameters,
+                                            variable,
+                                        )
+                                    } else {
+                                        self.substituted_object_size(
+                                            operands[0],
+                                            mode,
+                                            dynamic,
+                                            parameters,
+                                            arguments,
+                                        )
+                                    };
+                                    let value = match size {
                                         | ObjectSize::Constant(value) =>
                                             Some(Integer::int(i128::from(value)).cast(64, false)),
                                         | ObjectSize::Unknown => Some(

@@ -23,6 +23,7 @@ use super::{
         Linkage,
         Namespace,
         ObjectSize,
+        PredicateKind,
         SemanticErrorKind,
         facts::{
             AliasFacts,
@@ -689,6 +690,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return;
         }
+        // Clang cleanup requires one function, rather than resolving the
+        // overload set as an ordinary source call would. Redeclarations of
+        // the same mangled identity remain a single function.
+        let identity = self.function_identity(entry.binding);
+        let mut candidate = self.overload_previous.get(&entry.binding).copied();
+        while let Some(binding) = candidate {
+            let overloaded = self
+                .function_extensions
+                .function(entry.binding)
+                .is_some_and(|contract| contract.overloadable)
+                || self
+                    .function_extensions
+                    .function(binding)
+                    .is_some_and(|contract| contract.overloadable);
+            if overloaded && self.function_identity(binding) != identity {
+                self.error(
+                    SemanticErrorKind::CleanupOverloadSet,
+                    identifier.source_vectors,
+                    Some(identifier.contents),
+                    Some(self.bindings[binding].name.source_vectors),
+                );
+                return;
+            }
+            candidate = self.overload_previous.get(&binding).copied();
+        }
         if self.types.unanalyzed(function.ty) || self.types.unanalyzed(variable.ty) {
             return;
         }
@@ -745,6 +771,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .function_extensions
                 .cleanup_sizes
                 .insert(binding, value);
+        }
+        if let Some(contract) = self.function_extensions.function(entry.binding) {
+            if let Some(message) = contract.unavailable {
+                self.call_attribute_diagnostic(identifier.source_vectors, message, false);
+            }
+            // Cleanup bypasses enable_if candidate filtering, but diagnoses
+            // the call with its actual nonnull automatic-object address.
+            for predicate in contract.predicates {
+                if predicate.kind != PredicateKind::Enable
+                    && self
+                        .cleanup_predicate_value(
+                            predicate.parameters,
+                            predicate.expression,
+                            binding,
+                        )
+                        .is_some_and(|value| value.value != 0)
+                {
+                    self.call_attribute_diagnostic(
+                        identifier.source_vectors,
+                        predicate.message,
+                        predicate.kind == PredicateKind::Warning,
+                    );
+                }
+            }
         }
         // The variable's scope calls the function, so the enclosing body
         // uses it: it needs a definition and keeps it reachable.

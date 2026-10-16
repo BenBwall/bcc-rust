@@ -484,6 +484,8 @@ pub(crate) enum SemanticErrorKind {
     /// Clang: the cleanup argument names no function.
     /// GNU extension: GCC manual, "Common Variable Attributes", cleanup.
     CleanupNotFunction,
+    /// Clang: cleanup names one function, not an overload set.
+    CleanupOverloadSet,
     /// Clang: the cleanup function takes exactly one parameter.
     CleanupParameterCount,
     /// Clang: a pointer to the variable converts to the cleanup function's
@@ -550,6 +552,7 @@ impl SemanticErrorKind {
             | Self::SectionMismatch => "different section",
             | Self::InvalidVisibility => "unsupported visibility",
             | Self::CleanupNotFunction => "not a function",
+            | Self::CleanupOverloadSet => "not a single function",
             | Self::CleanupParameterCount => "cleanup function must take one parameter",
             | Self::CleanupParameterType => "parameter type is incompatible with the variable",
             | Self::JumpIntoCleanupScope | Self::SwitchIntoCleanupScope =>
@@ -710,6 +713,7 @@ impl SemanticErrorKind {
             | Self::SectionMismatch
             | Self::InvalidVisibility
             | Self::CleanupNotFunction
+            | Self::CleanupOverloadSet
             | Self::CleanupParameterCount
             | Self::CleanupParameterType
             | Self::JumpIntoCleanupScope
@@ -1502,6 +1506,11 @@ impl SemanticErrorKind {
                 "cleanup argument is not a function",
                 "GCC Common Variable Attributes: cleanup names a function to call with the \
                  variable's address",
+            ),
+            | Self::CleanupOverloadSet => (
+                "cleanup argument is not a single function",
+                "Clang Attributes Reference: cleanup requires one function, rather than an \
+                 overload set",
             ),
             | Self::CleanupParameterCount => (
                 "cleanup function must take one parameter",
