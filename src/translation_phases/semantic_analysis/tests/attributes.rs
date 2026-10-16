@@ -705,3 +705,138 @@ int checks[_Alignof(struct A) == 16 && sizeof(struct A) == 16 && __alignof__(b1)
         |context, _| assert_ne!(context.error_count(), 0),
     );
 }
+
+/// Clang combines the declaration's explicit requests before checking C11's
+/// original type minimum; Microsoft object requests can replace inherited
+/// typedef alignment. C11: §6.7.5p4-6, p. 127; PDF p. 145.
+#[test]
+fn declared_alignment_combines_explicit_requests_before_checking_the_type() {
+    let source = r#"
+typedef __declspec(align(8)) int T8;
+typedef __declspec(align(8)) long long L8;
+__declspec(align(1)) T8 byte;
+__declspec(align(1)) T8 suffix __attribute__((aligned(32)));
+__declspec(align(64)) T8 stronger __attribute__((aligned(32)));
+__declspec(align(1)) __declspec(align(16)) T8 forward;
+__declspec(align(16)) __declspec(align(1)) T8 reverse;
+__attribute__((aligned(32))) __declspec(align(1)) T8 gnu_first;
+__declspec(align(1)) __attribute__((aligned(32))) T8 ms_first;
+_Alignas(1) __declspec(align(32)) T8 standard_first;
+__declspec(align(32)) _Alignas(1) T8 standard_last;
+_Alignas(0) T8 unchanged;
+_Alignas(8) __declspec(align(1)) T8 minimum;
+_Alignas(1) __attribute__((aligned(32))) T8 gnu;
+_Alignas(1) __declspec(align(32)) T8 all __attribute__((aligned(64)));
+_Alignas(1) _Alignas(32) __declspec(align(1)) T8 standards;
+_Alignas(1) L8 array[2] __attribute__((aligned(32)));
+__declspec(align(1)) T8 *pointer __attribute__((aligned(32)));
+__declspec(align(32)) T8 function(void);
+_Static_assert(_Alignof(T8)==8 && __alignof__(byte)==1, "inherited type");
+_Static_assert(__alignof__(suffix)==32 && __alignof__(stronger)==64, "suffix requests");
+_Static_assert(__alignof__(forward)==16 && __alignof__(reverse)==16, "MS order");
+_Static_assert(__alignof__(gnu_first)==32 && __alignof__(ms_first)==32, "GNU order");
+_Static_assert(__alignof__(standard_first)==32 && __alignof__(standard_last)==32, "standard order");
+_Static_assert(__alignof__(unchanged)==8 && __alignof__(minimum)==8, "minimum");
+_Static_assert(__alignof__(gnu)==32 && __alignof__(all)==64 && __alignof__(standards)==32, "combined");
+_Static_assert(__alignof__(array)==32 && __alignof__(pointer)==32, "declarators");
+_Static_assert(_Alignof(__typeof__(function()))==8, "return type");
+"#;
+    for target in [Target::WindowsMsvc, Target::WindowsGnu, Target::LinuxGnu] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true)
+                .with_msvc_extensions(true),
+            |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                );
+                assert!(
+                    sema.bindings
+                        .iter()
+                        .all(|binding| !sema.types.unanalyzed(binding.ty))
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn member_alignment_preserves_type_requirements_and_packed_queries() {
+    let source = r#"
+typedef __declspec(align(8)) int T8;
+struct M { char c; __declspec(align(1)) T8 x; } ordinary;
+struct I { char c; __declspec(align(1)) int x; } integer;
+struct S { char c; _Alignas(1) __declspec(align(32)) T8 x; } standard;
+struct A { char c; __declspec(align(1)) T8 x __attribute__((aligned(32))); } suffix;
+struct __attribute__((packed)) P { char c; __declspec(align(1)) T8 x; } packed;
+struct __attribute__((packed)) Q { char c; T8 x; } inherited;
+_Static_assert(_Alignof(struct M)==8 && sizeof(struct M)==16 && __builtin_offsetof(struct M,x)==8 && __alignof__(ordinary.x)==8, "typedef member");
+_Static_assert(_Alignof(struct I)==4 && sizeof(struct I)==8 && __builtin_offsetof(struct I,x)==4 && __alignof__(integer.x)==4, "int member");
+_Static_assert(_Alignof(struct S)==32 && sizeof(struct S)==64 && __builtin_offsetof(struct S,x)==32 && __alignof__(standard.x)==32, "standard member");
+_Static_assert(_Alignof(struct A)==32 && sizeof(struct A)==64 && __builtin_offsetof(struct A,x)==32 && __alignof__(suffix.x)==32, "suffix member");
+_Static_assert(__alignof__(packed.x)==1 && __alignof__(inherited.x)==1, "packed expressions");
+#ifdef _MSC_VER
+_Static_assert(_Alignof(struct P)==8 && sizeof(struct P)==16 && __builtin_offsetof(struct P,x)==8, "MS placement");
+_Static_assert(_Alignof(struct Q)==8 && sizeof(struct Q)==16 && __builtin_offsetof(struct Q,x)==8, "MS inherited placement");
+#else
+_Static_assert(_Alignof(struct P)==1 && sizeof(struct P)==5 && __builtin_offsetof(struct P,x)==1, "GNU placement");
+_Static_assert(_Alignof(struct Q)==1 && sizeof(struct Q)==5 && __builtin_offsetof(struct Q,x)==1, "GNU inherited placement");
+#endif
+"#;
+    for target in [Target::WindowsMsvc, Target::WindowsGnu, Target::LinuxGnu] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true)
+                .with_msvc_extensions(true),
+            |context, _| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                )
+            },
+        );
+    }
+}
+
+#[test]
+fn standard_alignment_checks_the_original_type_even_with_zero_requests() {
+    for declaration in [
+        "_Alignas(1) __declspec(align(1)) T8 x;",
+        "_Alignas(0) __declspec(align(1)) T8 x;",
+        "_Alignas(1) T8 x;",
+        "_Alignas(1) __declspec(align(1)) int x;",
+        "_Alignas(0) __declspec(align(1)) int x;",
+        "_Alignas(1) T8 x __attribute__((aligned(1)));",
+        "struct M { char c; _Alignas(1) __declspec(align(1)) T8 x; };",
+        "struct __attribute__((packed)) M { char c; _Alignas(1) __declspec(align(1)) T8 x; };",
+    ] {
+        for target in [Target::WindowsMsvc, Target::WindowsGnu, Target::LinuxGnu] {
+            let source =
+                format!("typedef __declspec(align(8)) int T8; {declaration} int following;");
+            with_configuration(
+                &source,
+                CompilerConfiguration::default()
+                    .with_target(target)
+                    .with_gnu_extensions(true)
+                    .with_msvc_extensions(true),
+                |context, sema| {
+                    let errors = context.take_pending_errors();
+                    assert_eq!(errors.iter().filter(|error| matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::InvalidStandardAlignment)).count(), 1, "{target:?}: {declaration}: {errors:?}");
+                    assert!(sema.bindings.iter().any(|binding| {
+                        context.string_cache.at(binding.name.name) == "following"
+                            && !sema.types.unanalyzed(binding.ty)
+                    }));
+                },
+            );
+        }
+    }
+}

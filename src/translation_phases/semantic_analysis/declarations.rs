@@ -1129,13 +1129,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .with_alignment(if tag.max_member_alignment.get() != 0 {
                             member.ty.alignment
                         } else if tag.packed.get() || member.packed {
-                            if self.context.configuration.target()
-                                == crate::target::Target::WindowsMsvc
-                            {
-                                member.ty.alignment.max(1)
-                            } else {
-                                member.explicit_alignment.max(1)
-                            }
+                            // Packing lowers expression alignment even when
+                            // Microsoft placement preserves typedef alignment.
+                            // C99 §6.7.2.1p12: implementation-defined
+                            // alignment.
+                            member.explicit_alignment.max(1)
                         } else {
                             member.ty.alignment
                         }),
