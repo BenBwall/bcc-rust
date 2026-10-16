@@ -320,6 +320,59 @@ block0:
 }
 
 #[test]
+fn mingw_reaches_undefined_data_through_refptr_stubs() {
+    // #69: data the module does not define may be in a DLL, which MinGW's
+    // auto-import relocates through a 64-bit stub, as Clang reaches it; a
+    // 32-bit RIP-relative operand would fail beyond 2 GiB. Defined data,
+    // functions (import thunks) and unused declarations stay direct, and
+    // MSVC, which does not auto-import, addresses undefined data directly
+    // as Clang does.
+    let ir = "abi lowered
+global @imported external size 16, align 4
+global @unused external size 4, align 4
+global @local external size 4, align 4 = zero
+function @read() -> i32 external {
+block0:
+    v0 = global_addr @imported
+    v1 = iconst.i64 12
+    v2 = ptr_add v0, v1
+    v3 = load.i32 v2, align 4
+    v4 = global_addr @local
+    v5 = load.i32 v4, align 4
+    v6 = iadd.i32 v3, v5
+    v7 = call @thunk()
+    v8 = iadd.i32 v6, v7
+    return v8
+}
+function @thunk() -> i32 external
+";
+    let coff = assembly(ir, Target::WindowsGnu);
+    for line in [
+        "movq\t.refptr.imported(%rip), %",
+        "\t.section\t.rdata$.refptr.imported,\"dr\",discard,.refptr.imported\n",
+        ".refptr.imported:\n\t.quad\timported\n",
+        "local(%rip)",
+        "callq\tthunk\n",
+    ] {
+        assert!(coff.contains(line), "{line}\n{coff}");
+    }
+    assert!(
+        coff.lines()
+            .filter(|line| line.contains("imported") && line.contains("(%rip)"))
+            .all(|line| line.contains(".refptr.imported(%rip)")),
+        "{coff}"
+    );
+    assert!(!coff.contains("refptr.unused"), "{coff}");
+    assert!(!coff.contains("refptr.local"), "{coff}");
+    assert!(!coff.contains(".weak"), "{coff}");
+    let msvc = assembly(ir, Target::WindowsMsvc);
+    assert!(msvc.contains("imported+12(%rip)"), "{msvc}");
+    assert!(!msvc.contains("refptr"), "{msvc}");
+    let elf = assembly(ir, Target::LinuxGnu);
+    assert!(elf.contains("imported@GOTPCREL(%rip)"), "{elf}");
+}
+
+#[test]
 fn symbol_attributes_become_directives() {
     let ir = "abi lowered
 global @value external size 4, align 4 hidden section \"mine\" = bytes \"05000000\"

@@ -673,7 +673,7 @@ Sections and symbols per format:
 | visibility | `.hidden sym`, `.protected sym` | — |
 | constructors, destructors | `.init_array[.prio]`, `.fini_array[.prio]` | MinGW `.ctors[.65535-prio]`, `.dtors[...]`; MSVC `.CRT$XC*`, `.CRT$XT*` |
 | defined data reference | `sym(%rip)` (`R_X86_64_PC32`) | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
-| undefined data reference | `movq sym@GOTPCREL(%rip), %r` (`GOTPCRELX`) | `sym(%rip)`; LLD's MinGW auto-import handles DLL data |
+| undefined data reference | `movq sym@GOTPCREL(%rip), %r` (`GOTPCRELX`) | MinGW: `movq .refptr.sym(%rip), %r` through a `.refptr.sym` stub, as Clang emits it; MSVC: `sym(%rip)` |
 | direct call | `call f` / `call f@PLT` if undefined (`PLT32`) | `call f` (`REL32`; import thunks for DLL functions) |
 | function address | `leaq f(%rip)` / `movq f@GOTPCREL(%rip)` if undefined | `leaq f(%rip)` |
 | non-executable stack | `.section .note.GNU-stack,"",@progbits` | — |
@@ -801,8 +801,18 @@ with the following decisions recorded for review:
   defines a runtime name the back end calls (`memmove`, `__main`,
   `___chkstk_ms`, `fmod`, `__divti3` …) with internal linkage is refused,
   since the call would bind to it.
-- Undefined data on Windows is referenced directly, relying on LLD's MinGW
-  auto-import.
+- Undefined data on Windows GNU is reached through a `.refptr.sym` stub
+  (a discardable `.rdata$.refptr.sym` COMDAT holding `.quad sym`), as Clang
+  reaches it, and only where code uses it. Such data may live in a DLL,
+  which LLD's MinGW auto-import resolves with a runtime pseudo-relocation:
+  on the stub that is a 64-bit absolute address, valid wherever the DLL is
+  loaded, whereas a direct `sym(%rip)` operand is a 32-bit PC-relative field
+  that fails once the DLL lies more than 2 GiB from the executable (#69).
+  Defined data stays RIP-relative, functions keep direct calls through the
+  import library's thunks, and the LLVM back end already gets the same
+  stubs from LLVM for its non-`dso_local` declarations. On MSVC, whose
+  linker does not auto-import, undefined data is addressed directly as
+  Clang addresses it; DLL data there needs `__declspec(dllimport)`.
 - `--emit=asm` prints the native assembly and requires `--backend=native`.
 
 - An `i1` arriving from another compiler (a parameter or a call result) is
