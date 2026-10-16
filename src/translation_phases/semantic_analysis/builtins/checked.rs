@@ -28,8 +28,9 @@ use crate::{
 
 impl Analyzer<'_, '_, '_> {
     /// Whether `descriptor`'s prototype can be formed where `name` is first
-    /// used: a `FILE *` parameter needs the program's file-scope `FILE` typedef. An
-    /// unavailable builtin is diagnosed here and stays unmodeled.
+    /// used: a `FILE *` parameter needs the program's file-scope `FILE`
+    /// typedef. An unavailable builtin is diagnosed here and stays
+    /// unmodeled.
     pub(in crate::translation_phases::semantic_analysis) fn builtin_prototype_available(
         &mut self,
         descriptor: &BuiltinDescriptor,

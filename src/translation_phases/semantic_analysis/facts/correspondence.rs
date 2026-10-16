@@ -141,9 +141,7 @@ impl<'tu> CorrespondenceBuilder<'tu> {
         _ = self.identities.insert(binding, name);
     }
 
-    pub(in crate::translation_phases::semantic_analysis) fn new(
-        tu: &'tu Bump,
-    ) -> Self {
+    pub(in crate::translation_phases::semantic_analysis) fn new(tu: &'tu Bump) -> Self {
         Self {
             declarations:       ArenaVec::new_in(tu),
             indices:            ArenaMap::with_hasher_in(FxBuildHasher, tu),

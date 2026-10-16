@@ -198,7 +198,7 @@ pub(crate) struct Function<'ir> {
     /// 256.
     pub(crate) returns_twice: bool,
     /// Whether calls may, must or must not be expanded inline.
-    pub(crate) inlining:   InlineControl,
+    pub(crate) inlining:      InlineControl,
 }
 
 // Tests

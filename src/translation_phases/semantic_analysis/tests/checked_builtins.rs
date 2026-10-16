@@ -275,20 +275,20 @@ fn checked_stream_builtins_use_file_scope_typedef() {
     ] {
         for (source, missing_header, valid) in [
             (
-                "typedef struct stream FILE; int f(FILE *p, __builtin_va_list ap) { \
-                 typedef int FILE; return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
+                "typedef struct stream FILE; int f(FILE *p, __builtin_va_list ap) { typedef int \
+                 FILE; return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
                 false,
                 true,
             ),
             (
-                "int f(void *p, __builtin_va_list ap) { typedef int FILE; \
-                 return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
+                "int f(void *p, __builtin_va_list ap) { typedef int FILE; return \
+                 __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
                 true,
                 false,
             ),
             (
-                "typedef struct stream FILE; int f(int *p, __builtin_va_list ap) { \
-                 typedef int FILE; return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
+                "typedef struct stream FILE; int f(int *p, __builtin_va_list ap) { typedef int \
+                 FILE; return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
                 false,
                 false,
             ),
@@ -312,10 +312,14 @@ fn checked_stream_builtins_use_file_scope_typedef() {
                         "{target:?}: {source}: {kinds:?}"
                     );
                     if valid {
-                        let binding = unit.bindings.iter().find(|binding| {
-                            context.string_cache.at(binding.name.name)
-                                == "__builtin___vfprintf_chk"
-                        }).unwrap();
+                        let binding = unit
+                            .bindings
+                            .iter()
+                            .find(|binding| {
+                                context.string_cache.at(binding.name.name)
+                                    == "__builtin___vfprintf_chk"
+                            })
+                            .unwrap();
                         assert!(
                             spell(unit, context, binding.ty).starts_with("int (stream *,"),
                             "{target:?}: {}",

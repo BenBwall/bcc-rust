@@ -87,8 +87,8 @@ fn always_inline_gnu_bodies_reach_their_calls() {
 /// `always_inline` cannot bypass the optimizer's frame safeguards.
 #[test]
 fn private_inline_bodies_keep_returns_twice_contracts() {
-    let source = "extern inline __attribute__((gnu_inline, always_inline, returns_twice)) \
-                  int save(void) { return 7; } int main(void) { return save(); }";
+    let source = "extern inline __attribute__((gnu_inline, always_inline, returns_twice)) int \
+                  save(void) { return 7; } int main(void) { return save(); }";
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         for (optimize, profile) in STAGES {
             with_module(source, target, optimize, profile, |module, _| {
@@ -100,7 +100,9 @@ fn private_inline_bodies_keep_returns_twice_contracts() {
                 assert!(module.returns_twice(private), "{module}");
                 assert!(calls(module, "save.always_inline"), "{module}");
                 let mut assembly = String::new();
-                assert!(crate::backend::native::emit_assembly(module, target, &mut assembly).is_err());
+                assert!(
+                    crate::backend::native::emit_assembly(module, target, &mut assembly).is_err()
+                );
             });
         }
     }

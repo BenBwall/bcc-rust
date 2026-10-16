@@ -519,7 +519,7 @@ struct FunctionHeader<'t, 's> {
     linkage:       Linkage,
     align:         Option<Align>,
     returns_twice: bool,
-    inlining: InlineControl,
+    inlining:      InlineControl,
     attributes:    WrittenAttributes<'t>,
 }
 

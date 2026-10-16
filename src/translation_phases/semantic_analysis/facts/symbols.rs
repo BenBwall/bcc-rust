@@ -73,7 +73,7 @@ pub(crate) struct EntityAttributes<'tu> {
     /// C11: §6.7.5p6, p. 127; PDF p. 145.
     pub(crate) declared_alignment: bool,
     /// GNU `noinline`/`noipa` or `always_inline` on a function.
-    pub(crate) inlining: Inlining,
+    pub(crate) inlining:           Inlining,
 }
 
 /// A function's inline-control request. `Never` wins over `Always` when
