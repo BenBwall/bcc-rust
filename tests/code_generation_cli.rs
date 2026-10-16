@@ -1469,14 +1469,28 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     }
 
     /// The MinGW-w64 installation root and its C library include directory,
-    /// from a `gcc.exe` on `PATH`, as the conformance harness finds them.
+    /// from `MINGW_ROOT` or a `gcc.exe` on `PATH`, as the build finds them.
     fn mingw() -> Option<(PathBuf, PathBuf)> {
+        let installation = |root: &Path| {
+            ["include", "x86_64-w64-mingw32/include"]
+                .into_iter()
+                .map(|relative| root.join(relative))
+                .find(|include| {
+                    include.join("_mingw.h").is_file() && include.join("windows.h").is_file()
+                })
+                .map(|include| (root.to_path_buf(), include))
+        };
+        if let Some(root) = env::var_os("MINGW_ROOT") {
+            return installation(Path::new(&root));
+        }
         let path = env::var_os("PATH")?;
         env::split_paths(&path).find_map(|directory| {
             let root = directory.parent()?;
-            let include = root.join("x86_64-w64-mingw32/include");
-            (directory.join("gcc.exe").is_file() && include.join("_mingw.h").is_file())
-                .then(|| (root.to_path_buf(), include))
+            directory
+                .join("gcc.exe")
+                .is_file()
+                .then(|| installation(root))
+                .flatten()
         })
     }
 
@@ -1491,7 +1505,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             return;
         }
         let Some((root, include)) = mingw() else {
-            eprintln!("skipping: no MinGW-w64 gcc on PATH");
+            eprintln!("skipping: no MinGW-w64 installation in MINGW_ROOT or PATH");
             return;
         };
         let units = [
