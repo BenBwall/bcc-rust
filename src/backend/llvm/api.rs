@@ -1420,7 +1420,9 @@ impl<'id> Session<'id> {
         if matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
             // SAFETY: The machine is live and exclusively owned here, before
             // emission initializes its ELF sections. LLVM-C omits this option.
-            unsafe { bcc_llvm_use_init_array(machine.0) };
+            unsafe {
+                bcc_llvm_use_init_array(machine.0);
+            }
         }
         if !skip_passes {
             let pipeline = match opt.unwrap_or(OptLevel::O0) {
