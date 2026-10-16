@@ -20,10 +20,14 @@ use crate::{
         Type,
         Value,
     },
+    target::Target,
     translation_phases::{
         SourceVectors,
         semantic_analysis::{
+            ArrayBound,
+            SemanticTranslationUnit,
             TypeId,
+            TypeKind,
             Types,
         },
     },
@@ -50,7 +54,7 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
         let object = match self.unit.sema.types.kind(ty) {
-            | crate::translation_phases::semantic_analysis::TypeKind::Pointer(pointee) => pointee,
+            | TypeKind::Pointer(pointee) => pointee,
             | _ => ty,
         };
         let default = storage_alignment(&self.unit.sema.types, object)
@@ -139,9 +143,7 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         // GNU extension: GCC "Pointer Arith".
         let default = if matches!(
             self.unit.sema.types.kind(element),
-            crate::translation_phases::semantic_analysis::TypeKind::Scalar(
-                crate::translation_phases::semantic_analysis::Scalar::Void
-            )
+            TypeKind::Scalar(crate::translation_phases::semantic_analysis::Scalar::Void)
         ) {
             Align::BYTE
         } else {
@@ -170,8 +172,7 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
                 return at_offset(base, u128::from(layout.size));
             }
             match self.unit.sema.types.kind(element) {
-                | crate::translation_phases::semantic_analysis::TypeKind::Array(next, _) =>
-                    element = next,
+                | TypeKind::Array(next, _) => element = next,
                 | _ => return Align::BYTE,
             }
         }
@@ -202,6 +203,52 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
             | _ => None,
         }
     }
+}
+
+/// The alignment of the storage of the variable `binding`, of type `ty`:
+/// its type's storage alignment, raised to 16 bytes on the GNU targets for
+/// an array of at least 16 bytes or of variable length, unless a
+/// declaration of the variable specifies its alignment. The C type's
+/// alignment, which `_Alignof` and pointers to the array's elements assume,
+/// is unchanged; only the variable's own storage, global, static or
+/// automatic, is raised, and code compiled by others may assume it of an
+/// external array it declares.
+/// System V AMD64 psABI §3.1.2, "Aggregates and Unions": "a local or global
+/// array variable of length at least 16 bytes or a C99 variable-length
+/// array variable always has alignment of at least 16 bytes"
+/// (<https://gitlab.com/x86-psABIs/x86-64-ABI>). Clang applies the rule to
+/// every x86-64 target but Microsoft's (`TargetInfo::getLargeArrayAlign`,
+/// used by `ASTContext::getDeclAlign`), so MinGW follows it too.
+pub(super) fn variable_alignment(
+    sema: &SemanticTranslationUnit<'_>,
+    target: Target,
+    binding: usize,
+    ty: TypeId,
+) -> Result<Align, LoweringErrorKind> {
+    const LARGE: u64 = 16;
+    let align = storage_alignment(&sema.types, ty)?;
+    let large = match sema.types.kind(ty) {
+        | TypeKind::Array(_, ArrayBound::Incomplete) => false,
+        | TypeKind::Array(..) => sema
+            .types
+            .layout(ty)
+            .is_none_or(|layout| layout.size >= LARGE),
+        | _ => false,
+    };
+    if !large
+        || target == Target::WindowsMsvc
+        || sema
+            .entity_attributes(binding)
+            .is_some_and(|attributes| attributes.declared_alignment)
+    {
+        return Ok(align);
+    }
+    let minimum = Align::from_bytes(LARGE).expect("16 is a power of two");
+    Ok(if align.bytes() < LARGE {
+        minimum
+    } else {
+        align
+    })
 }
 
 /// The language producer includes variable arrays and declaration overrides.

@@ -188,3 +188,117 @@ fn clang_ir(name: &str, source: &str, target: Target) -> String {
     );
     String::from_utf8(output.stdout).unwrap()
 }
+
+/// Array variables of at least 16 bytes for the System V large-array rule
+/// (#69), with the alignment Clang 23 gives each on the GNU targets and on
+/// MSVC (whose own minimum global alignment is not modeled).
+const LARGE_ARRAYS: &str = "\
+char g16[16]; char g15[15]; char gi[4][4]; struct M { char a[32]; } gm;
+char ga[32] __attribute__((aligned(2))); _Alignas(4) char gb[32];
+typedef char C1 __attribute__((aligned(1))); C1 gt[64];
+extern char ext[16]; char *use_ext(void) { return ext; }
+_Static_assert(_Alignof(char[32]) == 1, \"the C type keeps its alignment\");
+void use(char *);
+void f(int n) {
+  char l16[16]; char l15[15]; static char ls[16]; char vla[n];
+  char lx[32] __attribute__((aligned(2)));
+  use(l16); use(l15); use(ls); use(vla); use(lx);
+}
+";
+
+#[test]
+fn large_array_variables_get_the_psabi_alignment() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        let tu = Bump::new();
+        let arena = Bump::new();
+        let module = lower_c(&tu, &arena, LARGE_ARRAYS, target);
+        let text = module.to_string();
+        let gnu = target != Target::WindowsMsvc;
+        let large = if gnu { 16 } else { 1 };
+        let global = |name: &str| {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&format!("global @{name} ")))
+                .unwrap_or_else(|| panic!("no @{name}\n{text}"));
+            line[line.find(", align ").unwrap() + 8..]
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        };
+        for (name, align) in [
+            ("g16", large),
+            ("g15", 1),
+            ("gi", large),
+            ("gm", 1),
+            ("ga", 2),
+            ("gb", 4),
+            ("gt", large),
+            ("ext", large),
+            ("f.ls", large),
+        ] {
+            assert_eq!(global(name), align, "@{name} for {target:?}\n{text}");
+        }
+        // `l16`, `l15`, `lx`, then the VLA.
+        let body = &text[text.find("function @f(").unwrap()..];
+        let slots: Vec<&str> = body
+            .lines()
+            .filter(|line| line.contains("stack_slot") || line.contains("dyn_alloca"))
+            .collect();
+        let expected = [
+            format!("stack_slot 16, align {large}"),
+            "stack_slot 15, align 1".to_string(),
+            "stack_slot 32, align 2".to_string(),
+            format!("align {large}"),
+        ];
+        for expected in &expected {
+            assert!(
+                slots.iter().any(|line| line.ends_with(expected.as_str())),
+                "{expected} for {target:?}: {slots:?}\n{text}"
+            );
+        }
+    }
+}
+
+/// Clang's code may assume the large-array alignment of an array variable
+/// bcc defines: zeroing it with aligned vector stores faults on a
+/// misaligned object. The bcc side checks its own arrays' addresses too.
+#[test]
+fn large_array_variables_link_with_clang_code_that_assumes_their_alignment() {
+    let bcc = "char pad1 = 1; char g[32] = { 1 }; char pad2 = 2; char h[17];
+static char s[48] = { 3 }; char *s_address(void) { return s; }
+static int misaligned(const void *p) { return (int)((unsigned long)p % 16); }
+int b_check(void) {
+  char local[16]; char tail[24]; char *volatile keep = local; (void)keep;
+  return misaligned(g) || misaligned(h) || misaligned(s) || misaligned(local)
+      || misaligned(tail);
+}";
+    let clang = "extern char g[32], h[17]; char *s_address(void); int b_check(void);
+__attribute__((noinline)) void c_clear(void) {
+  __builtin_memset(g, 0, 32); __builtin_memset(h, 0, 16);
+}
+int main(void) {
+  if (b_check()) return 1;
+  c_clear();
+  return g[0] || g[31] || s_address()[0] != 3;
+}";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for optimized in [false, true] {
+            let tu = Bump::new();
+            let arena = Bump::new();
+            let mut module = lower_c(&tu, &arena, bcc, target);
+            if optimized {
+                _ = optimize(&mut module, &OptimizerOptions::default(), &Bump::new());
+            }
+            lower_abi(&mut module, target, &Bump::new()).unwrap();
+            assert_conforms("large-arrays", target, &module, clang);
+            assert_native_conforms("large-arrays-native", target, &module, clang);
+        }
+    }
+}

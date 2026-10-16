@@ -40,20 +40,30 @@ impl<'tu> SymbolFacts<'tu> {
 
 /// Attributes merged over every declaration of one entity.
 #[derive(Debug, Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent GNU attribute or declaration fact merged per entity."
+)]
 pub(crate) struct EntityAttributes<'tu> {
     /// GNU `weak`: a definition yields to a strong one at link time; an
     /// undefined declaration may stay undefined, with a null address.
-    pub(crate) weak:           bool,
+    pub(crate) weak:               bool,
     /// GNU `section("name")`, from the declaration that wrote it.
-    pub(crate) section:        Option<&'tu str>,
+    pub(crate) section:            Option<&'tu str>,
     /// GNU `used`: emit the definition even if nothing references it.
-    pub(crate) used:           bool,
+    pub(crate) used:               bool,
     /// GNU `aligned` on a function: the alignment of its code, in bytes.
-    pub(crate) code_alignment: u32,
+    pub(crate) code_alignment:     u32,
     /// GNU `visibility`, from the declaration that wrote it.
-    pub(crate) visibility:     Option<Visibility>,
+    pub(crate) visibility:         Option<Visibility>,
     /// GNU `returns_twice`: lowering refuses direct calls to the entity.
-    pub(crate) returns_twice:  bool,
+    pub(crate) returns_twice:      bool,
+    /// A declaration of the object specifies its alignment, by GNU
+    /// `aligned` or `_Alignas`, rather than a typedef: that alignment is the
+    /// object's own, which the System V rule for large arrays does not raise
+    /// (as in Clang, `ASTContext::getDeclAlign`).
+    /// C11: §6.7.5p6, p. 127; PDF p. 145.
+    pub(crate) declared_alignment: bool,
 }
 
 /// ELF symbol visibility; COFF targets ignore it as Clang does.

@@ -15,7 +15,7 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 
 function @f(i32 noundef) -> i32 external {
     slot0 = stack_slot 4, align 4
-    slot1 = stack_slot 16, align 4
+    slot1 = stack_slot 16, align 16
 block0(v0: i32):
     v1 = stack_addr slot0
     store.i32 v0, v1, align 4
@@ -25,7 +25,7 @@ block0(v0: i32):
     call @g(v4)
     v5 = stack_addr slot1
     v6 = iconst.i32 0
-    store.i32 v3, v5, align 4
+    store.i32 v3, v5, align 16
     v7 = stack_addr slot1
     v8 = sext.i64 v0
     v9 = iconst.i64 4
@@ -36,7 +36,7 @@ block0(v0: i32):
     store.i32 v13, v11, align 4
     v14 = stack_addr slot1
     v15 = iconst.i32 0
-    v16 = load.i32 v14, align 4
+    v16 = load.i32 v14, align 16
     v17 = stack_addr slot0
     v18 = load.i32 v17, align 4
     v19 = iadd.i32 nsw v16, v18

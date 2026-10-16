@@ -11,7 +11,7 @@
 target triple = "x86_64-unknown-linux-gnu"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
-global @dispatch.table internal constant size 24, align 8 = bytes "000000000000000000000000000000000000000000000000" relocs [0: blockaddress(@dispatch, label0), 8: blockaddress(@dispatch, label1), 16: blockaddress(@dispatch, label2)]
+global @dispatch.table internal constant size 24, align 16 = bytes "000000000000000000000000000000000000000000000000" relocs [0: blockaddress(@dispatch, label0), 8: blockaddress(@dispatch, label1), 16: blockaddress(@dispatch, label2)]
 global @dispatch.offsets internal constant size 8, align 4 = bytes "0000000000000000" relocs [0: labeldiff.i32(@dispatch, label0, label2), 4: labeldiff.i32(@dispatch, label2, label2)]
 
 function @dispatch(i32 noundef, i32 noundef) -> i32 external {
@@ -47,7 +47,7 @@ block3:
     v23 = iconst.i32 2
     v24 = iconst.i64 16
     v25 = ptr_add inbounds v22, v24
-    v26 = load.ptr v25, align 8
+    v26 = load.ptr v25, align 16
     jump block1(v26, v21)
 block4:
     return v9
