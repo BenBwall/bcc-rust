@@ -297,3 +297,183 @@ fn declspec_align_objects_lower_with_their_alignment() {
     assert!(global.contains("align 1"), "{global}");
     assert!(global.contains("section \".rdata\""), "{global}");
 }
+
+/// Clang 23's MSVC size-based global minima apply to the storage, including
+/// packed records and typedefs, while language alignment queries keep the type.
+#[test]
+fn global_storage_alignment_follows_the_target_size_boundaries() {
+    let source = r#"
+char a1[1], a2[2], a7[7], a8[8], a63[63], a64[64];
+struct Small { char bytes[2]; } small;
+struct R { char c; int n; } record;
+union U { char bytes[63]; } aggregate;
+struct __attribute__((packed)) P { char c; int n; } packed;
+typedef int ByteInt __attribute__((aligned(1)));
+ByteInt inherited;
+short scalar;
+_Static_assert(__alignof__(a2)==1 && __alignof__(a64)==1 && __alignof__(record)==4, "object queries");
+_Static_assert(_Alignof(struct Small)==1 && _Alignof(union U)==1 && _Alignof(struct P)==1, "record queries");
+_Static_assert(__alignof__(inherited)==1 && __alignof__(scalar)==2, "scalar queries");
+"#;
+    for target in [
+        Target::WindowsMsvc,
+        Target::WindowsGnu,
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+    ] {
+        let text = lower_for(source, target).unwrap();
+        for (name, microsoft, gnu) in [
+            ("a1", 1, 1),
+            ("a2", 4, 1),
+            ("a7", 4, 1),
+            ("a8", 8, 1),
+            ("a63", 8, 16),
+            ("a64", 16, 16),
+            ("small", 4, 1),
+            ("record", 8, 4),
+            ("aggregate", 8, 1),
+            ("packed", 4, 1),
+            ("inherited", 4, 1),
+            ("scalar", 4, 2),
+        ] {
+            assert_eq!(
+                global_storage_alignment(&text, name),
+                if target == Target::WindowsMsvc {
+                    microsoft
+                } else {
+                    gnu
+                },
+                "{target:?}: {name}: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_nonzero_alignment_suppresses_target_storage_increases() {
+    let source = r#"
+char implicit[64];
+_Alignas(0) char zero[64];
+_Alignas(1) char standard[64];
+char gnu[64] __attribute__((aligned(1)));
+__declspec(align(1)) char microsoft[64];
+_Alignas(32) char standard32[64];
+__declspec(align(32)) char microsoft32[64];
+struct R { char c; int n; };
+_Alignas(0) struct R zero_record;
+_Alignas(4) struct R standard_record;
+struct R gnu_record __attribute__((aligned(4)));
+__declspec(align(4)) struct R microsoft_record;
+_Static_assert(__alignof__(zero)==1 && __alignof__(standard)==1 && __alignof__(gnu)==1 && __alignof__(microsoft)==1, "small requests");
+_Static_assert(__alignof__(standard32)==32 && __alignof__(microsoft32)==32, "large requests");
+_Static_assert(_Alignof(struct R)==4 && __alignof__(zero_record)==4, "record queries");
+"#;
+    for target in [
+        Target::WindowsMsvc,
+        Target::WindowsGnu,
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+    ] {
+        let text = lower_with(
+            source,
+            crate::configuration::CompilerConfiguration::default()
+                .with_target(target)
+                .with_msvc_extensions(true),
+        )
+        .unwrap();
+        for (name, expected) in [
+            ("implicit", 16),
+            ("zero", 16),
+            ("standard", 1),
+            ("gnu", 1),
+            ("microsoft", 1),
+            ("standard32", 32),
+            ("microsoft32", 32),
+            ("standard_record", 4),
+            ("gnu_record", 4),
+            ("microsoft_record", 4),
+        ] {
+            assert_eq!(
+                global_storage_alignment(&text, name),
+                expected,
+                "{target:?}: {name}: {text}"
+            );
+        }
+        assert_eq!(
+            global_storage_alignment(&text, "zero_record"),
+            if target == Target::WindowsMsvc { 8 } else { 4 },
+            "{target:?}: {text}"
+        );
+    }
+}
+
+#[test]
+fn msvc_global_storage_minima_cover_extern_static_and_thread_objects() {
+    let source = r"
+struct R { char c; int n; };
+static struct R file_static;
+extern struct R declared;
+_Thread_local struct R thread;
+struct R weak __attribute__((weak));
+void sink(void *);
+void f(void) {
+ static struct R local_static;
+ struct R automatic;
+ char bytes[64];
+ sink(&file_static); sink(&declared); sink(&thread); sink(&weak);
+ sink(&local_static); sink(&automatic); sink(bytes);
+}
+";
+    for target in [Target::WindowsMsvc, Target::WindowsGnu, Target::LinuxGnu] {
+        let text = lower_for(source, target).unwrap();
+        let expected = if target == Target::WindowsMsvc { 8 } else { 4 };
+        for name in ["file_static", "declared", "thread", "weak"] {
+            assert_eq!(
+                global_storage_alignment(&text, name),
+                expected,
+                "{target:?}: {name}: {text}"
+            );
+        }
+        let local = text
+            .lines()
+            .find(|line| line.starts_with("global @") && line.contains("local_static"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(
+            written_storage_alignment(local),
+            expected,
+            "{target:?}: {local}"
+        );
+        assert!(
+            text.contains("stack_slot 8, align 4\n"),
+            "{target:?}: {text}"
+        );
+        assert!(
+            text.contains(if target == Target::WindowsMsvc {
+                "stack_slot 64, align 1\n"
+            } else {
+                "stack_slot 64, align 16\n"
+            }),
+            "{target:?}: {text}"
+        );
+    }
+}
+
+fn global_storage_alignment(text: &str, name: &str) -> u64 {
+    let prefix = format!("global @{name} ");
+    let line = text
+        .lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("{name}: {text}"));
+    written_storage_alignment(line)
+}
+
+fn written_storage_alignment(line: &str) -> u64 {
+    line.split_once(", align ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
