@@ -267,6 +267,11 @@ pub(crate) enum ScopeKind {
 pub(crate) enum DefinitionKind {
     Object,
     Function,
+    /// A Microsoft external inline body, emitted when reached or retained.
+    /// It is not a C99 inline-only definition and keeps the target's
+    /// exemption from §6.7.4p3 and p6, pp. 112-113; PDF pp. 124-125.
+    /// Microsoft ABI extension under C99 §4p6, p. 7; PDF p. 19.
+    DiscardableFunction,
     Inline,
     Tentative,
     /// The contents of `__func__` and `__FUNCTION__`: the function's name, or

@@ -1089,7 +1089,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut init_functions = ArenaVec::new_in(tu);
         for index in 0..self.definitions.len() {
             let definition = self.definitions[index];
-            if definition.kind != super::super::DefinitionKind::Function {
+            if !matches!(
+                definition.kind,
+                super::super::DefinitionKind::Function
+                    | super::super::DefinitionKind::DiscardableFunction
+            ) {
                 continue;
             }
             let entity = self.entity_of(definition.binding);

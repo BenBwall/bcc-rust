@@ -605,9 +605,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let definition = self.definitions[i];
             if definition.kind == DefinitionKind::Function
                 && self.bindings[definition.binding].linkage == Linkage::External
-                && self.is_inline_definition(definition.binding)
+                && self.inline_only_declarations(definition.binding)
             {
-                self.definitions[i].kind = DefinitionKind::Inline;
+                // Microsoft inline bodies remain callable external
+                // definitions, but an unused plain inline body is
+                // discardable, as in Clang's basicGVALinkageForFunction.
+                // C99 §6.7.4p6, pp. 112-113; PDF pp. 124-125;
+                // Microsoft ABI extension under §4p6, p. 7; PDF p. 19.
+                self.definitions[i].kind =
+                    if self.context.configuration.target().c99_inline_definitions() {
+                        DefinitionKind::Inline
+                    } else {
+                        DefinitionKind::DiscardableFunction
+                    };
             }
         }
         self.definitions.sort_unstable_by_key(|d| d.binding);
@@ -1341,13 +1351,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// emits inline functions as external definitions.
     fn is_inline_definition(&self, binding: usize) -> bool {
         self.context.configuration.target().c99_inline_definitions()
-            && self
-                .functions
-                .entities
-                .get(&self.function_identity(binding))
-                .is_some_and(|e| {
-                    !e.non_inline && !e.gnu_inline && !self.context.configuration.gnu89_inline()
-                })
+            && self.inline_only_declarations(binding)
+    }
+
+    /// Whether every file-scope declaration selects a C99 inline-only
+    /// body, independently of the target's external-inline ABI rule.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    fn inline_only_declarations(&self, binding: usize) -> bool {
+        self.functions
+            .entities
+            .get(&self.function_identity(binding))
+            .is_some_and(|e| {
+                !e.non_inline && !e.gnu_inline && !self.context.configuration.gnu89_inline()
+            })
     }
 
     /// Clang permits replacing a GNU extern inline declaration.

@@ -73,7 +73,13 @@ mod tests {
                     "gnu89-extern-inline",
                     "extern inline int f(void) { return 1; }",
                     "gnu89",
-                    vec!["main"],
+                    // MSVC keeps mode-selected GNU89 inline definitions;
+                    // explicit gnu_inline has its own body-omission rule.
+                    if target == "x86_64-pc-windows-msvc" {
+                        vec!["f", "main"]
+                    } else {
+                        vec!["main"]
+                    },
                 ),
                 (
                     "c99-inline",

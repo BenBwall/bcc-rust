@@ -13,16 +13,18 @@ use super::{
 };
 
 impl<'a> Unit<'a, '_, '_> {
-    /// External definitions are roots, and so are constructors, destructors,
-    /// aliases and their targets, and `used` entities. Internal objects and
-    /// functions are reached through references from emitted definitions
-    /// and initializers.
+    /// Nondiscardable external definitions are roots, and so are constructors,
+    /// destructors, aliases and their targets, and `used` entities. Internal
+    /// objects, functions and discardable Microsoft inline bodies are reached
+    /// through references from emitted definitions and initializers.
     /// Inline-only bodies supply no external definition, even when referenced:
     /// at O0 calls and addresses continue to name the external declaration.
     /// A private `always_inline` body is emitted when reached, so its own
     /// references, such as another private body or a static helper, are.
     /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p3-5,
     /// p. 140; PDF p. 152. GNU extern inline follows the same emission policy.
+    /// Microsoft discardable bodies retain their callable external definition
+    /// when reached; this is an ABI extension under §4p6, p. 7; PDF p. 19.
     pub(super) fn reachable_items(&self) -> ArenaSet<'a, usize> {
         let mut entities = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
         let mut canonical = ArenaVec::new_in(self.tables);
@@ -50,7 +52,10 @@ impl<'a> Unit<'a, '_, '_> {
         let mut work = ArenaVec::new_in(self.tables);
         for definition in self.sema.definitions {
             let binding = self.sema.bindings[definition.binding];
-            if definition.kind == DefinitionKind::Inline {
+            if matches!(
+                definition.kind,
+                DefinitionKind::Inline | DefinitionKind::DiscardableFunction
+            ) {
                 continue;
             }
             if binding.linkage == Linkage::External {

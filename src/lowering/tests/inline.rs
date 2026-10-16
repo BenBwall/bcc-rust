@@ -8,7 +8,7 @@ use crate::configuration::{
 };
 
 fn has_body(source: &str, config: CompilerConfiguration) -> bool {
-    let text = lower_with(source, config).unwrap();
+    let text = lower_with(source, config).unwrap_or_else(|error| panic!("{source}: {error:?}"));
     let arena = Bump::new();
     let module = parse_module(&arena, &text).unwrap();
     let Some(crate::ir::Symbol::Function(id)) = module.symbol("f") else {
@@ -48,6 +48,108 @@ fn inline_emission_uses_the_effective_mode_and_all_c99_declarations() {
                 ),
             ] {
                 assert_eq!(has_body(source, config), defined, "gnu89={gnu89}: {source}");
+            }
+        }
+    }
+}
+
+/// The Microsoft ABI may discard an unused C99-mode inline body while
+/// retaining its callable definition and dependencies when reached.
+#[test]
+fn msvc_c99_inline_bodies_follow_reachability_and_retention_attributes() {
+    let config = CompilerConfiguration::default().with_target(Target::WindowsMsvc);
+    for (source, defined) in [
+        ("inline int f(void) { return 7; }", false),
+        (
+            "inline int f(void) { return 7; } int main(void) { return f(); }",
+            true,
+        ),
+        ("inline int f(void) { return 7; } int (*p)(void) = f;", true),
+        (
+            "__attribute__((used)) inline int f(void) { return 7; }",
+            true,
+        ),
+        ("__attribute__((constructor)) inline void f(void) {}", true),
+        ("__attribute__((destructor)) inline void f(void) {}", true),
+        (
+            "extern inline int f(void) { return 7; } int other(void) \
+             __attribute__((alias(\"f\")));",
+            true,
+        ),
+        ("int f(void); inline int f(void) { return 7; }", true),
+        ("inline int f(void) { return 7; } int f(void);", true),
+        (
+            "extern inline int f(void); inline int f(void) { return 7; }",
+            true,
+        ),
+        (
+            "inline int f(void) { return 7; } extern inline int f(void);",
+            true,
+        ),
+        (
+            "inline int f(void) { static int x = 7; return x; } int main(void) { return f(); }",
+            true,
+        ),
+    ] {
+        assert_eq!(has_body(source, config), defined, "{source}");
+    }
+    for called in [false, true] {
+        let source = format!(
+            "static int helper(void) {{ return 7; }} inline int f(void) {{ return helper(); }} \
+             static int dead(void) {{ return f(); }} int main(void) {{ return {}; }}",
+            if called { "f()" } else { "0" }
+        );
+        let text = lower_with(&source, config).unwrap();
+        let arena = Bump::new();
+        let module = parse_module(&arena, &text).unwrap();
+        for name in ["f", "helper"] {
+            assert_eq!(
+                module.symbol(name).is_some(),
+                called,
+                "called={called} {name}: {text}"
+            );
+        }
+        assert!(module.symbol("dead").is_none(), "{text}");
+    }
+}
+
+/// Discarding a Microsoft C99-mode body must not change GNU89 or explicit
+/// `gnu_inline` emission, including explicit mode overrides before C99.
+#[test]
+fn msvc_discardable_inline_keeps_gnu_modes_and_attributes() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
+            for gnu89 in [false, true] {
+                let config = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                    .with_target(target)
+                    .with_gnu_extensions(true)
+                    .with_gnu89_inline(gnu89);
+                for (source, defined) in [
+                    ("inline int f(void) { return 7; }", gnu89),
+                    (
+                        "extern inline int f(void) { return 7; }",
+                        target == Target::WindowsMsvc || !gnu89,
+                    ),
+                    (
+                        "inline __attribute__((gnu_inline)) int f(void) { return 7; }",
+                        true,
+                    ),
+                    (
+                        "extern inline __attribute__((gnu_inline)) int f(void) { return 7; }",
+                        false,
+                    ),
+                ] {
+                    assert_eq!(
+                        has_body(source, config),
+                        defined,
+                        "{target:?} {standard:?} gnu89={gnu89}: {source}"
+                    );
+                }
             }
         }
     }
