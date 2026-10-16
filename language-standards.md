@@ -147,7 +147,10 @@ and scalar `mode` retain their layouts and representation types. GNU
 prototyped call pass an argument of a member's type as the union, selecting
 the member as Clang does; a union with no member, a floating or vector first
 member, or a member of another size or a stricter alignment ignores the
-attribute with Clang's warning.
+attribute with Clang's warning, as do the positions where it names no union
+definition. On System V such an argument takes its first member's registers
+and extension, and the whole union's stack slot once they are taken; Win64
+passes the whole union.
 
 Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
 in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the

@@ -891,7 +891,16 @@ memory as arguments and come back in ST0 (`registers(f80)`). `va_arg` follows
 psABI §3.5.7 for integers, pointers, `f32`, `f64`, `i128`, `f80` and `f128`.
 Every narrow integer argument and result is widened to 32 bits, signed ones with
 `signext` and unsigned ones and `_Bool` with `zeroext`: the psABI leaves those
-bits unspecified, but Clang widens them and relies on it.
+bits unspecified, but Clang widens them and relies on it. A GNU
+`transparent_union` argument is classified as its first member, as GCC and
+Clang do: its `aggregate(...)` descriptor keeps the union's size and alignment
+and adds `first(size N[, extension])` with the member's scalars, so it takes the
+member's registers (a narrow integer member with its extension) and, once
+they are taken, goes on the stack, and through `va_arg`'s overflow area, as the
+whole union. Lowering also gives an array variable of at least 16 bytes, or of
+variable length, 16-byte storage on the GNU targets unless its declaration
+specifies an alignment (psABI §3.1.2), without changing the C type's
+alignment.
 
 **Win64** (both Windows targets): aggregates of 1, 2, 4 or 8 bytes without a
 flexible array member travel as integers of that size and come back in RAX;
@@ -1112,7 +1121,7 @@ library is left to the linker to reject.
 | 5 | Optimizer prototype: fold, DCE, CFG simplification; `--passes` | arms A0-A3 run on a small benchmark set |
 | 6 | Floats, switch, globals with initializers, varargs, ABI lowering for x86-64 SysV and Win64 | GCC torture `execute` subset passes |
 | 7 | SCCP, GVN, LICM, inlining, slot promotion; comparison harness | first optimizer-vs-LLVM report |
-| 8 | Native back end, stage 1 (integer code) | see [docs/design/native-backend.md](docs/design/native-backend.md) |
+| 8 | Native back end: integer, variadic, dynamic-stack and float code (stages 1-3 of its design) | see [docs/design/native-backend.md](docs/design/native-backend.md), "Staged roadmap", which tracks each stage's status |
 
 Stage 7 status: promotion, SCCP, GVN, LICM and bottom-up inlining exist
 (the prototype pipeline above). The comparison harness exists:

@@ -190,7 +190,11 @@ A union that qualifies for GNU `transparent_union` records `Tag::transparent`;
 a prototyped call whose argument does not have the union type converts it to
 the first member it fits, as Clang selects one, and records an assignment
 conversion to that member followed by a `TransparentUnion` conversion, which
-lowering turns into a union temporary holding the value.
+lowering turns into a union temporary holding the value. The attribute written
+elsewhere is ignored with Clang's warnings: on a union specifier that does not
+define the union, on a structure or enumeration, on an object, function,
+parameter or member, and among the specifiers of a declaration that declares
+only a tag.
 Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
 matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
 an entire reserved storage unit only when their base-type sizes match and they
@@ -613,15 +617,29 @@ Designators reset the current path relative to the containing brace pair.
 Unions initialize one selected member; unnamed bit-fields do not consume
 ordinary initializer positions. As a GNU extension (`FlexibleArrayInitializers`),
 a static object's own list may give its flexible array member elements: the
-binding records the member's completed array type
-(`SemanticTranslationUnit::flexible_array`) and its storage size
-(`flexible_object_size`), the larger of the structure's size and the member's
-end, while its type and `sizeof` stay the structure's. A later list for the
-member overrides an earlier one (§6.7.8p19) but keeps the larger extent, where
-Clang allocates only the last. An empty list may initialize any flexible array
-member, as in Clang; any other initializer of one, in an automatic object, a
-compound literal, a nested structure or through a designator into its
-elements, is an error. Excess elements,
+binding records a `FlexibleArray` (`SemanticTranslationUnit::flexible_array`)
+with the member's completed array type and an array type with room for every
+element any initializer of it writes, and its storage size
+(`flexible_object_size`), the larger of the structure's size and the completed
+member's end, while its type and `sizeof` stay the structure's. A later list or
+string for the whole member overrides the earlier ones (§6.7.8p19), so the
+object ends with the last one's extent as in Clang; an element brace elision
+reaches replaces only that element. Lowering writes the initializer into a
+buffer of the written extent and cuts it to the storage size. An empty list may
+initialize any flexible array member, as in Clang; any other initializer of
+one, in an automatic object, a compound literal or a nested structure, is an
+error. A designator naming the member takes only a brace-enclosed list or a
+string literal ("flexible array requires brace-enclosed initializer"), and a
+designator into its elements is an error at that designator ("designator into
+flexible array member subobject"), both with Clang's note at the member.
+`initializers/overrides.rs` records which subobjects each initializer has
+written and reports Clang's `-Winitializer-overrides` warnings (group
+`initializer-overrides`): a replaced subobject at the new initializer, a write
+inside a subobject an expression initialized whole at the designator that
+enters it (for every such write), and a replaced union member at the element,
+each noting the earlier initializer. Elements of a GNU range share their
+initializer's history; a range of more than 65,536 elements records only its
+last element. Excess elements,
 incompatible scalar values and invalid designators have structured diagnostics.
 Narrow/wide strings initialize their matching character arrays, with optional
 braces and the permitted omitted terminator in an exactly sized array.
