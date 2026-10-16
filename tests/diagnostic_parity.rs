@@ -57,6 +57,88 @@ mod tests {
     }
 
     #[test]
+    fn dll_attribute_spelling_target_and_warning_groups_match_clang() {
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-unknown-linux-musl",
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            let windows = target.contains("windows");
+            for name in ["dllimport", "dllexport", "__dllimport__", "__dllexport__"] {
+                for (source, group, other) in [
+                    (
+                        format!("__declspec({name}) extern int value;\n"),
+                        "ignored-attributes",
+                        "unknown-attributes",
+                    ),
+                    (
+                        format!("__attribute__(({name})) extern int value;\n"),
+                        "unknown-attributes",
+                        "ignored-attributes",
+                    ),
+                ] {
+                    // Clang ignores wrapped declspec names on Windows;
+                    // bcc's existing normalization there is separate policy.
+                    if windows && name.starts_with("__") && group == "ignored-attributes" {
+                        continue;
+                    }
+                    let tag = format!("-W{group}]");
+                    for (option, warning, error) in [
+                        (String::new(), !windows, false),
+                        (format!("-Wno-{group}"), false, false),
+                        (format!("-Wno-{other}"), !windows, false),
+                        (format!("-Werror={group}"), false, !windows),
+                    ] {
+                        let mut flags = vec!["-std=c17", "-fms-extensions", target];
+                        if !option.is_empty() {
+                            flags.push(option.as_str());
+                        }
+                        for output in [bcc(&source, &flags), clang(&source, &flags)] {
+                            let text = String::from_utf8_lossy(&output.stderr);
+                            assert_eq!(
+                                output.status.success(),
+                                !error,
+                                "{source} {flags:?}: {text}"
+                            );
+                            assert_eq!(
+                                text.contains("warning:"),
+                                warning,
+                                "{source} {flags:?}: {text}"
+                            );
+                            assert_eq!(
+                                text.contains("error:"),
+                                error,
+                                "{source} {flags:?}: {text}"
+                            );
+                            assert_eq!(
+                                text.contains(&tag),
+                                warning || error,
+                                "{source} {flags:?}: {text}"
+                            );
+                        }
+                    }
+                }
+            }
+            // Policy for an unsupported declspec does not make GNU/query
+            // spellings available outside Windows.
+            let available = usize::from(windows);
+            let source = format!(
+                "#if __has_attribute(dllimport) != {available} || __has_attribute(dllexport) != \
+                 {available} || __has_c_attribute(gnu::dllimport) != {available} || \
+                 __has_c_attribute(gnu::dllexport) != {available}\n#error wrong attribute \
+                 availability\n#endif\nint value;\n"
+            );
+            let flags = ["-std=c17", "-fms-extensions", target];
+            for output in [bcc(&source, &flags), clang(&source, &flags)] {
+                let text = String::from_utf8_lossy(&output.stderr);
+                assert!(output.status.success(), "{target}: {text}");
+                assert!(!text.contains("warning:"), "{target}: {text}");
+            }
+        }
+    }
+
+    #[test]
     fn issue54_constraints_and_warning_groups_match_pinned_clang() {
         for (source, standard, group, error) in [
             ("void f(void){int i; i=nullptr;}\n", "c23", "", true),

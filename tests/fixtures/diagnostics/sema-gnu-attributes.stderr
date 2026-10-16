@@ -1,4 +1,4 @@
-warning: unknown attribute ignored: `frobnicate`
+warning: unknown attribute ignored: `frobnicate` [-Wunknown-attributes]
  --> sema-gnu-attributes.c:2:16
   |
 2 | __attribute__((frobnicate)) int unknown;
@@ -14,7 +14,7 @@ error: weak declaration cannot have internal linkage
   |
   = note: GCC Common Function Attributes: weak makes an external symbol overridable; internal and automatic identifiers have no external symbol
 
-warning: attribute ignored: `weak`
+warning: attribute ignored: `weak` [-Wignored-attributes]
  --> sema-gnu-attributes.c:4:38
   |
 4 | typedef int weak_type __attribute__((weak));
@@ -46,7 +46,7 @@ error: constructor and destructor priorities must be integers from 0 to 65535: `
    |
    = note: GCC Common Function Attributes: priorities are integers from 0 to 65535 inclusive
 
-warning: attribute ignored: `constructor`
+warning: attribute ignored: `constructor` [-Wignored-attributes]
   --> sema-gnu-attributes.c:15:16
    |
 15 | __attribute__((constructor)) int not_a_function;

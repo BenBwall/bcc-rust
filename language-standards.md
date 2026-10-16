@@ -1322,14 +1322,19 @@ in `semantic_analysis/attributes/catalog.rs`, under the spellings bundled
 Clang knows for the target (`catalog/spellings.rs`, read from the pinned
 Clang): GCC's attributes take `[[gnu::...]]` and Clang's own `[[clang::...]]`,
 so `[[clang::weak]]` and `[[gnu::overloadable]]` are unknown;
-`dllimport`, `dllexport` and `guard` exist only on the Windows targets and
-`ifunc` only for glibc. Unknown names warn as Clang's `-Wunknown-attributes`
+GNU and `gnu::` `dllimport`, `dllexport` and `guard` exist only on the
+Windows targets and `ifunc` only for glibc. Non-Windows
+`__declspec(dllimport)` and `__declspec(dllexport)` warn under
+`-Wignored-attributes`; their GNU spellings remain unknown, and attribute
+availability queries remain zero. Unknown names warn as Clang's `-Wunknown-attributes`
 ("unknown attribute ignored"); a vendor prefix other than `gnu::` or
 `clang::` is unknown, as in Clang. GCC attributes Clang lacks that bcc
 accepts (`noipa`, `access`, `optimize` and others in the table) keep their
 GNU and `gnu::` spellings, while `__has_attribute` answers Clang's 0 for
-them. Warnings are withheld inside system headers, so library headers stay
-quiet.
+them. Unknown-attribute and dropped-attribute warnings follow
+`-Wno-unknown-attributes` and `-Wno-ignored-attributes`, respectively, and
+the matching `-Werror=` options. Warnings are withheld inside system headers,
+so library headers stay quiet.
 
 An attribute that a redeclaration adds after the entity's function body or
 initialized definition is ignored with Clang's "attribute declaration must
@@ -1436,8 +1441,9 @@ later initialized declaration is a redefinition and the type must be
 complete), `thread` is thread storage
 duration (also in the GNU spelling MinGW's `__declspec` macro produces; see
 the thread-local storage notes), `naked` is refused, `noinline` is the GNU
-attribute, and `dllimport`, `dllexport`, `noreturn`, `nothrow`,
-`deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
+attribute, and `dllimport` and `dllexport` are accepted on Windows and
+warn as ignored on other targets. `noreturn`, `nothrow`, `deprecated`,
+`restrict`, `noalias`, `novtable`, `uuid` and similar
 declaration annotations are accepted. Space-separated modifiers, as in
 `__declspec(selectany allocate("s"))`, are one list. Other names, such as the
 GNU `__declspec(weak)`, warn as Clang's unsupported `__declspec` attributes.

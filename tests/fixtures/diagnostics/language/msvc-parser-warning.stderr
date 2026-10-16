@@ -4,6 +4,14 @@ warning: '__declspec' is an MSVC extension [-Wpedantic]
 1 | __declspec(dllexport align(16)) unsigned __int64 wide;
   | ^^^^^^^^^^
 
+warning: attribute ignored: `dllexport` [-Wignored-attributes]
+ --> <input>:1:12
+  |
+1 | __declspec(dllexport align(16)) unsigned __int64 wide;
+  |            ^^^^^^^^^ attribute ignored here
+  |
+  = note: Clang -Wignored-attributes: the attribute does not apply to this declaration, or bcc drops its effect (see language-standards.md, "Attribute status")
+
 warning: '__int64' is an MSVC extension [-Wpedantic]
  --> <input>:1:42
   |
@@ -118,4 +126,4 @@ warning: 'anonymous tagged struct or union member' is an MSVC extension [-Wpedan
 14 | struct Outer { struct Inner; union Tagged { int field; }; };
    |                                                         ^
 
-20 warnings generated.
+21 warnings generated.

@@ -28,12 +28,12 @@ warning: '__declspec' is an MSVC extension [-Wpedantic]
 4 | [[maybe_unused]] __declspec(dllexport) double _Complex value = VALUE;
   |                  ^^^^^^^^^^
 
-warning: unknown attribute ignored: `dllexport`
+warning: attribute ignored: `dllexport` [-Wignored-attributes]
  --> language-integration-policy.c:4:29
   |
 4 | [[maybe_unused]] __declspec(dllexport) double _Complex value = VALUE;
-  |                             ^^^^^^^^^ unknown attribute
+  |                             ^^^^^^^^^ attribute ignored here
   |
-  = note: Clang -Wunknown-attributes: bcc does not know this attribute and ignores it
+  = note: Clang -Wignored-attributes: the attribute does not apply to this declaration, or bcc drops its effect (see language-standards.md, "Attribute status")
 
 6 warnings generated.

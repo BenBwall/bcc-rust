@@ -80,6 +80,10 @@ impl Analyzer<'_, '_, '_> {
         name: Option<StringCacheId>,
         previous: Option<SourceVectors>,
     ) {
+        if let Some(group) = kind.attribute_group() {
+            self.group_diagnostic(group, kind, source_vectors, name, previous);
+            return;
+        }
         if !self.tainted {
             self.semantic_errors += 1;
             let source_vectors = self.context.file_location(source_vectors);

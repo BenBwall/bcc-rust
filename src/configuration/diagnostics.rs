@@ -165,6 +165,10 @@ diagnostic_groups! {
     UnknownPragmas => Some("unknown-pragmas"), Ignored, false;
     UnknownStdcPragma => Some("unknown-pragmas"), Warning, false;
     UnknownWarningOption => Some("unknown-warning-option"), Warning, false;
+    /// An attribute name unavailable in its spelling on the selected target.
+    UnknownAttributes => Some("unknown-attributes"), Warning, false;
+    /// A recognized attribute whose effect bcc drops.
+    IgnoredAttributes => Some("ignored-attributes"), Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
     /// An initializer that replaces an earlier one for the same subobject

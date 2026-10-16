@@ -118,4 +118,12 @@ error: 'anonymous tagged struct or union member' is an MSVC extension [-Wpedanti
 14 | struct Outer { struct Inner; union Tagged { int field; }; };
    |                                                         ^
 
-20 errors generated.
+warning: attribute ignored: `dllexport` [-Wignored-attributes]
+ --> <input>:1:12
+  |
+1 | __declspec(dllexport align(16)) unsigned __int64 wide;
+  |            ^^^^^^^^^ attribute ignored here
+  |
+  = note: Clang -Wignored-attributes: the attribute does not apply to this declaration, or bcc drops its effect (see language-standards.md, "Attribute status")
+
+20 errors and 1 warning generated.

@@ -514,6 +514,17 @@ pub(crate) enum SemanticErrorKind {
 }
 
 impl SemanticErrorKind {
+    /// Attribute-name policy warnings use Clang's independent suppression
+    /// and severity groups. C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) const fn attribute_group(self) -> Option<crate::configuration::DiagnosticGroup> {
+        use crate::configuration::DiagnosticGroup;
+        match self {
+            | Self::UnknownAttribute => Some(DiagnosticGroup::UnknownAttributes),
+            | Self::IgnoredAttribute => Some(DiagnosticGroup::IgnoredAttributes),
+            | _ => None,
+        }
+    }
+
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
@@ -750,6 +761,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Undef
                     | crate::configuration::DiagnosticGroup::PredefinedOutsideFunction
                     | crate::configuration::DiagnosticGroup::UnknownWarningOption
+                    | crate::configuration::DiagnosticGroup::UnknownAttributes
+                    | crate::configuration::DiagnosticGroup::IgnoredAttributes
                     | crate::configuration::DiagnosticGroup::UnknownStdcPragma
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
@@ -1612,13 +1625,16 @@ impl ToDiagnostic for SemanticError {
         } else {
             message
         };
-        let message = if let SemanticErrorKind::PointerConstraint(group) = self.kind
-            && let Some(group) = group.name()
-        {
-            format_in!(arena, "{message} [-W{group}]")
-        } else {
-            message
+        let group = match self.kind {
+            | SemanticErrorKind::PointerConstraint(group) => Some(group),
+            | _ => self.kind.attribute_group(),
         };
+        let message =
+            if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
+                format_in!(arena, "{message} [-W{group}]")
+            } else {
+                message
+            };
         let mut diagnostic = Explanation::new(arena, message)
             .label(self.kind.label())
             .note(note)

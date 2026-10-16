@@ -1,7 +1,9 @@
 //! What bcc does with each attribute name. Every name bundled Clang knows
 //! for C on the selected x86-64 target has a rule, under exactly the
 //! spellings Clang accepts (`spellings.rs`): `[[gnu::weak]]` is `weak`, but
-//! `[[clang::weak]]` is unknown, as `dllimport` is outside Windows. Other
+//! `[[clang::weak]]` is unknown, as GNU `dllimport` is outside Windows.
+//! Non-Windows `__declspec(dllimport)` and `__declspec(dllexport)` are
+//! recognized but ignored with a warning, as Clang does. Other
 //! names are unknown and warned about, as Clang's `-Wunknown-attributes`
 //! does, except the GCC attributes bcc also accepts, which keep their GNU
 //! and `gnu::` spellings. A rule says whether the attribute's meaning is
@@ -119,6 +121,10 @@ pub(in crate::translation_phases::semantic_analysis) fn rule(
     };
     match (syntax, namespace) {
         | (AttributeSyntax::Standard, None) => standard(name),
+        | (AttributeSyntax::Msvc, None)
+            if matches!(name, "dllimport" | "dllexport")
+                && !matches!(target, Target::WindowsGnu | Target::WindowsMsvc) =>
+            Some(Rule::Ignored),
         | (AttributeSyntax::Msvc, None) => declspec(name).or_else(|| known(Spellings::DECLSPEC)),
         | (AttributeSyntax::Gnu, None) => known(Spellings::GNU),
         | (AttributeSyntax::Standard, Some("gnu")) => known(Spellings::GNU_SCOPE),

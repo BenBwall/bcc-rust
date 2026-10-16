@@ -1,4 +1,4 @@
-error: 'forward reference to an enum type' is a GNU extension
+error: 'forward reference to an enum type' is a GNU extension [-Wpedantic]
  --> sema-enum-incomplete.c:1:1
   |
 1 | enum Missing *p;

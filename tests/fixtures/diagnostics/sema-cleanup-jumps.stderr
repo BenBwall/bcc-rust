@@ -22,7 +22,7 @@ error: cleanup argument is not a function: `object`
    |
    = note: GCC Common Variable Attributes: cleanup names a function to call with the variable's address
 
-warning: attribute ignored: `cleanup`
+warning: attribute ignored: `cleanup` [-Wignored-attributes]
   --> sema-cleanup-jumps.c:10:33
    |
 10 |     static int d __attribute__((cleanup(release)));
