@@ -112,11 +112,15 @@ described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__`, which bcc never
 defines itself, glibc selects Clang's fortify wrappers, which need the
 `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`,
 `enable_if` and `unavailable` attributes. `__has_attribute` reports them as
-Clang does. Their meanings belong to the separate fortify work, whose
-semantics replace these catalog entries on integration; in the attribute
-catalog alone `overloadable` and the two object-size attributes are refused
-and the other three are accepted without meaning, so the fortified headers
-are not supported by the catalog by itself. In MinGW-w64, `__CRT_INLINE` becomes
+Clang does. Semantic analysis retains overload identities and call selection,
+hidden object-size parameters, and deferred call diagnostics; lowering expands
+the hidden arguments and evaluates each written argument once. Object-size
+inference handles fixed objects, interior pointers and modeled dynamic bounds.
+Unmodeled allocation/conditional/compound-literal origins remain unknown, as do
+runtime member and nested-array offsets in subobject modes 1 and 3. Unsupported
+predicate shapes diagnose rather than being discarded. These contracts cover
+the exercised glibc level-2/3 fortify wrappers; full Clang type-generic overload
+resolution remains a separate scope. In MinGW-w64, `__CRT_INLINE` becomes
 `extern inline` with `gnu_inline`, `setjmp` passes `__builtin_frame_address (0)`,
 `intrin.h` always includes the x86 intrinsic headers, the printf and strftime
 format archetypes become Clang's, and `intsafe.h` defines its functions as
@@ -810,10 +814,8 @@ token or directive boundary.
 
 `__has_c_attribute` returns 202311 for the seven standard C23 attributes and
 `_Noreturn`, including double-underscore forms, and 0 for other names. GNU
-`__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
-`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`,
-`noinline`, `gnu_inline`, `transparent_union`, `cleanup`, `constructor`,
-`destructor`, `alias` and `used`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`__has_attribute` reads the pinned Clang attribute catalog, including known
+attributes whose semantics bcc still refuses or ignores; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -823,8 +825,9 @@ Unmodeled names return 0. Clang's `__has_feature` and `__has_extension` share
 `c_generic_selections`, `c_static_assert` and `c_thread_local` are features
 where the C11 feature is native and extensions wherever bcc accepts it, as in
 Clang; `attribute_deprecated_with_message` is a feature in every mode; every
-other name, including Clang features bcc lacks such as `attribute_overloadable`,
-returns 0. These tables describe the
+other name returns 0. In particular, `attribute_overloadable` remains 0:
+the modeled fortify overload contracts do not cover every Clang type-generic
+promotion and fallback. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -1209,10 +1212,10 @@ selection, type classification, and real/imaginary components now have
 semantic types and constant eligibility. The reachable old-GCC glibc
 `tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
 Clang rejects that builtin. No resource `tgmath.h` is supplied for MinGW.
-Clang's resource implementation requires `overloadable` function resolution
-(not provided by the attribute catalog; see the fortify work above for its
-status), and is ambiguous for binary128 calls, so no resource `tgmath.h` is
-supplied either way.
+Clang's resource implementation needs promotion overloads, real/complex
+selection and an unavailable variadic fallback beyond the modeled fortify
+overload contracts, and its binary128 calls are ambiguous. No resource
+`tgmath.h` is supplied.
 
 Binary128 literals are parsed exactly with arena-backed integer rational
 conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,
@@ -1383,12 +1386,13 @@ Implemented meanings, with Clang's applicability diagnostics:
 
 | Status | Attributes |
 | --- | --- |
-| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `returns_twice` (the same retained fact the external-symbol catalog gives `setjmp`, `_setjmp`, `__sigsetjmp`, `vfork` and their MinGW-w64 spellings; the native back end refuses calls to such functions) |
+| Implemented (entity) | `noinline`, `noipa`, `always_inline`, diagnostic `nonnull`, `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `returns_twice` (the same retained fact the external-symbol catalog gives `setjmp`, `_setjmp`, `__sigsetjmp`, `vfork` and their MinGW-w64 spellings; the native back end refuses calls to such functions) |
+| Implemented (call contracts) | `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`, `enable_if`, `unavailable`, `error`, `warning`; unsupported predicate shapes diagnose and unmodeled object-size origins remain unknown |
 | Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
-| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `overloadable`, `cpu_dispatch`, `cpu_specific`, `target_version`, `pass_object_size`, `pass_dynamic_object_size`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
+| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
-| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `always_inline`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `noinline`, `noipa`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, and the C23 standard attributes; see the catalog for the full list |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, and the C23 standard attributes; see the catalog for the full list |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), and MSVC `restrict`, `uuid`, `allocate` through MinGW's `__declspec` macro |
 
 `__declspec` modifiers use the MSVC catalog: `align` stays an unanalyzed
