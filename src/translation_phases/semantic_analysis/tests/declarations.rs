@@ -999,12 +999,25 @@ fn annotation_takes_wide_string_literals() {
     let msvc = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
         .with_target(crate::target::Target::WindowsMsvc)
         .with_msvc_extensions(true);
-    assert_eq!(
-        kinds("void f(void) { __annotation(L\"a\", L\"b\"); }", msvc),
-        []
-    );
-    assert_eq!(
-        kinds("void f(void) { __annotation(L\"a\", \"narrow\"); }", msvc),
-        [SemanticErrorKind::AnnotationArgument]
-    );
+    for target in [crate::target::Target::WindowsMsvc, crate::target::Target::WindowsGnu] {
+        let configuration = msvc.with_target(target);
+        for source in [
+            "void f(void) { __annotation(L\"a\", L\"b\"); }",
+            "void f(void) { __annotation((L\"a\"), (((L\"b\")))); }",
+            "void f(void) { __annotation((L\"a\" L\"b\")); }",
+        ] {
+            assert_eq!(kinds(source, configuration), [], "{target:?}: {source}");
+        }
+        for source in [
+            "void f(void) { __annotation(L\"a\", \"narrow\"); }",
+            "void f(void) { __annotation((L\"a\" + 0)); }",
+            "void f(void) { __annotation(u\"a\"); }",
+        ] {
+            assert_eq!(
+                kinds(source, configuration),
+                [SemanticErrorKind::AnnotationArgument],
+                "{target:?}: {source}"
+            );
+        }
+    }
 }

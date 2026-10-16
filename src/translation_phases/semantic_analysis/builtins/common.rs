@@ -96,8 +96,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Microsoft's `__annotation`.
         if descriptor.type_rule == crate::builtins::TypeRule::WideStrings {
             for &argument in args {
+                let mut literal = argument;
+                while let ExpressionType::Parenthesized { expression } = literal.kind {
+                    literal = expression;
+                }
                 if !matches!(
-                    argument.kind,
+                    literal.kind,
                     ExpressionType::StringLiteral(
                         crate::translation_phases::preprocessing::StringTokenType::WideString(_)
                     )
