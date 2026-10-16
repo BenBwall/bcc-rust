@@ -119,8 +119,11 @@ pub(super) enum Leaf<'tu> {
 }
 
 /// The stores of `initializer` for an object of type `ty`, in source order.
-/// `flexible` is the completed type semantic analysis gave the flexible array
-/// member of a static structure whose initializer fills it (GNU).
+/// `flexible` is the array type semantic analysis gave the flexible array
+/// member of a static structure whose initializer fills it (GNU), with room
+/// for every element the initializer writes, including those a later
+/// initializer of the member replaces; the caller cuts the replaced tail
+/// off the object.
 /// C99: §6.7.8 paragraphs 14-19, pp. 126-127; PDF pp. 138-139.
 pub(super) fn leaves<'tu, 's>(
     sema: &SemanticTranslationUnit<'tu>,
@@ -360,7 +363,7 @@ struct Subobject {
 }
 
 struct Walker<'a, 'tu, 's> {
-    /// The object's structure and the completed type of its flexible array
+    /// The object's structure and the written type of its flexible array
     /// member, which only that structure's own frame reaches.
     flexible:        Option<(TypeId, TypeId)>,
     arena:           &'s Bump,
@@ -519,7 +522,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                     return Ok(None);
                 };
                 // The flexible array member of the object's own structure has
-                // the extent semantic analysis completed; a structure cannot
+                // the extent semantic analysis recorded; a structure cannot
                 // contain itself, so its type alone identifies that frame.
                 // Any other flexible array member keeps its incomplete type,
                 // which only an empty list initializes.

@@ -84,6 +84,9 @@ impl TranslationError<'_> {
                     Some(G::PredefinedOutsideFunction),
                 | semantic_analysis::SemanticErrorKind::UnusedStaticFunction =>
                     Some(G::UnusedFunction),
+                | semantic_analysis::SemanticErrorKind::InitializerOverride
+                | semantic_analysis::SemanticErrorKind::PartialInitializerOverride =>
+                    Some(G::InitializerOverrides),
                 | _ => None,
             },
             | _ => None,

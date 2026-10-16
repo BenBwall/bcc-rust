@@ -3,6 +3,8 @@
 //! `sizeof` stays the structure's. Checked in every interpreter stage on each
 //! target and natively on the host; the expected values are Clang's and
 //! GCC's. Empty lists may initialize any flexible array member, as in Clang.
+//! A later list or string for the member replaces the earlier ones, and the
+//! object ends with the last one's extent (#68).
 //! A thread-local object has global storage too, so Clang accepts its
 //! flexible array initializer as well.
 
@@ -19,6 +21,9 @@ static struct F designated = { .v = { [3] = 9, [1] = 8 }, .n = 2 };
 static struct F empty = { 1, {} };
 static _Thread_local struct F per_thread = { 2, { 5, 6 } };
 static struct F twice = { .v = { 1, 2, 3 }, .n = 1, .v = { 4 } };
+static struct F longer = { .v = { 1 }, .n = 1, .v = { 4, 5, 6 } };
+static struct F elided_after = { .v = { 1, 2, 3 }, .n = 1, 4 };
+static struct S { int n; char t[]; } shorter = { .t = "hello", .t = "x" };
 struct G { struct F f; int after; } nested = { { 1, {} }, 2 };
 struct F *literal = &(struct F){ 4, {} };
 struct Q { int n; struct { short a, b; } v[]; };
@@ -38,12 +43,15 @@ int main(void) {
     if (designated.n != 2 || designated.v[0] || designated.v[1] != 8 || designated.v[3] != 9) return 6;
     if (empty.n != 1 || *p.p != 5 || p.list[0] != &g || p.list[1] || p.list[2] != &f.n) return 7;
     if (local.n != 7 || local.v[1] != 71) return 8;
-    if (twice.n != 1 || twice.v[0] != 4 || twice.v[1] || twice.v[2]) return 9;
+    if (twice.n != 1 || twice.v[0] != 4) return 9;
     if (nested.f.n != 1 || nested.after != 2 || literal->n != 4 || automatic() != 3) return 10;
     if (elided_pairs.v[0].a != 2 || elided_pairs.v[0].b != 3) return 11;
     if (braced_pairs.v[0].b != 5 || braced_pairs.v[1].a != 6 || braced_pairs.v[1].b != 7) return 12;
     if (braced_pairs.v[2].a || braced_pairs.v[3].b != 8) return 13;
     if (per_thread.n != 2 || sum(per_thread.v, 2) != 11) return 14;
+    if (longer.v[0] != 4 || longer.v[2] != 6) return 15;
+    if (elided_after.v[0] != 4 || elided_after.v[1] != 2 || elided_after.v[2] != 3) return 16;
+    if (shorter.t[0] != 'x' || shorter.t[1]) return 17;
     return 0;
 }
 "#;
@@ -55,6 +63,27 @@ fn flexible_array_initializers_extend_static_objects_in_all_stages() {
             let actual = with_module(SOURCE, target, optimize, profile, interpret);
             assert_eq!(actual.0, 0, "{target:?} {optimize} {profile:?}");
         }
+    }
+}
+
+#[test]
+fn the_last_flexible_array_member_initializer_sets_the_storage() {
+    // Clang 23: `twice` takes 8 bytes and `shorter` 6; brace elision after a
+    // list replaces only the elements it reaches (`elided_after`, which
+    // Clang 23 crashes on, keeps the list's three as for a fixed array).
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        with_module(SOURCE, target, false, Profile::PreAbi, |module, _| {
+            let size = |name: &str| {
+                module
+                    .globals()
+                    .find(|(_, global)| global.name == name)
+                    .map(|(_, global)| global.size)
+            };
+            assert_eq!(size("twice"), Some(8), "{module}");
+            assert_eq!(size("longer"), Some(16), "{module}");
+            assert_eq!(size("elided_after"), Some(16), "{module}");
+            assert_eq!(size("shorter"), Some(6), "{module}");
+        });
     }
 }
 

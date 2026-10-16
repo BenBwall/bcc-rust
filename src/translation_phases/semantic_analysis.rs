@@ -122,6 +122,7 @@ pub(crate) use results::{
     DefinitionKind,
     Duration,
     EntityReference,
+    FlexibleArray,
     FunctionRecord,
     Linkage,
     Scope,
@@ -373,6 +374,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     )
                 {
                     self.reject_standard_alignment(d.declaration_specifiers.extensions);
+                }
+                if d.init_declarators.is_empty() {
+                    self.misplaced_transparent_union(d.declaration_specifiers);
                 }
                 for init in d.init_declarators.iter().rev() {
                     if attributes::written_on(d.declaration_specifiers.extensions, init.declarator)
@@ -1735,7 +1739,7 @@ struct Analyzer<'a, 'tu, 's> {
     function_controls:       ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
     expression_indices:      ArenaMap<'s, usize, usize>,
     string_initializers:     ArenaMap<'tu, usize, TypeId>,
-    flexible_arrays:         ArenaMap<'tu, usize, TypeId>,
+    flexible_arrays:         ArenaMap<'tu, usize, FlexibleArray>,
     /// Unions whose definition requests `transparent_union`, until their
     /// completion decides whether they qualify.
     transparent_unions:      ArenaMap<'s, usize, SourceVectors>,

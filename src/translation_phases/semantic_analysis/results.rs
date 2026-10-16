@@ -82,11 +82,11 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// String initializer syntax to its destination element type, independent
     /// of array completion. C99: §6.7.8p14-15, p. 126; PDF p. 138.
     pub(super) string_initializers:  ArenaMap<'tu, usize, TypeId>,
-    /// A static object's binding to the completed type of the flexible
-    /// array member its initializer initializes, which extends the object
-    /// past its structure (GNU extension; C99 §6.7.2.1p16, p. 103; PDF
-    /// p. 115). See [`Self::flexible_array`].
-    pub(super) flexible_arrays:      ArenaMap<'tu, usize, TypeId>,
+    /// A static object's binding to the flexible array member its
+    /// initializer initializes, which extends the object past its structure
+    /// (GNU extension; C99 §6.7.2.1p16, p. 103; PDF p. 115). See
+    /// [`Self::flexible_array`].
+    pub(super) flexible_arrays:      ArenaMap<'tu, usize, FlexibleArray>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
     pub(crate) conversions:          &'tu [Conversion<'tu>],
@@ -121,6 +121,24 @@ pub(crate) struct BoundSiteFacts<'tu> {
     /// New runtime-bound identities at this written site, in type order.
     pub(crate) bounds:              &'tu [usize],
     pub(crate) operand_evaluations: &'tu [&'tu Expression<'tu>],
+}
+
+/// The flexible array member a static object's initializer gives elements.
+/// GNU extension: GCC manual, "Arrays of Length Zero".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
+/// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115; §6.7.8 paragraph 19,
+/// p. 127; PDF p. 139.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FlexibleArray {
+    /// The member's completed array type: the extent the last initializer
+    /// of the whole member gives it, extended by elements brace elision
+    /// reaches after it. The object's storage ends with it, as GCC and
+    /// Clang allocate it.
+    pub(crate) completed: TypeId,
+    /// An array type with room for every element any initializer of the
+    /// member writes, including those a later one overrides, at least as
+    /// long as `completed`.
+    pub(crate) written:   TypeId,
 }
 
 /// A resolved declaration occurrence, retained in lexical traversal order.
@@ -316,13 +334,12 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             .copied()
     }
 
-    /// The completed array type of the flexible array member that the
-    /// initializer of static object `binding` initializes. The object's
-    /// storage extends to the end of that array; its type and `sizeof` stay
-    /// the structure's.
+    /// The flexible array member that the initializer of static object
+    /// `binding` initializes. The object's storage extends to the end of its
+    /// completed array; its type and `sizeof` stay the structure's.
     /// GNU extension: GCC manual, "Arrays of Length Zero".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
-    pub(crate) fn flexible_array(&self, binding: usize) -> Option<TypeId> {
+    pub(crate) fn flexible_array(&self, binding: usize) -> Option<FlexibleArray> {
         self.flexible_arrays.get(&binding).copied()
     }
 
@@ -332,7 +349,13 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// and Clang allocate it. `None` for every other object, whose storage
     /// is its type's size.
     pub(crate) fn flexible_object_size(&self, binding: usize) -> Option<u64> {
-        let array = self.flexible_array(binding)?;
+        let array = self.flexible_array(binding)?.completed;
+        self.flexible_extent(binding, array)
+    }
+
+    /// The bytes static object `binding` needs to hold its flexible array
+    /// member as type `array`, or its structure if that is larger.
+    fn flexible_extent(&self, binding: usize, array: TypeId) -> Option<u64> {
         let ty = self.bindings.get(binding)?.ty;
         let size = self.types.layout(ty)?.size;
         let member = self.types.tag(ty)?.members.get().last()?;

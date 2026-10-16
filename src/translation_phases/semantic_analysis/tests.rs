@@ -723,5 +723,6 @@ mod expression_regressions;
 mod expressions;
 mod flexible_initializers;
 mod function_regressions;
+mod initializer_overrides;
 mod operand_regressions;
 mod statements;

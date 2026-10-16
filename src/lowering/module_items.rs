@@ -129,8 +129,10 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// One static object per file-scope compound literal syntax node. New
     /// initializers join the explicit queue, never recursively lower syntax.
     compound_literals: ArenaMap<'a, usize, GlobalId>,
-    /// Static objects to define: global, type, initializer and the
-    /// completed type of a flexible array member the initializer fills.
+    /// Static objects to define: global, type, initializer and, for a
+    /// flexible array member the initializer fills, the array type with
+    /// room for every element it writes
+    /// ([`FlexibleArray`](crate::translation_phases::semantic_analysis::FlexibleArray)).
     static_initializers: ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>, Option<TypeId>)>,
     /// Next candidate for a string literal's internal symbol.
     next_string_suffix: u64,
@@ -609,7 +611,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     global,
                     data.ty,
                     initializer,
-                    self.sema.flexible_array(binding),
+                    self.sema.flexible_array(binding).map(|array| array.written),
                 ));
                 self.define_static_initializers()?;
             },
@@ -937,8 +939,19 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let length = usize::try_from(size).map_err(|_| {
             LoweringError::unsupported(Construct::StaticInitializer, initializer.source_vectors)
         })?;
-        let mut bytes = ArenaVec::with_capacity_in(length, tables);
-        bytes.resize(length, 0_u8);
+        // GNU: an initializer of a flexible array member that a later list
+        // or string replaces may write past the storage the replacement
+        // gives the member (§6.7.8p19). Those bytes are written into a
+        // longer buffer, which the replacement zeroes, and cut off.
+        let written = flexible
+            .and_then(|array| {
+                let member = self.sema.types.tag(ty)?.members.get().last()?;
+                let array = self.sema.types.layout(array)?;
+                usize::try_from(member.offset.checked_add(array.size)?).ok()
+            })
+            .map_or(length, |written| written.max(length));
+        let mut bytes = ArenaVec::with_capacity_in(written, tables);
+        bytes.resize(written, 0_u8);
         let mut relocations = ArenaVec::new_in(tables);
         for leaf in leaves {
             match leaf {
@@ -989,6 +1002,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     )),
             }
         }
+        bytes.truncate(length);
+        relocations.retain(|relocation| relocation.offset + relocation.size() <= size);
         Ok((bytes, relocations))
     }
 

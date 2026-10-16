@@ -30,6 +30,8 @@ fn transparent_unions_qualify_and_convert_arguments_as_in_clang() {
     use SemanticErrorKind::{
         IgnoredTransparentUnion as Ignored,
         InvalidArgumentType as Invalid,
+        TransparentUnionNotDefinition as NotDefinition,
+        TransparentUnionNotUnion as NotUnion,
     };
     // Every position Clang accepts, the unions it ignores and the arguments
     // it rejects; the expected positions are Clang's, which also warns twice
@@ -73,9 +75,64 @@ typedef int *not_union_t __attribute__((transparent_union));";
             (Invalid, 18, 6),
             (Invalid, 19, 6),
             (Invalid, 20, 6),
-            (Ignored, 22, 23),
-            (Ignored, 24, 41),
-            (Ignored, 25, 41),
+            (NotUnion, 22, 23),
+            (NotDefinition, 24, 41),
+            (NotUnion, 25, 41),
+        ]
+    );
+}
+
+#[test]
+fn inapplicable_transparent_union_attributes_warn_as_in_clang() {
+    use SemanticErrorKind::{
+        InvalidArgumentType as Invalid,
+        TransparentUnionNotDefinition as NotDefinition,
+        TransparentUnionNotUnion as NotUnion,
+        TransparentUnionPlacement as Placement,
+    };
+
+    use super::super::types::TagKind;
+    // Clang 23's warnings and positions; Clang repeats the warnings of
+    // lines 11-13 once more. Only `union U3` becomes transparent: `h7` and
+    // `h2` reject a pointer argument.
+    let source = "union U1 __attribute__((transparent_union));
+union U2 { int *a; long *b; };
+union U2 __attribute__((transparent_union));
+union U3 { int *a; long *b; } __attribute__((transparent_union)) u3var;
+union U4 { int *a; long *b; } u4 __attribute__((transparent_union));
+int x __attribute__((transparent_union));
+__attribute__((transparent_union)) int x3;
+void f(int p __attribute__((transparent_union)));
+int g(void) __attribute__((transparent_union));
+struct S2 { int a __attribute__((transparent_union)); };
+union __attribute__((transparent_union)) U5;
+union __attribute__((transparent_union)) U6 *ptr;
+typedef union __attribute__((transparent_union)) U2 T2;
+__attribute__((transparent_union)) union U7 { int *a; };
+struct S3 { int a; };
+struct S3 __attribute__((transparent_union));
+enum __attribute__((transparent_union)) E { A };
+void h3(union U3 u); void h7(union U7 u); void h2(T2 u);
+void k(int *p) { h3(p); h7(p); h2(p); }";
+    assert_eq!(
+        diagnostics(source),
+        [
+            (Placement(TagKind::Union), 1, 25),
+            (Placement(TagKind::Union), 3, 25),
+            (NotUnion, 5, 49),
+            (NotUnion, 6, 22),
+            (NotUnion, 7, 16),
+            (NotUnion, 8, 29),
+            (NotUnion, 9, 28),
+            (NotUnion, 10, 34),
+            (NotDefinition, 11, 22),
+            (NotDefinition, 12, 22),
+            (NotDefinition, 13, 30),
+            (Placement(TagKind::Union), 14, 16),
+            (Placement(TagKind::Struct), 16, 26),
+            (NotUnion, 17, 21),
+            (Invalid, 19, 28),
+            (Invalid, 19, 35),
         ]
     );
 }

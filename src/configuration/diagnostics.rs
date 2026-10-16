@@ -167,6 +167,9 @@ diagnostic_groups! {
     UnknownWarningOption => Some("unknown-warning-option"), Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
+    /// An initializer that replaces an earlier one for the same subobject
+    /// (C99 §6.7.8p19); Clang warns by default.
+    InitializerOverrides => Some("initializer-overrides"), Warning, false;
     /// A decimal or unsuffixed constant that takes a wider type of its list.
     /// Valid C99 that neither GCC nor Clang diagnoses, so it stays off; the
     /// bcc-only `-Wconstant-promotion` reports it.

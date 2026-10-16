@@ -1,0 +1,41 @@
+warning: initializer overrides prior initialization of this subobject
+ --> sema-initializer-overrides.c:3:33
+  |
+3 | struct P whole = { .x = 1, .x = 2 };
+  |                         -       ^ overrides an earlier initializer
+  |                         |
+  |                         previous initialization is here
+  |
+  = note: C99 §6.7.8p19: each initializer for a subobject overrides any previously listed initializer for the same subobject
+
+warning: initializer partially overrides prior initialization of this subobject
+ --> sema-initializer-overrides.c:4:55
+  |
+4 | void f(struct P p) { struct P part[1] = { [0] = p, [0].y = 3 }; (void)part; }
+  |                                                 -     ^^ overrides an earlier initializer
+  |                                                 |
+  |                                                 previous initialization is here
+  |
+  = note: C99 §6.7.8p19: each initializer for a subobject overrides any previously listed initializer for the same subobject, here part of one an expression initialized
+
+warning: initializer overrides prior initialization of this subobject
+ --> sema-initializer-overrides.c:5:30
+  |
+5 | union U member = { .p.x = 1, .i = 2 };
+  |                      --      ^^^^^^ overrides an earlier initializer
+  |                      |
+  |                      previous initialization is here
+  |
+  = note: C99 §6.7.8p19: each initializer for a subobject overrides any previously listed initializer for the same subobject
+
+warning: initializer overrides prior initialization of this subobject
+ --> sema-initializer-overrides.c:7:61
+  |
+7 | static struct F flexible = { .v = { 1, 2, 3 }, .n = 1, .v = { 4 } };
+  |                                   -----------               ^^^^^ overrides an earlier initializer
+  |                                   |
+  |                                   previous initialization is here
+  |
+  = note: C99 §6.7.8p19: each initializer for a subobject overrides any previously listed initializer for the same subobject
+
+4 warnings generated.

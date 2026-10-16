@@ -32,6 +32,7 @@ impl Analyzer<'_, '_, '_> {
             SemanticErrorKind::PointerConstraint(group),
             source_vectors,
             None,
+            None,
         );
     }
 
@@ -39,7 +40,7 @@ impl Analyzer<'_, '_, '_> {
     /// does for a diagnostic that belongs to a group. Every group is a Clang
     /// warning, some defaulting to an error, so a system header withholds it
     /// at any severity. It is reported at its expansion location, as Clang
-    /// reports it.
+    /// reports it, with the earlier source `previous` it refers to.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
     pub(super) fn group_diagnostic(
         &mut self,
@@ -47,6 +48,7 @@ impl Analyzer<'_, '_, '_> {
         kind: SemanticErrorKind,
         source_vectors: SourceVectors,
         name: Option<StringCacheId>,
+        previous: Option<SourceVectors>,
     ) {
         if self.tainted {
             return;
@@ -55,6 +57,7 @@ impl Analyzer<'_, '_, '_> {
             return;
         };
         let source_vectors = self.context.file_location(source_vectors);
+        let previous = previous.map(|previous| self.context.file_location(previous));
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
@@ -64,7 +67,7 @@ impl Analyzer<'_, '_, '_> {
                 kind,
                 source_vectors,
                 name,
-                previous: None,
+                previous,
             })]);
     }
 
