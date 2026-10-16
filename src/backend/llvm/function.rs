@@ -480,7 +480,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     self.emitter.module.function_signature(func),
                     self.body.value_list(args),
                 )?;
-                if self.emitter.module.function(func).returns_twice {
+                if self.emitter.module.returns_twice(func) {
                     returns_twice(api, call, true);
                 }
                 call
@@ -491,12 +491,16 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     .value_list(args)
                     .split_first()
                     .ok_or(std::fmt::Error)?;
-                self.call(
+                let call = self.call(
                     inst,
                     self.value(callee)?,
                     self.emitter.module.signature(sig),
                     args,
-                )?
+                )?;
+                if self.emitter.indirect_returns_twice {
+                    returns_twice(api, call, true);
+                }
+                call
             },
             | InstData::Jump { dest } => api.jump(self.destination(dest)?),
             | InstData::Brif {

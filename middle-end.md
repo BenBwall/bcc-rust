@@ -1444,17 +1444,24 @@ other phase matches these spellings.
   `returns_twice` after `align`. Lowering sets it from the fact (and, until
   M7 retains assembler labels, from the catalog for a label naming a listed
   symbol); the textual parser also sets it for an unmarked non-internal
-  function the catalog lists. Calls are ordinary `call`s.
+  function the catalog lists. Calls are ordinary `call`s. Every safeguard
+  asks `Module::returns_twice`, which adds an alias's canonical target's
+  flag to its own, and `Module::returns_twice_escapes`, which says whether a
+  returns-twice address reaches a value (`func_addr`) or a global
+  relocation, so that any indirect call may return twice.
 - **Optimizer.** `inline` refuses functions that are or call flagged
   functions or take their address, and their direct wrappers, as before
-  but from the flag. Every call is a memory barrier, and volatile accesses
+  but from the effective contract; in a module where such an address
+  escapes, a function making an indirect call is refused too. Every call is a memory barrier, and volatile accesses
   stay, which is what C99 §7.13.2.1p3 needs; a non-volatile local changed
   between `setjmp` and `longjmp` is indeterminate, so promotion stays legal.
-- **LLVM.** The declaration and every direct call get `returns_twice`; LLVM
+- **LLVM.** The declaration and every direct call get `returns_twice`, as
+  does every indirect call in a module where such an address escapes; LLVM
   then treats the caller as exposing a second return (no stack-slot
   coloring, for example), as for Clang's output.
-- **Native back end.** A call to, or the address of, a flagged function is
-  refused (`a call to a function that may return twice`): its linear-scan
+- **Native back end.** A call to, or the address of, a flagged function or
+  alias, and a global relocation naming one, are refused (`a call to, or the
+  address of, a function that may return twice`): its linear-scan
   allocator and frame layout do not account for the second return, which
   could read a register or spill slot reused after the first.
 - **Interpreter.** `setjmp`-family calls store the frame's activation, depth,
@@ -1464,6 +1471,10 @@ other phase matches these spellings.
   follows an `i32` call, pops the newer frames and the dynamic objects
   allocated since, and resumes with `val`, or 1 for 0; otherwise it traps
   with `longjmp to an environment that no active setjmp invocation saved`.
+  A corrupted record traps the same way. `setjmp` accepts the three x86-64
+  shapes of the family, `(env)`, `(env, int savemask)` and MinGW-w64's
+  `(env, frame)`, since one spelling (`_setjmp`) has different arities
+  across C libraries; others are a signature mismatch.
   `mingw_getsp` returns the frame address. `vfork`, `getcontext`, `savectx`
   and attributed functions outside the catalog trap as unsupported.
 

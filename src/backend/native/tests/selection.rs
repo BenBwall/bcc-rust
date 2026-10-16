@@ -392,10 +392,31 @@ fn returns_twice_calls_and_addresses_are_refused() {
         );
         assert_eq!(
             message,
-            "not yet supported by the native back end: a call to a function that may return \
-             twice, such as `setjmp` (in @f)"
+            "not yet supported by the native back end: a call to, or the address of, a function \
+             that may return twice, such as `setjmp` (in @f)"
         );
     }
+    // An alias of a defined attributed function inherits its contract, and
+    // an address stored in a global escapes to indirect calls.
+    let alias = refusal(
+        "abi lowered\nfunction @real(ptr) -> i32 external returns_twice {\nblock0(v0: ptr):\n    \
+         v1 = iconst.i32 0\n    return v1\n}\nfunction @save(ptr) -> i32 external alias \
+         @real\nfunction @f(ptr) -> i32 external {\nblock0(v0: ptr):\n    v1 = call @save(v0)\n    \
+         return v1\n}\n",
+        Target::LinuxGnu,
+    );
+    assert!(alias.ends_with("such as `setjmp` (in @f)"), "{alias}");
+    let escaped = refusal(
+        "abi lowered\nglobal @save internal size 8, align 8 = bytes \"0000000000000000\" relocs \
+         [0: @_setjmp]\nfunction @_setjmp(ptr) -> i32 external\nfunction @f(ptr) -> i32 external \
+         {\nblock0(v0: ptr):\n    v1 = global_addr @save\n    v2 = load.ptr v1, align 8\n    v3 = \
+         call_indirect v2(v0) : (ptr) -> i32\n    return v3\n}\n",
+        Target::LinuxGnu,
+    );
+    assert!(
+        escaped.ends_with("such as `setjmp` (in @save)"),
+        "{escaped}"
+    );
 }
 
 #[test]

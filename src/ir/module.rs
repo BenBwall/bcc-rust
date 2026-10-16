@@ -288,6 +288,48 @@ impl<'ir> Module<'ir> {
         &mut self.functions[func]
     }
 
+    /// Whether a call to `func` may return twice: its own
+    /// [`Function::returns_twice`] or, for an alias, its target's. A
+    /// verified alias names a definition that is not an alias, so one step
+    /// reaches the canonical function. Every returns-twice safeguard asks
+    /// here rather than reading the flag. C99: §7.13.2.1 paragraph 4,
+    /// p. 244; PDF p. 256.
+    pub(crate) fn returns_twice(&self, func: FuncId) -> bool {
+        let Some(function) = self.functions.get(func) else {
+            return false;
+        };
+        function.returns_twice
+            || matches!(
+                function.attributes.alias,
+                Some(Symbol::Function(target))
+                    if self.functions.get(target).is_some_and(|target| target.returns_twice)
+            )
+    }
+
+    /// Whether the address of a function that may return twice escapes into
+    /// a value (`func_addr`) or a global's relocation, so any indirect call
+    /// in the module may reach it. Back ends and the inliner then treat
+    /// every indirect call as returning twice; modules without such an
+    /// address keep ordinary indirect calls.
+    pub(crate) fn returns_twice_escapes(&self) -> bool {
+        let escapes = |func| self.returns_twice(func);
+        self.globals.iter().any(|(_, global)| {
+            matches!(global.init, Some(GlobalInit::Bytes { relocations, .. })
+            if relocations.iter().any(|relocation| matches!(
+                relocation.target,
+                RelocationTarget::Symbol(Symbol::Function(func)) if escapes(func)
+            )))
+        }) || self.functions.iter().any(|(_, function)| {
+            function.body.as_ref().is_some_and(|body| {
+                body.blocks().any(|block| {
+                    body.block_insts(block).iter().any(|&inst| {
+                        matches!(*body.inst(inst), InstData::FuncAddr { func } if escapes(func))
+                    })
+                })
+            })
+        })
+    }
+
     pub(crate) fn get_function(&self, func: FuncId) -> Option<&Function<'ir>> {
         self.functions.get(func)
     }

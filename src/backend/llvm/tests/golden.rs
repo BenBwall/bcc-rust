@@ -77,6 +77,47 @@ fn returns_twice_marks_the_declaration_and_each_direct_call() {
     }
 }
 
+#[test]
+fn aliases_and_escaped_addresses_mark_their_calls_returns_twice() {
+    let marked = |llvm: &str, callee: &str| {
+        let line = llvm
+            .lines()
+            .find(|line| line.contains(&format!("call i32 {callee}(")))
+            .unwrap_or_else(|| panic!("{llvm}"));
+        line.rsplit_once('#').is_some_and(|(_, group)| {
+            llvm.lines().any(|attributes| {
+                attributes.starts_with(&format!("attributes #{} = {{", group.trim()))
+                    && attributes.contains("returns_twice")
+            })
+        })
+    };
+    let alias = "function @real(ptr) -> i32 external returns_twice {\nblock0(v0: ptr):\n    v1 = \
+                 iconst.i32 0\n    return v1\n}\nfunction @save(ptr) -> i32 external alias \
+                 @real\nfunction @main(ptr) -> i32 external {\nblock0(v0: ptr):\n    v1 = call \
+                 @save(v0)\n    return v1\n}\n";
+    assert!(marked(
+        &emit(alias, Profile::PreAbi, Target::LinuxGnu),
+        "@save"
+    ));
+    let indirect = |relocation: &str| {
+        format!(
+            "global @table internal size 8, align 8 = bytes \"0000000000000000\" relocs [0: \
+             {relocation}]\nfunction @_setjmp(ptr) -> i32 external\nfunction @plain(ptr) -> i32 \
+             external\nfunction @main(ptr) -> i32 external {{\nblock0(v0: ptr):\n    v1 = \
+             global_addr @table\n    v2 = load.ptr v1, align 8\n    v3 = call_indirect v2(v0) : \
+             (ptr) -> i32\n    return v3\n}}\n"
+        )
+    };
+    assert!(marked(
+        &emit(&indirect("@_setjmp"), Profile::PreAbi, Target::LinuxGnu),
+        "%v2"
+    ));
+    assert!(!marked(
+        &emit(&indirect("@plain"), Profile::PreAbi, Target::LinuxGnu),
+        "%v2"
+    ));
+}
+
 const ARITHMETIC: Golden = Golden {
     name:     "arithmetic",
     input:    "\

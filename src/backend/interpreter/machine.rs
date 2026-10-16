@@ -165,6 +165,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             self.argument_types.push(body.value_type(arg));
         }
         self.check_arguments(signature)?;
+        let returns_twice = self.module.returns_twice(func);
         // An alias runs its target's body; a weak declaration nothing
         // defines has the null address, and calling it is undefined.
         // GNU extension: GCC manual, "Common Function Attributes", alias/weak.
@@ -200,7 +201,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 .environment_call(contract, call_result, result)
                 .map(|()| None);
         }
-        if callee.returns_twice {
+        if returns_twice {
             return Err(Fault::Unsupported(Unsupported::ReturnsTwice));
         }
         let call = HostCall {

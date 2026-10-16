@@ -110,6 +110,7 @@ fn build_module<'m>(
         functions: &functions,
         globals: &globals,
         labels: &[],
+        indirect_returns_twice: module.returns_twice_escapes(),
     };
     // Bodies first: a relocation may take the address of a labeled block,
     // which exists once its function is built.
@@ -129,13 +130,16 @@ fn build_module<'m>(
 }
 
 struct Emitter<'a, 'id, 'm, 'ir> {
-    module:    &'m Module<'ir>,
-    api:       &'a Session<'id>,
-    arena:     &'a Bump,
-    functions: &'a [Val<'id>],
-    globals:   &'a [Val<'id>],
+    module:                 &'m Module<'ir>,
+    api:                    &'a Session<'id>,
+    arena:                  &'a Bump,
+    functions:              &'a [Val<'id>],
+    globals:                &'a [Val<'id>],
     /// The LLVM block of each label of each function, by `FuncId`.
-    labels:    &'a [&'a [api::Block<'id>]],
+    labels:                 &'a [&'a [api::Block<'id>]],
+    /// A returns-twice function's address escapes, so every indirect call
+    /// is marked `returns_twice` ([`Module::returns_twice_escapes`]).
+    indirect_returns_twice: bool,
 }
 
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {

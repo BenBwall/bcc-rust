@@ -313,16 +313,21 @@ impl<'s> CallGraph<'s> {
         let mut edges = ArenaVec::new_in(scratch);
         let mut nodes = ArenaVec::new_in(scratch);
         let mut unsafe_frame = ArenaVec::new_in(scratch);
-        for (_, function) in module.functions() {
+        // Where a returns-twice address escapes, any indirect call may be
+        // one, so its frame is kept like a direct caller's.
+        let indirect_returns_twice = module.returns_twice_escapes();
+        for (id, function) in module.functions() {
             let mut calls = ArenaVec::new_in(scratch);
-            let mut unsafe_body = function.returns_twice;
+            let mut unsafe_body = module.returns_twice(id);
             if let Some(body) = &function.body {
                 for block in body.blocks() {
                     for &inst in body.block_insts(block) {
                         match *body.inst(inst) {
                             | InstData::Call { func, .. } => calls.push(func),
                             | InstData::FuncAddr { func } =>
-                                unsafe_body |= module.function(func).returns_twice,
+                                unsafe_body |= module.returns_twice(func),
+                            | InstData::CallIndirect { .. } =>
+                                unsafe_body |= indirect_returns_twice,
                             | _ => {},
                         }
                         unsafe_body |= matches!(
