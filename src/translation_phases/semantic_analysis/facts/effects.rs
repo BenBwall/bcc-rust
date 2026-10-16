@@ -122,7 +122,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let e = info.expression;
         let summary = match e.kind {
-            | E::Identifier(_) | E::Constant(_) | E::StringLiteral(_) => EffectSet::empty(),
+            | E::Identifier(_) | E::Constant(_) | E::StringLiteral(_) | E::Nullptr =>
+                EffectSet::empty(),
             | E::SizeofExpr(_) | E::SizeofType(_) | E::AlignofExpr(_) | E::AlignofType(_)
                 if info.ice =>
                 EffectSet::empty(),
@@ -243,7 +244,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::LabelAddress(_)
             | E::Countof(_)
             | E::Boolean(_)
-            | E::Nullptr
             | E::Error => EffectSet::UNKNOWN,
         };
         summary | self.action_effects(e)
@@ -459,7 +459,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Some(selected) => self.sequence(e, index, context, &[(selected, context)]),
                 | None => RecipeKind::EvaluateValue,
             },
-            | E::Identifier(_) | E::Constant(_) | E::StringLiteral(_) => RecipeKind::None,
+            | E::Identifier(_) | E::Constant(_) | E::StringLiteral(_) | E::Nullptr =>
+                RecipeKind::None,
             | _ => RecipeKind::EvaluateValue,
         }
     }

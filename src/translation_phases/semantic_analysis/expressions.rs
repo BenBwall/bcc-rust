@@ -186,6 +186,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },
+            | E::Nullptr => {
+                info.ty = self.types.intern(TypeKind::Nullptr);
+                info.integer = Some(Integer::int(0).cast(64, false));
+                info.constant = ConstantClass::Address;
+            },
             | E::Boolean(value) => {
                 info.ty = self.types.scalar(Scalar::Int);
                 info.integer = Some(Integer::int(i128::from(value)));
@@ -435,7 +440,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     // A compound literal's flexible array member stays empty.
                     info.ty = self
-                        .check_initializer(ty, initializer, self.scope == 0, false)
+                        .check_initializer(ty, initializer, self.scope == 0, false, None)
                         .0;
                 }
                 info.category = self.object_category(info.ty);

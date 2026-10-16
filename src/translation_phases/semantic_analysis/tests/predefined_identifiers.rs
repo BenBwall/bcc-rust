@@ -240,6 +240,14 @@ fn pretty_function_spells_the_signature_as_clang_does() {
 fn pretty_function_keeps_the_typedef_names_as_written() {
     for (source, expected) in [
         (
+            "typedef int T; T shadow2(void){int T; __PRETTY_FUNCTION__; return 0;}",
+            "T shadow2(void)",
+        ),
+        (
+            "typedef int T; void shadow_param(T x){int T; __PRETTY_FUNCTION__;}",
+            "void shadow_param(T)",
+        ),
+        (
             "typedef unsigned long count_t; typedef int (*callback_t)(int); typedef struct { int \
              a; } box_t; typedef const int fixed_t;\nvoid f(count_t a, count_t *b, const count_t \
              *c, callback_t d, callback_t *e, box_t f, box_t *g, fixed_t h, const callback_t i) { \

@@ -45,6 +45,7 @@ use crate::{
             Duration,
             Linkage,
             SemanticErrorKind,
+            Work,
             integer::Integer,
             scopes::Namespace,
             types::{
@@ -134,6 +135,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let Some(target) = self.pointer_target(ty) else {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
             };
+            if self.void_type(target) && !self.indirection_cancelled(e) {
+                self.pointer_diagnostic(
+                    crate::configuration::DiagnosticGroup::VoidPtrDereference,
+                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                );
+            }
             let mut info = Self::expression_result(e, target);
             info.category = if matches!(self.types.nodes[target.index], TypeKind::Function { .. }) {
                 ValueCategory::FunctionDesignator
@@ -178,6 +185,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.real_imag(e, op, operand);
         }
         let ty = if op == U::LogicalNot {
+            self.boolean_conversion_warning(operand);
             // C99 §6.5.3.3p5: `!E` compares E with 0, like `&&` and `||`,
             // and converts nothing; an `int` conversion would read `!0.5`
             // as `!0`.
@@ -260,7 +268,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
                 }
-            } else if !self.assignment_conversion(left.ty, right) {
+            } else if !self.assignment_conversion_at(
+                left.ty,
+                right,
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+            ) {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
             if compound.is_none() {
@@ -403,6 +415,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
             },
             | B::LogicalAnd | B::LogicalOr => {
+                self.boolean_conversion_warning(left);
+                self.boolean_conversion_warning(right);
                 if !self.scalar_type(lt) || !self.scalar_type(rt) {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidLogicalOperands);
                 }
@@ -424,13 +438,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     arithmetic_operands = Some(self.common_arithmetic(left, right, lt, rt));
                 } else {
                     let null_pair = equality
-                        && ((self.pointer_target(lt).is_some()
-                            && self.null_pointer_constant(right))
+                        && ((self.nullptr_type(lt) && self.null_pointer_constant(right))
+                            || (self.nullptr_type(rt) && self.null_pointer_constant(left))
+                            || (self.pointer_target(lt).is_some()
+                                && self.null_pointer_constant(right))
                             || (self.pointer_target(rt).is_some()
                                 && self.null_pointer_constant(left)));
                     // C99 §6.5.9p2, p. 86; PDF p. 98: null alternatives
                     // apply even when the null constant itself is void *.
                     let valid = if null_pair {
+                        let null = if self.pointer_target(lt).is_some() {
+                            right
+                        } else {
+                            left
+                        };
+                        self.null_conversion_warning(null, true, null.expression.source_vectors);
                         true
                     } else if let (Some(lp), Some(rp)) =
                         (self.pointer_target(lt), self.pointer_target(rt))
@@ -556,6 +578,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self.scalar_type(ct) {
             return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
         }
+        self.boolean_conversion_warning(condition);
         let ty = if self.arithmetic(lt) && self.arithmetic(rt) {
             self.common_arithmetic(left, right, lt, rt)
         } else if self.vector(lt).is_some() && self.vector(rt).is_some() {
@@ -564,8 +587,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
             };
             ty
-        } else if (matches!(self.types.nodes[lt.index], TypeKind::Scalar(Scalar::Void))
-            && matches!(self.types.nodes[rt.index], TypeKind::Scalar(Scalar::Void)))
+        } else if (self.nullptr_type(lt) && self.nullptr_type(rt))
+            || (matches!(self.types.nodes[lt.index], TypeKind::Scalar(Scalar::Void))
+                && matches!(self.types.nodes[rt.index], TypeKind::Scalar(Scalar::Void)))
             || (self.pointer_target(lt).is_some() && self.null_pointer_constant(right))
         {
             lt
@@ -643,6 +667,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> ExpressionInfo<'tu> {
         self.x86_immediates(function, arguments);
+        self.check_nonnull_arguments(function.binding, arguments);
         let ty = self.converted(function);
         if self.types.unanalyzed(ty) {
             return Self::expression_result(e, self.types.unknown());
@@ -699,6 +724,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 self.convert(argument, parameter, ConversionKind::Assignment);
             } else {
+                if let Some(&parameter) = parameters.get(index) {
+                    // A visible old-style definition supplies parameter types
+                    // for diagnostics, while calls still use default
+                    // promotions.
+                    _ = self.assignment_conversion(parameter, info);
+                }
                 let ty = self.converted(info);
                 let ty = if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Float)) {
                     self.types.scalar(Scalar::Double)
@@ -986,6 +1017,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && self.integer_type(target).is_none()))
         {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
+        }
+        let nullptr_cast = if self.nullptr_type(target) {
+            self.null_pointer_constant(operand)
+        } else if self.nullptr_type(from) {
+            void || self.pointer_target(target).is_some()
+                || matches!(
+                    self.types.nodes[target.index],
+                    TypeKind::Scalar(Scalar::Bool)
+                )
+        } else {
+            true
+        };
+        if !nullptr_cast {
+            return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
+        }
+        if self.pointer_target(from).is_some()
+            && self
+                .integer_type(target)
+                .is_some_and(|(bits, _)| u64::from(bits) < self.types.target.pointer.size * 8)
+            && !matches!(
+                self.types.nodes[target.index],
+                TypeKind::Scalar(Scalar::Bool)
+            )
+        {
+            self.pointer_diagnostic(
+                crate::configuration::DiagnosticGroup::PointerToIntCast,
+                e.source_vectors,
+            );
         }
         self.convert(operand.expression, target, ConversionKind::Assignment);
         let mut info = Self::expression_result(e, target.unqualified());
@@ -1349,7 +1408,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Classifies arithmetic and pointer types as scalar types.
     /// C99: §6.2.5 paragraph 21, p. 36; PDF p. 48.
     fn scalar_type(&self, ty: TypeId) -> bool {
-        self.arithmetic(ty) || self.pointer_target(ty).is_some()
+        self.arithmetic(ty) || self.pointer_target(ty).is_some() || self.nullptr_type(ty)
     }
 
     /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
@@ -1386,21 +1445,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
         self.complete_object(target)
             || self.types.unanalyzed(target)
-            || (self.void_type(target)
+            || ((self.void_type(target)
+                || matches!(self.types.nodes[target.index], TypeKind::Function { .. }))
                 && self
                     .context
                     .configuration
                     .accepts(crate::configuration::Feature::VoidPointerArithmetic))
     }
 
-    /// Reports arithmetic on a `void *` operand under the extension policy;
-    /// its element size is 1. GNU extension: GCC "Pointer Arith",
+    /// Reports arithmetic on void or function pointers under the extension
+    /// policy; their element size is 1. GNU extension: GCC "Pointer Arith",
     /// <https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html>.
     fn report_void_arithmetic(&mut self, e: &'tu Expression<'tu>, target: TypeId) {
-        if self.void_type(target) {
+        if self.void_type(target)
+            || matches!(self.types.nodes[target.index], TypeKind::Function { .. })
+        {
             self.context.report_extension(
                 crate::configuration::Feature::VoidPointerArithmetic,
-                "arithmetic on a pointer to void",
+                if self.void_type(target) {
+                    "arithmetic on a pointer to void"
+                } else {
+                    "arithmetic on a pointer to function"
+                },
                 e.source_vectors,
             );
         }
@@ -1413,7 +1479,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &self,
         target: TypeId,
     ) -> Option<u64> {
-        if self.void_type(target) {
+        if self.void_type(target)
+            || matches!(self.types.nodes[target.index], TypeKind::Function { .. })
+        {
             return self
                 .context
                 .configuration
@@ -1421,6 +1489,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .then_some(1);
         }
         self.types.layout(target).map(|layout| layout.size)
+    }
+
+    /// C23: §7.21.2p2, p. 316; PDF p. 329: the null pointer type is
+    /// distinct from ordinary pointer and arithmetic types.
+    pub(super) fn nullptr_type(&self, ty: TypeId) -> bool {
+        matches!(
+            self.types.nodes[self.types.non_atomic(ty).index],
+            TypeKind::Nullptr
+        )
+    }
+
+    /// An immediately enclosing address operator cancels indirection, even
+    /// through parentheses. Pending expression completions are its ancestors.
+    /// C99: §6.5.3.2p3, pp. 78-79; PDF pp. 90-91.
+    fn indirection_cancelled(&self, mut expression: &'tu Expression<'tu>) -> bool {
+        for work in self.work.iter().rev() {
+            let Work::ExpressionDone(parent) = work else {
+                continue;
+            };
+            match parent.kind {
+                | ExpressionType::Parenthesized { expression: child }
+                    if std::ptr::eq(child, expression) =>
+                    expression = parent,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::AddressOf,
+                    operand_expression,
+                } => return std::ptr::eq(operand_expression, expression),
+                | _ => return false,
+            }
+        }
+        false
     }
 
     fn void_type(&self, ty: TypeId) -> bool {
@@ -1440,7 +1539,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|(bits, _)| u64::from(bits) == self.types.target.pointer.size * 8)
     }
 
-    pub(super) fn pointer_target(&self, ty: TypeId) -> Option<TypeId> {
+    pub(in crate::translation_phases::semantic_analysis) fn pointer_target(
+        &self,
+        ty: TypeId,
+    ) -> Option<TypeId> {
         let ty = self.types.non_atomic(ty);
         if let TypeKind::Pointer(target) = self.types.nodes[ty.index] {
             Some(target)
@@ -1661,11 +1763,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.3.2.3p3, p. 47; PDF p. 59.
+    /// C23: §6.3.2.4p1-2, p. 51; PDF p. 64 includes null pointer values.
     pub(in crate::translation_phases::semantic_analysis) fn null_pointer_constant(
         &self,
         info: ExpressionInfo<'tu>,
     ) -> bool {
-        (info.ice && info.integer.is_some_and(|v| v.value == 0))
+        self.nullptr_type(info.ty)
+            || (info.ice && info.integer.is_some_and(|v| v.value == 0))
             || (matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(target) if matches!(self.types.nodes[target.index], TypeKind::Scalar(Scalar::Void)))
                 && info.constant == ConstantClass::Address
                 && info.integer.is_some_and(|v| v.value == 0))
@@ -1689,6 +1793,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let target = self.types.non_atomic(target);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return true;
+        }
+        if self.nullptr_type(target) {
+            return self.null_pointer_constant(source);
+        }
+        if self.nullptr_type(from) {
+            return self.pointer_target(target).is_some()
+                || matches!(
+                    self.types.nodes[target.index],
+                    TypeKind::Scalar(Scalar::Bool)
+                );
         }
         if self.vector_assignment(target, from) {
             return true;
@@ -1883,6 +1997,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let ExpressionSlot::Parsed(e) = slot {
             let info = self.expression_info(e);
             let ty = self.converted(info);
+            if !integer {
+                self.boolean_conversion_warning(info);
+            }
             if !self.types.unanalyzed(ty)
                 && if integer {
                     self.integer_type(ty).is_none()

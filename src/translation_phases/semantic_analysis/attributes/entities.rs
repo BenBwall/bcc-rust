@@ -115,6 +115,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.init_attribute(subject, specifier, attribute, rule == Rule::Constructor),
                 | Rule::Cleanup => self.cleanup_attribute(subject, attribute),
                 | Rule::ReturnsTwice => self.returns_twice_attribute(subject, attribute),
+                | Rule::Nonnull => self.nonnull_attribute(subject, specifier, attribute),
                 | _ => {},
             }
         }
@@ -186,6 +187,137 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.attributes.entity(entity).returns_twice = true;
         } else {
             self.ignored(attribute);
+        }
+    }
+
+    /// Retains GNU `nonnull` parameter indices after checking each integer
+    /// constant operand. The annotation affects diagnostics at later calls.
+    /// GNU extension: GCC Common Function Attributes, nonnull.
+    /// C99: §6.6p6, p. 95; PDF p. 107 (integer constant operands).
+    fn nonnull_attribute(
+        &mut self,
+        subject: Subject,
+        specifier: &'tu AttributeSpecifier<'tu>,
+        attribute: WrittenAttribute<'_>,
+    ) {
+        use crate::translation_phases::parsing::syntax::{
+            BinaryOperator as B,
+            ExpressionType as E,
+        };
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let TypeKind::Function {
+            parameters,
+            variadic,
+            ..
+        } = self.types.nodes[self.bindings[binding].ty.index]
+        else {
+            return;
+        };
+        let entity = self.entity_of(binding);
+        if attribute.arguments.is_none_or(<[_]>::is_empty) {
+            self.attributes.entity(entity).nonnull = Some(&[]);
+            return;
+        }
+        let retained = self.attributes.entity(entity).nonnull;
+        let mut positions = ArenaVec::new_in(self.scratch);
+        positions.extend_from_slice(retained.unwrap_or_default());
+        let mut work: ArenaVec<
+            '_,
+            &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
+        > = ArenaVec::new_in(self.scratch);
+        work.extend(
+            specifier
+                .arguments
+                .iter()
+                .filter(|argument| argument.index == attribute.index)
+                .map(|argument| argument.expression),
+        );
+        while let Some(expression) = work.pop() {
+            if let E::Binary {
+                operator: B::Comma,
+                left_expression,
+                right_expression,
+            } = expression.kind
+            {
+                work.push(right_expression);
+                work.push(left_expression);
+                continue;
+            }
+            let info = self.expression_info(expression);
+            let position = info
+                .integer
+                .filter(|_| info.ice)
+                .and_then(super::super::Integer::to_i128)
+                .and_then(|value| usize::try_from(value).ok())
+                .and_then(|value| value.checked_sub(1));
+            let Some(position) =
+                position.filter(|&position| position < parameters.len() || variadic)
+            else {
+                self.error(
+                    SemanticErrorKind::AttributeArguments,
+                    expression.source_vectors,
+                    None,
+                    None,
+                );
+                continue;
+            };
+            if parameters
+                .get(position)
+                .is_some_and(|&parameter| self.pointer_target(parameter).is_none())
+            {
+                self.ignored(attribute);
+                continue;
+            }
+            if !positions.contains(&position) {
+                positions.push(position);
+            }
+        }
+        if retained.is_none_or(|positions| !positions.is_empty()) && !positions.is_empty() {
+            self.attributes.entity(entity).nonnull =
+                Some(self.types.tu.alloc_slice_copy(&positions));
+        }
+    }
+
+    /// Emits `-Wnonnull` only for calls whose visible declaration carries
+    /// the annotation and whose argument is known to be a null pointer.
+    /// GNU extension: GCC Common Function Attributes, nonnull.
+    pub(in crate::translation_phases::semantic_analysis) fn check_nonnull_arguments(
+        &mut self,
+        binding: Option<usize>,
+        arguments: crate::util::arena_list::ArenaList<
+            'tu,
+            &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
+        >,
+    ) {
+        let Some(binding) = binding else {
+            return;
+        };
+        let entity = self.entity_of(binding);
+        let attributes = *self.attributes.entity(entity);
+        let Some(positions) = attributes.nonnull else {
+            return;
+        };
+        let parameters = match self.types.nodes[self.bindings[binding].ty.index] {
+            | TypeKind::Function { parameters, .. } => parameters,
+            | _ => &[],
+        };
+        for (index, &argument) in arguments.iter().enumerate() {
+            let info = self.expression_info(argument);
+            if ((positions.is_empty()
+                && parameters
+                    .get(index)
+                    .is_some_and(|&parameter| self.pointer_target(parameter).is_some()))
+                || positions.contains(&index))
+                && self.null_pointer_constant(info)
+            {
+                self.pointer_diagnostic(
+                    crate::configuration::DiagnosticGroup::Nonnull,
+                    argument.source_vectors,
+                );
+            }
         }
     }
 

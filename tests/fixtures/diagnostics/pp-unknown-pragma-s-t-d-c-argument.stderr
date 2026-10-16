@@ -1,4 +1,4 @@
-error: unknown `STDC` pragma `BANANAS`
+warning: unknown `STDC` pragma `BANANAS` [-Wunknown-pragmas]
  --> pp-unknown-pragma-s-t-d-c-argument.c:1:14
   |
 1 | #pragma STDC BANANAS ON
@@ -6,4 +6,4 @@ error: unknown `STDC` pragma `BANANAS`
   |
   = note: C99 §6.10.6: the standard pragmas are `FP_CONTRACT`, `FENV_ACCESS`, and `CX_LIMITED_RANGE`
 
-1 error generated.
+1 warning generated.

@@ -54,6 +54,10 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) visibility:     Option<Visibility>,
     /// GNU `returns_twice`: lowering refuses direct calls to the entity.
     pub(crate) returns_twice:  bool,
+    /// GNU `nonnull`: zero-based parameter positions, or None when absent.
+    /// An empty slice applies to every pointer parameter. These facts are
+    /// diagnostic only.
+    pub(crate) nonnull:        Option<&'tu [usize]>,
 }
 
 /// ELF symbol visibility; COFF targets ignore it as Clang does.

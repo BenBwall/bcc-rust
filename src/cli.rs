@@ -94,6 +94,9 @@ pub fn run() -> Result<i32, MainError> {
         return Ok(print_default_passes());
     }
     let args = Cli::try_parse_from(arguments)?;
+    if args.report_unknown_warning_options() {
+        return Ok(1);
+    }
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {

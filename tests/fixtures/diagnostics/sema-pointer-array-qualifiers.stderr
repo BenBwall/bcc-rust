@@ -1,24 +1,24 @@
 warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-  --> sema-pointer-array-qualifiers.c:9:27
+  --> sema-pointer-array-qualifiers.c:9:25
    |
  9 | void dropped(void) { pa = cpa; }
-   |                           ^^^ pointer constraint violation
+   |                         ^ pointer constraint violation
    |
    = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-  --> sema-pointer-array-qualifiers.c:10:28
+  --> sema-pointer-array-qualifiers.c:10:26
    |
 10 | void nested(void) { pcpa = ppa; }
-   |                            ^^^ pointer constraint violation
+   |                          ^ pointer constraint violation
    |
    = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
-  --> sema-pointer-array-qualifiers.c:11:36
+  --> sema-pointer-array-qualifiers.c:11:34
    |
 11 | void nested_bound(void) { pcpinc = ppa; }
-   |                                    ^^^ pointer constraint violation
+   |                                  ^ pointer constraint violation
    |
    = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 

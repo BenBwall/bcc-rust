@@ -997,3 +997,47 @@ fn undefining_a_predefined_macro_is_diagnosed_and_keeps_it() {
         },
     );
 }
+
+#[test]
+fn directives_inside_macro_arguments_execute_before_argument_expansion() {
+    for (source, expected) in [
+        ("#define ID(x) x\nID(\n#define VALUE 42\nVALUE)\n", 42),
+        (
+            "#define ID(x) x\n#define VALUE 1\nID(\n#undef VALUE\n#define VALUE 43\nVALUE)\n",
+            43,
+        ),
+        (
+            "#define ID(x) x\nID(\n#if 0\n100\n#else\n44\n#endif\n)\n",
+            44,
+        ),
+        ("#define ID(x) x\nID(\n#line 45\n__LINE__)\n", 45),
+    ] {
+        with_directive_tokens_at_path(source, Path::new("macro-directive.c"), |tokens, context| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{source}: {:?}",
+                context.take_pending_errors()
+            );
+            assert_eq!(tokens.len(), 1, "{source}: {tokens:?}");
+            assert_eq!(
+                tokens[0].kind,
+                TokenType::Integer(IntegerTokenType::Int(expected))
+            );
+        });
+    }
+}
+
+#[test]
+fn unknown_stdc_pragma_is_a_warning_and_preserves_the_following_declaration() {
+    with_directive_tokens_at_path(
+        "#pragma STDC FOO\nint following;\n",
+        Path::new("pragma.c"),
+        |tokens, context| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].severity(), ErrorSeverity::Warning);
+            assert_eq!(tokens.len(), 3, "{tokens:?}");
+        },
+    );
+}

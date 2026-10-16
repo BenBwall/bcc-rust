@@ -16,6 +16,9 @@ impl CompilerConfiguration {
         option: WarningOption,
     ) -> Self {
         self.warning_options[group as usize].apply(option);
+        if group == DiagnosticGroup::UnknownPragmas {
+            self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option);
+        }
         if group == DiagnosticGroup::IncompatiblePointerTypes {
             self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option);
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
@@ -135,6 +138,14 @@ diagnostic_groups! {
     CompareDistinctPointerTypes => Some("compare-distinct-pointer-types"), Warning, true;
     IncompatiblePointerTypes => Some("incompatible-pointer-types"), Error, true;
     PointerSign => Some("pointer-sign"), Warning, true;
+    NonLiteralNullConversion => Some("non-literal-null-conversion"), Warning, false;
+    PointerCompare => Some("pointer-compare"), Warning, false;
+    NullConversion => Some("null-conversion"), Warning, false;
+    PointerBoolConversion => Some("pointer-bool-conversion"), Warning, false;
+    PointerToIntCast => Some("pointer-to-int-cast"), Warning, false;
+    VoidPtrDereference => Some("void-ptr-dereference"), Warning, false;
+    Nonnull => Some("nonnull"), Warning, false;
+    PredefinedOutsideFunction => Some("predefined-identifier-outside-function"), Warning, false;
     PointerQualifiers => Some("incompatible-pointer-types-discards-qualifiers"), Warning, true;
     IncompatibleFunctionPointerTypes => Some("incompatible-function-pointer-types"), Error, true;
     IntConversion => Some("int-conversion"), Error, true;
@@ -152,6 +163,8 @@ diagnostic_groups! {
     Undef => Some("undef"), Ignored, false;
     /// A `#pragma` that names nothing bcc knows.
     UnknownPragmas => Some("unknown-pragmas"), Ignored, false;
+    UnknownStdcPragma => Some("unknown-pragmas"), Warning, false;
+    UnknownWarningOption => Some("unknown-warning-option"), Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
     /// A decimal or unsuffixed constant that takes a wider type of its list.

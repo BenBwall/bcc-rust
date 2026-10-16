@@ -115,11 +115,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `top level` for the pretty form. The objects are made once per
     /// translation unit and are not installed, so each use warns.
     fn predefined_outside_function(&mut self, which: Predefined, name: Identifier) -> usize {
-        self.error(
+        self.group_diagnostic(
+            crate::configuration::DiagnosticGroup::PredefinedOutsideFunction,
             SemanticErrorKind::PredefinedOutsideFunction,
             name.source_vectors,
             Some(name.name),
-            None,
         );
         let slot = usize::from(which == Predefined::Pretty);
         if let Some(binding) = self.functions.outside[slot] {
@@ -153,10 +153,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }) => Some((parameter_list.as_slice(), *is_variadic)),
             | _ => None,
         };
-        let result = self.typedef_sugar(syntax.declaration_specifiers.type_specifiers);
+        let declaration_scope = self.scopes[current.scope].parent.unwrap_or(0);
+        let result = self.typedef_sugar(
+            syntax.declaration_specifiers.type_specifiers,
+            declaration_scope,
+        );
         let mut parameters = ArenaVec::new_in(scratch);
         for parameter in prototype.map_or(&[][..], |(list, _)| list) {
-            parameters.push(self.typedef_sugar(parameter.declaration_specifiers.type_specifiers));
+            parameters.push(self.typedef_sugar(
+                parameter.declaration_specifiers.type_specifiers,
+                declaration_scope,
+            ));
         }
         let mut signature = ArenaString::new_in(scratch);
         self.write_signature(
@@ -255,7 +262,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// A typedef-name specifier and the type it names. The built-in typedef
     /// names exist only in the type table of a program that uses them.
-    fn typedef_sugar(&mut self, specifiers: TypeSpecifiers<'tu>) -> Option<Spelled> {
+    fn typedef_sugar(&mut self, specifiers: TypeSpecifiers<'tu>, scope: usize) -> Option<Spelled> {
         let TypeSpecifiers::TypedefName(name) = specifiers else {
             return None;
         };
@@ -264,7 +271,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | "__int128_t" => self.types.scalar(Scalar::Int128),
             | "__uint128_t" => self.types.scalar(Scalar::UnsignedInt128),
             | _ => {
-                let binding = self.bindings[self.lookup(Namespace::Ordinary, name.name)?.binding];
+                let binding = self.bindings[self
+                    .lookup_at(Namespace::Ordinary, name.name, scope)?
+                    .binding];
                 (binding.kind == BindingKind::Typedef).then_some(binding.ty)?
             },
         };
@@ -400,6 +409,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     ty.qualifiers,
                                 );
                             },
+                            | TypeKind::Nullptr => break (Base::Text("nullptr_t"), ty.qualifiers),
                             | TypeKind::Unknown => break (Base::Text("int"), ty.qualifiers),
                             | TypeKind::Scalar(scalar) =>
                                 break (Base::Text(scalar_spelling(scalar, c23)), ty.qualifiers),

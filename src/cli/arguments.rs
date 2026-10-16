@@ -144,6 +144,32 @@ impl Cli {
             .with_suppress_warnings(self.suppress_warnings)
     }
 
+    /// Clang diagnoses unsupported warning options at startup and continues.
+    pub(super) fn report_unknown_warning_options(&self) -> bool {
+        let Some(severity) = self
+            .configuration()
+            .diagnostic_severity(DiagnosticGroup::UnknownWarningOption)
+        else {
+            return false;
+        };
+        let mut failed = false;
+        for option in &self.language_option {
+            if matches!(
+                LanguageFlag::parse(option),
+                Some(LanguageFlag::UnknownWarning)
+            ) {
+                let label = if severity == crate::translation_phases::ErrorSeverity::Error {
+                    failed = true;
+                    "error"
+                } else {
+                    "warning"
+                };
+                eprintln!("{label}: unknown warning option '{option}' [-Wunknown-warning-option]");
+            }
+        }
+        failed
+    }
+
     pub(super) fn configure_preprocessing(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
         context.preprocessing_options =
@@ -164,6 +190,10 @@ impl Cli {
 enum LanguageFlag {
     WarningsAsErrors(bool),
     WarningGroup(DiagnosticGroup, WarningOption),
+    AllWarnings(bool),
+    ConversionWarnings(bool),
+    ExtraWarnings,
+    UnknownWarning,
     /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
     Pedantic(ExtensionPolicy),
     /// `-fms-extensions` or `-fno-ms-extensions`.
@@ -183,6 +213,12 @@ impl LanguageFlag {
             | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
             | "-Werror" => return Some(Self::WarningsAsErrors(true)),
             | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
+            | "-Wall" => return Some(Self::AllWarnings(true)),
+            | "-Wno-all" => return Some(Self::AllWarnings(false)),
+            | "-Wextra" | "-Wno-extra" => return Some(Self::ExtraWarnings),
+            | "-Wconversion" => return Some(Self::ConversionWarnings(true)),
+            | "-Wno-conversion" => return Some(Self::ConversionWarnings(false)),
+            | "-Wno-pedantic" => return Some(Self::Pedantic(ExtensionPolicy::Allow)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
@@ -199,7 +235,11 @@ impl LanguageFlag {
             } else {
                 (text, WarningOption::Enable(true))
             };
-            return DiagnosticGroup::parse(name).map(|group| Self::WarningGroup(group, option));
+            return Some(
+                DiagnosticGroup::parse(name).map_or(Self::UnknownWarning, |group| {
+                    Self::WarningGroup(group, option)
+                }),
+            );
         }
         let (name, enabled) = text
             .strip_prefix("-fms-")
@@ -214,6 +254,24 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
+            | Self::UnknownWarning | Self::ExtraWarnings => configuration,
+            | Self::AllWarnings(enabled) => configuration.with_warning_option(
+                DiagnosticGroup::UnusedFunction,
+                WarningOption::Enable(enabled),
+            ),
+            | Self::ConversionWarnings(enabled) => configuration
+                .with_warning_option(
+                    DiagnosticGroup::NullConversion,
+                    WarningOption::Enable(enabled),
+                )
+                .with_warning_option(
+                    DiagnosticGroup::NonLiteralNullConversion,
+                    WarningOption::Enable(enabled),
+                )
+                .with_warning_option(
+                    DiagnosticGroup::PointerBoolConversion,
+                    WarningOption::Enable(enabled),
+                ),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(policy) => configuration.with_extension_policy(policy),

@@ -348,7 +348,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let address = self.inst(InstData::BlockAddr { label }, Type::Ptr);
                 self.push_item(Operand::Value(address), info.ty);
             },
-            | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
+            | E::Nullptr => {
+                let value = self.nullary(Opcode::Null);
+                self.push_item(Operand::Value(value), info.ty);
+            },
+            | E::Countof(_) | E::Boolean(_) | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
@@ -1626,7 +1630,7 @@ fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
         | ExpressionType::CompoundLiteral { type_name, .. } if literal_storage(type_name, true) =>
             Construct::CompoundLiteralStorage,
         | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
-        | ExpressionType::Countof(_) | ExpressionType::Nullptr => Construct::Extension,
+        | ExpressionType::Countof(_) => Construct::Extension,
         | _ => return None,
     })
 }

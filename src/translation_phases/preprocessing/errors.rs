@@ -1260,13 +1260,15 @@ impl PreprocessorErrorType<'_> {
             | Self::UnknownPragmaDirective => new("unknown pragma ignored")
                 .label("not recognized")
                 .note("bcc recognizes `#pragma once` and the `#pragma STDC` pragmas"),
-            | Self::UnknownPragmaSTDCArgument(argument) =>
-                new(format_in!(arena, "unknown `STDC` pragma `{argument}`"))
-                    .label("not a standard pragma")
-                    .note(
-                        "C99 §6.10.6: the standard pragmas are `FP_CONTRACT`, `FENV_ACCESS`, and \
-                         `CX_LIMITED_RANGE`",
-                    ),
+            | Self::UnknownPragmaSTDCArgument(argument) => new(format_in!(
+                arena,
+                "unknown `STDC` pragma `{argument}` [-Wunknown-pragmas]"
+            ))
+            .label("not a standard pragma")
+            .note(
+                "C99 §6.10.6: the standard pragmas are `FP_CONTRACT`, `FENV_ACCESS`, and \
+                 `CX_LIMITED_RANGE`",
+            ),
             | Self::ExtraTokensAfterPragmaOnce(kind) => new(format_in!(
                 arena,
                 "unexpected {} after `#pragma once`",
@@ -1538,7 +1540,6 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
-            | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
             | PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument
             | PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch
             | PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(..)
@@ -1636,6 +1637,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
             | PreprocessorErrorType::UnknownPragmaDirective
+            | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
             | PreprocessorErrorType::ExtraTokensAfterIncludeDirective

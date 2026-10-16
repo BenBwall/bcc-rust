@@ -68,7 +68,7 @@ pub(super) fn repr(types: &Types<'_>, ty: TypeId) -> Result<Repr, LoweringErrorK
     match types.kind(ty) {
         | TypeKind::Unknown => Err(LoweringErrorKind::UnanalyzedType),
         | TypeKind::Scalar(scalar) => scalar_repr(types, scalar),
-        | TypeKind::Pointer(_) => Ok(Repr::Pointer),
+        | TypeKind::Pointer(_) | TypeKind::Nullptr => Ok(Repr::Pointer),
         | TypeKind::Array(element, _) =>
             if types.unanalyzed(element) {
                 Err(LoweringErrorKind::UnanalyzedType)
@@ -265,7 +265,8 @@ pub(super) fn aggregate_layout<'s>(
             match types.kind(ty) {
                 | TypeKind::Unknown => return Err(LoweringErrorKind::UnanalyzedType),
                 | TypeKind::Scalar(scalar) => scalar_leaves(types, scalar, offset, &mut scalars)?,
-                | TypeKind::Pointer(_) => push_scalar(&mut scalars, offset, Type::Ptr)?,
+                | TypeKind::Pointer(_) | TypeKind::Nullptr =>
+                    push_scalar(&mut scalars, offset, Type::Ptr)?,
                 | TypeKind::Array(element, bound) => {
                     let count = match bound {
                         | ArrayBound::Constant(count) => count,
@@ -404,10 +405,13 @@ pub(super) fn target_type(types: &Types<'_>, ty: TypeId) -> Option<TypeId> {
 }
 
 /// The size pointer arithmetic steps by for an element type: its layout's
-/// size, or 1 for `void`, which semantic analysis accepts only as the GNU
-/// extension. GNU extension: GCC "Pointer Arith".
+/// size, or 1 for void/function targets, which semantic analysis accepts only
+/// as the GNU extension. GNU extension: GCC "Pointer Arith".
 pub(super) fn arithmetic_size(types: &Types<'_>, element: TypeId) -> Option<u64> {
-    if let TypeKind::Scalar(Scalar::Void) = types.kind(element) {
+    if matches!(
+        types.kind(element),
+        TypeKind::Scalar(Scalar::Void) | TypeKind::Function { .. }
+    ) {
         return Some(1);
     }
     types.layout(element).map(|layout| layout.size)

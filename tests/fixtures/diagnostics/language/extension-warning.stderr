@@ -1,4 +1,4 @@
-warning: '__const__' is a GNU extension
+warning: '__const__' is a GNU extension [-Wpedantic]
  --> <input>:1:14
   |
 1 | #define QUAL __const__

@@ -47,6 +47,16 @@ fn assert_clean(context: &mut Context<'_>, _: &SemanticTranslationUnit<'_>) {
     );
 }
 
+fn assert_null_conversion_warning(context: &mut Context<'_>, unit: &SemanticTranslationUnit<'_>) {
+    let diagnostics = context.take_pending_errors();
+    assert!(
+        matches!(diagnostics.as_slice(), [TranslationError::Semantic(error)]
+        if error.kind == SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::NonLiteralNullConversion)),
+        "{diagnostics:?}"
+    );
+    assert_eq!(unit.errors, 0);
+}
+
 #[test]
 fn unevaluated_commas_preserve_null_pointer_ice() {
     for expression in [
@@ -59,7 +69,7 @@ fn unevaluated_commas_preserve_null_pointer_ice() {
             &format!("int *p = {expression};"),
             CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
             |context, unit| {
-                assert_clean(context, unit);
+                assert_null_conversion_warning(context, unit);
                 let info = unit.expressions.last().unwrap();
                 assert!(info.ice, "{expression}");
                 assert_eq!(info.integer.unwrap().value, 0, "{expression}");
@@ -129,7 +139,7 @@ fn vla_alignof_is_an_element_alignment_ice() {
              }}; int *p = {operator}(int[n]) == 4 ? 0 : 1; sizeof(int[n]); sizeof(a); }}"
         );
         with_configuration(&source, configuration, |context, unit| {
-            assert_clean(context, unit);
+            assert_null_conversion_warning(context, unit);
             for name in ["N", "M"] {
                 let binding = unit
                     .bindings

@@ -7,18 +7,18 @@ warning: incompatible pointer types in conversion [-Wincompatible-pointer-types]
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 warning: incompatible function pointer types in conversion [-Wincompatible-function-pointer-types]
- --> sema-pointer-demote.c:3:61
+ --> sema-pointer-demote.c:3:59
   |
 3 | void function_assign(int (*p)(int), int (*q)(double)) { p = q; }
-  |                                                             ^ pointer constraint violation
+  |                                                           ^ pointer constraint violation
   |
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 warning: incompatible integer and pointer conversion [-Wint-conversion]
- --> sema-pointer-demote.c:4:43
+ --> sema-pointer-demote.c:4:41
   |
 4 | void integer_pointer(int *p, int q) { p = q; }
-  |                                           ^ pointer constraint violation
+  |                                         ^ pointer constraint violation
   |
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 

@@ -39,14 +39,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         source: ExpressionInfo<'tu>,
     ) -> bool {
+        self.assignment_conversion_at(target, source, source.expression.source_vectors)
+    }
+
+    /// Uses the assignment operator as the diagnostic location while the
+    /// conversion remains attached to its operand.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    pub(in crate::translation_phases::semantic_analysis) fn assignment_conversion_at(
+        &mut self,
+        target: TypeId,
+        source: ExpressionInfo<'tu>,
+        diagnostic_site: SourceVectors,
+    ) -> bool {
         if self.assignment_compatible(target, source) {
+            if self.pointer_target(target).is_some() && self.null_pointer_constant(source) {
+                self.null_conversion_warning(source, false, diagnostic_site);
+            }
+            if matches!(
+                self.types.nodes[target.index],
+                TypeKind::Scalar(Scalar::Bool)
+            ) {
+                self.boolean_conversion_warning(source);
+            }
             return true;
         }
         let target = self.types.non_atomic(target);
         // Compatibility has already recorded lvalue conversion or decay.
         let (from, _) = self.value_conversion(source);
         if let Some(group) = self.pointer_conversion_violation(target, from) {
-            self.pointer_diagnostic(group, source.expression.source_vectors);
+            self.pointer_diagnostic(group, diagnostic_site);
             return true;
         }
         // Clang accepts function/void pointers silently by default and reports
@@ -59,11 +80,98 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.context.report_extension_since(
                 "conversion between function and void pointers",
                 FeatureOrigin::Gnu,
-                source.expression.source_vectors,
+                diagnostic_site,
             );
             return true;
         }
         false
+    }
+
+    /// Diagnoses suspicious but valid C null pointer constants. Parentheses
+    /// do not change whether the expression was a literal.
+    /// C99: §6.3.2.3p3, p. 47; PDF p. 59.
+    pub(super) fn null_conversion_warning(
+        &mut self,
+        info: ExpressionInfo<'tu>,
+        comparison: bool,
+        site: SourceVectors,
+    ) {
+        use crate::translation_phases::parsing::syntax::{
+            Constant,
+            ExpressionType as E,
+        };
+        let mut expression = info.expression;
+        while let E::Parenthesized { expression: inner } = expression.kind {
+            expression = inner;
+        }
+        if comparison && matches!(expression.kind, E::Constant(Constant::Char(_))) {
+            self.pointer_diagnostic(DiagnosticGroup::PointerCompare, site);
+        } else if !comparison
+            && !self.nullptr_type(info.ty)
+            && !matches!(expression.kind, E::Constant(Constant::Integer(_)))
+            && !matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(_))
+        {
+            self.pointer_diagnostic(
+                DiagnosticGroup::NonLiteralNullConversion,
+                expression.source_vectors,
+            );
+        }
+    }
+
+    /// Diagnoses implicit Boolean conversion while retaining the operand's
+    /// type; truth contexts need no synthetic cast.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
+    pub(super) fn boolean_conversion_warning(&mut self, info: ExpressionInfo<'tu>) {
+        if self.nullptr_type(info.ty) {
+            self.pointer_diagnostic(
+                DiagnosticGroup::NullConversion,
+                info.expression.source_vectors,
+            );
+        } else {
+            self.pointer_bool_warning(info);
+        }
+    }
+
+    /// Clang's pointer-to-bool warning concerns a known address, not the
+    /// unknown value read from a pointer variable.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
+    pub(super) fn pointer_bool_warning(&mut self, info: ExpressionInfo<'tu>) {
+        use crate::translation_phases::parsing::syntax::{
+            ExpressionType as E,
+            UnaryOperator as U,
+        };
+        let mut expression = info.expression;
+        while let E::Parenthesized { expression: inner } = expression.kind {
+            expression = inner;
+        }
+        let address = if let E::Unary {
+            operator: U::AddressOf,
+            operand_expression,
+        } = expression.kind
+        {
+            let mut operand = operand_expression;
+            loop {
+                match operand.kind {
+                    | E::Identifier(_) | E::CompoundLiteral { .. } => break true,
+                    | E::Parenthesized { expression } => operand = expression,
+                    | E::DirectMember {
+                        base_expression, ..
+                    } => operand = base_expression,
+                    | _ => break false,
+                }
+            }
+        } else {
+            false
+        };
+        if info.category == super::ValueCategory::FunctionDesignator
+            || matches!(self.types.nodes[info.ty.index], TypeKind::Array(..))
+            || address
+        {
+            self.pointer_diagnostic(
+                DiagnosticGroup::PointerBoolConversion,
+                expression.source_vectors,
+            );
+        }
     }
 
     /// The sole conversion-constraint classifier. Callers first test standard

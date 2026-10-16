@@ -167,7 +167,13 @@ int following;
 
 #[test]
 fn atomic_bool_accepts_static_address_initializers() {
-    check(ATOMIC_BOOL_ADDRESS, CStandard::C11, &[]);
+    check(
+        ATOMIC_BOOL_ADDRESS,
+        CStandard::C11,
+        &[SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::PointerBoolConversion,
+        )],
+    );
 }
 
 const LOCK_FREE_SIZE: &str = r#"

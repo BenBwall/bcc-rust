@@ -486,15 +486,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 }
                 ParseAction::Consume
             },
-            | Phase::AttributeArgument => {
-                self.phase = Phase::AwaitAttributeArgument;
-                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
-                    parser.arena,
-                    ExpressionMode::ConstantExpression,
-                    ExpressionBoundary::Argument,
-                    parser.hard_error_count,
-                )))
-            },
+            | Phase::AttributeArgument => self.attribute_argument(parser, token),
             | Phase::AwaitAttributeArgument =>
                 self.complete_attribute_argument(parser, token, returned),
             | Phase::Finish => {
@@ -550,6 +542,49 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
+    /// Parses the integer operand or the GNU nonnull parameter list.
+    /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
+    fn attribute_argument(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        let list = self.tokens.iter().rev().nth(1).is_some_and(|token| {
+            parser
+                .context
+                .string_cache
+                .at(token.contents)
+                .trim_matches('_')
+                == "nonnull"
+        });
+        if list
+            && token.is_some_and(|token| {
+                matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                )
+            })
+        {
+            self.phase = Phase::AttributeTokens;
+            return ParseAction::Continue;
+        }
+        self.phase = Phase::AwaitAttributeArgument;
+        ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+            parser.arena,
+            if list {
+                ExpressionMode::Expression
+            } else {
+                ExpressionMode::ConstantExpression
+            },
+            if list {
+                ExpressionBoundary::ClosingParenthesis
+            } else {
+                ExpressionBoundary::Argument
+            },
+            parser.hard_error_count,
+        )))
+    }
+
     /// GCC aligned, and the constructor/destructor priority, have a C integer
     /// constant expression operand. Keep unknown vendor-prefixed attributes
     /// opaque, even if their name is `aligned`.
@@ -578,7 +613,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 .string_cache
                 .at(name.contents)
                 .trim_matches('_');
-            matches!(name, "aligned" | "constructor" | "destructor")
+            matches!(name, "aligned" | "constructor" | "destructor" | "nonnull")
         }) && parser.cursor.alignment_argument_closes(parser.arena)
         {
             self.argument_index = parser.cursor.consumed - self.attribute_start - 1;

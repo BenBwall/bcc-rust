@@ -1,5 +1,17 @@
 # Diagnostic golden corpus
 
+Issues #49/#54 (2026-10-16): extension headlines now retain `[-Wpedantic]`,
+and the predefined-name fixture retains
+`[-Wpredefined-identifier-outside-function]`. Unknown STDC pragmas use the
+`unknown-pragmas` warning group. Pointer assignment and root initializer labels
+identify the operator and declarator; macro diagnostics identify the invocation.
+The Clang comparison in `tests/diagnostic_parity.rs` checks those positions,
+C23 nullptr constraints, default warning groups and suppress/promote controls,
+K&R calls, C89 predefined names, embedded directives, GNU subtraction and CLI
+warning-option behavior. Semantic tests retain nullptr/nonnull facts and typedef
+spellings; pipeline tests replay #49 with relocation, interpreter and native
+execution checks. Snapshot updates are reviewed against those intended changes.
+
 Issue #46 (2026-10-14): `sema-pointer-warnings` pins distinct object comparisons,
 pointer signedness, immediate/nested qualifiers, pointer/integer comparisons
 and ordered function-pointer comparisons with Clang group names. Ordering

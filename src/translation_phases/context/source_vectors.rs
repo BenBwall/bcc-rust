@@ -285,6 +285,12 @@ impl Context<'_> {
             return source;
         };
         let site = sites.ends[id as usize].clone();
+        let spelling = self.first_source_vector(source);
+        // A token written within the invocation is a macro argument. Its
+        // own physical location is more precise than the macro's name.
+        if spelling.source_file_index == site.source_file_index && spelling.index >= site.index {
+            return source;
+        }
         self.create_retained_source_vectors(
             site.position(self),
             site.source_file_index,

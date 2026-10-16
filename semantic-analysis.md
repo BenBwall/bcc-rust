@@ -2103,3 +2103,27 @@ constants. GNU `void *` arithmetic
 compound assignment and subscripts, and in address constants and constant
 differences; a `void` subscript is an rvalue that is never read, and `sizeof`
 of `void` is 1 in every mode.
+
+
+## Diagnostic parity follow-up (#49 and #54)
+
+`TypeKind::Nullptr` retains the C23 null pointer type independently of ordinary
+pointers. Its layout and lowering representation match pointers; constraints
+admit pointer and Boolean conversions and reject integer/arithmetic misuse.
+Nullptr literals have a constant null address and no effects. GNU function
+pointer arithmetic uses byte stride, including subtraction.
+
+The assignment conversion classifier accepts a separate diagnostic site while
+retaining the conversion at the operand. Root declaration initializers use the
+identifier, assignments use the operator, and diagnostics from expanded syntax
+report at the invocation; tokens written as macro arguments keep their own
+locations. Parser diagnostic folding still uses spelling provenance. New
+null/pointer warning groups retain ordinary
+conversion facts. K&R calls check the parameter types retained by a visible
+definition without replacing the default argument promotions. `nonnull`
+attributes retain pointer parameter positions in entity facts and merge them
+over redeclarations; later direct calls check constant null arguments.
+
+Predefined signature typedef sugar is looked up at the function declaration's
+scope rather than the first use's active body scope. C89 `__func__` follows
+Clang's reserved-identifier behavior without a C99 extension diagnostic.

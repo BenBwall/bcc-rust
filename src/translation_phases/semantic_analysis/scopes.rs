@@ -70,6 +70,28 @@ impl Analyzer<'_, '_, '_> {
             .map(|&i| self.entries[i])
     }
 
+    /// Looks up a name as visible in an enclosing declaration scope.
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
+    pub(super) fn lookup_at(
+        &self,
+        namespace: Namespace,
+        name: StringCacheId,
+        scope: usize,
+    ) -> Option<Entry> {
+        let mut index = self.visible.get(&(namespace, name)).copied()?;
+        loop {
+            let entry = self.entries[index];
+            let mut ancestor = Some(scope);
+            while let Some(scope) = ancestor {
+                if scope == entry.scope {
+                    return Some(entry);
+                }
+                ancestor = self.scopes[scope].parent;
+            }
+            index = entry.previous?;
+        }
+    }
+
     /// C99: §6.2.1p7, p. 30; PDF p. 42; §6.2.3p1, p. 31; PDF p. 43.
     pub(super) fn install(&mut self, name: Identifier, namespace: Namespace, binding: usize) {
         let previous = self.visible.get(&(namespace, name.name)).copied();
