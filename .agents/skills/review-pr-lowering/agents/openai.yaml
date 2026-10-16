@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Lowering"
+  short_description: "Review C-to-IR lowering, SSA, UB flags, and IR invariants"
+  default_prompt: "Use $review-pr-lowering to review the current PR's lowering and IR changes."
