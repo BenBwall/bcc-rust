@@ -139,6 +139,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         attribute: &AttributeSpecifier<'tu>,
     ) {
         for argument in attribute.arguments.iter().rev() {
+            if !super::known_names(attribute, self.context)
+                .any(|(index, _)| index == argument.index)
+            {
+                continue;
+            }
             if super::written::written(attribute, self.context).any(|written| {
                 written.index == argument.index
                     && matches!(written.name, "diagnose_if" | "enable_if")
