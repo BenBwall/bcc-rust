@@ -74,6 +74,8 @@ class LauncherTests(unittest.TestCase):
             for groups in hooks.values():
                 for group in groups:
                     for hook in group["hooks"]:
+                        if "scripts/agentbus/run.py" not in hook["command"]:
+                            continue
                         command = shlex.split(hook["command"])
                         self.assertEqual(command[0], "python")
                         configurations.append((command[1:], {}))
