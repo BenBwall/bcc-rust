@@ -115,6 +115,9 @@ pub(crate) enum BuiltinId {
     Isnan = 103,
     Isnormal = 104,
     ReturnAddress = 105,
+    Rdtsc = 106,
+    Debugbreak = 107,
+    Annotation = 108,
 }
 
 impl BuiltinId {
@@ -199,6 +202,9 @@ impl BuiltinId {
             | Self::VaEnd => &scalar::BUILTINS[76],
             | Self::VaStart => &scalar::BUILTINS[77],
             | Self::PlainAlloca => &scalar::BUILTINS[78],
+            | Self::Rdtsc => &scalar::BUILTINS[79],
+            | Self::Debugbreak => &scalar::BUILTINS[80],
+            | Self::Annotation => &scalar::BUILTINS[81],
             | Self::LibraryAbort => &library::BUILTINS[0],
             | Self::LibraryAbs => &library::BUILTINS[1],
             | Self::LibraryCalloc => &library::BUILTINS[2],
@@ -243,6 +249,7 @@ pub(crate) fn descriptors() -> impl Iterator<Item = &'static BuiltinDescriptor> 
 }
 
 const NAMES: &[(&str, BuiltinId)] = &[
+    ("__annotation", BuiltinId::Annotation),
     ("__builtin_abort", BuiltinId::LibraryAbort),
     ("__builtin_abs", BuiltinId::LibraryAbs),
     ("__builtin_add_overflow", BuiltinId::AddOverflow),
@@ -357,5 +364,7 @@ const NAMES: &[(&str, BuiltinId)] = &[
     ("__builtin_va_copy", BuiltinId::VaCopy),
     ("__builtin_va_end", BuiltinId::VaEnd),
     ("__builtin_va_start", BuiltinId::VaStart),
+    ("__debugbreak", BuiltinId::Debugbreak),
+    ("__rdtsc", BuiltinId::Rdtsc),
     ("alloca", BuiltinId::PlainAlloca),
 ];

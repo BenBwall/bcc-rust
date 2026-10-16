@@ -365,11 +365,19 @@ fn cross_frame_calls_preserve_replacement_token_blue_paint() {
             "#define ID(x) x\n#define foo(x) [x]\n#define WRAP ID(foo)(ID)\nWRAP(1)\n",
             "[ ID ] ( 1 )",
         ),
-        // Keep the live replacement frames' disablement while rescanning
-        // g's replacement, even though its argument comes from source.
+        // C11 §6.10.3.4p4 allows either result. As in GCC and Clang, f's
+        // replacement is no longer being rescanned once g's call reads past
+        // its end, so g's replacement may expand f again; g stays painted.
         (
             "#define f(a) a*g\n#define g(a) f(a)\nf(2)(9)\n",
-            "2 * f ( 9 )",
+            "2 * 9 * g",
+        ),
+        // Microsoft's `TraceLoggingProvider.h` counts arguments this way.
+        (
+            "#define P2(a, b) P2_imp(a, b)\n#define P2_imp(a, b) a##b\n#define N(e, args) \
+             P2(N_imp, e) args\n#define N_imp0(...) P2(N_imp2(__VA_ARGS__, 3, 2, 1,),)\n#define \
+             N_imp2(a1, a2, a3, a4, ...) a4\nN(0, (a, b, c))\n",
+            "3",
         ),
     ] {
         assert_expansion(source, expected);

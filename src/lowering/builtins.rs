@@ -342,7 +342,28 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Opcode::FrameAddress
                 }))
             },
-            | CommonBuiltin::Prefetch => Operand::Void,
+            // Debug-information annotations do not execute.
+            | CommonBuiltin::Prefetch | CommonBuiltin::Annotation => Operand::Void,
+            // x86 `__rdtsc` reads the time-stamp counter, as Clang's
+            // `llvm.x86.rdtsc`.
+            | CommonBuiltin::ReadTimestamp => Operand::Value(self.inst(
+                InstData::Nullary {
+                    opcode: Opcode::ReadTimestamp,
+                    ty:     Type::I64,
+                },
+                Type::I64,
+            )),
+            // Microsoft `__debugbreak` traps to a debugger and may continue.
+            | CommonBuiltin::DebugTrap => {
+                _ = self.draft.push(
+                    Op::Inst(InstData::Nullary {
+                        opcode: Opcode::DebugTrap,
+                        ty:     Type::Ptr,
+                    }),
+                    None,
+                );
+                Operand::Void
+            },
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {
                 if builtin == CommonBuiltin::Trap {
                     _ = self.draft.push(

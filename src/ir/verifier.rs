@@ -737,7 +737,8 @@ impl Verifier<'_, '_, '_, '_> {
                 }
             },
             | InstData::Nullary { ty, .. } => checker.require(
-                opcode == Opcode::Trap
+                matches!(opcode, Opcode::Trap | Opcode::DebugTrap)
+                    || (opcode == Opcode::ReadTimestamp && ty == Type::I64)
                     || (matches!(
                         opcode,
                         Opcode::StackSave | Opcode::FrameAddress | Opcode::ReturnAddress

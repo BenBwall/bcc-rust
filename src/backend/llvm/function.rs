@@ -551,6 +551,14 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 opcode: Opcode::Trap,
                 ..
             } => self.intrinsic("llvm.trap", &[], &[]),
+            | InstData::Nullary {
+                opcode: Opcode::DebugTrap,
+                ..
+            } => self.intrinsic("llvm.debugtrap", &[], &[]),
+            | InstData::Nullary {
+                opcode: Opcode::ReadTimestamp,
+                ..
+            } => self.intrinsic("llvm.x86.rdtsc", &[], &[]),
             | InstData::IndirectBr { addr, dests } => {
                 let dests = self.body.block_list(dests);
                 let branch = api.indirect_br(

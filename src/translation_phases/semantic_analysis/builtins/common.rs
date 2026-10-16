@@ -88,6 +88,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         };
         let mut info = Self::expression_result(e, result);
+        // C99 §6.4.5p2 wide string literals, as Clang requires of
+        // Microsoft's `__annotation`.
+        if descriptor.type_rule == crate::builtins::TypeRule::WideStrings {
+            for &argument in args {
+                if !matches!(
+                    argument.kind,
+                    ExpressionType::StringLiteral(
+                        crate::translation_phases::preprocessing::StringTokenType::WideString(_)
+                    )
+                ) {
+                    self.error(
+                        SemanticErrorKind::AnnotationArgument,
+                        argument.source_vectors,
+                        None,
+                        None,
+                    );
+                }
+            }
+        }
         if descriptor.type_rule == crate::builtins::TypeRule::Fixed {
             for (index, &argument) in args.iter().enumerate() {
                 self.check_registry_argument(descriptor, index, argument, name.name);
@@ -196,7 +215,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Trap
             | CommonBuiltin::Varargs(_)
             | CommonBuiltin::Library
-            | CommonBuiltin::Offsetof => {},
+            | CommonBuiltin::Offsetof
+            | CommonBuiltin::ReadTimestamp
+            | CommonBuiltin::DebugTrap
+            | CommonBuiltin::Annotation => {},
         }
         Some(info)
     }

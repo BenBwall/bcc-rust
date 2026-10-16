@@ -572,6 +572,10 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 opcode: Opcode::Trap,
                 ..
             } => self.emit(MInst::Ud2),
+            | InstData::Nullary {
+                opcode: Opcode::DebugTrap,
+                ..
+            } => self.emit(MInst::Int3),
             // GNU extension: GCC manual, "Getting the Return or Frame
             // Address of a Function", level 0.
             | InstData::Nullary {

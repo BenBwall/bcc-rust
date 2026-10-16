@@ -64,6 +64,18 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         }
     }
 
+    /// Starts after a UTF-8 byte-order mark that begins the file, as Clang
+    /// and GCC skip it: phase 1 maps the encoding signature to no source
+    /// character. Positions keep counting from the file's first byte.
+    /// C99: §5.1.1.2p1, pp. 9-10; PDF pp. 21-22 (implementation-defined
+    /// mapping of physical source characters).
+    pub(super) fn after_byte_order_mark(mut self) -> Self {
+        if self.text.starts_with('\u{feff}') {
+            self.pos = '\u{feff}'.len_utf8();
+        }
+        self
+    }
+
     pub(super) fn with_terminal_splice(mut self, terminal_splice: bool) -> Self {
         self.terminal_splice = terminal_splice;
         self

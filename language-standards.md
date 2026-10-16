@@ -805,11 +805,14 @@ limits (C23 §6.10.2p11, §6.10.4.2p3); their names remain defined for `defined`
 token or directive boundary.
 
 `__has_c_attribute` returns 202311 for the seven standard C23 attributes and
-`_Noreturn`, including double-underscore forms, and 0 for other names. GNU
-`__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
-`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`,
-`noinline`, `gnu_inline`, `transparent_union`, `cleanup`, `constructor`,
-`destructor`, `alias` and `used`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`_Noreturn`, including double-underscore forms. GNU `__has_attribute(name)`
+and `__has_c_attribute(gnu::name)` or `(clang::name)` answer from the
+attribute catalog exactly as bundled Clang does for the selected target
+(`external_source_symbol` is 20230206), including attributes that bcc
+refuses or only accepts, and 0 for other names and vendors; see
+[the attribute status](#gnu-entity-attributes-and-attribute-status-2026-10-14).
+`__has_builtin` returns 1 for `__builtin_va_arg`, x86 `__rdtsc` (and
+Microsoft's `__debugbreak` with Microsoft extensions),
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -1361,27 +1364,69 @@ Implemented meanings, with Clang's applicability diagnostics:
   host function when the host provides one, else to null.
 - `section("name")`, `used`, `visibility("default"|"hidden"|"internal"|
   "protected")` and `aligned(N)` on functions are emitted on the symbol;
-  `section` and `alias` on an automatic variable are errors, `used` warns.
+  `used` is `llvm.compiler.used` on ELF and `llvm.used` on COFF, as Clang
+  emits it. `section` and `alias` on an automatic variable, a typedef, a
+  member or a parameter are errors, as in Clang; `used` there warns.
+- `noinline` and `noipa` keep the bcc inliner from expanding a function and
+  mark it `noinline` for LLVM (bcc has no other interprocedural pass, so
+  `noipa` means the same; LLVM's own interprocedural passes do not see it,
+  as Clang, which does not know `noipa`, does not mark it either).
+  `always_inline` asks the inliner to expand every direct call it can copy,
+  regardless of size, and LLVM to as well; an `always_inline` GNU or C99
+  inline body that supplies no external definition becomes a private copy
+  that direct calls reach.
+- A goto in a cleanup variable's own initializer (a statement expression)
+  may jump to a label in the variable's scope, as Clang allows; the cleanup
+  then runs when the scope ends.
   Visibility on an entity with internal linkage is accepted silently and has
   no effect, as in Clang.
 
 | Status | Attributes |
 | --- | --- |
-| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions |
+| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `noinline`, `noipa`, `always_inline` |
 | Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
-| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `returns_twice` (at each direct call; declarations nothing calls, as in MinGW's `<setjmp.h>`, are accepted), `overloadable`, `cpu_dispatch`, `cpu_specific`, `target_version`, `pass_object_size`, `pass_dynamic_object_size`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
+| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `returns_twice` (at each direct call; declarations nothing calls, as in MinGW's `<setjmp.h>`, are accepted), `overloadable`, `cpu_dispatch`, `cpu_specific`, `target_version`, `pass_object_size`, `pass_dynamic_object_size`, `address_space` (x86 segment address spaces), `internal_linkage`, the Swift parameter attributes (`swift_async_context` passes its parameter in `r14`, `swift_context`, `swift_error_result`, `swift_indirect_result`), the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
-| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `always_inline`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `noinline`, `noipa`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, and the C23 standard attributes; see the catalog for the full list |
-| Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), and MSVC `restrict`, `uuid`, `allocate` through MinGW's `__declspec` macro |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, the C23 standard attributes and every other name Clang knows; see the catalog for the full list |
+| Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and the target-specific names on other targets |
 
-`__declspec` modifiers use the MSVC catalog: `align` stays an unanalyzed
-representation, `allocate` is `section`, `thread` is thread storage duration
-(also in the GNU spelling MinGW's `__declspec` macro produces; see the
-thread-local storage notes), `naked` is refused, and
-`dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`, `noinline`,
+`__declspec` modifiers use the names Clang supports there: `align` stays an
+unanalyzed representation, `allocate` is `section`, `thread` is thread storage
+duration (also in the GNU spelling MinGW's `__declspec` macro produces; see
+the thread-local storage notes), `naked` is refused, `noinline` is the GNU
+attribute, and `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
 `deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
-declaration annotations are accepted.
+declaration annotations are accepted. Space-separated modifiers, as in
+`__declspec(selectany allocate("s"))`, are one list. Other names, such as the
+GNU `__declspec(weak)`, warn as Clang's unsupported `__declspec` attributes.
+
+## Windows headers, intrinsics and macro rescanning (2026-10-16)
+
+Checked against MinGW-w64 13.0.0 and Microsoft's published `win32metadata`
+headers for `x86_64-w64-windows-gnu` (C99, cross-target; no Windows program
+was run):
+
+- A UTF-8 byte-order mark that begins a source file is skipped, as Clang and
+  GCC do (Microsoft's `icu.h`); one elsewhere is a stray character.
+- A forward reference to an enum tag, as in WinRT's `typedef enum E E;`
+  before `enum E { ... }`, is accepted in every mode as GCC and Clang accept
+  it, reported only under `-pedantic` as a GNU extension; the type is
+  incomplete until its list.
+- When a function-like macro call reads past the end of the replacement
+  that supplied its name, that replacement's macro may expand again inside
+  the call's replacement, as GCC and Clang choose (C11 §6.10.3.4p4 allows
+  either); `TraceLoggingProvider.h` counts arguments that way.
+- `__rdtsc` is Clang's x86 builtin in every target and mode
+  (`unsigned long long __rdtsc(void)`, `llvm.x86.rdtsc`); the interpreter
+  gives an increasing counter and the native back end refuses it.
+  `__debugbreak` is the Microsoft breakpoint with Microsoft extensions
+  (`llvm.debugtrap`, `int3`); the interpreter ends the program as an
+  undebugged breakpoint does.
+  `__annotation(L"...", ...)`, which `TraceLoggingProvider.h` writes, is
+  Microsoft's debug-information annotation with Microsoft extensions: its
+  arguments must be wide string literals and it does not execute (bcc emits
+  no CodeView annotation).
 
 ## GNU labels as values (2026-10-14)
 

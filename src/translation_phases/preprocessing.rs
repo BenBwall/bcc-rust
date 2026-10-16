@@ -411,6 +411,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                                 invocation:     self.invocation_location(token),
                                 spelling:       self.spelling_location(token),
                                 name:           token.identifier_id(self.context),
+                                released:       false,
                             },
                             tokenizer,
                         };
@@ -450,6 +451,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                                     name: token.identifier_id(self.context),
                                     arguments,
                                     is_variadic,
+                                    released: false,
                                 },
                                 tokenizer,
                             });
@@ -735,6 +737,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                                 name: token.identifier_id(self.context),
                                 arguments,
                                 is_variadic,
+                                released: false,
                             },
                             tokenizer,
                         };

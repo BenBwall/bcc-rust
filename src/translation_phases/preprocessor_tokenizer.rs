@@ -136,6 +136,7 @@ impl<'a> LexedFile<'a> {
         let terminal_splice = terminal_splice_length(source, trigraphs);
         let file = Lexer::new(context, arena, &scratch, text, remaps, source.is_empty())
             .with_terminal_splice(terminal_splice.is_some())
+            .after_byte_order_mark()
             .run();
         let escaped_final_newline = terminal_splice.map(|length| {
             let index = source.len() - length;

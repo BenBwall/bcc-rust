@@ -38,6 +38,9 @@ pub(crate) struct Availability {
 pub(crate) enum NamingPolicy {
     Reserved,
     GnuOrdinary,
+    /// A Microsoft compiler intrinsic, which Clang provides only with
+    /// Microsoft extensions (`__debugbreak`).
+    Microsoft,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +80,8 @@ pub(crate) enum TypeRule {
     Overflow,
     Varargs,
     Offsetof,
+    /// Every argument is a wide string literal (Microsoft `__annotation`).
+    WideStrings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +172,17 @@ pub(crate) enum BuiltinOperation {
     Complex,
     Library,
     Offsetof,
+    /// x86 `__rdtsc`: the processor's time-stamp counter.
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-readcyclecounter>
+    ReadTimestamp,
+    /// Microsoft `__debugbreak`: a breakpoint trap after which execution
+    /// may continue. MSVC extension: Microsoft Learn, "__debugbreak".
+    /// <https://learn.microsoft.com/en-us/cpp/intrinsics/debugbreak>
+    DebugTrap,
+    /// Microsoft `__annotation`: wide strings for the debug information,
+    /// with no effect on execution. MSVC extension: Microsoft Learn,
+    /// "__annotation". <https://learn.microsoft.com/en-us/cpp/intrinsics/annotation>
+    Annotation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

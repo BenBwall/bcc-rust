@@ -571,7 +571,7 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `ConflictingLinkage` | [linkage](sema-linkage.c) | Internal/external linkage mix. Positive extern-after-static is in unit tests. |
 | `TagKindMismatch` | [tag kind](sema-tag-kind.c) | Tag namespace kind conflicts. |
 | `TagRedefinition` | [tag definition](sema-tag-redefinition.c) | Completing an already complete tag. |
-| `IncompleteEnum` | [enum declaration](sema-enum-incomplete.c) | Strict C99 enum tag without a prior completion. |
+| `Extension(ForwardEnumReference)` | [enum declaration](sema-enum-incomplete.c) | An enum tag without a prior completion under `-pedantic-errors`; accepted silently otherwise, as Clang does. |
 | `InvalidConstant` | [constant](sema-constant.c) | Runtime enumerator operand, including unselected conditional/logical arms. |
 | `ConstantOverflow` | [overflow](sema-overflow.c) | Exceptional ICE evaluation; no dependent enumerator cascade. |
 | `EnumeratorRange` | [enum range](sema-enum-range.c) | Members that no 64-bit integer type holds; under `-pedantic-errors` the C23 extension diagnostic for values outside int precedes it. |

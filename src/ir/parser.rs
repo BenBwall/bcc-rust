@@ -806,8 +806,13 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 self.builder.constant(opcode, ty, bits)
             },
             | Opcode::Poison => InstData::Nullary { opcode, ty },
+            | Opcode::ReadTimestamp => InstData::Nullary {
+                opcode,
+                ty: Type::I64,
+            },
             | Opcode::Null
             | Opcode::Trap
+            | Opcode::DebugTrap
             | Opcode::StackSave
             | Opcode::FrameAddress
             | Opcode::ReturnAddress => InstData::Nullary {

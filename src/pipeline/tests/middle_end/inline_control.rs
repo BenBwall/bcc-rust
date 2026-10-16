@@ -1,9 +1,14 @@
-//! GNU inline controls through lowering, the bcc optimizer, the interpreter
-//! and LLVM.
+//! GNU inline controls and the x86/Microsoft timing and breakpoint
+//! intrinsics through lowering, the bcc optimizer, the interpreter and LLVM.
 //! GNU extension: GCC manual, "Common Function Attributes", noinline, noipa,
 //! `always_inline`, and "Inline".
 
 use super::*;
+use crate::configuration::{
+    CStandard,
+    ExtensionPolicy,
+};
+
 /// Whether `module` keeps a direct call to `callee` in `main`.
 fn calls(module: &Module<'_>, callee: &str) -> bool {
     let text = module.to_string();
@@ -114,6 +119,51 @@ fn private_inline_bodies_bring_their_dependencies() {
             });
         }
     }
+}
+
+/// `__rdtsc` reads an increasing counter in every mode; `__debugbreak`
+/// is Microsoft's breakpoint, `llvm.debugtrap` as Clang emits it.
+#[test]
+fn timestamp_and_breakpoint_intrinsics_lower() {
+    let source =
+        "int main(void) { unsigned long long a = __rdtsc(), b = __rdtsc(); return b > a ? 0 : 1; }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        let configuration =
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow).with_target(target);
+        for (optimize, profile) in STAGES {
+            with_configured_module(
+                source,
+                target,
+                optimize,
+                profile,
+                configuration,
+                |module, target| {
+                    assert_eq!(interpret(module, target).0, 0, "{module}");
+                    if profile == Profile::PostAbi {
+                        let mut llvm = String::new();
+                        crate::backend::llvm::emit_module(module, target, &mut llvm).unwrap();
+                        assert!(llvm.contains("@llvm.x86.rdtsc()"), "{llvm}");
+                    }
+                },
+            );
+        }
+    }
+    with_configured_module(
+        "void stop(void) { __debugbreak(); __annotation(L\"TlgWrite\", L\"probe\"); } int \
+         main(void) { return 0; }",
+        Target::WindowsMsvc,
+        false,
+        Profile::PostAbi,
+        CompilerConfiguration::default()
+            .with_target(Target::WindowsMsvc)
+            .with_msvc_extensions(true),
+        |module, target| {
+            assert!(module.to_string().contains("debug_trap"), "{module}");
+            let mut llvm = String::new();
+            crate::backend::llvm::emit_module(module, target, &mut llvm).unwrap();
+            assert!(llvm.contains("call void @llvm.debugtrap()"), "{llvm}");
+        },
+    );
 }
 
 /// Runs `main` and returns its status, ignoring output.

@@ -116,6 +116,7 @@ impl Expander<'_, '_, '_, '_> {
                                     paren_depth,
                                     argument,
                                     has_generated_token,
+                                    ..
                                 },
                             ..
                         } => {

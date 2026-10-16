@@ -622,6 +622,7 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             globals,
             steps: 0,
             activations: 0,
+            timestamp: 0,
         })
     }
 }

@@ -354,6 +354,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 invocation_end: location,
                 arguments,
                 is_variadic: true,
+                released: false,
             },
             tokenizer,
         });
