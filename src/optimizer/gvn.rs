@@ -37,9 +37,13 @@
 //! address-and-type table in `memory.rs`: each fact records the memory
 //! generation at its load or store, and intervening writes must all be proven
 //! disjoint. Calls, volatile accesses, range operations and `va_*` are full
-//! barriers. Memory facts cross only a dominator-tree edge whose child has
-//! exactly one CFG predecessor, the parent; joins and loop headers start a
-//! fresh generation. Leaving a subtree rolls back both tables and generations.
+//! barriers. A memory fact crosses a dominator-tree edge whose child has
+//! exactly one CFG predecessor, the parent, as it is. Entering a join or a
+//! loop header, the walk logs every write of the blocks on a path from the
+//! immediate dominator (the loop body, for a header), so a fact survives
+//! when none of them may alias it; a region of more than [`MAX_REGION`]
+//! blocks is a full barrier instead. Leaving a subtree rolls back both
+//! tables and generations.
 //! Stores, calls, the `va_*` operations and `freeze` have no pure key.
 //! LLVM's `freeze` returns "an arbitrary,
 //! but fixed, value" for poison, and different `freeze` instructions of one
@@ -76,6 +80,7 @@ use super::{
 use crate::{
     ir::{
         Block,
+        ControlFlowGraph,
         DominatorTree,
         Entity,
         FloatCC,
@@ -111,6 +116,7 @@ pub(super) fn run(
     let mut added: ArenaVec<'_, Key> = ArenaVec::new_in(scratch);
     let mut stack = ArenaVec::new_in(scratch);
     let mut memory = MemoryFacts::new(draft, module);
+    let mut regions = Regions::new(draft.blocks.len(), scratch);
     if let Some(&entry) = tree.reverse_post_order().first() {
         stack.push(Visit::Enter(entry));
     }
@@ -122,7 +128,8 @@ pub(super) fn run(
                 if let Some(parent) = tree.idom(block)
                     && cfg.predecessors(block) != [parent]
                 {
-                    memory.barrier();
+                    let region = regions.between(&cfg, parent, block);
+                    memory.join(draft, region);
                 }
                 stack.push(Visit::Leave(added.len(), scope));
                 for &child in children.of(block).iter().rev() {
@@ -142,6 +149,60 @@ pub(super) fn run(
         draft.sweep();
     }
     changed
+}
+
+/// The most blocks a join's region may have before GVN gives up on it and
+/// enters the join with a full memory barrier.
+const MAX_REGION: usize = 64;
+
+/// Finds the blocks between a join and its immediate dominator.
+struct Regions<'s> {
+    /// The visit stamp of each block; `stamp` marks this walk's visits.
+    seen:     ArenaVec<'s, u32>,
+    stamp:    u32,
+    blocks:   ArenaVec<'s, Block>,
+    worklist: ArenaVec<'s, Block>,
+}
+
+impl<'s> Regions<'s> {
+    fn new(blocks: usize, scratch: &'s Bump) -> Self {
+        let mut seen = ArenaVec::with_capacity_in(blocks, scratch);
+        seen.resize(blocks, 0);
+        Self {
+            seen,
+            stamp: 0,
+            blocks: ArenaVec::new_in(scratch),
+            worklist: ArenaVec::new_in(scratch),
+        }
+    }
+
+    /// Every block on a path from `parent`, the immediate dominator of
+    /// `join`, to `join` (`join` itself too when a loop leads back to it),
+    /// found by walking predecessors back to `parent`; `None` when there are
+    /// more than [`MAX_REGION`].
+    fn between(
+        &mut self,
+        cfg: &ControlFlowGraph<'_>,
+        parent: Block,
+        join: Block,
+    ) -> Option<&[Block]> {
+        self.stamp += 1;
+        self.blocks.clear();
+        self.worklist.clear();
+        self.worklist.extend_from_slice(cfg.predecessors(join));
+        while let Some(block) = self.worklist.pop() {
+            if block == parent || self.seen[block.index()] == self.stamp {
+                continue;
+            }
+            self.seen[block.index()] = self.stamp;
+            if self.blocks.len() == MAX_REGION {
+                return None;
+            }
+            self.blocks.push(block);
+            self.worklist.extend_from_slice(cfg.predecessors(block));
+        }
+        Some(&self.blocks)
+    }
 }
 
 /// A step of the walk over the dominator tree.

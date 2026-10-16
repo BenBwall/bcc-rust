@@ -225,6 +225,10 @@ pub(super) struct CodeGeneration {
     /// --opt=bcc).
     #[arg(long, requires = "back_end")]
     pub(super) print_after_all:      bool,
+    /// Print the bcc optimizer's per-pass runs, rewrites and times to
+    /// stderr when it finishes (implies --opt=bcc).
+    #[arg(long, requires = "back_end")]
+    pub(super) time_passes:          bool,
     /// Select the LLVM IR pipeline and code generation level; none means O0.
     #[arg(long, value_enum, default_value = "none", requires = "back_end")]
     pub(super) llvm_opt:             LlvmOpt,
@@ -284,7 +288,8 @@ impl CodeGeneration {
         let enabled = self.opt == MiddleEnd::Bcc
             || self.passes.is_some()
             || self.opt_bisect_limit.is_some()
-            || self.print_after_all;
+            || self.print_after_all
+            || self.time_passes;
         #[cfg_attr(
             not(test),
             expect(
@@ -297,6 +302,7 @@ impl CodeGeneration {
             let mut options = OptimizerOptions::default();
             options.passes = self.passes;
             options.print_after_all = self.print_after_all.then_some(print_after_all);
+            options.time_passes = self.time_passes.then_some(print_after_all);
             options.bisect_limit = self.opt_bisect_limit;
             options
         })

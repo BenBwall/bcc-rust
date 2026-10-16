@@ -511,6 +511,21 @@ block0(v0: i32):
     return v0
 }
 
+function @pair(i32) -> i32 external {
+    slot0 = stack_slot 8, align 4
+block0(v0: i32):
+    v1 = stack_addr slot0
+    store.i32 v0, v1, align 4
+    v2 = iconst.i64 4
+    v3 = ptr_add inbounds v1, v2
+    store.i32 v0, v3, align 4
+    v4 = load.i32 v3, align 4
+    v5 = iconst.i32 1
+    v6 = iadd.i32 v4, v5
+    v7 = iadd.i32 v6, v5
+    return v7
+}
+
 ";
 
 #[test]

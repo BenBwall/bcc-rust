@@ -99,6 +99,163 @@ block2(v4: i32):
     assert_pass_leaves(Pass::SimplifyCfg, input);
 }
 
+/// A labeled arm that only tests a second condition for the branch's other
+/// destination is not merged into the branch: the merge would delete the
+/// block its label names. No `indirect_br` lists it, so it has one
+/// incoming edge, as in `p = &&l; if (x) { l: if (y > 3) return 1; }`.
+#[test]
+fn condition_merging_keeps_labeled_arms() {
+    let input = "\
+function @f(i32, i32) -> ptr external {
+    label0 = block_label block1
+block0(v0: i32, v1: i32):
+    v2 = iconst.i32 0
+    v3 = icmp.i32 ne v0, v2
+    brif v3, block1, block3
+block1:
+    v4 = iconst.i32 3
+    v5 = icmp.i32 sgt v1, v4
+    brif v5, block2, block3
+block2:
+    v6 = block_addr label0
+    return v6
+block3:
+    v7 = null
+    return v7
+}
+";
+    assert_pass_leaves(Pass::SimplifyCfg, input);
+    let (optimized, _) = optimize_text(
+        input,
+        &OptimizerOptions {
+            verify_each: true,
+            ..OptimizerOptions::default()
+        },
+    );
+    assert!(optimized.contains("label0 = block_label"), "{optimized}");
+}
+
+/// A constant reaching a labeled test block on a direct edge skips the test,
+/// while the `indirect_br` edge, which passes a constant too, keeps its
+/// target, and the labeled block stays.
+#[test]
+fn constant_threading_keeps_indirect_edges_and_labeled_blocks() {
+    let input = "\
+function @f(ptr, i1) -> i32 external {
+    label0 = block_label block2
+block0(v0: ptr, v1: i1):
+    v2 = iconst.i1 1
+    brif v1, block2(v2), block1
+block1:
+    v3 = iconst.i1 0
+    indirect_br v0, [block2(v3)]
+block2(v4: i1):
+    brif v4, block3, block4
+block3:
+    v5 = iconst.i32 1
+    return v5
+block4:
+    v6 = iconst.i32 2
+    return v6
+}
+";
+    let expected = "\
+function @f(ptr, i1) -> i32 external {
+    label0 = block_label block2
+block0(v0: ptr, v1: i1):
+    v2 = iconst.i1 1
+    brif v1, block3, block1
+block1:
+    v3 = iconst.i1 0
+    indirect_br v0, [block2(v3)]
+block2(v4: i1):
+    brif v4, block3, block4
+block3:
+    v5 = iconst.i32 1
+    return v5
+block4:
+    v6 = iconst.i32 2
+    return v6
+}
+";
+    assert_pass(Pass::SimplifyCfg, input, expected);
+}
+
+/// A join reached by an `indirect_br` and by a block that stores to the
+/// loaded address: the indirect edge is an ordinary predecessor of the
+/// join's region, so the store kills the dominating load's fact.
+#[test]
+fn gvn_join_regions_include_indirect_predecessors() {
+    let input = "\
+function @f(ptr, ptr, i32) -> i32 external {
+    label0 = block_label block1
+    label1 = block_label block2
+block0(v0: ptr, v1: ptr, v2: i32):
+    v3 = load.i32 v1, align 4
+    indirect_br v0, [block1, block2]
+block1:
+    store.i32 v2, v1, align 4
+    jump block2
+block2:
+    v4 = load.i32 v1, align 4
+    v5 = iadd.i32 v3, v4
+    return v5
+}
+";
+    assert_pass_leaves(Pass::Gvn, input);
+}
+
+/// A structure slot live across indirect branches splits into fields that
+/// `promote` turns into values passed on the indirect edges, and every
+/// path returns what it did before.
+#[test]
+fn sroa_splits_a_structure_live_across_indirect_branches() {
+    let input = "\
+function @f(i1, i32) -> i32 external {
+    slot0 = stack_slot 8, align 4
+    label0 = block_label block1
+    label1 = block_label block2
+block0(v0: i1, v1: i32):
+    v2 = stack_addr slot0
+    v3 = iconst.i64 4
+    v4 = ptr_add inbounds v2, v3
+    store.i32 v1, v2, align 4
+    v5 = iconst.i32 7
+    store.i32 v5, v4, align 4
+    v6 = block_addr label0
+    v7 = block_addr label1
+    v8 = select.ptr v0, v6, v7
+    indirect_br v8, [block1, block2]
+block1:
+    v9 = load.i32 v2, align 4
+    v10 = load.i32 v4, align 4
+    v11 = iadd.i32 v9, v10
+    store.i32 v11, v2, align 4
+    store.i32 v9, v4, align 4
+    indirect_br v7, [block2]
+block2:
+    v12 = load.i32 v2, align 4
+    v13 = load.i32 v4, align 4
+    v14 = imul.i32 v12, v13
+    return v14
+}
+";
+    let options = OptimizerOptions {
+        verify_each: true,
+        ..OptimizerOptions::default()
+    };
+    let (optimized, _) = optimize_text(input, &options);
+    assert!(!optimized.contains("stack_slot"), "{optimized}");
+    for (condition, value) in [(1, 3), (0, 3), (1, 0xFFFF_FFFB)] {
+        let args = [RuntimeValue::Int(condition), RuntimeValue::Int(value)];
+        assert_eq!(
+            equivalence::returned(&optimized, "f", &args),
+            equivalence::returned(input, "f", &args),
+            "{condition} {value}\n{optimized}"
+        );
+    }
+}
+
 /// An unused parameter of an `indirect_br` target loses its argument on
 /// every edge, the indirect one included.
 #[test]

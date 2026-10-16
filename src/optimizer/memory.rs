@@ -4,7 +4,9 @@
 //! A generation is the length of the current path's write log, like
 //! `EarlyCSE`'s memory counter with an alias refinement: a fact from an older
 //! generation survives only if every intervening write is provably disjoint. A
-//! full barrier is a write of unknown extent. GVN inserts one at merge points.
+//! full barrier is a write of unknown extent. At a join or loop header GVN logs
+//! the writes of every block on a path from the immediate dominator instead,
+//! or a full barrier when that region is too large to scan.
 //! The scoped table restores overwritten facts as well as removing new ones,
 //! and truncates the log on leaving a subtree, so siblings see the same input.
 //! This is an IR transformation; no C type-based alias assumptions are used.
@@ -20,6 +22,7 @@ use super::{
 };
 use crate::{
     ir::{
+        Block,
         Entity,
         GlobalId,
         Inst,
@@ -131,6 +134,57 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
 
     pub(super) fn barrier(&mut self) {
         self.writes.push(None);
+    }
+
+    /// Enters a join or loop header: logs every write of `region`, the
+    /// blocks on some path from its immediate dominator to it, or a full
+    /// barrier when the region is unknown. A fact from the dominator then
+    /// survives exactly when no write on any incoming path may alias it.
+    pub(super) fn join(&mut self, draft: &Draft<'_, '_>, region: Option<&[Block]>) {
+        let Some(region) = region else {
+            self.barrier();
+            return;
+        };
+        for &block in region {
+            for &inst in &draft.block(block).insts {
+                if !draft.is_removed(inst) {
+                    self.record_write(draft, inst);
+                }
+            }
+        }
+    }
+
+    /// Logs what `inst` writes, as [`MemoryFacts::number`] would, without
+    /// recording any fact.
+    fn record_write(&mut self, draft: &Draft<'_, '_>, inst: Inst) {
+        let data = *draft.inst(inst);
+        if data.flags().contains(InstFlags::VOLATILE) {
+            self.barrier();
+            return;
+        }
+        match data {
+            | InstData::Store {
+                args: [_, addr],
+                ty,
+                ..
+            } => {
+                let addr = draft.resolve(addr);
+                self.writes.push(Some(location(draft, addr, ty)));
+            },
+            | InstData::Call { .. }
+            | InstData::CallIndirect { .. }
+            | InstData::VaArgAggregate { .. }
+            | InstData::MemoryRange { .. }
+            | InstData::Unary {
+                opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
+                ..
+            }
+            | InstData::Binary {
+                opcode: Opcode::VaCopy,
+                ..
+            } => self.barrier(),
+            | _ => {},
+        }
     }
 
     fn remember(&mut self, key: Key, value: Value) {

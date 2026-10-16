@@ -239,27 +239,61 @@ block0(v0: ptr, v1: ptr, v2: i1, v3: i64):
 }
 
 #[test]
-fn merge_points_and_loop_headers_refuse_incoming_facts() {
-    for arm in ["", "    store.i32 v2, v0, align 4\n"] {
+fn merge_points_and_loop_headers_keep_facts_no_incoming_path_clobbers() {
+    // A store through the same pointer in either arm, a call, or a store
+    // through a pointer that may alias reaches the join; an empty arm or a
+    // store to a slot does not.
+    for (arm, reused) in [
+        ("", true),
+        ("    store.i32 v2, v0, align 4\n", false),
+        ("    call @g()\n", false),
+        ("    store.i32 v2, v4, align 4\n", false),
+        ("    store.i32 v2, v5, align 4\n", true),
+    ] {
         let text = format!(
             "\
+global @other internal size 4, align 4 = zero
+
+function @g() external
+
 function @f(ptr, i1, i32) -> i32 external {{
+    slot0 = stack_slot 4, align 4
 block0(v0: ptr, v1: i1, v2: i32):
     v3 = load.i32 v0, align 4
+    v4 = global_addr @other
+    v5 = stack_addr slot0
     brif v1, block1, block2
 block1:
 {arm}    jump block3
 block2:
     jump block3
 block3:
-    v4 = load.i32 v0, align 4
-    return v4
+    v6 = load.i32 v0, align 4
+    return v6
 }}
 "
         );
         let (_, report) = optimize_text(&text, &only(&[Pass::Gvn]));
-        assert_eq!(report.transformations(), 0);
+        assert_eq!(report.transformations(), u64::from(reused), "{arm}");
     }
+    // A loop whose body writes nothing keeps the preheader's load.
+    let unclobbered = "\
+function @f(ptr, i32) -> i32 external {
+block0(v0: ptr, v1: i32):
+    v2 = load.i32 v0, align 4
+    v3 = iconst.i32 0
+    jump block1(v3)
+block1(v4: i32):
+    v5 = load.i32 v0, align 4
+    v6 = iadd.i32 v4, v5
+    v7 = icmp.i32 slt v6, v1
+    brif v7, block1(v6), block2
+block2:
+    return v2
+}
+";
+    let (_, report) = optimize_text(unclobbered, &only(&[Pass::Gvn]));
+    assert_eq!(report.transformations(), 1);
     let text = "\
 function @f(ptr, i1, i32) -> i32 external {
 block0(v0: ptr, v1: i1, v2: i32):

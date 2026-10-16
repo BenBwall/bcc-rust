@@ -20,6 +20,9 @@ The research behind the decisions lives in `docs/research/`:
 - [optimizer-gap-analysis.md](docs/research/optimizer-gap-analysis.md)
   measures the optimizer gap, introduces control arm N, and prioritizes missing
   transformations.
+- [optimizer-performance-2026-10-14.md](docs/research/optimizer-performance-2026-10-14.md)
+  adds seven benchmarks, measures `sroa`, `combine`, branch threading and
+  join-aware GVN against LLVM, and ranks the transformations still missing.
 
 ## Goals
 
@@ -678,8 +681,9 @@ The command line exposes `--passes=<list>` for ablation, a global transformation
 counter for bisecting a miscompile (`--opt-bisect-limit`), per-pass timing, and
 `--print-after-all`.
 
-**Prototype:** nine passes: direct-call inlining (`inline`), stack-slot promotion
-(`promote`), constant folding (`fold`), CFG simplification (`simplify-cfg`), sparse
+**Prototype:** eleven passes: direct-call inlining (`inline`), scalar replacement
+of aggregates (`sroa`), stack-slot promotion (`promote`), constant folding
+(`fold`), peephole combining (`combine`), CFG simplification (`simplify-cfg`), sparse
 conditional constant propagation (`sccp`), dominating-condition integer facts
 (`known-bits`), dominator-scoped value numbering (`gvn`), loop-invariant code motion
 (`licm`) and dead code elimination (`dce`). When inline is enabled, an explicit-stack
@@ -721,7 +725,29 @@ records and the replacement map; lowering densely renumbers the live results,
 blocks and instructions. Added stack slots and foreign wide constants also live
 in the draft arena and are densely copied on rebuild.
 
-`simplify-cfg` forms selects for diamond and triangle joins whose arm blocks
+`sroa` splits a stack slot accessed only by loads and stores at constant
+offsets, and by `copy` and `fill` of constant ranges, into one slot per field,
+which `promote` then turns into SSA values. A copy between two slots spreads
+the fields inside its range to the other side; overlapping fields, a variable
+offset or any other use of the address keep the slots whole. A field moves as
+a value, which is poison as a whole where one of its bytes is, so a slot that
+lies on a copy path from other memory to other memory is *retained*: it keeps
+its memory and every write, so the copy out still moves exact bytes, and its
+loads read promoted shadow fields. Bytes of a slot that reaches a copy out but
+that no access covers become integer fields, so fills and copies carry them.
+
+`combine` rewrites short integer chains: booleans and their zero extensions
+compared with 0 or 1, negated comparisons, branch conditions and select
+conditions, boolean selects of constants, two constant bounds of one value
+joined by `and`, `or` or the lowered `&&`/`||` selects (one unsigned
+comparison of `x - lo`), and nested additions of constants.
+
+`simplify-cfg` threads an edge that passes a constant to an empty block
+branching on that parameter straight to the chosen successor, unless the block
+heads a loop or blocks below it use its parameters, and merges a branch with a
+single-entry arm that only tests a second cheap condition for one of the
+branch's destinations into one branch on a `select` (LLVM's
+`FoldBranchToCommonDest`). It also forms selects for diamond and triangle joins whose arm blocks
 have a single incoming edge and at most four cheap computation units per arm.
 Constants and addresses cost zero. It refuses loads, stores, calls, division,
 remainder and other potentially trapping or expensive instructions. Moved
@@ -750,9 +776,11 @@ from an earlier generation survives only when the alias check proves every
 intervening store disjoint. Calls (direct and indirect), volatile accesses,
 `copy`, `fill` and every `va_*` operation advance the generation with a full
 barrier. Each eliminated load consumes one `allow()` rewrite; stores stay.
-Facts cross a dominator-tree edge only when the child has exactly one CFG
-predecessor, the parent. A join or loop header starts a fresh generation,
-even when its paths happen to preserve memory. Scope rollback restores both
+Facts cross a dominator-tree edge as they are when the child has exactly one CFG
+predecessor, the parent. Entering a join or loop header, GVN logs the writes of
+every block on a path from its immediate dominator (the loop body, for a
+header), so a fact survives when no such write may alias it; a region of more
+than 64 blocks is a full barrier instead. Scope rollback restores both
 overwritten facts and generations before visiting siblings. No loop-carried
 load elimination, load motion or type-based aliasing is attempted. Later
 pipeline rounds let removed arm loads enable select formation in sorts-style
@@ -936,6 +964,7 @@ bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with cla
     [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)
     [--opt-bisect-limit=N]          apply only the first N rewrites (implies bcc)
     [--print-after-all]             each function after every pass, to stderr
+    [--time-passes]                 per-pass runs, rewrites and times, to stderr
     [--llvm-opt=none|O0|O1|O2|O3]   LLVM pipeline and machine level; none means O0
     [--llvm-codegen-only]           skip LLVM IR passes; retain machine level
 bcc-rust --print-default-passes     print the default pass list and exit
@@ -987,7 +1016,7 @@ triple to produce a runnable program; `main` is called without arguments.
   also include the seed, arm,
   rerun command and both bcc and LLVM IR. Object-only output needs no MinGW
   discovery; the CLI regression removes `MINGW_ROOT` and clears `PATH`.
-- `benches/c` holds ten self-checking performance programs; their reduced
+- `benches/c` holds seventeen self-checking performance programs; their reduced
   workloads (`-DBENCH_REDUCED`) run in the interpreter, with and without the
   bcc optimizer, in `tests/bench_corpus.rs`.
 - Corpora later: GCC c-torture `execute`, then Csmith/YARPGen differential runs,
@@ -1010,7 +1039,7 @@ triple to produce a runnable program; `main` is called without arguments.
 Stage 7 status: promotion, SCCP, GVN, LICM and bottom-up inlining exist
 (the prototype pipeline above). The comparison harness exists:
 `scripts/compare_optimizers.py` runs arms A0-A3, N and R, with `--passes` ablation,
-over the ten self-checking programs in `benches/c` and writes JSON Lines plus a
+over the seventeen self-checking programs in `benches/c` and writes JSON Lines plus a
 summary of per-benchmark medians, ratios to A2, a separate A1/N comparison,
 and their geometric means with a bootstrap interval (README, "Optimizer
 comparison harness"). What remains for the exit criterion is a run on native

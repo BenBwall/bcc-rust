@@ -100,6 +100,9 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
                     }
                     if rewrite(draft, inst, &zeros, report) {
                         changed = true;
+                        // The rewrite added a constant, which may be a new
+                        // value with facts of its own.
+                        zeros.resize(draft.value_count(), 0);
                     }
                     if let Some(value) = draft.inst_result(inst) {
                         let bits = propagated(draft, inst, &zeros, &ordered);

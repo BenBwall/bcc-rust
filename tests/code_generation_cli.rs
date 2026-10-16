@@ -910,6 +910,19 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             text(&bcc(SUM, &["--emit=ir"]).stdout)
         );
 
+        // The per-pass report goes to stderr and leaves the module alone.
+        let timed = bcc(SUM, &["--emit=ir", "--time-passes"]);
+        assert!(timed.status.success());
+        let report = text(&timed.stderr);
+        assert!(
+            report.contains(" rewrites") && report.contains("  sroa "),
+            "{report}"
+        );
+        assert_eq!(
+            text(&timed.stdout),
+            text(&bcc(SUM, &["--emit=ir", "--opt=bcc"]).stdout)
+        );
+
         let unknown = bcc(SUM, &["--emit=ir", "--passes=fold,unknown"]);
         assert_eq!(unknown.status.code(), Some(2));
         assert!(text(&unknown.stderr).contains("unknown pass `unknown`"));

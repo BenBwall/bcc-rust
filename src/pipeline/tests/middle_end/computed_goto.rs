@@ -202,13 +202,75 @@ int f(void *p) {
 int main(void) { return f(arr) != 1 + 2 + 12 + 2; }
 ";
 
-const PROGRAMS: [(&str, &str); 6] = [
+/// The optimizer around labels: a labeled arm of `&&` whose address is only
+/// stored (condition merging must keep it), a dispatch loop with a structure
+/// copied and updated across indirect edges (scalar replacement), and a
+/// labeled test block reached by direct jumps with known flags and by the
+/// indirect branch (constant threading on the direct edges only).
+const OPTIMIZED_DISPATCH: &str = "int printf(const char *, ...);
+static void *saved;
+static int tested(int x, int y) {
+    saved = &&inner;
+    if (x) {
+    inner:
+        if (y > 3) return 1;
+    }
+    return 0;
+}
+struct pair { int x, y; long z; };
+static int dispatch(const unsigned char *code, int *mem) {
+    static void *const ops[] = { &&op_add, &&op_swap, &&op_test, &&op_halt, &&check };
+    struct pair p = { 1, 2, 3 }, q;
+    int flag = 0, pc = 0, acc = 0;
+    goto *ops[code[pc++]];
+op_add:
+    flag = 1;
+    p.x += mem[0];
+    p.z += p.y;
+    if (p.x & 4) goto op_test;
+    goto check;
+op_swap:
+    flag = (p.x & 1) && (p.y > 3);
+    q = p;
+    p.x = q.y;
+    p.y = q.x + (mem[1] & 3);
+    goto *ops[code[pc++]];
+op_test:
+    flag = 0;
+    mem[0] += p.y;
+    acc += mem[0];
+    if (acc & 8) goto op_add;
+    goto check;
+check:
+    if (flag && p.y) {
+        acc += p.x;
+        mem[1] ^= acc;
+    } else {
+        acc -= p.y;
+    }
+    if (acc > 100000 || acc < -100000) acc = 0;
+    goto *ops[code[pc++]];
+op_halt:
+    return acc * 7 + p.x + p.y + (int)p.z + mem[0] + mem[1] + flag;
+}
+int main(void) {
+    int mem[2] = { 3, 9 };
+    static const unsigned char code[] = { 0, 1, 4, 2, 0, 4, 2, 1, 1, 0, 0, 2, 1, 4, 2, 0, 1, 3 };
+    int r = dispatch(code, mem);
+    int t = tested(1, 5) * 100 + tested(1, 2) * 10 + tested(0, 9);
+    printf(\"%d %d %d %d\\n\", r, mem[0], mem[1], t);
+    return r != 4121 || t != 100 || saved == 0;
+}
+";
+
+const PROGRAMS: [(&str, &str); 7] = [
     ("table", TABLE),
     ("lua", LUA_DISPATCH),
     ("differences", LABEL_DIFFERENCES),
     ("threaded", THREADED),
     ("miscellaneous", MISCELLANEOUS),
     ("void_pointers", VOID_POINTERS),
+    ("optimized_dispatch", OPTIMIZED_DISPATCH),
 ];
 
 #[test]
