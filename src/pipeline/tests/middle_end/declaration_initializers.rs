@@ -190,6 +190,27 @@ fn sqlite_function_table_initializer_matches_clang_native_execution() {
 fn nullptr_objects_and_pointer_conversions_execute_in_every_stage() {
     let source = "typeof(nullptr) global=nullptr; int main(void){typeof(nullptr) n=global; int \
                   *p=n; bool b=n; return b || p!=nullptr || n!=nullptr || sizeof(n)!=sizeof(p);}";
+    check_nullptr_program(source);
+}
+
+#[test]
+fn nullptr_zero_comparisons_execute_in_every_stage() {
+    check_nullptr_program(
+        "int equal(typeof(nullptr) n){return n==0 && 0==n;} int different(typeof(nullptr) \
+         n){return n!=0 || 0!=n;} int main(void){return !equal(nullptr)||different(nullptr);}",
+    );
+}
+
+#[test]
+fn nullptr_constant_casts_execute_in_every_stage() {
+    check_nullptr_program(
+        "typeof(nullptr) a=(typeof(nullptr))0,b=(typeof(nullptr))nullptr, \
+         c=(typeof(nullptr))(void*)0; bool d=(bool)nullptr; int main(void){return \
+         a!=nullptr||b!=nullptr||c!=nullptr||d;}",
+    );
+}
+
+fn check_nullptr_program(source: &str) {
     for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
         for (optimize, profile) in STAGES {
             with_configured_module(

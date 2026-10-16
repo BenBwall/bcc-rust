@@ -175,13 +175,18 @@ impl Expander<'_, '_, '_, '_> {
                                             "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE"
                                         )
                                     {
-                                        self.context.preprocessor_error(PreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnknownPragmaSTDCArgument(
-                                                    self.context.diagnostic_text(s),
-                                                ),
-                                            source_vectors: token.source_vectors,
-                                        });
+                                        if self.context.group_severity(
+                                            crate::configuration::DiagnosticGroup::UnknownStdcPragma,
+                                            token.source_vectors,
+                                        ).is_some() {
+                                            self.context.preprocessor_error(PreprocessorError {
+                                                error_type:
+                                                    PreprocessorErrorType::UnknownPragmaSTDCArgument(
+                                                        self.context.diagnostic_text(s),
+                                                    ),
+                                                source_vectors: token.source_vectors,
+                                            });
+                                        }
                                         break 'base;
                                     }
                                 },

@@ -354,8 +354,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .ok_or_else(|| LoweringError::missing("a scalar has no value type", source))
     }
 
+    /// Pointer representation includes the distinct C23 null pointer type.
+    /// C23: §7.21.2p2, p. 316; PDF p. 329.
     pub(super) fn is_pointer(&self, ty: TypeId) -> bool {
-        matches!(self.unit.sema.types.kind(ty), TypeKind::Pointer(_))
+        matches!(
+            self.unit.sema.types.kind(ty),
+            TypeKind::Pointer(_) | TypeKind::Nullptr
+        )
     }
 
     /// The width of `int`, below which integers are promoted.
