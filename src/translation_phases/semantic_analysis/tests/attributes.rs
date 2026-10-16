@@ -639,9 +639,10 @@ fn natural_and_member_place_alignment_are_distinct_retained_facts() {
 /// Microsoft's `__declspec(align(N))` is Clang's `aligned` attribute: it
 /// raises a record's alignment and size, sets a declared object's or
 /// typedef's alignment (also below the natural one, as `align(1)` in
-/// `TraceLoggingProvider.h` does), and cannot lower a member's. In the
-/// declaration specifiers that follow a record body it describes the
-/// object, not the record. Values are bundled Clang 23's for
+/// `TraceLoggingProvider.h` does), replacing what a typedef carries, and
+/// cannot lower a member's. After a record body, directly or behind other
+/// specifiers, it is a declaration specifier: it describes the object, not
+/// the record. Values are bundled Clang 23's for
 /// `x86_64-pc-windows-msvc -fms-extensions`; MinGW's `__declspec` macro
 /// spelling, which Clang ignores, is covered in `targets.rs`.
 #[test]
@@ -658,6 +659,16 @@ struct P { char c; __declspec(align(1)) int m; };
 const __declspec(allocate(".rdata")) __declspec(align(1)) struct B cb = {1};
 __declspec(align) int y;
 __declspec(align(1)) __declspec(align(64)) char two;
+typedef __declspec(align(8)) int A8;
+__declspec(align(1)) volatile A8 over1;
+__declspec(align(2)) A8 over2;
+__declspec(align(16)) A8 over16;
+__declspec(align(1)) __declspec(align(2)) A8 overm;
+struct D { int x; } __declspec(align(1)) after;
+struct __declspec(align(16)) E { int x; } __declspec(align(2)) after2;
+int more[_Alignof(A8) == 8 && __alignof__(over1) == 1 && __alignof__(over2) == 2
+    && __alignof__(over16) == 16 && __alignof__(overm) == 2 && __alignof__(after) == 1
+    && _Alignof(struct D) == 4 && __alignof__(after2) == 2 && _Alignof(struct E) == 16 ? 1 : -1];
 int checks[_Alignof(struct A) == 16 && sizeof(struct A) == 16 && __alignof__(b1) == 1
     && __alignof__(d1) == 1 && __alignof__(i32) == 32 && _Alignof(T1) == 1 && _Alignof(T8) == 8
     && _Alignof(struct M) == 8 && sizeof(struct M) == 16 && __builtin_offsetof(struct M, m) == 8

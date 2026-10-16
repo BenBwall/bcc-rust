@@ -93,7 +93,17 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
-        if matches!(self.phase, StructOrUnionPhase::FinishBody) && parser.attribute_starter(token) {
+        // Microsoft's `__declspec` after a record body is a declaration
+        // specifier of the enclosing declaration, as in MSVC and Clang:
+        // `struct S { int x; } __declspec(align(1)) s;` aligns `s`, not
+        // `struct S`. GNU attributes there describe the record.
+        // MSVC extension: Microsoft Learn, "declspec".
+        if matches!(self.phase, StructOrUnionPhase::FinishBody)
+            && parser.attribute_starter(token)
+            && !token.is_some_and(|token| {
+                matches!(token.kind, TokenType::Keyword(KeywordTokenType::Declspec))
+            })
+        {
             self.attribute_resume = self.phase;
             self.phase = StructOrUnionPhase::AwaitTagAttributes;
             return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
