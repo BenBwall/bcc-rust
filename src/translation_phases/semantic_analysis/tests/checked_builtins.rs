@@ -262,3 +262,68 @@ fn checked_builtins_reject_missing_file_and_mismatched_operands() {
         assert!(errors > 0, "{call}: {kinds:?}");
     }
 }
+
+/// Clang forms the stream prototype from file scope, independently of local
+/// typedefs with the same spelling (C99 §6.2.1p4, p. 29; PDF p. 41).
+#[test]
+fn checked_stream_builtins_use_file_scope_typedef() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for (source, missing_header, valid) in [
+            (
+                "typedef struct stream FILE; int f(FILE *p, __builtin_va_list ap) { \
+                 typedef int FILE; return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
+                false,
+                true,
+            ),
+            (
+                "int f(void *p, __builtin_va_list ap) { typedef int FILE; \
+                 return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
+                true,
+                false,
+            ),
+            (
+                "typedef struct stream FILE; int f(int *p, __builtin_va_list ap) { \
+                 typedef int FILE; return __builtin___vfprintf_chk(p, 1, \"x\", ap); }",
+                false,
+                false,
+            ),
+        ] {
+            with_configuration(
+                source,
+                CompilerConfiguration::default().with_target(target),
+                |context, unit| {
+                    let kinds: Vec<_> = context
+                        .take_pending_errors()
+                        .into_iter()
+                        .filter_map(|error| match error {
+                            | TranslationError::Semantic(error) => Some(error.kind),
+                            | _ => None,
+                        })
+                        .collect();
+                    assert_eq!(unit.errors == 0, valid, "{target:?}: {source}: {kinds:?}");
+                    assert_eq!(
+                        kinds.contains(&SemanticErrorKind::BuiltinRequiresHeader),
+                        missing_header,
+                        "{target:?}: {source}: {kinds:?}"
+                    );
+                    if valid {
+                        let binding = unit.bindings.iter().find(|binding| {
+                            context.string_cache.at(binding.name.name)
+                                == "__builtin___vfprintf_chk"
+                        }).unwrap();
+                        assert!(
+                            spell(unit, context, binding.ty).starts_with("int (stream *,"),
+                            "{target:?}: {}",
+                            spell(unit, context, binding.ty)
+                        );
+                    }
+                },
+            );
+        }
+    }
+}

@@ -28,7 +28,7 @@ use crate::{
 
 impl Analyzer<'_, '_, '_> {
     /// Whether `descriptor`'s prototype can be formed where `name` is first
-    /// used: a `FILE *` parameter needs the program's `FILE` typedef. An
+    /// used: a `FILE *` parameter needs the program's file-scope `FILE` typedef. An
     /// unavailable builtin is diagnosed here and stays unmodeled.
     pub(in crate::translation_phases::semantic_analysis) fn builtin_prototype_available(
         &mut self,
@@ -61,7 +61,7 @@ impl Analyzer<'_, '_, '_> {
         }
     }
 
-    /// `FILE *` for the visible `FILE` typedef; with none, a pointer to an
+    /// `FILE *` for the file-scope `FILE` typedef; with none, a pointer to an
     /// unanalyzed type, which [`Self::builtin_prototype_available`] has
     /// already diagnosed.
     pub(super) fn file_parameter(&mut self) -> TypeId {
@@ -69,10 +69,11 @@ impl Analyzer<'_, '_, '_> {
         self.types.intern(TypeKind::Pointer(file))
     }
 
-    /// The type the visible ordinary identifier `FILE` names as a typedef.
+    /// The type the file-scope ordinary identifier `FILE` names as a typedef.
+    /// A block-scope shadow cannot change the C library prototype.
     fn stdio_file(&mut self) -> Option<TypeId> {
         let name = self.context.string_cache.intern("FILE");
-        let entry = self.lookup(Namespace::Ordinary, name)?;
+        let entry = self.lookup_at(Namespace::Ordinary, name, 0)?;
         let binding = self.bindings[entry.binding];
         (binding.kind == BindingKind::Typedef).then_some(binding.ty)
     }
