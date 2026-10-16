@@ -512,7 +512,7 @@ fn host() -> Option<Target> {
 /// Windows line ends made plain.
 fn run_native(executable: &Path) -> (i32, String) {
     let output = crate::test_support::native::run_native(&mut Command::new(executable))
-        .unwrap_or_else(|error| panic!("{error}"));
+        .unwrap_or_else(|error| panic!("{}: {error}", executable.display()));
     let stdout = String::from_utf8(output.stdout)
         .unwrap()
         .replace("\r\n", "\n");

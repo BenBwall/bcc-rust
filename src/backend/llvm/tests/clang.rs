@@ -360,11 +360,15 @@ fn command_lines_follow_the_options() {
     }
     assert_eq!(
         arguments(None, false, OutputKind::SharedLibrary),
-        format!("{target} -fuse-ld=lld -shared in.o -o out")
+        format!("{target} -fuse-ld=lld -shared in.o -o out -lm")
     );
     assert_eq!(
         arguments(None, false, OutputKind::PositionDependentExecutable),
-        format!("{target} -fuse-ld=lld -no-pie in.o -o out")
+        format!("{target} -fuse-ld=lld -no-pie in.o -o out -lm")
+    );
+    assert_eq!(
+        arguments(None, false, OutputKind::Object),
+        format!("{target} -fuse-ld=lld -c in.o -o out")
     );
 }
 
