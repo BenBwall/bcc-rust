@@ -407,19 +407,27 @@ fn msvc_identity_follows_the_umbrella_flag_and_identity_macros_can_be_undefined(
     let result = observe_with(
         source,
         CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsMsvc)
             .with_gnu_extensions(true)
             .with_msvc_extensions(true),
     );
     assert_eq!(result.spellings, ["1933", "193300000", "1", "1"]);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     // A single group is not the umbrella, and the umbrella's opposite
-    // withdraws it.
+    // withdraws it. As in Clang, Linux and MinGW-w64 never claim MSVC, so
+    // MinGW-w64's `__CRT_INLINE` keeps its GNU `extern inline` meaning.
     for configuration in [
         CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsMsvc)
             .with_msvc_feature(crate::configuration::MsvcFeature::Declspec, true),
         CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsMsvc)
             .with_msvc_extensions(true)
             .with_msvc_extensions(false),
+        CompilerConfiguration::default().with_msvc_extensions(true),
+        CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsGnu)
+            .with_msvc_extensions(true),
     ] {
         let result = observe_with("#ifdef _MSC_VER\nbad\n#endif\n", configuration);
         assert!(result.spellings.is_empty(), "{:?}", result.spellings);

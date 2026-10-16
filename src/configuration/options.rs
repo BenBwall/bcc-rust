@@ -170,8 +170,9 @@ impl CompilerConfiguration {
         self.extension_policy
     }
 
-    /// Whether the last MSVC umbrella flag was `-fms-extensions`, which
-    /// predefines `_MSC_VER` as Clang does; the individual groups do not.
+    /// Whether the last MSVC umbrella flag was `-fms-extensions`, which on
+    /// the MSVC target predefines `_MSC_VER` as Clang does; the individual
+    /// groups do not.
     pub(crate) const fn msvc_compatibility(self) -> bool {
         self.msvc & MSVC_COMPATIBILITY != 0
     }

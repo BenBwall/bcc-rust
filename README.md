@@ -368,7 +368,8 @@ ISO modes, claims GCC 4.2.1 (`__GNUC__` `4`), with `__GNUC_GNU_INLINE__`
 before C99 and `__GNUC_STDC_INLINE__` from C99 on. `__STRICT_ANSI__` is
 defined only in strict modes. Every mode also claims the pinned Clang 23.1.1
 (`__clang__`, `__clang_major__` `23`, `__clang_version__`), so headers take
-their Clang paths. `-fms-extensions` claims MSVC 19.33 (`_MSC_VER` `1933`),
+their Clang paths. On the MSVC target, `-fms-extensions` claims MSVC 19.33
+(`_MSC_VER` `1933`), as Clang does; other targets never claim MSVC,
 and every mode defines `__bcc__`, which tells bcc from Clang. See
 [language-standards.md](language-standards.md) for the full list.
 `offsetof` and the varargs intrinsics have semantic types; this front end does

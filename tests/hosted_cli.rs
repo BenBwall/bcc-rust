@@ -519,17 +519,27 @@ mod tests {
                 );
             }
         }
-        // `-fms-extensions` claims MSVC, whose runtime chains the same way.
-        let output = bcc(&[
-            "-fms-extensions",
-            "-idirafter",
-            arg(&library),
-            "--tokens",
-            "--input",
-            check,
-        ]);
-        clean(&output);
-        assert_eq!(identifiers(&output), ["windows_additions"]);
+        // The MSVC target claims MSVC, whose runtime chains the same way;
+        // `-fms-extensions` elsewhere does not claim it, as in Clang.
+        for (target, expected) in [
+            (
+                "--target=x86_64-pc-windows-msvc",
+                &["windows_additions"][..],
+            ),
+            ("--target=x86_64-unknown-linux-gnu", &[][..]),
+        ] {
+            let output = bcc(&[
+                target,
+                "-fms-extensions",
+                "-idirafter",
+                arg(&library),
+                "--tokens",
+                "--input",
+                check,
+            ]);
+            clean(&output);
+            assert_eq!(identifiers(&output), expected, "{target}");
+        }
     }
 
     #[test]
@@ -994,15 +1004,25 @@ mod tests {
             env!("CARGO_PKG_VERSION_PATCH"),
         ];
         for mode in ["-std=c99", "-std=gnu17"] {
-            let output = bcc(&[mode, "-fms-extensions", "--tokens", "--input", source]);
+            let output = bcc(&[
+                mode,
+                "--target=x86_64-pc-windows-msvc",
+                "-fms-extensions",
+                "--tokens",
+                "--input",
+                source,
+            ]);
             clean(&output);
             let mut expected = vec!["ms", "1933", "193300000", "1", "1", "clang", "bcc"];
             expected.extend(version);
             assert_eq!(constants(&output), expected, "{mode}");
+            // As in Clang, only the MSVC target claims MSVC.
             for flags in [
                 &["-fms-declspec"][..],
                 &["-fms-extensions", "-fno-ms-extensions"][..],
                 &[][..],
+                &["-fms-extensions"][..],
+                &["--target=x86_64-w64-windows-gnu", "-fms-extensions"][..],
             ] {
                 let mut args = vec![mode];
                 args.extend_from_slice(flags);
