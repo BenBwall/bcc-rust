@@ -77,6 +77,7 @@ pub(crate) enum TypeRule {
     Overflow,
     Varargs,
     Offsetof,
+    Atomic,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +145,7 @@ pub(crate) enum BuiltinEffectClass {
 /// phase. No callbacks or backend opcodes are stored in descriptors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BuiltinOperation {
+    Atomic(AtomicBuiltin),
     Varargs(VaOperation),
     Bit(BitOperation, Scalar),
     Float(FloatOperation, Option<Scalar>),
@@ -255,4 +257,53 @@ impl ArgumentRule {
             ..Self::value(conversion)
         }
     }
+}
+
+/// Neutral atomic builtin contracts; spelling is resolved once by the registry.
+/// GCC atomic/sync builtins and Clang C11 atomic builtins are extensions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AtomicBuiltin {
+    pub(crate) family:     AtomicFamily,
+    pub(crate) operation:  AtomicOperation,
+    pub(crate) generic:    bool,
+    pub(crate) count:      usize,
+    pub(crate) rmw:        AtomicRmw,
+    pub(crate) return_new: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AtomicFamily {
+    C11,
+    Gnu,
+    Sync,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AtomicOperation {
+    Init,
+    ThreadFence,
+    SignalFence,
+    AlwaysLockFree,
+    IsLockFree,
+    Load,
+    Store,
+    Exchange,
+    Compare,
+    TestSet,
+    Clear,
+    FetchAdd,
+    FetchSub,
+    FetchBitwise,
+    FetchMinMax,
+    ValueCompare,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AtomicRmw {
+    Exchange,
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Nand,
+    Min,
+    Max,
 }

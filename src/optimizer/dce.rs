@@ -169,6 +169,7 @@ fn has_side_effects(data: &InstData) -> bool {
             opcode: Opcode::StackSave,
             ..
         }
+        | InstData::Atomic { .. }
         | InstData::VaArgAggregate { .. }
         | InstData::DynAlloca { .. }
         | InstData::Store { .. }

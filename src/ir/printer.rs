@@ -185,6 +185,23 @@ impl<'ir> Module<'ir> {
                     write!(f, " {}", self.display_global_name(global)),
                 | InstData::FuncAddr { func } => write!(f, " {}", self.display_func_name(func)),
                 | InstData::BlockAddr { label } => write!(f, " {label}"),
+                | InstData::Atomic {
+                    op,
+                    order,
+                    failure,
+                    align,
+                    args,
+                    ..
+                } => {
+                    write!(f, " {op} {order} {failure} align {} (", align.bytes())?;
+                    for (index, arg) in body.value_list(args).iter().enumerate() {
+                        if index != 0 {
+                            f.write_str(", ")?;
+                        }
+                        write!(f, "{arg}")?;
+                    }
+                    f.write_str(")")
+                },
                 | InstData::Load {
                     align, tag, addr, ..
                 } => {

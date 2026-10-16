@@ -61,14 +61,6 @@ pub(crate) struct BuiltinOperand<'tu> {
     pub(crate) ty:              TypeId,
     pub(crate) evaluation:      ArgumentEvaluation,
     pub(crate) storage_binding: Option<usize>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "M4 retains normalized operand types and converted constants for M6 \
-                      consumers."
-        )
-    )]
     pub(crate) integer:         Option<Integer>,
     #[cfg_attr(
         not(test),
@@ -96,6 +88,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .get(index)
                 .copied()
                 .unwrap_or(ArgumentRule::value(ConversionRule::Value));
+            let rule = if let BuiltinOperation::Atomic(atomic) = descriptor.operation
+                && index >= atomic.count
+            {
+                ArgumentRule::evaluation(ArgumentEvaluation::Unevaluated)
+            } else {
+                rule
+            };
             operands.push(self.checked_operand(expression, rule));
         }
         self.builtin_instance(info, descriptor, operands.leak())

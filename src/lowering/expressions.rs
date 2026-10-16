@@ -383,6 +383,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let operation_type = info.operation_type.ok_or_else(|| {
                     LoweringError::missing("a compound assignment has no type", source)
                 })?;
+                if matches!(self.unit.sema.types.kind(place.ty), TypeKind::Atomic(_)) {
+                    let back = self.unit.sema.types.non_atomic(place.ty).unqualified();
+                    let (_, stored) = self.atomic_update(place, left, source, |this, old| {
+                        let old = this.convert_value(old, operation_type, source)?;
+                        let result =
+                            this.atomic_binary(operation, old, right, operation_type, source)?;
+                        this.convert_value(result, back, source)
+                    })?;
+                    self.push_item(stored.operand, info.ty);
+                    return Ok(());
+                }
                 let result = self.binary(operation, left, right, operation_type, source)?;
                 // The conversion back to the left operand's type is recorded
                 // on the compound assignment itself (§6.5.16.2p3).
@@ -946,6 +957,36 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 // Operators
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
+    /// Atomic add/sub compound updates follow the wrapping RMW operations.
+    /// Other operators retain their ordinary C arithmetic flags.
+    fn atomic_binary(
+        &mut self,
+        operator: BinaryOperator,
+        left: Item,
+        right: Item,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        if matches!(
+            operator,
+            BinaryOperator::Addition | BinaryOperator::Subtraction
+        ) && matches!(self.repr(ty, source)?, Repr::Int { .. })
+        {
+            let a = self.value(left, source)?;
+            let b = self.value(right, source)?;
+            let op = if operator == BinaryOperator::Addition {
+                Opcode::Iadd
+            } else {
+                Opcode::Isub
+            };
+            return Ok(Item {
+                operand: Operand::Value(self.binary_inst(op, InstFlags::empty(), a, b)),
+                ty,
+            });
+        }
+        self.binary(operator, left, right, ty, source)
+    }
+
     /// A binary operator on converted operands, with result type `ty`.
     /// C99: §6.5.5-§6.5.12, pp. 82-88; PDF pp. 94-100.
     fn binary(
@@ -1165,7 +1206,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement => {
                 let place = self.pop();
                 let increment = matches!(operator, U::PreIncrement | U::PostIncrement);
-                let updated = self.step_value(operand, increment, source)?;
+                if matches!(self.unit.sema.types.kind(place.ty), TypeKind::Atomic(_)) {
+                    let (old, stored) =
+                        self.atomic_update(place, operand, source, |this, old| {
+                            this.step_value(old, increment, true, source)
+                        })?;
+                    let result = if matches!(operator, U::PreIncrement | U::PreDecrement) {
+                        stored
+                    } else {
+                        old
+                    };
+                    self.push_item(result.operand, info.ty);
+                    return Ok(());
+                }
+                let updated = self.step_value(operand, increment, false, source)?;
                 let stored = self.write(place, updated, source)?;
                 if matches!(operator, U::PreIncrement | U::PreDecrement) {
                     stored.operand
@@ -1192,6 +1246,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         &mut self,
         item: Item,
         increment: bool,
+        atomic: bool,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
         let value = self.value(item, source)?;
@@ -1237,7 +1292,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let one = self.iconst(ty, 1);
                 // Types narrower than int are promoted (§6.3.1.1p2), so their
                 // arithmetic cannot overflow; the conversion back wraps.
-                let flags = if signed && ty.bits() >= self.int_bits() {
+                let flags = if signed && ty.bits() >= self.int_bits() && !atomic {
                     InstFlags::NSW
                 } else {
                     InstFlags::empty()

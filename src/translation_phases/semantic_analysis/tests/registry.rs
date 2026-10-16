@@ -38,7 +38,7 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             .unwrap();
         }
     }
-    assert_eq!(ids.len(), 286);
+    assert_eq!(ids.len(), 350);
     source.push_str("int following;\n");
     for target in [
         Target::LinuxGnu,
@@ -238,7 +238,10 @@ fn m4_binding_origins_keep_implicit_and_m6_opaque_calls_distinct() {
         |context, unit| {
             assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
             for (spelling, origin) in [
-                ("__atomic_always_lock_free", BindingOrigin::LegacyIntrinsic),
+                (
+                    "__atomic_always_lock_free",
+                    BindingOrigin::Intrinsic(crate::builtins::BuiltinId::AtomicGnuAlwaysLockFree),
+                ),
                 ("__builtin_classify_type", BindingOrigin::LegacyIntrinsic),
                 ("__builtin_M4_unknown", BindingOrigin::OpaqueIntrinsic),
                 ("external", BindingOrigin::ImplicitOrdinary),

@@ -835,6 +835,41 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             | Opcode::BlockAddr => InstData::BlockAddr {
                 label: self.label()?,
             },
+            | Opcode::Atomic => {
+                let flags = self.cursor.flags();
+                let token = self.cursor.next();
+                let op = if let TokenKind::Ident(name) = token.kind {
+                    super::AtomicOp::from_name(name)
+                } else {
+                    None
+                }
+                .ok_or_else(|| token.expected("an atomic operation"))?;
+                let token = self.cursor.next();
+                let order = if let TokenKind::Ident(name) = token.kind {
+                    super::MemoryOrder::from_name(name)
+                } else {
+                    None
+                }
+                .ok_or_else(|| token.expected("a memory order"))?;
+                let token = self.cursor.next();
+                let failure = if let TokenKind::Ident(name) = token.kind {
+                    super::MemoryOrder::from_name(name)
+                } else {
+                    None
+                }
+                .ok_or_else(|| token.expected("a failure order"))?;
+                let align = self.cursor.align()?;
+                let args = self.argument_list(None)?;
+                InstData::Atomic {
+                    op,
+                    ty,
+                    flags,
+                    align,
+                    order,
+                    failure,
+                    args: self.builder.value_list(&args),
+                }
+            },
             | Opcode::Load => {
                 let flags = self.cursor.flags();
                 let addr = self.value()?;

@@ -50,7 +50,6 @@ fn unsupported_constructs_name_themselves() {
             "binary128 floating-point types",
         ),
         ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),
-        ("_Atomic int a; int f(void) { return a; }", "atomic types"),
         (
             "_Complex double z; int f(void) { return __real__ z; }",
             "complex arithmetic",

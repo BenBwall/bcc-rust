@@ -1,12 +1,12 @@
 //! Phase-neutral builtin contracts, indexed by exact spelling and stable ID.
 //! Read [`lookup`] and [`BuiltinDescriptor`] first. `index.rs` assigns IDs and
-//! supplies the sorted name index; `scalar.rs`, `library.rs` and `math.rs`
-//! hold scalar operations, general library aliases and C99 real math contracts.
-//! `contract.rs` defines closed rules, operations and effects.
-//! Semantic handlers check these contracts and retain instances; lowering owns
-//! executable implementations. Atomic, x86, vector and type-generic shards are
-//! migration M6 work. `external.rs` is the external-symbol contract: the
-//! library functions that return twice or restore an environment, which
+//! supplies the sorted name index; `scalar.rs`, `library.rs`, `math.rs` and
+//! `atomic.rs` hold scalar operations, general library aliases, C99 real math
+//! and atomic contracts. `contract.rs` defines closed rules, operations and
+//! effects. Semantic handlers check these contracts and retain instances;
+//! lowering owns executable implementations. x86, vector and type-generic
+//! shards are migration M6 work. `external.rs` is the external-symbol contract:
+//! the library functions that return twice or restore an environment, which
 //! every phase reads from there instead of matching spellings itself. No
 //! syntax, semantic type IDs or IR types belong here.
 //!
@@ -18,6 +18,7 @@
 mod contract;
 
 // Static index and contract shards
+mod atomic;
 mod external;
 mod index;
 mod library;

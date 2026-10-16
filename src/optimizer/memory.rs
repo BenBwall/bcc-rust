@@ -96,6 +96,7 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
                 self.writes.push(Some(location(draft, addr, ty)));
                 self.remember(Key { addr, ty }, draft.resolve(value));
             },
+            | InstData::Atomic { .. }
             | InstData::Call { .. }
             | InstData::CallIndirect { .. }
             | InstData::VaArgAggregate { .. }
@@ -171,6 +172,7 @@ impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
                 let addr = draft.resolve(addr);
                 self.writes.push(Some(location(draft, addr, ty)));
             },
+            | InstData::Atomic { .. }
             | InstData::Call { .. }
             | InstData::CallIndirect { .. }
             | InstData::VaArgAggregate { .. }

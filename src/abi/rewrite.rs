@@ -319,6 +319,14 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 );
                 _ = self.builder.insert(InstData::Return { value: None });
             },
+            | InstData::Atomic { args, .. } => {
+                let values = self.builder.value_list(old.value_list(args));
+                let mut data = data;
+                if let InstData::Atomic { args, .. } = &mut data {
+                    *args = values;
+                }
+                _ = self.builder.insert_with_result(data, result);
+            },
             | InstData::Call { func, args } => {
                 let sig = self.old_signatures[func.index()];
                 self.call(sig, Callee::Direct(func), old.value_list(args), result);

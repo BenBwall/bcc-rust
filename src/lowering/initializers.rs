@@ -466,8 +466,9 @@ impl<'tu> Walker<'_, 'tu, '_> {
             .last()
             .map(|conversion| conversion.ty)
             .or_else(|| self.sema.expression_info(expression).map(|info| info.ty));
-        if matches!(types.kind(ty), TypeKind::Tag(_))
-            && converted.is_some_and(|from| from.index == ty.index)
+        let value_ty = types.non_atomic(ty);
+        if matches!(types.kind(value_ty), TypeKind::Tag(_))
+            && converted.is_some_and(|from| types.non_atomic(from).index == value_ty.index)
         {
             return Ok(Some(Leaf::Copy {
                 offset,

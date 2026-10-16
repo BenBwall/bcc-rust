@@ -48,7 +48,29 @@ pub(crate) fn compile_module(
     let (object, mut file) = TemporaryObject::create(out_path, "o", &arena)?;
     file.write_all(buffer.bytes())?;
     drop(file);
-    Toolchain::bundled(options.target)?.link_object(&object.0, out_path, options)
+    let toolchain = Toolchain::bundled(options.target)?;
+    let atomic_runtime = module.functions().any(|(_, f)| {
+        f.body.as_ref().is_some_and(|body| {
+            body.blocks().any(|block| {
+                body.block_insts(block).iter().any(|&inst| {
+                    matches!(body.inst(inst), crate::ir::InstData::Atomic { op, ty, align, .. }
+                        if op.is_bytes() || *ty == crate::ir::Type::I128
+                            || !op.is_fence() && align.bytes() < u64::from(ty.bits() / 8))
+                })
+            })
+        })
+    });
+    if !atomic_runtime {
+        return toolchain.link_object(&object.0, out_path, options);
+    }
+    let mut command = toolchain.command(&object.0, out_path, options);
+    _ = command.arg("-latomic");
+    let output = command.output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(ClangError(output)))
+    }
 }
 
 /// A temporary file beside the output (an object, or the native back

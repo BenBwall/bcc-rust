@@ -304,6 +304,50 @@ impl<'a> Memory<'a> {
         Ok(())
     }
 
+    /// Executes one libatomic buffer operation as one interpreter step. The
+    /// interpreter is single-threaded; its trace is a sequentially consistent
+    /// execution admitted by every source ordering.
+    pub(super) fn atomic_bytes(
+        &mut self,
+        op: crate::ir::AtomicOp,
+        args: &[RuntimeValue],
+    ) -> Result<RuntimeValue, Fault> {
+        use crate::ir::AtomicOp as A;
+        let size = *args.last().expect("verified byte atomic size");
+        let count = defined_size(size)?;
+        let align = Align::BYTE;
+        let copy = |this: &mut Self, to, from| this.copy(to, from, size, align, true);
+        match op {
+            | A::LoadBytes => copy(self, args[1], args[0])?,
+            | A::StoreBytes => copy(self, args[0], args[1])?,
+            | A::ExchangeBytes => {
+                let temp = self.allocate(ObjectKind::Heap, count, align)?;
+                let temp_value = RuntimeValue::Ptr(temp);
+                copy(self, temp_value, args[0])?;
+                copy(self, args[0], args[1])?;
+                copy(self, args[2], temp_value)?;
+                self.free(temp.provenance.expect("temporary"));
+            },
+            | A::CompareExchangeBytes => {
+                let (object, object_offset) = self.resolve(args[0], count, align, false)?;
+                let (expected, expected_offset) = self.resolve(args[1], count, align, false)?;
+                let count = usize::try_from(count).map_err(|_| UbKind::OutOfBounds)?;
+                let equal = self.objects[object].cells[object_offset..object_offset + count]
+                    .iter()
+                    .zip(&self.objects[expected].cells[expected_offset..expected_offset + count])
+                    .all(|(a, b)| a.byte == b.byte);
+                if equal {
+                    copy(self, args[0], args[2])?;
+                } else {
+                    copy(self, args[1], args[0])?;
+                }
+                return Ok(RuntimeValue::Int(u128::from(equal)));
+            },
+            | _ => unreachable!("byte atomic operation"),
+        }
+        Ok(RuntimeValue::Poison)
+    }
+
     /// `ptr_add`: offsets `base` by `offset` bytes. With `inbounds`, the
     /// result is poison unless the base and the result both lie within one
     /// live object, at most one past its end, or the offset is zero.

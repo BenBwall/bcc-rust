@@ -66,6 +66,109 @@ impl Machine<'_, '_, '_> {
                     | _ => float_binary(opcode, ty, a, b)?,
                 }
             },
+            | InstData::Atomic {
+                op,
+                ty,
+                args,
+                align,
+                ..
+            } => {
+                use crate::ir::{
+                    AtomicOp as A,
+                    IntCC,
+                };
+                if op.is_fence() {
+                    return Ok(None);
+                }
+                if op.is_bytes() {
+                    let args = body.value_list(args);
+                    let mut values = [RuntimeValue::Poison; 4];
+                    for (index, &arg) in args.iter().enumerate() {
+                        values[index] = self.value(arg);
+                    }
+                    let value = self.memory.atomic_bytes(op, &values[..args.len()])?;
+                    if let Some(result) = result {
+                        self.set(result, value);
+                    }
+                    return Ok(None);
+                }
+                let args = body.value_list(args);
+                let address = self.value(args[0]);
+                if op == A::Store {
+                    self.memory.store(ty, self.value(args[1]), address, align)?;
+                    return Ok(None);
+                }
+                let old = self.memory.load(ty, address, align)?;
+                if op != A::Load {
+                    let operand = self.value(args[1]);
+                    let updated = match op {
+                        | A::Exchange => operand,
+                        | A::CompareExchange => {
+                            let expected = self.value(args[2]);
+                            if old.is_poison() || expected.is_poison() {
+                                return Err(UbKind::BranchOnPoison.into());
+                            }
+                            if old == expected { operand } else { old }
+                        },
+                        | A::Add | A::Sub | A::And | A::Or | A::Xor | A::Nand => {
+                            let opcode = match op {
+                                | A::Add => Opcode::Iadd,
+                                | A::Sub => Opcode::Isub,
+                                | A::And | A::Nand => Opcode::And,
+                                | A::Or => Opcode::Or,
+                                | _ => Opcode::Xor,
+                            };
+                            let value = int_binary(opcode, ty, InstFlags::empty(), old, operand)?;
+                            if op == A::Nand {
+                                int_binary(
+                                    Opcode::Xor,
+                                    ty,
+                                    InstFlags::empty(),
+                                    value,
+                                    RuntimeValue::Int(ty.mask()),
+                                )?
+                            } else {
+                                value
+                            }
+                        },
+                        | A::Min | A::Max | A::Umin | A::Umax => {
+                            let condition = match op {
+                                | A::Min => IntCC::Slt,
+                                | A::Max => IntCC::Sgt,
+                                | A::Umin => IntCC::Ult,
+                                | _ => IntCC::Ugt,
+                            };
+                            match int_compare(condition, ty, old, operand) {
+                                | RuntimeValue::Int(1) => old,
+                                | RuntimeValue::Int(_) => operand,
+                                | _ => RuntimeValue::Poison,
+                            }
+                        },
+                        | A::Fadd | A::Fsub => float_binary(
+                            if op == A::Fadd {
+                                Opcode::Fadd
+                            } else {
+                                Opcode::Fsub
+                            },
+                            ty,
+                            old,
+                            operand,
+                        )?,
+                        | A::Fmin | A::Fmax => match (old, operand) {
+                            | (RuntimeValue::F32(a), RuntimeValue::F32(b)) =>
+                                RuntimeValue::F32(if op == A::Fmin { a.min(b) } else { a.max(b) }),
+                            | (RuntimeValue::F64(a), RuntimeValue::F64(b)) =>
+                                RuntimeValue::F64(if op == A::Fmin { a.min(b) } else { a.max(b) }),
+                            | _ => RuntimeValue::Poison,
+                        },
+                        | _ => unreachable!("handled atomic operation"),
+                    };
+                    if op != A::CompareExchange || old == self.value(args[2]) {
+                        self.memory.store(ty, updated, address, align)?;
+                    }
+                }
+                old
+            },
             | InstData::DynAlloca { size, align, .. } => {
                 let RuntimeValue::Int(size) = self.value(size) else {
                     return Err(Fault::Ub(UbKind::PoisonAddress));

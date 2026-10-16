@@ -114,7 +114,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let representation = self.repr(ty, source)?;
         let local = match representation.value_type() {
             | Some(value_type)
-                if !types::is_volatile(ty) && !self.unit.address_taken.contains(&binding) =>
+                if !types::is_volatile(ty)
+                    && !matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
+                    && !self.unit.address_taken.contains(&binding) =>
                 Local::Variable(self.draft.declare_var(value_type)),
             | _ if self.unit.sema.types.layout(ty).is_none()
                 && matches!(self.unit.sema.types.kind(ty), TypeKind::Array(..)) =>
@@ -157,6 +159,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         to: TypeId,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
+        if matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
+            && let Place::Memory(address) = place
+        {
+            return self.atomic_read(address, ty, to, source);
+        }
         let operand = match (place, self.repr(ty, source)?) {
             | (Place::BitField(address, field), _) => {
                 let result = self.value_type(ty, source)?;
@@ -227,6 +234,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         };
+        if matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
+            && let Place::Memory(address) = target
+        {
+            self.atomic_write(address, ty, value, source)?;
+            return Ok(Item {
+                operand: value.operand,
+                ty:      self.unit.sema.types.non_atomic(ty).unqualified(),
+            });
+        }
         let stored = match (target, value.operand) {
             | (Place::Memory(address), Operand::Aggregate(from)) => {
                 // C99 §6.5.16.1p3: the objects may overlap only exactly.
@@ -284,6 +300,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         ty: TypeId,
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
+        if matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_)) {
+            return self.atomic_write(
+                address,
+                ty,
+                Item {
+                    operand: Operand::Value(value),
+                    ty:      self.unit.sema.types.non_atomic(ty),
+                },
+                source,
+            );
+        }
         let flags = self.mem_flags(ty, source)?;
         let value_type = self.draft.value_type(value);
         _ = self.draft.push(

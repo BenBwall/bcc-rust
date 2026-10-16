@@ -140,7 +140,8 @@ impl Checker<'_, '_> {
                 Err(Construct::WideConversion(opcode)),
             | InstData::Switch { value, .. } if wide(value) => Err(Construct::WideSwitch),
             | InstData::Unary { .. } if opcode == Opcode::VaArg => Err(Construct::Opcode(opcode)),
-            | InstData::VaArgAggregate { .. } => Err(Construct::Opcode(opcode)),
+            | InstData::Atomic { .. } | InstData::VaArgAggregate { .. } =>
+                Err(Construct::Opcode(opcode)),
             | InstData::Load { ty: Type::I1, .. } | InstData::Store { ty: Type::I1, .. } =>
                 Err(Construct::Type(Type::I1)),
             | InstData::Call { func, .. } | InstData::FuncAddr { func }

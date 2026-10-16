@@ -18,6 +18,7 @@ use std::{
 
 mod aggregate_varargs;
 mod asm_labels;
+mod atomics;
 mod braced_strings;
 mod builtin_bindings;
 mod compound_assignments;
@@ -108,15 +109,30 @@ fn with_configured_module<R>(
     configuration: CompilerConfiguration,
     then: impl FnOnce(&Module<'_>, Target) -> R,
 ) -> R {
+    with_configured_headers(
+        source,
+        target,
+        optimize,
+        profile,
+        configuration,
+        HeaderSearch::default(),
+        then,
+    )
+}
+
+fn with_configured_headers<R>(
+    source: &str,
+    target: Target,
+    optimize: bool,
+    profile: Profile,
+    configuration: CompilerConfiguration,
+    headers: HeaderSearch<'_>,
+    then: impl FnOnce(&Module<'_>, Target) -> R,
+) -> R {
     let tu = Bump::new();
     let source = tu.alloc_str(source);
     let mut context = Context::with_configuration(&tu, configuration);
-    let unit = parse_translation_unit(
-        &mut context,
-        Path::new("<test>"),
-        source,
-        HeaderSearch::default(),
-    );
+    let unit = parse_translation_unit(&mut context, Path::new("<test>"), source, headers);
     let sema = analyze_translation_unit(&mut context, &unit);
     assert!(
         sema.lowerable(&context),

@@ -111,6 +111,20 @@ pub(crate) enum InstData {
     BlockAddr {
         label: BlockLabel,
     },
+    /// Ordered atomic access. Compare-exchange returns the observed old value;
+    /// weak operations may be strengthened to strong operations. Operands are
+    /// address, then value, then expected, as required by `AtomicOp::arity`.
+    /// C11: §7.17.3p6, pp. 275-276; PDF pp. 293-294;
+    /// §7.17.7.4p2, p. 283; PDF p. 301.
+    Atomic {
+        op:      AtomicOp,
+        ty:      Type,
+        flags:   InstFlags,
+        align:   Align,
+        order:   MemoryOrder,
+        failure: MemoryOrder,
+        args:    ValueList,
+    },
     Load {
         ty:    Type,
         flags: InstFlags,
@@ -178,6 +192,7 @@ impl InstData {
             | Self::WideConst { opcode, .. }
             | Self::Nullary { opcode, .. }
             | Self::MemoryRange { opcode, .. } => opcode,
+            | Self::Atomic { .. } => Opcode::Atomic,
             | Self::DynAlloca { .. } => Opcode::DynAlloca,
             | Self::VaArgAggregate { .. } => Opcode::VaArgAggregate,
             | Self::IntCompare { .. } => Opcode::Icmp,
@@ -203,6 +218,7 @@ impl InstData {
     /// The flags of a format that has them, else none.
     pub(crate) const fn flags(&self) -> InstFlags {
         match *self {
+            | Self::Atomic { flags, .. }
             | Self::Binary { flags, .. }
             | Self::Load { flags, .. }
             | Self::Store { flags, .. }
@@ -215,6 +231,7 @@ impl InstData {
     /// format that has one.
     pub(crate) const fn controlling_type(&self) -> Option<Type> {
         match *self {
+            | Self::Atomic { ty, .. }
             | Self::Binary { ty, .. }
             | Self::Unary { ty, .. }
             | Self::DynAlloca { ty, .. }
@@ -340,6 +357,7 @@ named! {
         FuncAddr = "func_addr",
         BlockAddr = "block_addr",
         PtrAdd = "ptr_add",
+        Atomic = "atomic",
         Load = "load",
         Store = "store",
         Copy = "copy",
@@ -490,7 +508,7 @@ impl Opcode {
                 InstFlags::NSW.union(InstFlags::NUW),
             | Self::Sdiv | Self::Udiv | Self::Lshr | Self::Ashr => InstFlags::EXACT,
             | Self::PtrAdd => InstFlags::INBOUNDS,
-            | Self::Load | Self::Store | Self::Fill => InstFlags::VOLATILE,
+            | Self::Atomic | Self::Load | Self::Store | Self::Fill => InstFlags::VOLATILE,
             | Self::Copy => InstFlags::VOLATILE.union(InstFlags::MAY_OVERLAP),
             | _ => InstFlags::empty(),
         }
@@ -671,6 +689,9 @@ impl Bits64 {
 /// A list of values in the function's value pool.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct ValueList(pub(super) u32);
+impl ValueList {
+    pub(crate) const EMPTY: Self = Self(0);
+}
 
 /// A branch edge in the function's value pool: a target block with the
 /// arguments for its parameters.
@@ -686,3 +707,97 @@ pub(crate) struct BlockList(pub(super) u32);
 /// constant and an edge.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct CaseList(pub(super) u32);
+
+named! {
+    /// Atomic instruction contracts. All operations are observable memory
+    /// barriers for bcc optimization, including relaxed loads.
+    AtomicOp {
+        Load = "load",
+        Store = "store",
+        Exchange = "exchange",
+        CompareExchange = "compare_exchange",
+        Add = "add",
+        Sub = "sub",
+        And = "and",
+        Or = "or",
+        Xor = "xor",
+        Nand = "nand",
+        Min = "min",
+        Max = "max",
+        Umin = "umin",
+        Umax = "umax",
+        Fadd = "fadd",
+        Fsub = "fsub",
+        Fmin = "fmin",
+        Fmax = "fmax",
+        LoadBytes = "load_bytes",
+        StoreBytes = "store_bytes",
+        ExchangeBytes = "exchange_bytes",
+        CompareExchangeBytes = "compare_exchange_bytes",
+        ThreadFence = "thread_fence",
+        SignalFence = "signal_fence",
+    }
+}
+impl AtomicOp {
+    pub(crate) const fn arity(self) -> usize {
+        match self {
+            | Self::ThreadFence | Self::SignalFence => 0,
+            | Self::Load => 1,
+            | Self::LoadBytes | Self::StoreBytes | Self::CompareExchange => 3,
+            | Self::ExchangeBytes | Self::CompareExchangeBytes => 4,
+            | _ => 2,
+        }
+    }
+
+    pub(crate) const fn has_result(self) -> bool {
+        !matches!(
+            self,
+            Self::Store
+                | Self::LoadBytes
+                | Self::StoreBytes
+                | Self::ExchangeBytes
+                | Self::ThreadFence
+                | Self::SignalFence
+        )
+    }
+
+    pub(crate) const fn is_bytes(self) -> bool {
+        matches!(
+            self,
+            Self::LoadBytes | Self::StoreBytes | Self::ExchangeBytes | Self::CompareExchangeBytes
+        )
+    }
+
+    pub(crate) const fn is_fence(self) -> bool {
+        matches!(self, Self::ThreadFence | Self::SignalFence)
+    }
+}
+named! {
+    /// LLVM-compatible ordering. C11 consume is conservatively acquire.
+    /// C11: §7.17.3p6, pp. 275-276; PDF pp. 293-294.
+    MemoryOrder {
+        Relaxed = "relaxed",
+        Acquire = "acquire",
+        Release = "release",
+        AcqRel = "acq_rel",
+        SeqCst = "seq_cst",
+    }
+}
+impl MemoryOrder {
+    pub(crate) const fn from_c(order: i128) -> Self {
+        match order {
+            | 0 => Self::Relaxed,
+            | 1 | 2 => Self::Acquire,
+            | 3 => Self::Release,
+            | 4 => Self::AcqRel,
+            | _ => Self::SeqCst,
+        }
+    }
+
+    pub(crate) const fn valid_failure(self, failure: Self) -> bool {
+        matches!(failure, Self::Relaxed)
+            || (matches!(failure, Self::Acquire)
+                && matches!(self, Self::Acquire | Self::AcqRel | Self::SeqCst))
+            || (matches!(failure, Self::SeqCst) && matches!(self, Self::SeqCst))
+    }
+}

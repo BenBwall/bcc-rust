@@ -415,14 +415,14 @@ impl<'b, 's> Draft<'b, 's> {
         self.block_mut(to).insts.push(inst);
     }
 
-    /// Copies a call's variable-length operands into the draft's arena.
+    /// Copies call or atomic variable-length operands into the draft's arena.
     pub(super) fn set_call_args(&mut self, inst: Inst, args: &[Value]) {
         assert!(
             matches!(
                 self.inst(inst),
-                InstData::Call { .. } | InstData::CallIndirect { .. }
+                InstData::Atomic { .. } | InstData::Call { .. } | InstData::CallIndirect { .. }
             ),
-            "owned argument lists belong only to calls"
+            "owned operand lists belong only to calls and atomics"
         );
         self.call_args[inst.index()] = Some(self.scratch.alloc_slice_copy(args));
     }
@@ -523,7 +523,9 @@ impl<'b, 's> Draft<'b, 's> {
                 | InstData::VaArgAggregate { list: arg, .. }
                 | InstData::DynAlloca { size: arg, .. } => operand(arg),
                 | InstData::Load { addr, .. } => operand(addr),
-                | InstData::Call { args, .. } | InstData::CallIndirect { args, .. } => self
+                | InstData::Atomic { args, .. }
+                | InstData::Call { args, .. }
+                | InstData::CallIndirect { args, .. } => self
                     .call_operands(inst, args)
                     .iter()
                     .copied()

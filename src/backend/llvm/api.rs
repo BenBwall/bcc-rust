@@ -42,6 +42,8 @@ use llvm_sys::{
         LLVMBlockAddress,
         LLVMBuildAlloca,
         LLVMBuildArrayAlloca,
+        LLVMBuildAtomicCmpXchg,
+        LLVMBuildAtomicRMW,
         LLVMBuildBinOp,
         LLVMBuildBr,
         LLVMBuildCall2,
@@ -50,6 +52,7 @@ use llvm_sys::{
         LLVMBuildExtractValue,
         LLVMBuildFCmp,
         LLVMBuildFNeg,
+        LLVMBuildFence,
         LLVMBuildFreeze,
         LLVMBuildGEP2,
         LLVMBuildICmp,
@@ -96,6 +99,7 @@ use llvm_sys::{
         LLVMGetDataLayoutStr,
         LLVMGetEnumAttributeKindForName,
         LLVMGetIntrinsicDeclaration,
+        LLVMGetNamedFunction,
         LLVMGetNamedGlobalAlias,
         LLVMGetParam,
         LLVMGetPoison,
@@ -123,6 +127,7 @@ use llvm_sys::{
         LLVMSetNSW,
         LLVMSetNUW,
         LLVMSetOperand,
+        LLVMSetOrdering,
         LLVMSetSection,
         LLVMSetTarget,
         LLVMSetThreadLocalMode,
@@ -875,6 +880,185 @@ impl<'id> Session<'id> {
             LLVMBuildSelect(self.builder, operand, a.0, b.0, c"".as_ptr())
         });
         Val(raw, PhantomData)
+    }
+
+    /// Calls the libatomic generic ABI for arbitrary object widths.
+    pub(super) fn atomic_bytes(
+        &self,
+        op: crate::ir::AtomicOp,
+        args: &[Val<'id>],
+        order: crate::ir::MemoryOrder,
+        failure: crate::ir::MemoryOrder,
+    ) -> Val<'id> {
+        use crate::ir::{
+            AtomicOp as A,
+            MemoryOrder as M,
+        };
+        let c_order = |order| {
+            self.bits(
+                Type::I32,
+                match order {
+                    | M::Relaxed => 0,
+                    | M::Acquire => 2,
+                    | M::Release => 3,
+                    | M::AcqRel => 4,
+                    | M::SeqCst => 5,
+                },
+            )
+        };
+        let ptr = self.ty(Type::Ptr);
+        let int = self.ty(Type::I32);
+        let size = self.ty(Type::I64);
+        let (name, result, params, values): (&CStr, _, &[_], &[_]) = match op {
+            | A::LoadBytes => (
+                c"__atomic_load",
+                self.void(),
+                &[size, ptr, ptr, int],
+                &[args[2], args[0], args[1], c_order(order)],
+            ),
+            | A::StoreBytes => (
+                c"__atomic_store",
+                self.void(),
+                &[size, ptr, ptr, int],
+                &[args[2], args[0], args[1], c_order(order)],
+            ),
+            | A::ExchangeBytes => (
+                c"__atomic_exchange",
+                self.void(),
+                &[size, ptr, ptr, ptr, int],
+                &[args[3], args[0], args[1], args[2], c_order(order)],
+            ),
+            | A::CompareExchangeBytes => (
+                c"__atomic_compare_exchange",
+                self.ty(Type::I1),
+                &[size, ptr, ptr, ptr, int, int],
+                &[
+                    args[3],
+                    args[0],
+                    args[1],
+                    args[2],
+                    c_order(order),
+                    c_order(failure),
+                ],
+            ),
+            | _ => unreachable!("byte atomic operation"),
+        };
+        let signature = self.signature(result, params, false);
+        // SAFETY: The reserved runtime symbol has the libatomic ABI specified
+        // above; all values have the verified scalar/pointer types.
+        let raw = unsafe { LLVMGetNamedFunction(self.module, name.as_ptr()) };
+        let function = if raw.is_null() {
+            self.function(name, signature)
+        } else {
+            Val(raw, PhantomData)
+        };
+        let value = self.call(signature, function, values);
+        if op == A::CompareExchangeBytes {
+            self.cast(LLVMOpcode::LLVMZExt, value, self.ty(Type::I8))
+        } else {
+            value
+        }
+    }
+
+    /// Constructs real LLVM atomic operations; relaxed fences are no-ops.
+    pub(super) fn atomic(
+        &self,
+        op: crate::ir::AtomicOp,
+        ty: Type,
+        args: &[Val<'id>],
+        order: crate::ir::MemoryOrder,
+        failure: crate::ir::MemoryOrder,
+    ) -> Option<Val<'id>> {
+        use llvm_sys::{
+            LLVMAtomicOrdering as O,
+            LLVMAtomicRMWBinOp as R,
+        };
+
+        use crate::ir::{
+            AtomicOp as A,
+            MemoryOrder as M,
+        };
+        let ordering = |order| match order {
+            | M::Relaxed => O::LLVMAtomicOrderingMonotonic,
+            | M::Acquire => O::LLVMAtomicOrderingAcquire,
+            | M::Release => O::LLVMAtomicOrderingRelease,
+            | M::AcqRel => O::LLVMAtomicOrderingAcquireRelease,
+            | M::SeqCst => O::LLVMAtomicOrderingSequentiallyConsistent,
+        };
+        let value = if op.is_fence() {
+            if order == M::Relaxed {
+                return None;
+            }
+            // SAFETY: The verifier checks this fence ordering; the builder is
+            // live.
+            unsafe {
+                LLVMBuildFence(
+                    self.builder,
+                    ordering(order),
+                    i32::from(op == A::SignalFence),
+                    c"".as_ptr(),
+                )
+            }
+        } else if op == A::Load || op == A::Store {
+            let value = if op == A::Load {
+                self.load(self.ty(ty), args[0])
+            } else {
+                self.store(args[1], args[0])
+            };
+            // SAFETY: This is a load/store instruction with verified atomic
+            // ordering.
+            unsafe {
+                LLVMSetOrdering(value.0, ordering(order));
+            }
+            return Some(value);
+        } else if op == A::CompareExchange {
+            // SAFETY: Session brands own the handles. The verifier checks
+            // widths, operand counts and success/failure order
+            // constraints.
+            unsafe {
+                LLVMBuildAtomicCmpXchg(
+                    self.builder,
+                    args[0].0,
+                    args[2].0,
+                    args[1].0,
+                    ordering(order),
+                    ordering(failure),
+                    0,
+                )
+            }
+        } else {
+            let operation = match op {
+                | A::Exchange => R::LLVMAtomicRMWBinOpXchg,
+                | A::Add => R::LLVMAtomicRMWBinOpAdd,
+                | A::Sub => R::LLVMAtomicRMWBinOpSub,
+                | A::And => R::LLVMAtomicRMWBinOpAnd,
+                | A::Or => R::LLVMAtomicRMWBinOpOr,
+                | A::Xor => R::LLVMAtomicRMWBinOpXor,
+                | A::Nand => R::LLVMAtomicRMWBinOpNand,
+                | A::Min => R::LLVMAtomicRMWBinOpMin,
+                | A::Max => R::LLVMAtomicRMWBinOpMax,
+                | A::Umin => R::LLVMAtomicRMWBinOpUMin,
+                | A::Umax => R::LLVMAtomicRMWBinOpUMax,
+                | A::Fadd => R::LLVMAtomicRMWBinOpFAdd,
+                | A::Fsub => R::LLVMAtomicRMWBinOpFSub,
+                | A::Fmin => R::LLVMAtomicRMWBinOpFMin,
+                | A::Fmax => R::LLVMAtomicRMWBinOpFMax,
+                | _ => unreachable!("handled atomic opcode"),
+            };
+            // SAFETY: Session brands own the handles. The verifier checks the
+            // operation's value type, width, operands and memory order.
+            unsafe {
+                LLVMBuildAtomicRMW(
+                    self.builder,
+                    operation,
+                    args[0].0,
+                    args[1].0,
+                    ordering(order),
+                    0,
+                )
+            }
+        };
+        Some(Val(value, PhantomData))
     }
 
     pub(super) fn load(&self, ty: Ty<'id>, addr: Val<'id>) -> Val<'id> {

@@ -366,6 +366,39 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     },
                 }
             },
+            | InstData::Atomic {
+                op,
+                ty,
+                args,
+                order,
+                failure,
+                align,
+                flags,
+            } => {
+                let mut values = ArenaVec::new_in(self.emitter.arena);
+                for &arg in self.body.value_list(args) {
+                    values.push(self.value(arg)?);
+                }
+                if op.is_bytes() {
+                    let value = api.atomic_bytes(op, &values, order, failure);
+                    return Ok(op.has_result().then_some(value));
+                }
+                let Some(value) = api.atomic(op, ty, &values, order, failure) else {
+                    return Ok(None);
+                };
+                if !op.is_fence() {
+                    api.alignment(value, align.bytes());
+                    api.volatile(value, flags.contains(InstFlags::VOLATILE));
+                }
+                if !op.has_result() {
+                    return Ok(None);
+                }
+                if op == crate::ir::AtomicOp::CompareExchange {
+                    api.extract_value(value, 0)
+                } else {
+                    value
+                }
+            },
             | InstData::DynAlloca { size, align, .. } => {
                 let value = api.array_alloca(api.ty(Type::I8), self.value(size)?);
                 api.alignment(value, align.bytes());

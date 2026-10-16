@@ -99,6 +99,7 @@ pub(crate) use function::{
 };
 pub(crate) use instructions::{
     Align,
+    AtomicOp,
     Bits64,
     BlockCall,
     BlockList,
@@ -108,6 +109,7 @@ pub(crate) use instructions::{
     InstFlags,
     IntCC,
     MemFlags,
+    MemoryOrder,
     Opcode,
     ValueList,
 };
