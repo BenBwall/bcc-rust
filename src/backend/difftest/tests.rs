@@ -264,6 +264,29 @@ fn generated_records_exercise_scalar_replacement() {
     assert!(split >= 10, "{split} of 50 programs split a record");
 }
 
+/// Record copies and fills take every form: between two records at one
+/// offset and at different ones, within one record, to and from `@g1`, and
+/// partial fills; pointer fields are stored and loaded through.
+#[test]
+fn generated_records_copy_across_offsets_and_hold_pointers() {
+    let programs: Vec<String> = (0..100).map(|seed| generate(seed, false)).collect();
+    for form in [
+        "; records",
+        "; shifted",
+        "; within a record",
+        "; to @g1",
+        "; from @g1",
+        "; partial fill",
+        "store.ptr",
+    ] {
+        let count = programs
+            .iter()
+            .filter(|program| program.contains(form))
+            .count();
+        assert!(count >= 5, "{count} of 100 programs have `{form}`");
+    }
+}
+
 /// Range checks and lowered `&&` and `||` give `combine` work in many
 /// programs.
 #[test]

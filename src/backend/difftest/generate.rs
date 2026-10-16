@@ -2,8 +2,9 @@
 //!
 //! [`generate`] writes textual IR directly. Each function is built from
 //! structured statements (integer and floating arithmetic, comparisons,
-//! `select`, `freeze`, conversions, loads, stores and copies, accesses and
-//! copies of structure-like *record* slots, range checks and lowered `&&`
+//! `select`, `freeze`, conversions, loads, stores and copies, accesses,
+//! copies and fills of structure-like *record* slots, range checks and
+//! lowered `&&`
 //! and `||` conditions, direct and indirect calls,
 //! output through `putchar` and `printf`, diamonds, counted
 //! loops and switches), so every use is dominated by its
@@ -120,14 +121,46 @@ block0(v0: i32):
 const DATA_GLOBALS: [(&str, u64); 3] = [("@g0", 16), ("@g1", 64), ("@table", 32)];
 
 /// The fields of a record slot, by offset, with padding at 5..8: a
-/// structure that is only accessed member by member and copied whole, as
-/// `sroa` splits it.
-const RECORD_FIELDS: [(u64, Ty); 4] = [(0, Ty::I32), (4, Ty::I8), (8, Ty::F64), (16, Ty::I64)];
-const RECORD_SIZE: u64 = 24;
+/// structure that is accessed member by member and copied, as `sroa` splits
+/// it. The pointer field always holds the address of a data object, so a
+/// load through it is defined: it is written only by pointer stores, whole
+/// record copies and copies of itself, never by a fill, a copy to another
+/// offset or a copy from `@g1`, whose bytes are no address.
+const RECORD_FIELDS: [(u64, Ty); 5] = [
+    (0, Ty::I32),
+    (4, Ty::I8),
+    (8, Ty::F64),
+    (16, Ty::I64),
+    (24, Ty::Ptr),
+];
+const RECORD_SIZE: u64 = 32;
 
-/// The byte ranges record copies move: the whole record, or runs of whole
-/// fields with their padding.
-const RECORD_RANGES: [(u64, u64); 5] = [(0, 24), (0, 24), (0, 8), (8, 16), (16, 8)];
+/// The start of the pointer field; the bytes before it hold no address.
+const RECORD_POINTER: u64 = 24;
+
+/// The byte ranges record copies between two records move at the same
+/// offset on both sides: the whole record, or runs of fields with their
+/// padding. Copies to or from `@g1` take only the ranges before
+/// [`RECORD_POINTER`].
+const RECORD_RANGES: [(u64, u64); 7] =
+    [(0, 32), (0, 24), (0, 8), (8, 16), (16, 8), (4, 4), (24, 8)];
+
+/// Member copies to a different offset, as (destination, source, size):
+/// whole fields, a field into another of another type, and a part of one.
+/// The two ranges never overlap, so each also copies within one record.
+const RECORD_SHIFTS: [(u64, u64, u64); 7] = [
+    (8, 16, 8),
+    (16, 8, 8),
+    (0, 16, 8),
+    (16, 0, 8),
+    (0, 8, 8),
+    (4, 0, 4),
+    (12, 16, 4),
+];
+
+/// Fills of part of a record: within one field, across a field and its
+/// padding, and over runs of fields.
+const RECORD_FILLS: [(u64, u64); 6] = [(0, 4), (4, 4), (0, 8), (8, 16), (12, 8), (0, 24)];
 
 /// The most a non-`main` function may cost, in estimated instructions
 /// executed per call.
@@ -712,12 +745,14 @@ impl FunctionGen<'_> {
                 "fill v{}, v{}, v{}, align 8",
                 address.id, byte.id, size.id
             ));
+            self.store_record_field(record, RECORD_POINTER, Ty::Ptr);
             return;
         }
+        // The pointer field is always set.
         let unset = self
             .rng
             .chance(25)
-            .then(|| self.rng.index(RECORD_FIELDS.len()));
+            .then(|| self.rng.index(RECORD_FIELDS.len() - 1));
         for (field, &(offset, ty)) in RECORD_FIELDS.iter().enumerate() {
             if unset != Some(field) {
                 self.store_record_field(record, offset, ty);
@@ -725,66 +760,132 @@ impl FunctionGen<'_> {
         }
     }
 
-    /// A load or store of a record field, or a copy of a run of fields
-    /// between two records, into a record from `@g1` or out of one to `@g1`.
+    /// A load or store of a record field (a load of the pointer field also
+    /// loads through it), a copy of a run of fields between two records at
+    /// one offset or at different ones, a copy within one record, a copy
+    /// into a record from `@g1` or out of one to `@g1`, or a partial fill.
+    /// Each copy and fill line ends in a comment naming its form.
     fn record_statement(&mut self) {
         let record = self.rng.index(self.records);
         let (offset, ty) = self.rng.pick(&RECORD_FIELDS);
-        match self.rng.below(10) {
+        match self.rng.below(14) {
             | 0..4 => self.store_record_field(record, offset, ty),
-            | 4..8 => {
-                let address = self.record_address(record, offset);
-                let align = if offset == 0 { 8 } else { ty.bytes() };
-                let range = if ty.is_int() {
-                    Range::full(ty)
-                } else {
-                    Range::FULL_PTR
-                };
-                _ = self.def(
-                    ty,
-                    range,
-                    format_args!("load.{ty} v{}, align {align}", address.id),
-                );
-            },
+            | 4..8 => self.load_record_field(record, offset, ty),
             | 8 if self.records > 1 => {
-                let other = (record + 1 + self.rng.index(self.records - 1)) % self.records;
+                let other = self.other_record(record);
                 let (start, size) = self.rng.pick(&RECORD_RANGES);
                 let destination = self.record_address(record, start);
                 let source = self.record_address(other, start);
-                self.copy_record(destination, source, size);
+                self.copy_record(destination, source, size, start, "records");
+            },
+            | 9..11 => {
+                // Between two records, or within one when there is only one.
+                let other = if self.records > 1 && self.rng.chance(50) {
+                    self.other_record(record)
+                } else {
+                    record
+                };
+                let (to, from, size) = self.rng.pick(&RECORD_SHIFTS);
+                let destination = self.record_address(record, to);
+                let source = self.record_address(other, from);
+                let form = if other == record {
+                    "within a record"
+                } else {
+                    "shifted"
+                };
+                self.copy_record(destination, source, size, to | from, form);
+            },
+            | 11 => {
+                let (start, size) = self.rng.pick(&RECORD_FILLS);
+                let address = self.record_address(record, start);
+                let byte = self.rng.int(256) - 128;
+                let byte = self.constant_value(Ty::I8, byte);
+                let size = self.constant_value(Ty::I64, i128::from(size));
+                self.line(format_args!(
+                    "fill v{}, v{}, v{}, align {} ; partial fill",
+                    address.id,
+                    byte.id,
+                    size.id,
+                    record_align(start)
+                ));
             },
             | _ => {
-                let (start, size) = self.rng.pick(&RECORD_RANGES);
+                let (start, size) = loop {
+                    let (start, size) = self.rng.pick(&RECORD_RANGES);
+                    if start + size <= RECORD_POINTER {
+                        break (start, size);
+                    }
+                };
                 let record = self.record_address(record, start);
                 let global = self.def(Ty::Ptr, Range::FULL_PTR, format_args!("global_addr @g1"));
                 if self.rng.chance(50) {
-                    self.copy_record(record, global, size);
+                    self.copy_record(record, global, size, start, "from @g1");
                 } else {
-                    self.copy_record(global, record, size);
+                    self.copy_record(global, record, size, start, "to @g1");
                 }
             },
         }
     }
 
+    /// A record other than `record`; there must be two.
+    fn other_record(&mut self, record: usize) -> usize {
+        (record + 1 + self.rng.index(self.records - 1)) % self.records
+    }
+
     fn store_record_field(&mut self, record: usize, offset: u64, ty: Ty) {
-        let value = if ty.is_int() {
-            self.operand(ty)
-        } else {
-            self.float_operand(ty)
+        let value = match ty {
+            | Ty::Ptr => {
+                let objects = self.slots.len() + DATA_GLOBALS.len();
+                let object = self.rng.index(objects);
+                self.object_address(object)
+            },
+            | _ if ty.is_int() => self.operand(ty),
+            | _ => self.float_operand(ty),
         };
         let address = self.record_address(record, offset);
-        let align = if offset == 0 { 8 } else { ty.bytes() };
         self.line(format_args!(
-            "store.{ty} v{}, v{}, align {align}",
-            value.id, address.id
+            "store.{ty} v{}, v{}, align {}",
+            value.id,
+            address.id,
+            record_align(offset).min(ty.bytes())
         ));
     }
 
-    fn copy_record(&mut self, destination: Val, source: Val, size: u64) {
+    /// Loads a field; through a pointer field, also the `i32` it points to.
+    fn load_record_field(&mut self, record: usize, offset: u64, ty: Ty) {
+        let address = self.record_address(record, offset);
+        let range = if ty.is_int() {
+            Range::full(ty)
+        } else {
+            Range::FULL_PTR
+        };
+        let value = self.def(
+            ty,
+            range,
+            format_args!(
+                "load.{ty} v{}, align {}",
+                address.id,
+                record_align(offset).min(ty.bytes())
+            ),
+        );
+        if ty == Ty::Ptr {
+            _ = self.def(
+                Ty::I32,
+                Range::full(Ty::I32),
+                format_args!("load.i32 v{}, align 4", value.id),
+            );
+        }
+    }
+
+    /// A copy whose ends lie at record offsets with the bits of `offsets`.
+    fn copy_record(&mut self, destination: Val, source: Val, size: u64, offsets: u64, form: &str) {
         let size = self.constant_value(Ty::I64, i128::from(size));
         self.line(format_args!(
-            "copy v{}, v{}, v{}, align 8",
-            destination.id, source.id, size.id
+            "copy v{}, v{}, v{}, align {} ; {form}",
+            destination.id,
+            source.id,
+            size.id,
+            record_align(offsets)
         ));
     }
 
@@ -1678,6 +1779,12 @@ impl FunctionGen<'_> {
         }
         out.push_str("}\n");
     }
+}
+
+/// The alignment a record access at byte `offset` may claim: records are
+/// 8-aligned.
+fn record_align(offset: u64) -> u64 {
+    1 << offset.trailing_zeros().min(3)
 }
 
 /// The integer operations [`FunctionGen::arithmetic`] picks from.
