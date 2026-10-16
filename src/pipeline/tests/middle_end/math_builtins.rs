@@ -151,7 +151,14 @@ fn math_builtins_execute_in_llvm_and_native_arms() {
                         compile_module(module, &object, options).unwrap();
                     }
                 });
-                let mut link = toolchain.command(&object, &executable, options);
+                let mut link = toolchain.command(
+                    &object,
+                    &executable,
+                    LlvmOptions {
+                        kind: OutputKind::Executable,
+                        ..options
+                    },
+                );
                 let result = crate::test_support::native::run_native(&mut link).unwrap();
                 assert!(
                     result.status.success(),
