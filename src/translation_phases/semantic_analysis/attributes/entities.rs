@@ -255,11 +255,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         match subject {
-            | Subject::Object { binding, .. }
-                if self.bindings[binding].linkage == Linkage::External =>
-            {
+            | Subject::Object {
+                binding,
+                definition,
+                ..
+            } if self.bindings[binding].linkage == Linkage::External => {
                 let entity = self.entity_of(binding);
                 self.attributes.entity(entity).select_any = true;
+                // An `extern` declaration without an initializer defines it.
+                if !definition {
+                    self.select_any_definition(binding);
+                }
             },
             | Subject::Typedef => {},
             | _ => self.error(

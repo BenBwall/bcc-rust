@@ -78,10 +78,13 @@ from C99 on, C99 inline is the default. `-fgnu89-inline` and
 `-fno-gnu89-inline` override this choice independently of `-std`, with the
 last inline flag winning. bcc permits explicitly selecting C99 inline even
 in a pre-C99 mode; GCC diagnoses that combination. Only `__STRICT_ANSI__` distinguishes
-strict modes from GNU modes in these macros. `-fms-extensions` defines
+strict modes from GNU modes in these macros. On the MSVC target,
+`-fms-extensions` (its default) defines
 `_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and
 `_MSC_EXTENSIONS` `1`: MSVC 19.33, Clang's default
-`-fms-compatibility-version`. Only the umbrella flag claims MSVC; the
+`-fms-compatibility-version`. As in Clang, Linux and MinGW-w64 targets never
+claim MSVC, even with `-fms-extensions`, so MinGW-w64 headers keep their GNU
+paths (`__CRT_INLINE` stays `extern inline` with `gnu_inline`). Only the umbrella flag claims MSVC; the
 individual `-fms-NAME` groups do not, and a later `-fno-ms-extensions`
 withdraws it. Both GNU and MSVC identity can therefore be claimed at once,
 whereas Clang drops the GNU identity under `-fms-compatibility`. Every mode
@@ -1427,8 +1430,10 @@ and not the record), `allocate` is `section` (also on function-local statics),
 `selectany` makes an external data definition `weak_odr` in a comdat of its
 own name, as Clang emits it, so units that each define it link to one object
 (on a function or data without external linkage it is Clang's error; the
-native back end refuses it; a `selectany` declaration without an initializer
-stays a declaration, where Clang makes it a zero definition), `thread` is thread storage
+native back end refuses it; a `selectany` declaration without an initializer,
+`extern` included, defines its object zero-initialized, as Clang does, so a
+later initialized declaration is a redefinition and the type must be
+complete), `thread` is thread storage
 duration (also in the GNU spelling MinGW's `__declspec` macro produces; see
 the thread-local storage notes), `naked` is refused, `noinline` is the GNU
 attribute, and `dllimport`, `dllexport`, `noreturn`, `nothrow`,

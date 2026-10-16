@@ -489,6 +489,19 @@ fn attribute_diagnostics_match_clang() {
             &[K::SelectAnySubject],
         ),
         ("typedef int T __attribute__((selectany));", &[]),
+        // An `extern` `selectany` declaration is a definition.
+        (
+            "extern int d __attribute__((selectany)); int d = 5;",
+            &[K::DuplicateDefinition],
+        ),
+        (
+            "extern int a[] __attribute__((selectany));",
+            &[K::IncompleteTentativeDefinition],
+        ),
+        (
+            "extern int e; extern int e __attribute__((selectany)); int f;",
+            &[],
+        ),
     ];
     for &(source, expected) in cases {
         assert_eq!(kinds(source, Target::LinuxGnu), expected, "{source}");
