@@ -476,6 +476,59 @@ block0(v0: i32):
 }
 
 #[test]
+fn oversized_byval_arguments_are_refused_before_selection() {
+    // A 3 GiB structure copied to the stack for a call, and one received,
+    // would need argument offsets beyond 32-bit displacements (#69); the
+    // back end refuses them instead of panicking in the copy.
+    let message = refusal(
+        "abi lowered
+function @take(ptr byval(size 3221225472, align 8)) -> i32 external
+
+function @give(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = call @take(v0)
+    return v1
+}
+",
+        Target::LinuxGnu,
+    );
+    assert_eq!(
+        message,
+        "not yet supported by the native back end: 3221225480 bytes of stack arguments (in @give)"
+    );
+    let message = refusal(
+        "abi lowered
+function @take(ptr byval(size 3221225472, align 8)) -> i32 external {
+block0(v0: ptr):
+    v1 = load.i32 v0, align 4
+    return v1
+}
+",
+        Target::LinuxGnu,
+    );
+    assert_eq!(
+        message,
+        "not yet supported by the native back end: 3221225480 bytes of stack arguments (in @take)"
+    );
+    // A large structure that still fits is compiled.
+    assert!(
+        assembly(
+            "abi lowered
+function @take(ptr byval(size 65536, align 8)) -> i32 external
+
+function @give(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = call @take(v0)
+    return v1
+}
+",
+            Target::LinuxGnu,
+        )
+        .contains("rep movsb")
+    );
+}
+
+#[test]
 fn bit_operations_use_baseline_instructions() {
     let text = assembly(
         "abi lowered

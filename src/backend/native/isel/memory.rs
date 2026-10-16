@@ -361,7 +361,9 @@ impl Selector<'_, '_, '_> {
             self.string_copy(
                 Operand::Reg(dst),
                 Operand::Reg(src),
-                Operand::Imm(i32::try_from(bytes).expect("an argument copy fits 32 bits")),
+                Operand::Imm(
+                    i32::try_from(bytes).expect("the support check bounds argument copies"),
+                ),
             );
             return;
         }
