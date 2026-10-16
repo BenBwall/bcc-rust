@@ -7,8 +7,9 @@
 //! pointer, `i128`, `f32` and `f64` code, variadic definitions and dynamic
 //! stack allocation. It refuses `f80` and `f128` values, `i128` bit counts,
 //! byte swaps, float conversions and `switch`es, `i128` values where Win64
-//! passes them only by reference, stack objects aligned above 16 bytes, and
-//! thread-local globals in named sections.
+//! passes them only by reference, stack objects aligned above 16 bytes,
+//! stack argument areas whose offsets would leave a 32-bit displacement,
+//! and thread-local globals in named sections.
 
 use std::fmt;
 
@@ -158,13 +159,24 @@ impl Checker<'_, '_> {
     }
 
     /// Checks a signature's parameter and result types and its aggregate
-    /// passing kinds.
+    /// passing kinds. The structures it copies to the stack (`byval`) must
+    /// leave the argument area addressable with the 32-bit displacements of
+    /// the copies, as [`MAX_FRAME_BYTES`] keeps a frame.
     fn signature(&self, signature: Signature<'_>) -> Result<(), Construct> {
         for &ty in signature.params.iter().chain(signature.result.iter()) {
             scalar(ty)?;
             if ty == Type::I128 && self.win64 {
                 return Err(Construct::WideByValue);
             }
+        }
+        let mut area = 8 * signature.params.len() as u64;
+        for param in signature.aggregates {
+            if let ParamAbi::ByVal(layout) = param.abi {
+                area = area.saturating_add(layout.size.next_multiple_of(8));
+            }
+        }
+        if area > MAX_FRAME_BYTES {
+            return Err(Construct::ArgumentArea(area));
         }
         for param in signature.aggregates {
             match param.abi {
@@ -272,6 +284,8 @@ pub(crate) enum Construct {
     RegisterResult(Type),
     SlotAlignment(u64),
     FrameSize(u64),
+    /// Stack arguments, chiefly `byval` structures, of this many bytes.
+    ArgumentArea(u64),
     /// A symbol the assembler cannot spell.
     SymbolName,
     /// The module defines, or makes internal, a name the back end calls
@@ -298,6 +312,7 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::SlotAlignment(align) =>
                 write!(f, "a stack object aligned to {align} bytes")?,
             | Construct::FrameSize(bytes) => write!(f, "a {bytes}-byte stack frame")?,
+            | Construct::ArgumentArea(bytes) => write!(f, "{bytes} bytes of stack arguments")?,
             | Construct::SymbolName => write!(f, "a symbol name with quotes or controls")?,
             | Construct::RuntimeName(name) => write!(
                 f,

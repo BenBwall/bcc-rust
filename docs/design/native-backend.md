@@ -159,7 +159,9 @@ definitions and dynamic stack allocation; **today** the check refuses only
 `f80` and `f128` values, `i128` bit counts, byte swaps, `switch`es and
 conversions to or from floats, `i128` positions Win64 never passes by value,
 structure results in `f80`/`f128` registers, stack objects aligned above 16,
-frames larger than 1 GiB, and thread-local globals in named sections.
+frames larger than 1 GiB, stack arguments (chiefly `byval` structures) of
+more than 1 GiB in one signature, whose offsets and copy lengths would leave
+32-bit operands, and thread-local globals in named sections.
 
 ### Legalization
 
