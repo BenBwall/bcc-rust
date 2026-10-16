@@ -27,10 +27,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: bcc-win-x64
-  cancel-in-progress: false
-
 jobs:
   windows:
     runs-on: [self-hosted, Windows, X64, bcc-windows]
@@ -43,6 +39,11 @@ jobs:
       MINGW_ROOT: C:\Strawberry\c
       CARGO_BUILD_JOBS: 8
       CARGO_TERM_COLOR: never
+      GIT_CONFIG_COUNT: 2
+      GIT_CONFIG_KEY_0: core.longpaths
+      GIT_CONFIG_VALUE_0: 'true'
+      GIT_CONFIG_KEY_1: core.autocrlf
+      GIT_CONFIG_VALUE_1: 'false'
     steps:
       - name: Validate request
         env:
