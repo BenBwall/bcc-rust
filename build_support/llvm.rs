@@ -7,6 +7,8 @@ use std::{
 #[path = "llvm/cache.rs"]
 mod cache;
 
+const LINK_COMPONENTS: [&str; 4] = ["core", "passes", "x86codegen", "x86asmparser"];
+
 /// Builds and installs the pinned LLVM tools unless an installation for
 /// `version` already exists, returning the installation prefix.
 pub(super) fn build(version: &str) -> PathBuf {
@@ -203,14 +205,8 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
             ])
             .arg(jobs.to_string()));
         let result = Command::new(tree.join("bin").join(&config_name))
-            .args([
-                "--link-static",
-                "--libnames",
-                "core",
-                "passes",
-                "x86codegen",
-                "x86asmparser",
-            ])
+            .args(["--link-static", "--libnames"])
+            .args(LINK_COMPONENTS)
             .output()
             .unwrap();
         assert!(
@@ -241,8 +237,12 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
         fs::write(&stamp, &identity).unwrap();
     }
     let llvm_config = install.join("bin").join(config_name);
-    let query = |args: &[&str]| {
-        let result = Command::new(&llvm_config).args(args).output().unwrap();
+    let query = |args: &[&str], components: &[&str]| {
+        let result = Command::new(&llvm_config)
+            .args(args)
+            .args(components)
+            .output()
+            .unwrap();
         assert!(
             result.status.success(),
             "llvm-config failed: {}",
@@ -251,24 +251,15 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
         String::from_utf8(result.stdout).unwrap()
     };
     assert_eq!(
-        query(&["--version"]).trim(),
+        query(&["--version"], &[]).trim(),
         version,
         "LLVM libraries must match the pinned toolchain"
     );
     println!(
         "cargo:rustc-link-search=native={}",
-        query(&["--libdir"]).trim()
+        query(&["--libdir"], &[]).trim()
     );
-    for name in query(&[
-        "--link-static",
-        "--libnames",
-        "core",
-        "passes",
-        "x86codegen",
-        "x86asmparser",
-    ])
-    .split_whitespace()
-    {
+    for name in query(&["--link-static", "--libnames"], &LINK_COMPONENTS).split_whitespace() {
         let name = name.strip_prefix("lib").unwrap_or(name);
         let name = name
             .strip_suffix(".a")
@@ -276,7 +267,9 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
             .unwrap();
         println!("cargo:rustc-link-lib=static={name}");
     }
-    for name in query(&["--link-static", "--system-libs"]).split_whitespace() {
+    // An empty component list makes llvm-config validate every LLVM library,
+    // including libraries outside the closure installed above.
+    for name in query(&["--link-static", "--system-libs"], &LINK_COMPONENTS).split_whitespace() {
         if let Some(name) = name.strip_prefix("-l") {
             println!("cargo:rustc-link-lib={name}");
         }
