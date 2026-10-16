@@ -101,6 +101,23 @@ fn private_inline_bodies_keep_returns_twice_contracts() {
     }
 }
 
+/// The private definition receives the same hidden object-size parameters
+/// as the declaration that selected it at a direct call.
+#[test]
+fn private_inline_bodies_keep_hidden_object_sizes() {
+    let source = "extern inline __attribute__((gnu_inline, always_inline)) unsigned long long \
+                  size(const void *const p __attribute__((pass_object_size(0)))) { return \
+                  __builtin_object_size(p, 0); } int main(void) { char buffer[11]; return \
+                  size(buffer) != 11; }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            with_module(source, target, optimize, profile, |module, target| {
+                assert_eq!(interpret(module, target).0, 0, "{module}");
+            });
+        }
+    }
+}
+
 /// A private `always_inline` body is emitted with what it references:
 /// another private body, a static helper and static data, and the cleanup
 /// function of a variable, which compiler-generated calls reach as direct
