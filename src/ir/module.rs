@@ -152,6 +152,7 @@ impl<'ir> Module<'ir> {
             body: None,
             attributes: SymbolAttributes::default(),
             align: None,
+            returns_twice: false,
         });
         self.add_symbol(name, Symbol::Function(id));
         id

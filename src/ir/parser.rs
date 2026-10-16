@@ -129,6 +129,12 @@ fn declare_items<'t>(
                 let func =
                     module.declare_function(name.text_name(scratch)?, signature, header.linkage);
                 module.function_mut(func).align = header.align;
+                // Text written without the keyword still gets the external
+                // contract of a cataloged name, so hand-written `@setjmp`
+                // declarations stay protected.
+                module.function_mut(func).returns_twice = header.returns_twice
+                    || (header.linkage != Linkage::Internal
+                        && crate::builtins::returns_twice(name.text_name(scratch)?));
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
                         _ = cursor.next();
@@ -468,8 +474,8 @@ fn parse_relocation_target<'t>(
     }
 }
 
-/// `function @name(params) [-> ty] linkage [align N]` and its symbol
-/// attributes, up to the body.
+/// `function @name(params) [-> ty] linkage [align N] [returns_twice]` and
+/// its symbol attributes, up to the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
@@ -483,22 +489,25 @@ fn parse_function_header<'t, 's>(
     } else {
         None
     };
+    let returns_twice = cursor.eat(TokenKind::Ident("returns_twice"));
     let attributes = WrittenAttributes::parse(cursor)?;
     Ok(FunctionHeader {
         name,
         signature,
         linkage,
         align,
+        returns_twice,
         attributes,
     })
 }
 
 struct FunctionHeader<'t, 's> {
-    name:       Token<'t>,
-    signature:  Signature<'s>,
-    linkage:    Linkage,
-    align:      Option<Align>,
-    attributes: WrittenAttributes<'t>,
+    name:          Token<'t>,
+    signature:     Signature<'s>,
+    linkage:       Linkage,
+    align:         Option<Align>,
+    returns_twice: bool,
+    attributes:    WrittenAttributes<'t>,
 }
 
 /// Parses a body after its `{`, through its `}`.

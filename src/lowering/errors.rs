@@ -72,7 +72,6 @@ pub(crate) enum Construct {
     StaticInitializer,
     Initializer,
     SelectionDeclaration,
-    Setjmp,
     Extension,
     CompoundLiteralStorage,
 }
@@ -127,7 +126,6 @@ impl Construct {
             | Self::StaticInitializer => "this static initializer",
             | Self::Initializer => "this initializer",
             | Self::SelectionDeclaration => "declarations in selection statements",
-            | Self::Setjmp => "setjmp",
             | Self::Extension => "this extension",
             | Self::CompoundLiteralStorage =>
                 "compound literals with static or thread storage duration",

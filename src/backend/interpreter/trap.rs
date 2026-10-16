@@ -176,6 +176,10 @@ pub(crate) enum UbKind {
     PoisonInHostCall,
     /// `printf` ran out of arguments for its conversions.
     MissingFormatArgument,
+    /// `longjmp` with a buffer that holds no environment `setjmp` saved,
+    /// or one whose function has returned since.
+    /// C99: §7.13.2.1 paragraph 2, p. 244; PDF p. 256.
+    InvalidJmpBuf,
 }
 
 impl fmt::Display for UbKind {
@@ -208,6 +212,8 @@ impl fmt::Display for UbKind {
             | Self::VaArgTypeMismatch => "va_arg of the wrong type",
             | Self::PoisonInHostCall => "poison passed to a host function",
             | Self::MissingFormatArgument => "printf has too few arguments",
+            | Self::InvalidJmpBuf =>
+                "longjmp to an environment that no active setjmp invocation saved",
         })
     }
 }
@@ -232,6 +238,9 @@ pub(crate) enum Unsupported {
     /// A variadic argument wider than a Win64 slot, which the target would
     /// pass by reference.
     WideVariadic,
+    /// A function that may return twice other than the `setjmp` family,
+    /// such as `vfork` or one declared GNU `returns_twice`.
+    ReturnsTwice,
 }
 
 impl fmt::Display for Unsupported {
@@ -244,6 +253,7 @@ impl fmt::Display for Unsupported {
             | Self::FormatWidth => "a printf field width larger than the size limit",
             | Self::VaListTarget => "a target va_list in a module without a known target",
             | Self::WideVariadic => "a Win64 variadic argument wider than eight bytes",
+            | Self::ReturnsTwice => "a returns-twice function other than setjmp",
         })
     }
 }

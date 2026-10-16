@@ -1,6 +1,6 @@
 //! Weak linkage, aliases, sections, retention, visibility, function
-//! alignment and constructor/destructor lists in the textual form and the
-//! verifier.
+//! alignment, returns-twice functions and constructor/destructor lists in
+//! the textual form and the verifier.
 
 use super::*;
 
@@ -54,6 +54,47 @@ fn symbol_attributes_round_trip_and_verify() {
     assert_eq!(module.function(copy).linkage, Linkage::Weak);
     assert_eq!(module.init_functions().len(), 2);
     assert_eq!(module.init_functions()[0].kind, InitKind::Constructor);
+}
+
+#[test]
+fn returns_twice_round_trips_and_follows_the_external_catalog() {
+    let text = "\
+function @save(ptr) -> i32 external align 16 returns_twice hidden
+
+function @_setjmp(ptr) -> i32 external returns_twice
+
+function @plain(ptr) -> i32 external
+";
+    assert_round_trip(text);
+    let arena = Bump::new();
+    // Unmarked text still declares glibc's `_setjmp` and `vfork` as the
+    // external-symbol contract describes them, but not an internal
+    // function of that name or `longjmp`.
+    let module = parse(
+        &arena,
+        "function @_setjmp(ptr) -> i32 external
+function @vfork() -> i32 weak
+function          @setjmp(ptr) -> i32 internal {
+block0(v0: ptr):
+    v1 = iconst.i32 0
+    return          v1
+}
+function @longjmp(ptr, i32) external
+",
+    );
+    let returns_twice = |name| {
+        let Some(Symbol::Function(func)) = module.symbol(name) else {
+            panic!("{name}")
+        };
+        module.function(func).returns_twice
+    };
+    assert!(returns_twice("_setjmp") && returns_twice("vfork"));
+    assert!(!returns_twice("setjmp") && !returns_twice("longjmp"));
+    assert!(
+        module
+            .to_string()
+            .contains("function @_setjmp(ptr) -> i32 external returns_twice\n")
+    );
 }
 
 #[test]

@@ -56,6 +56,9 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         let value = api.function(api.name(function.name), ty);
         function::attributes(api, value, signature, false);
+        if function.returns_twice {
+            function::returns_twice(api, value, false);
+        }
         if let Some(linkage) = linkage(function.linkage, function.body.is_some()) {
             api.linkage(value, linkage);
         }

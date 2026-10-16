@@ -391,9 +391,10 @@ type descriptors shaped like LLVM's struct-path TBAA, built once from sema's
 canonical types (character types alias everything; unions and `may_alias` are
 handled as in Clang's `CodeGenTBAA.cpp`). Tags are optional; the prototype emits
 none. Function parameters declared `restrict` become `noalias` parameter
-attributes. Calls to functions that may return twice (`setjmp` and attributed
-functions) are marked `returns_twice`; the optimizer must not keep values in
-registers across them.
+attributes. Functions that may return twice (`setjmp`, `vfork` and attributed
+functions) carry the IR flag `returns_twice`; the LLVM back end marks their
+declarations and direct calls, the inliner keeps their callers' frames, and the
+native back end refuses them (see "Returns-twice calls" below).
 
 The optimizer's current alias check uses object identity and byte ranges, not
 access tags: distinct stack slots and distinct globals are disjoint, as are
@@ -624,7 +625,9 @@ Lowering walks each function body with an explicit work stack, like semantic
 analysis, and builds IR with a function builder:
 
 - **Locals.** A pre-pass marks locals whose address is taken (`&x`, array decay,
-  aggregates, `volatile`, `setjmp` in the function). Those get stack slots.
+  aggregates, `volatile`). Those get stack slots. A `setjmp` in the function
+  changes nothing here: C99 §7.13.2.1p3 makes a non-volatile local changed
+  between `setjmp` and `longjmp` indeterminate, so it may stay an SSA value.
   Every other scalar local is an SSA *variable* handled with Braun et al.'s
   algorithm: `def_var` on assignment, `use_var` on read, and `seal_block` once
   all predecessors of a block are known (loop headers after their back edge;
@@ -705,11 +708,11 @@ terminators, after their cleanup. The caller can grow by its original instructio
 count or 256 instructions, whichever is larger, with an absolute cap of 2,000.
 Every site consumes exactly one `allow()` rewrite, including all block splits,
 return joins and copied definitions. Recursive callees, variadic callees,
-`va_start` bodies and bodies with labels or indirect branches are refused. The IR has no returns-twice attribute yet; textual
-IR's recognized `setjmp`, `_setjmp`, `sigsetjmp`, `__sigsetjmp` and `vfork` symbols,
-their direct wrappers and bodies taking their addresses are refused too. Lowering
-already rejects those builtins. General indirect returns-twice metadata remains
-outside the IR's supported contract.
+`va_start` bodies and bodies with labels or indirect branches are refused. Functions
+flagged `returns_twice` (lowered from the retained semantic fact, or projected
+by the textual parser from the external-symbol catalog), their direct wrappers
+and bodies taking their addresses are refused too. A call through a function
+pointer carries no returns-twice mark, as in Clang.
 
 Call expansion splits the caller at the call, maps entry parameters directly to
 arguments, copies every other parameter, instruction, constant and stack slot,
@@ -1073,8 +1076,10 @@ itself. Windows inliner measurements and validation are recorded in
   values.
 - Whether contiguous per-block instruction storage stays cheap once inlining and
   LICM move code; measure before switching to linked lists.
-- The `returns_twice` rule for the in-house optimizer needs a test written from
-  C99 §7.13 before it is trusted.
+- The `returns_twice` rule for the in-house optimizer is tested from C99 §7.13
+  (`optimizer::tests::inline`, `tests/fixtures/programs/setjmp.c`); it relies
+  on every call being a memory barrier in `optimizer/memory.rs` and on
+  volatile accesses never being promoted.
 
 
 ## GCC scalar intrinsics and GNU block expressions (2026-10-12)
@@ -1301,7 +1306,7 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
 `lowering/cleanup.rs`):
 
 - **Textual form.** Function headers end in
-  `linkage [align N] [hidden|protected] [section "name"] [used] [alias @target]`,
+  `linkage [align N] [returns_twice] [hidden|protected] [section "name"] [used] [alias @target]`,
   global headers in `linkage [thread_local] [constant] size N, align N
   [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
   `destructor @f priority N` follow the globals. The verifier checks alias
@@ -1420,3 +1425,63 @@ four of them through `void *` arithmetic or local labels alone. Lua 5.4.9's
 `lvm.c` compiles with its `LUA_USE_JUMPTABLE` dispatch table; a Lua built
 from 29 bcc-compiled files (A0 and A1; `lua.c` and `loadlib.c` use MinGW
 vector types) runs a test script identically to a Clang build.
+
+## Returns-twice calls: setjmp and longjmp (2026-10-16)
+
+Issue #50. One external-symbol contract, `builtins/external.rs`, classifies
+the library functions that return twice (`setjmp`, `_setjmp`, `sigsetjmp`,
+`__sigsetjmp`, `_setjmpex`, `_setjmp3`, `__mingw_setjmp`,
+`__intrinsic_setjmp(ex)`; `vfork`, `getcontext`, `savectx`), restore an
+environment (`longjmp`, `_longjmp`, `siglongjmp`, `__longjmp_chk`,
+`__mingw_longjmp`) or return MinGW-w64's stack pointer (`mingw_getsp`). No
+other phase matches these spellings.
+
+- **Semantic analysis.** `EntityAttributes::returns_twice` is the retained
+  fact: GNU `returns_twice` on any declaration of the entity, or a linked
+  function whose C name the catalog lists (glibc declares `_setjmp` without
+  the attribute). An internal or local function of that name is not marked.
+- **IR.** `Function::returns_twice`, printed and parsed as the header keyword
+  `returns_twice` after `align`. Lowering sets it from the fact (and, until
+  M7 retains assembler labels, from the catalog for a label naming a listed
+  symbol); the textual parser also sets it for an unmarked non-internal
+  function the catalog lists. Calls are ordinary `call`s.
+- **Optimizer.** `inline` refuses functions that are or call flagged
+  functions or take their address, and their direct wrappers, as before
+  but from the flag. Every call is a memory barrier, and volatile accesses
+  stay, which is what C99 §7.13.2.1p3 needs; a non-volatile local changed
+  between `setjmp` and `longjmp` is indeterminate, so promotion stays legal.
+- **LLVM.** The declaration and every direct call get `returns_twice`; LLVM
+  then treats the caller as exposing a second return (no stack-slot
+  coloring, for example), as for Clang's output.
+- **Native back end.** A call to, or the address of, a flagged function is
+  refused (`a call to a function that may return twice`): its linear-scan
+  allocator and frame layout do not account for the second return, which
+  could read a register or spill slot reused after the first.
+- **Interpreter.** `setjmp`-family calls store the frame's activation, depth,
+  block, position and dynamic-allocation mark in the first 40 bytes of the
+  `jmp_buf` (glibc's has 200, MinGW-w64's 256) and return 0. `longjmp`
+  checks that frame is the same live activation and that the position
+  follows an `i32` call, pops the newer frames and the dynamic objects
+  allocated since, and resumes with `val`, or 1 for 0; otherwise it traps
+  with `longjmp to an environment that no active setjmp invocation saved`.
+  `mingw_getsp` returns the frame address. `vfork`, `getcontext`, `savectx`
+  and attributed functions outside the catalog trap as unsupported.
+
+Evidence: `tests/fixtures/programs/setjmp.c` (nested buffers, longjmp three
+frames down, 0 delivered as 1, repeated returns, unchanged non-volatile
+locals in a loop, a Lua-style handler chain, glibc `_setjmp` and `sigsetjmp`)
+through the interpreter for Linux and, with MinGW-w64's declarations, for
+Windows, and natively through LLVM at O0 and with `--opt=bcc` and O2
+(`tests/code_generation_cli.rs`); unit tests in `ir/tests/symbols.rs`,
+`lowering/tests/extensions.rs`, `optimizer/tests/inline.rs`,
+`backend/interpreter/tests/nonlocal.rs`, `backend/llvm/tests/golden.rs` and
+`backend/native/tests/selection.rs`. The issue's `setjmp_linux.c`
+interprets and runs natively. Lua 5.4.9 with `LUA_USE_LINUX` builds from 33
+bcc-compiled units, `ldo.c` (`_setjmp`/`_longjmp`, marked `returns_twice` in
+its LLVM IR) included, in A0, A1 and A2; the six corpus scripts and an
+error-handling script (`pcall`, `error` objects, `xpcall`, coroutine errors,
+20,000 protected calls, to-be-closed variables) print what a Clang -O0
+build prints. Lua as one translation unit stops in the interpreter at the
+missing `realloc` host function, an unrelated host gap. Windows native
+execution (MSVCRT's `_setjmp` with a frame address and SEH unwinding) was
+not run for this change.

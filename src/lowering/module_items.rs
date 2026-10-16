@@ -374,6 +374,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .module
             .declare_function(name, signature, self.ir_linkage(binding));
         self.symbol_attributes(binding, Symbol::Function(func));
+        // Semantic analysis classifies the C spelling; an assembler label,
+        // which only lowering decodes until M7, can name a cataloged symbol
+        // instead. GNU extension: GCC manual, "Asm Labels".
+        if self.names.linked(data.name.name).is_some() && crate::builtins::returns_twice(name) {
+            self.module.function_mut(func).returns_twice = true;
+        }
         Ok(func)
     }
 

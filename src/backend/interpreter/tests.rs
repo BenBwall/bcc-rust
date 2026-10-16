@@ -1,6 +1,6 @@
 //! Tests for the interpreter, written as textual IR: arithmetic, poison,
-//! control flow and calls, memory, undefined behaviour, varargs and the
-//! default host.
+//! control flow and calls, memory, undefined behaviour, varargs, non-local
+//! jumps and the default host.
 
 mod arithmetic;
 mod calls;
@@ -8,6 +8,7 @@ mod control;
 mod host;
 mod labels;
 mod memory;
+mod nonlocal;
 mod noundef_boundary;
 mod poison;
 mod startup;

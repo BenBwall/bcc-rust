@@ -46,6 +46,37 @@ fn noundef_register_return_emits_the_contract_without_freezing_bytes() {
     assert!(!llvm.contains("freeze"), "{llvm}");
 }
 
+#[test]
+fn returns_twice_marks_the_declaration_and_each_direct_call() {
+    let text = "function @setjmp(ptr) -> i32 external\nfunction @main() -> i32 external {\n    \
+                slot0 = stack_slot 200, align 8\nblock0:\n    v0 = stack_addr slot0\n    v1 = \
+                call @setjmp(v0)\n    return v1\n}\n";
+    let llvm = emit(text, Profile::PreAbi, Target::LinuxGnu);
+    let group = |line: &str| {
+        line.rsplit_once('#')
+            .map(|(_, group)| group.trim().to_owned())
+    };
+    let declaration = llvm
+        .lines()
+        .find(|line| line.starts_with("declare i32 @setjmp(ptr)"))
+        .and_then(group)
+        .unwrap_or_else(|| panic!("{llvm}"));
+    let call = llvm
+        .lines()
+        .find(|line| line.contains("call i32 @setjmp("))
+        .and_then(group)
+        .unwrap_or_else(|| panic!("{llvm}"));
+    for group in [declaration, call] {
+        assert!(
+            llvm.lines().any(
+                |line| line.starts_with(&format!("attributes #{group} = {{"))
+                    && line.contains("returns_twice")
+            ),
+            "#{group}: {llvm}"
+        );
+    }
+}
+
 const ARITHMETIC: Golden = Golden {
     name:     "arithmetic",
     input:    "\

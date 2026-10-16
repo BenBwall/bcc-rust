@@ -88,6 +88,39 @@ void late(void) {}
 }
 
 #[test]
+fn returns_twice_is_one_retained_fact_for_attributes_and_cataloged_names() {
+    let source = r"
+typedef long jmp_buf[25];
+int _setjmp(jmp_buf);
+int __sigsetjmp(jmp_buf, int);
+void longjmp(jmp_buf, int);
+__attribute__((returns_twice)) int save(void *);
+int plain(void *);
+static int vfork(void) { return 0; }
+";
+    with_configuration(source, gnu(Target::LinuxGnu), |context, s| {
+        assert_eq!(
+            context.error_count(),
+            0,
+            "{:?}",
+            context.take_pending_errors()
+        );
+        let returns_twice = |name| {
+            s.entity_attributes(binding(context, s, name))
+                .is_some_and(|attributes| attributes.returns_twice)
+        };
+        for name in ["_setjmp", "__sigsetjmp", "save"] {
+            assert!(returns_twice(name), "{name}");
+        }
+        // `longjmp` restores rather than returns twice; an internal
+        // function is not the library's.
+        for name in ["longjmp", "plain", "vfork"] {
+            assert!(!returns_twice(name), "{name}");
+        }
+    });
+}
+
+#[test]
 fn constructors_and_destructors_register_definitions_in_order() {
     let source = r"
 __attribute__((constructor(300))) static void a(void) {}
@@ -409,8 +442,7 @@ fn unimplementable_attributes_and_conventions_are_retained_refusals() {
             Target::LinuxGnu,
             Some(UnsupportedAttribute::Naked),
         ),
-        // A declaration that is never called drops nothing; lowering
-        // refuses calls through the entity fact.
+        // An entity fact that lowering projects onto the IR function.
         (
             "__attribute__((returns_twice)) int f(void);",
             Target::LinuxGnu,

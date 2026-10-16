@@ -423,6 +423,13 @@ neutral signatures to target IR types and still reject incompatible textual IR
 before effects. Optimizer checks use the same external catalog or IR-projected
 attributes, preserving checks for textual functions, wrappers and address uses.
 Dynamic-alloca/frame exclusions are derived from IR opcodes as today.
+Status (2026-10-16, #50): the returns-twice and environment part of this
+catalog exists as `builtins/external.rs`. Semantic analysis retains it in
+`EntityAttributes::returns_twice`, lowering projects that onto the IR
+function flag `returns_twice`, the textual parser projects the catalog onto
+unmarked external declarations, and the inliner, LLVM emission, the native
+support check and the interpreter read the flag or the catalog; the lowering
+and inliner spelling lists of C34/B18/B27 are gone.
 
 Atomics retain their operation/object/order checker; x86 retains its generated
 signature/immediate data (386 names); vector and type-generic math keep their

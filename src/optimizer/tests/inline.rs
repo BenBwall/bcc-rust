@@ -304,6 +304,94 @@ block0(v0: ptr):
 }
 
 #[test]
+fn attributed_returns_twice_wrappers_are_refused() {
+    // GNU `returns_twice` on a name the external catalog does not list.
+    let text = "\
+function @save(ptr) -> i32 external returns_twice
+
+function @wrapper(ptr) -> i32 internal {
+block0(v0: ptr):
+    v1 = call @save(v0)
+    return v1
+}
+
+function @address() -> ptr internal {
+block0:
+    v0 = func_addr @save
+    return v0
+}
+
+function @main(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = call @wrapper(v0)
+    v2 = call @address()
+    return v1
+}
+";
+    let (output, report) = optimize_text(text, &only(&[Pass::Inline]));
+    assert_eq!(report.stats(Pass::Inline).changes, 0, "{output}");
+    assert!(output.contains("function @save(ptr) -> i32 external returns_twice"));
+}
+
+/// A `setjmp` in `@main`, a `longjmp` two internal calls down and a
+/// counter changed between them through volatile accesses.
+/// C99: §7.13.2.1 paragraphs 3-4, p. 244; PDF p. 256.
+const SETJMP: &str = "\
+function @setjmp(ptr) -> i32 external
+function @longjmp(ptr, i32) external
+
+function @thrower(ptr, i32) internal {
+block0(v0: ptr, v1: i32):
+    call @longjmp(v0, v1)
+    unreachable
+}
+
+function @middle(ptr, i32) -> i32 internal {
+block0(v0: ptr, v1: i32):
+    v2 = iconst.i32 1
+    v3 = iadd.i32 v1, v2
+    call @thrower(v0, v3)
+    return v3
+}
+
+function @main() -> i32 external {
+    slot0 = stack_slot 200, align 8
+    slot1 = stack_slot 4, align 4
+block0:
+    v0 = stack_addr slot0
+    v1 = stack_addr slot1
+    v2 = iconst.i32 0
+    store.i32 v2, v1, align 4
+    v3 = iconst.i32 40
+    v4 = call @setjmp(v0)
+    v5 = icmp.i32 eq v4, v2
+    brif v5, block1, block2
+block1:
+    v6 = load.i32 volatile v1, align 4
+    v7 = iconst.i32 1
+    v8 = iadd.i32 v6, v7
+    store.i32 volatile v8, v1, align 4
+    v9 = call @middle(v0, v3)
+    return v9
+block2:
+    v10 = load.i32 volatile v1, align 4
+    v11 = iadd.i32 v4, v10
+    v12 = iadd.i32 v11, v3
+    return v12
+}
+";
+
+#[test]
+fn setjmp_callers_keep_their_second_return_through_the_default_pipeline() {
+    let (output, _) = optimize_text(SETJMP, &OptimizerOptions::default());
+    assert!(output.contains("function @setjmp(ptr) -> i32 external returns_twice"));
+    assert!(output.contains("call @setjmp("), "{output}");
+    for text in [SETJMP, &output] {
+        assert_eq!(returned(text, "main", &[]), RuntimeValue::Int(82), "{text}");
+    }
+}
+
+#[test]
 fn weak_definitions_are_not_inlined() {
     // A strong definition in another unit may replace a weak body at link
     // time. GNU extension: GCC manual, "Common Function Attributes", weak.

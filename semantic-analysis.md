@@ -2054,8 +2054,13 @@ Clang Attributes Reference. C99 §6.2.2p2, p. 30 (PDF p. 42); §6.2.4p5, p. 32
 lowering (`extensions.rs::record_label`), and alias targets are resolved by C
 name, so aliases involving assembler labels are refused. The known-definition
 name set for open externals (`Unit::new`/`unprototyped_external`), the
-name-based `main` end policy, readonly/volatile object predicates, and the
-shared external-signature and returns-twice catalog are unchanged. MSVC
+name-based `main` end policy, readonly/volatile object predicates and the
+shared external-signature catalog are unchanged. The returns-twice part of
+the external-symbol contract exists (`builtins/external.rs`, 2026-10-16):
+semantic analysis retains it as `EntityAttributes::returns_twice` for linked
+functions, merged with GNU `returns_twice`, and lowering consults the catalog
+itself only for an assembler label, which M7 moves into retained symbol
+requests. MSVC
 convention keywords other than `__vectorcall` remain accepted as the default
 convention without a retained `CallingConvention` on types.
 

@@ -7,8 +7,9 @@
 //! pointer, `i128`, `f32` and `f64` code, variadic definitions and dynamic
 //! stack allocation. It refuses `f80` and `f128` values, `i128` bit counts,
 //! byte swaps, float conversions and `switch`es, `i128` values where Win64
-//! passes them only by reference, stack objects aligned above 16 bytes, and
-//! thread-local globals in named sections.
+//! passes them only by reference, stack objects aligned above 16 bytes,
+//! thread-local globals in named sections, and calls to functions that may
+//! return twice.
 
 use std::fmt;
 
@@ -142,6 +143,9 @@ impl Checker<'_, '_> {
             | InstData::VaArgAggregate { .. } => Err(Construct::Opcode(opcode)),
             | InstData::Load { ty: Type::I1, .. } | InstData::Store { ty: Type::I1, .. } =>
                 Err(Construct::Type(Type::I1)),
+            | InstData::Call { func, .. } | InstData::FuncAddr { func }
+                if self.module.function(func).returns_twice =>
+                Err(Construct::ReturnsTwice),
             | InstData::Call { func, args } => {
                 let signature = self.module.function_signature(func);
                 self.signature(signature)?;
@@ -281,6 +285,11 @@ pub(crate) enum Construct {
     NotAbiLowered,
     /// A thread-local global placed in a named section.
     ThreadLocalSection,
+    /// A call to, or the address of, a function that may return twice:
+    /// register allocation and frame layout do not yet keep the caller's
+    /// values where a second return finds them.
+    /// C99: §7.13.2.1 paragraph 3, p. 244; PDF p. 256.
+    ReturnsTwice,
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -306,6 +315,10 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::NotAbiLowered => write!(f, "a module not lowered for the ABI")?,
             | Construct::ThreadLocalSection =>
                 write!(f, "a thread-local global in a named section")?,
+            | Construct::ReturnsTwice => write!(
+                f,
+                "a call to a function that may return twice, such as `setjmp`"
+            )?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;

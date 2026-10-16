@@ -55,7 +55,8 @@ impl Unit<'_, '_, '_> {
     }
 
     /// Gives a newly declared symbol its entity's section, retention,
-    /// visibility and, for a function, code alignment.
+    /// visibility and, for a function, code alignment and returns-twice
+    /// fact.
     pub(super) fn symbol_attributes(&mut self, binding: usize, symbol: Symbol) {
         let Some(&attributes) = self.sema.entity_attributes(binding) else {
             return;
@@ -79,6 +80,11 @@ impl Unit<'_, '_, '_> {
         {
             self.module.function_mut(func).align =
                 Align::from_bytes(u64::from(attributes.code_alignment));
+        }
+        if let Symbol::Function(func) = symbol
+            && attributes.returns_twice
+        {
+            self.module.function_mut(func).returns_twice = true;
         }
     }
 
