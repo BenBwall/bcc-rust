@@ -385,6 +385,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .module
             .declare_function(name, signature, IrLinkage::Internal);
         self.module.function_mut(func).inlining = InlineControl::Always;
+        // The private body has the same return contract as its entity.
+        // C99: §7.13.2.1p4, p. 244; PDF p. 256 (longjmp resumes setjmp).
+        self.module.function_mut(func).returns_twice = self
+            .sema
+            .entity_attributes(binding)
+            .is_some_and(|attributes| attributes.returns_twice);
         _ = self.private_bodies.insert(external, func);
         Ok(Some(func))
     }

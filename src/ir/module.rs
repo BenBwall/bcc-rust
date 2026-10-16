@@ -301,11 +301,10 @@ impl<'ir> Module<'ir> {
             return false;
         };
         function.returns_twice
-            || matches!(
-                function.attributes.alias,
-                Some(Symbol::Function(target))
-                    if self.functions.get(target).is_some_and(|target| target.returns_twice)
-            )
+            || self
+                .functions
+                .get(self.function_definition(func))
+                .is_some_and(|target| target.returns_twice)
     }
 
     /// Whether the address of a function that may return twice escapes into
