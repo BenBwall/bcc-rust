@@ -141,3 +141,98 @@ fn unsupported_enable_expressions_do_not_receive_a_fabricated_symbol() {
         },
     );
 }
+
+#[test]
+fn foreign_fortify_spellings_only_report_unknown_attributes() {
+    with_source(
+        r#"
+[[gnu::overloadable]] int plain(int n) { return n; }
+int fixed(char *const p [[gnu::pass_object_size(missing_name)]]) { return 2; }
+int dynamic(char *const p [[gnu::pass_dynamic_object_size(1)]]) { return 3; }
+[[gnu::unavailable("blocked"), gnu::diagnose_if(missing_name,"blocked","error"),
+  gnu::enable_if(missing_name,"blocked"), clang::diagnose_if(missing_name,"blocked","error")]]
+int checked(int n) { return n; }
+int main(void) { char data[9]; return plain(1)+fixed(data)+dynamic(data)+checked(4); }
+"#,
+        |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 7, "{errors:?}");
+            assert_eq!(sema.errors, 0, "{errors:?}");
+            assert!(
+                errors.iter().all(|error| matches!(
+                    error,
+                    TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::UnknownAttribute,
+                        ..
+                    })
+                )),
+                "{errors:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn late_entity_attributes_respect_mangled_function_definitions() {
+    with_source(
+        r"
+int f(int n) __attribute__((overloadable)) { return n; }
+int f(int n) __attribute__((overloadable,weak,always_inline,noinline));
+",
+        |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 3, "{errors:?}");
+            assert_eq!(sema.errors, 0, "{errors:?}");
+            assert!(
+                errors.iter().all(|error| matches!(
+                    error,
+                    TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::AttributeAfterDefinition,
+                        ..
+                    })
+                )),
+                "{errors:?}"
+            );
+            for (binding, _) in sema
+                .bindings
+                .iter()
+                .enumerate()
+                .filter(|(_, binding)| context.string_cache.at(binding.name.name) == "f")
+            {
+                if let Some(attributes) = sema.entity_attributes(binding) {
+                    assert!(!attributes.weak);
+                    assert_eq!(attributes.inlining, Inlining::Default);
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn deferred_floating_arithmetic_keeps_target_precision_and_complex_domains() {
+    with_source(
+        r#"
+void divided(double n) __attribute__((diagnose_if(n/2.0==1.5,"division","warning")));
+void multiplied(double n) __attribute__((diagnose_if(n*2.0==6.0,"multiplication","warning")));
+void rounded(float n) __attribute__((diagnose_if(n+1.0f==16777216.0f,"float rounding","warning")));
+void complex(double _Complex n) __attribute__((diagnose_if(n/2.0==1.5+2.0i,"complex-real","warning")));
+void product(double _Complex n) __attribute__((diagnose_if(n*(2.0+0.0i)==6.0+8.0i,"complex-complex","warning")));
+void test(void) { divided(3.0); multiplied(3.0); rounded(16777216.0f); complex(3.0+4.0i); product(3.0+4.0i); }
+"#,
+        |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 5, "{errors:?}");
+            assert_eq!(sema.errors, 0, "{errors:?}");
+            assert!(
+                errors.iter().all(|error| matches!(
+                    error,
+                    TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::CallAttribute,
+                        ..
+                    })
+                )),
+                "{errors:?}"
+            );
+        },
+    );
+}

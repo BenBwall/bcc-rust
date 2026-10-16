@@ -31,18 +31,23 @@ pub(crate) struct FunctionExtensions<'tu> {
         ArenaMap<'tu, usize, &'tu FunctionExtension<'tu>>,
     pub(in crate::translation_phases::semantic_analysis) calls:
         ArenaMap<'tu, usize, ExtensionCall<'tu>>,
-    pub(in crate::translation_phases::semantic_analysis) values:       ArenaMap<'tu, usize, usize>,
+    pub(in crate::translation_phases::semantic_analysis) values:        ArenaMap<'tu, usize, usize>,
     pub(in crate::translation_phases::semantic_analysis) object_sizes:
+        ArenaMap<'tu, usize, ObjectSize<'tu>>,
+    /// Hidden size of a cleanup call's synthetic address argument, keyed by
+    /// the automatic object's binding rather than expression syntax.
+    pub(in crate::translation_phases::semantic_analysis) cleanup_sizes:
         ArenaMap<'tu, usize, ObjectSize<'tu>>,
 }
 
 impl<'tu> FunctionExtensions<'tu> {
     pub(in crate::translation_phases::semantic_analysis) fn new(arena: &'tu Bump) -> Self {
         Self {
-            functions:    ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            calls:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            values:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            object_sizes: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            functions:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            calls:         ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            values:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            object_sizes:  ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            cleanup_sizes: ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
     }
 
@@ -60,6 +65,10 @@ impl<'tu> FunctionExtensions<'tu> {
 
     pub(crate) fn object_size(&self, expression: &Expression<'tu>) -> Option<ObjectSize<'tu>> {
         self.object_sizes.get(&identity(expression)).copied()
+    }
+
+    pub(crate) fn cleanup_size(&self, variable: usize) -> Option<ObjectSize<'tu>> {
+        self.cleanup_sizes.get(&variable).copied()
     }
 }
 

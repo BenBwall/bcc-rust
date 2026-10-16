@@ -239,3 +239,106 @@ fn non_call_function_designators_retain_definition_references() {
         0,
     );
 }
+
+#[test]
+fn foreign_attribute_namespaces_leave_ordinary_calls_and_symbols() {
+    let text = returns(
+        r#"
+[[gnu::overloadable]] int plain(int n) { return n; }
+int fixed(char *const p [[gnu::pass_object_size(missing_name)]]) { return 2; }
+int dynamic(char *const p [[gnu::pass_dynamic_object_size(1)]]) { return 3; }
+[[gnu::unavailable("blocked"), gnu::diagnose_if(missing_name,"blocked","error"),
+  gnu::enable_if(missing_name,"blocked")]] int checked(int n) { return n; }
+int main(void) { char data[9]; return plain(1)+fixed(data)+dynamic(data)+checked(4); }
+"#,
+        10,
+    );
+    for signature in [
+        "function @plain(i32 noundef)",
+        "function @fixed(ptr noundef)",
+        "function @dynamic(ptr noundef)",
+        "function @checked(i32 noundef)",
+    ] {
+        assert!(text.contains(signature), "{signature}\n{text}");
+    }
+}
+
+#[test]
+fn recognized_clang_namespace_keeps_mangling_and_hidden_sizes() {
+    let text = returns(
+        r"
+[[clang::overloadable]] int scoped(char *const p [[clang::pass_object_size(1)]]) {
+    return __builtin_object_size(p,1);
+}
+int main(void) { char data[9]; return scoped(data); }
+",
+        9,
+    );
+    assert!(
+        text.contains("function @_Z6scopedPcU17pass_object_size1(ptr noundef, i64 noundef)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn cleanup_calls_transport_fixed_object_sizes() {
+    let _text = returns(
+        r"
+unsigned long observed;
+void scalar(int *const p __attribute__((pass_object_size(0)))) {
+    observed += __builtin_object_size(p,0);
+}
+void array(void *const p __attribute__((pass_object_size(3)))) {
+    observed += __builtin_object_size(p,3);
+}
+int main(void) {
+    { int n __attribute__((cleanup(scalar))) = 1;
+      char data[7] __attribute__((cleanup(array))); }
+    return observed;
+}
+",
+        11,
+    );
+}
+
+#[test]
+fn cleanup_calls_transport_saved_dynamic_and_unknown_static_vla_sizes() {
+    let _text = returns(
+        r"
+unsigned long observed;
+void dynamic(void *const p __attribute__((pass_dynamic_object_size(1)))) {
+    observed += __builtin_dynamic_object_size(p,1);
+}
+void upper(void *const p __attribute__((pass_object_size(1)))) {
+    observed += __builtin_object_size(p,1) == (unsigned long)-1;
+}
+void lower(void *const p __attribute__((pass_object_size(3)))) {
+    observed += __builtin_object_size(p,3) == 0;
+}
+void test(int n) {
+    char data[n][3] __attribute__((cleanup(dynamic)));
+    char other[n] __attribute__((cleanup(upper)));
+    char third[n] __attribute__((cleanup(lower)));
+    n = 77;
+}
+int main(void) { test(5); return observed; }
+",
+        17,
+    );
+}
+
+#[test]
+fn private_inline_cleanup_calls_keep_the_hidden_size_argument() {
+    let text = returns(
+        r"
+unsigned long observed;
+extern inline __attribute__((gnu_inline,always_inline))
+void clean(void *const p __attribute__((pass_object_size(1)))) {
+    observed = __builtin_object_size(p,1);
+}
+int main(void) { { char data[13] __attribute__((cleanup(clean))); } return observed; }
+",
+        13,
+    );
+    assert!(text.contains("@clean.always_inline"), "{text}");
+}

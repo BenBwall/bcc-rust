@@ -62,6 +62,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             args.push(object);
         }
         args.push(address);
+        if let Some(size) = self.unit.sema.function_extensions.cleanup_size(variable) {
+            let value = self.emit_object_size(size, Some(address), source)?;
+            args.push(value);
+        }
         let args = self.scratch.alloc_slice_copy(&args);
         _ = self.draft.push(Op::Call(func, args), signature.result);
         Ok(())
