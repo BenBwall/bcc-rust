@@ -55,17 +55,17 @@ pub(crate) struct EntityAttributes<'tu> {
     /// GNU `aligned` on a function: the alignment of its code, in bytes.
     pub(crate) code_alignment:     u32,
     /// GNU `visibility`, from the declaration that wrote it.
-    pub(crate) visibility:     Option<Visibility>,
+    pub(crate) visibility:         Option<Visibility>,
     /// Calls may return a second time, after a `longjmp`: GNU
     /// `returns_twice`, or a linked function that the external-symbol
     /// contract (`builtins::external_contract`) lists, as `_setjmp` is.
     /// Lowering marks the IR function, which the optimizer and back ends
     /// read. C99: §7.13.2.1 paragraph 4, p. 244; PDF p. 256.
-    pub(crate) returns_twice:  bool,
+    pub(crate) returns_twice:      bool,
     /// GNU `nonnull`: zero-based parameter positions, or None when absent.
     /// An empty slice applies to every pointer parameter. These facts are
     /// diagnostic only.
-    pub(crate) nonnull:        Option<&'tu [usize]>,
+    pub(crate) nonnull:            Option<&'tu [usize]>,
     /// A declaration of the object specifies its alignment, by GNU
     /// `aligned` or `_Alignas`, rather than a typedef: that alignment is the
     /// object's own, which the System V rule for large arrays does not raise
