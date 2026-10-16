@@ -34,6 +34,8 @@ use crate::{
     ir::{
         AggregateParam,
         Align,
+        BlockLabel,
+        Entity,
         ExtendedParam,
         FuncId,
         GlobalDecl,
@@ -43,6 +45,7 @@ use crate::{
         Module,
         ParamAbi,
         Relocation,
+        RelocationTarget,
         SigId,
         Signature,
         Symbol,
@@ -53,7 +56,6 @@ use crate::{
         Context,
         SourceVectors,
         parsing::{
-            ExternalDeclaration,
             ParsedTranslationUnit,
             declaration_syntax::{
                 Initializer,
@@ -73,16 +75,16 @@ use crate::{
             StringTokenType,
         },
         semantic_analysis::{
-            Binding,
+            ConstantClass,
             DefinitionKind,
             FunctionRecord,
             Integer,
+            LabelId,
             Linkage,
             ScopeKind,
             SemanticTranslationUnit,
             TypeId,
             TypeKind,
-            library_builtin_name,
         },
     },
     util::{
@@ -109,9 +111,6 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) tables: &'a Bump,
     pub(super) target: Target,
     pub(super) names: SymbolNames<'a>,
-    /// Each binding by its declared identifier, so a declarator finds its
-    /// binding without a search.
-    declarators: ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
     definitions: ArenaMap<'a, usize, DefinitionKind>,
     /// Completed types of linked object definitions, including tentative ones,
     /// indexed by emitted symbol name after applying GNU assembler labels.
@@ -154,7 +153,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// p. 143; PDF p. 155.
     pub(super) fn declare_items(
         &mut self,
-        syntax: &ParsedTranslationUnit<'tu>,
+        _syntax: &ParsedTranslationUnit<'tu>,
         errors: &mut ArenaVec<'_, LoweringError>,
     ) -> ArenaVec<'a, (&'tu FunctionRecord<'tu>, Option<FuncId>)> {
         let alias_errors = self.prepare_symbol_names();
@@ -176,9 +175,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             };
             if let Some(name) = name {
                 _ = self.reserved_names.insert(name);
-                if binding.builtin
+                if binding.origin.is_intrinsic()
                     && self.names.linked(binding.name.name).is_none()
-                    && let Some(runtime) = library_builtin_name(name)
+                    && let Some(runtime) = binding.origin.library()
                 {
                     _ = self.reserved_names.insert(runtime);
                 }
@@ -235,18 +234,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
             functions.push((record, func));
         }
-        let mut initializers: ArenaMap<'_, usize, &'tu Initializer<'tu>> =
+        let mut initializers: ArenaMap<'_, usize, Option<&'tu Initializer<'tu>>> =
             ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
-        for root in syntax.external_declarations() {
-            let ExternalDeclaration::Declaration(declaration) = *root else {
-                continue;
-            };
-            for init_declarator in declaration.init_declarators {
-                if let Some(initializer) = init_declarator.initializer
-                    && let Some(binding) = self.declarator_binding(init_declarator.declarator)
-                {
-                    _ = initializers.insert(binding, initializer);
-                }
+        for fact in self.sema.correspondence.declarations {
+            if let Some(binding) = fact.binding {
+                _ = initializers.insert(binding, fact.initializer);
             }
         }
         for definition in self.sema.definitions {
@@ -265,11 +257,25 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             {
                 continue;
             }
-            let initializer = initializers.get(&definition.binding).copied();
+            let Some(&initializer) = initializers.get(&definition.binding) else {
+                errors.push(LoweringError::missing(
+                    "object definition occurrence is not retained",
+                    binding.name.source_vectors,
+                ));
+                continue;
+            };
+            if definition.kind == DefinitionKind::Object && initializer.is_none() {
+                errors.push(LoweringError::missing(
+                    "object definition initializer is not retained",
+                    binding.name.source_vectors,
+                ));
+                continue;
+            }
             if let Err(error) = self.define_object(definition.binding, None, initializer) {
                 errors.push(error);
             }
         }
+        self.declare_aliases_and_initializers(errors);
         functions
     }
 
@@ -292,6 +298,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         record: &FunctionRecord<'tu>,
     ) -> Result<Option<FuncId>, LoweringError> {
         let source = record.syntax.source_vectors;
+        if self
+            .sema
+            .correspondence
+            .declaration(record.syntax.declarator)
+            .is_none()
+        {
+            return Err(LoweringError::missing(
+                "function definition occurrence is not retained",
+                source,
+            ));
+        }
         let Some(binding) = record.binding else {
             return Err(LoweringError::missing(
                 "a function definition has no binding",
@@ -320,8 +337,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let name = self.symbol_name(binding);
         // Builtin aliases describe the C binding, never the exact assembler
         // label chosen by the user (GNU extension to C99 §6.2.2p2).
-        let runtime = (data.builtin && self.names.linked(data.name.name).is_none())
-            .then(|| library_builtin_name(self.context.string_cache.at(data.name.name)))
+        let runtime = self
+            .names
+            .linked(data.name.name)
+            .is_none()
+            .then(|| data.origin.library())
             .flatten();
         let name = runtime.unwrap_or(name);
         if let Some(Symbol::Function(func)) = self.module.symbol(name) {
@@ -350,7 +370,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         } else {
             self.signature(data.ty)?
         };
-        Ok(self.module.declare_function(name, signature, linkage(data)))
+        let func = self
+            .module
+            .declare_function(name, signature, self.ir_linkage(binding));
+        self.symbol_attributes(binding, Symbol::Function(func));
+        Ok(func)
     }
 
     /// An external declaration without a prototype or a known definition.
@@ -513,10 +537,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 // C99 §6.2.7p4, §6.9.2p2: an initializer can refer to an
                 // earlier incomplete declaration. Reserve the same symbol
                 // using the definition's completed type from the outset.
+                // The definition's binding names the same entity, so its
+                // linkage and symbol attributes are the entity's.
                 let binding = self.defined_objects.get(name).copied().unwrap_or(binding);
-                let data = self.sema.bindings[binding];
-                let declaration = self.global_declaration(binding, linkage(data))?;
-                Ok(self.module.declare_global(name, declaration))
+                let declaration = self.global_declaration(binding, self.ir_linkage(binding))?;
+                let global = self.module.declare_global(name, declaration);
+                self.symbol_attributes(binding, Symbol::Global(global));
+                Ok(global)
             },
         }
     }
@@ -556,6 +583,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .global_declaration(binding, IrLinkage::Internal)
                     .map_err(|kind| at(kind, source))?;
                 let global = self.module.declare_global(name, declaration);
+                self.symbol_attributes(binding, Symbol::Global(global));
                 if self.names.local(binding).is_none() {
                     _ = self.generated_globals.insert(global);
                 }
@@ -614,6 +642,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             size: self.sema.flexible_object_size(binding).unwrap_or(size),
             align,
             constant: constant_object(types, data.ty),
+            thread_local: data.duration
+                == crate::translation_phases::semantic_analysis::Duration::Thread,
         })
     }
 
@@ -639,10 +669,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let global = self.module.declare_global(
             symbol,
             GlobalDecl {
-                linkage:  IrLinkage::Internal,
-                size:     text.len() as u64 + 1,
-                align:    Align::BYTE,
-                constant: true,
+                linkage:      IrLinkage::Internal,
+                size:         text.len() as u64 + 1,
+                align:        Align::BYTE,
+                constant:     true,
+                thread_local: false,
             },
         );
         let mut bytes = ArenaVec::with_capacity_in(text.len() + 1, self.tables);
@@ -686,6 +717,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 size: bytes.len() as u64,
                 align,
                 constant: true,
+                thread_local: false,
             },
         );
         self.module.define_global(
@@ -816,17 +848,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
     }
 
-    /// The binding a declarator declares.
-    pub(super) fn declarator_binding(
-        &self,
-        declarator: crate::translation_phases::parsing::declaration_syntax::Declarator<'tu>,
-    ) -> Option<usize> {
-        let identifier = declarator.identifier()?;
-        self.declarators
-            .get(&(identifier.name, identifier.source_vectors))
-            .copied()
-    }
-
     pub(super) fn into_module(self) -> Module<'ir> {
         self.module
     }
@@ -873,11 +894,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let global = self.module.declare_global(
             name,
             GlobalDecl {
-                linkage:  IrLinkage::Internal,
-                size:     layout.size,
-                align:    super::alignment::storage_alignment(&self.sema.types, ty)
+                linkage:      IrLinkage::Internal,
+                size:         layout.size,
+                align:        super::alignment::storage_alignment(&self.sema.types, ty)
                     .map_err(|kind| at(kind, expression.source_vectors))?,
-                constant: constant_object(&self.sema.types, ty),
+                constant:     constant_object(&self.sema.types, ty),
+                thread_local: false,
             },
         );
         _ = self.compound_literals.insert(key, global);
@@ -917,7 +939,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     bytes[start..end].fill(0);
                     // C99 §6.7.8p19: replacement also discards old addresses.
                     relocations.retain(|relocation: &Relocation| {
-                        relocation.offset + 8 <= offset || relocation.offset >= offset + size
+                        relocation.offset + relocation.size() <= offset
+                            || relocation.offset >= offset + size
                     });
                 },
                 | Leaf::Scalar {
@@ -943,7 +966,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let count = string.len().min(size);
                     bytes[start..start + size].fill(0);
                     relocations.retain(|relocation| {
-                        relocation.offset + 8 <= offset || relocation.offset >= offset + size as u64
+                        relocation.offset + relocation.size() <= offset
+                            || relocation.offset >= offset + size as u64
                     });
                     bytes[start..start + count].copy_from_slice(&string[..count]);
                 },
@@ -989,7 +1013,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // C99 §6.7.8p19: a later write replaces overlapping addresses,
         // including a scalar member that overwrites only part of a pointer.
         relocations.retain(|relocation| {
-            relocation.offset + 8 <= offset || relocation.offset >= offset + written
+            relocation.offset + relocation.size() <= offset || relocation.offset >= offset + written
         });
         let integer = info.integer.filter(|_| {
             representation == Repr::Pointer
@@ -1048,34 +1072,105 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             bytes[start..start + size].copy_from_slice(&value.to_le_bytes()[..size]);
             return Ok(());
         }
-        // An address converted to a pointer-wide integer keeps its
-        // relocation, as semantic analysis accepted it (§6.6p10).
-        let address_width = representation == Repr::Pointer
-            || (matches!(representation, Repr::Int { .. }) && size == 8);
-        if !address_width || bit_field.is_some() {
+        if info.constant == ConstantClass::LabelDifference
+            && let Repr::Int { ty: width, .. } = representation
+            && bit_field.is_none()
+        {
+            let target = self.label_difference(expression, width)?;
+            bytes[start..start + size].fill(0);
+            relocations.push(Relocation {
+                offset,
+                target,
+                addend: 0,
+            });
+            return Ok(());
+        }
+        // Semantic analysis keeps an address converted to an integer as wide
+        // as a pointer an address constant (§6.6p10), so its relocation
+        // fills that integer.
+        let address = representation == Repr::Pointer
+            || (matches!(representation, Repr::Int { .. })
+                && info.constant == ConstantClass::Address);
+        if !address || bit_field.is_some() {
             return Err(unsupported());
         }
-        let (symbol, addend) = self.address_constant(expression)?;
+        let (target, addend) = self.address_constant(expression)?;
         // Symbolic bytes replace any older scalar representation too;
         // that representation must not reappear if a later write drops the
         // relocation.
         bytes[start..start + size].fill(0);
         relocations.push(Relocation {
             offset,
-            symbol,
+            target,
             addend,
         });
         Ok(())
     }
 
+    /// The relocation of a constant label difference `&&label - &&base`,
+    /// truncated to `width`, from the labels semantic analysis retained.
+    /// GNU extension: GCC "Labels as Values".
+    fn label_difference(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        width: Type,
+    ) -> Result<RelocationTarget, LoweringError> {
+        let source = expression.source_vectors;
+        if !matches!(width, Type::I32 | Type::I64) {
+            return Err(LoweringError::missing(
+                "a label difference has a width semantic analysis refuses",
+                source,
+            ));
+        }
+        let (label, base) = self
+            .sema
+            .control
+            .label_difference(expression)
+            .ok_or_else(|| {
+                LoweringError::missing("a label difference has no retained labels", source)
+            })?;
+        let (func, label) = self.label_target(label, source)?;
+        let (_, base) = self.label_target(base, source)?;
+        Ok(RelocationTarget::LabelDifference {
+            func,
+            label,
+            base,
+            width,
+        })
+    }
+
+    /// The IR function and label of an address-taken C label: the label's
+    /// position among its function's address-taken labels, which that
+    /// function's body numbers its IR labels by.
+    /// GNU extension: GCC "Labels as Values".
+    fn label_target(
+        &mut self,
+        label: LabelId,
+        source: SourceVectors,
+    ) -> Result<(FuncId, BlockLabel), LoweringError> {
+        let facts = self.sema.control.labels[label.0];
+        let record =
+            self.sema.functions.get(facts.function.0).ok_or_else(|| {
+                LoweringError::missing("a label's function has no record", source)
+            })?;
+        let binding = record
+            .binding
+            .ok_or_else(|| LoweringError::missing("a label's function has no binding", source))?;
+        let func = self.function(binding).map_err(|kind| at(kind, source))?;
+        let index = facts.address.ok_or_else(|| {
+            LoweringError::missing("an addressed label has no address index", source)
+        })?;
+        Ok((func, BlockLabel::new(index as usize)))
+    }
+
     /// The symbol and byte offset an address constant designates: a static
-    /// object, function or string literal, optionally with a constant
-    /// subscript, member offset or integer added.
+    /// object, function, string literal or, as a GNU extension, label,
+    /// optionally with a constant subscript, member offset or integer added.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
     fn address_constant(
         &mut self,
         mut expression: &'tu Expression<'tu>,
-    ) -> Result<(Symbol, i64), LoweringError> {
+    ) -> Result<(RelocationTarget, i64), LoweringError> {
         let unsupported =
             || LoweringError::unsupported(Construct::StaticInitializer, expression.source_vectors);
         let mut addend = 0_i64;
@@ -1092,9 +1187,28 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 continue;
             }
             match expression.kind {
-                | ExpressionType::CompoundLiteral { initializer, .. } => {
+                | ExpressionType::CompoundLiteral {
+                    type_name,
+                    initializer,
+                } => {
+                    if super::expressions::literal_storage(type_name, false) {
+                        return Err(LoweringError::unsupported(
+                            Construct::CompoundLiteralStorage,
+                            expression.source_vectors,
+                        ));
+                    }
                     let global = self.static_compound_literal(expression, initializer, info.ty)?;
-                    return Ok((Symbol::Global(global), addend));
+                    return Ok((RelocationTarget::Symbol(Symbol::Global(global)), addend));
+                },
+                // GNU extension: GCC "Labels as Values" tables, as in Lua's
+                // threaded `luaV_execute`.
+                | ExpressionType::LabelAddress(_) if !place => {
+                    let source = expression.source_vectors;
+                    let label = self.sema.control.label_address(expression).ok_or_else(|| {
+                        LoweringError::missing("a label address has no resolved label", source)
+                    })?;
+                    let (func, label) = self.label_target(label, source)?;
+                    return Ok((RelocationTarget::Label { func, label }, addend));
                 },
                 | ExpressionType::Unary {
                     operator: UnaryOperator::Indirection,
@@ -1133,17 +1247,22 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     } else {
                         return Err(unsupported());
                     };
-                    return Ok((symbol, addend));
+                    return Ok((RelocationTarget::Symbol(symbol), addend));
                 },
                 | ExpressionType::StringLiteral(_) =>
-                    return Ok((Symbol::Global(self.string(expression)?), addend)),
+                    return Ok((
+                        RelocationTarget::Symbol(Symbol::Global(self.string(expression)?)),
+                        addend,
+                    )),
                 | ExpressionType::DirectMember {
                     base_expression, ..
                 } if place || matches!(self.sema.types.kind(info.ty), TypeKind::Array(..)) => {
-                    let field = self
-                        .sema
-                        .selected_field(expression)
-                        .ok_or_else(unsupported)?;
+                    let field = self.sema.selected_field(expression).ok_or_else(|| {
+                        LoweringError::missing(
+                            "member facts are not retained",
+                            expression.source_vectors,
+                        )
+                    })?;
                     if field.width.is_some() {
                         return Err(unsupported());
                     }
@@ -1184,12 +1303,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let index = index.and_then(Integer::to_i128).ok_or_else(unsupported)?;
                     let element =
                         types::target_type(&self.sema.types, pointer).ok_or_else(unsupported)?;
-                    let size = self
-                        .sema
-                        .types
-                        .layout(element)
-                        .ok_or_else(unsupported)?
-                        .size;
+                    let size = types::arithmetic_size(&self.sema.types, element)
+                        .ok_or_else(unsupported)?;
                     let scaled = index
                         .checked_mul(i128::from(size))
                         .and_then(|scaled| i64::try_from(scaled).ok())
@@ -1255,13 +1370,6 @@ pub(super) fn peel<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression
 
 /// The IR linkage of a function or object with linkage.
 /// C99: §6.2.2, pp. 30-31; PDF pp. 42-43.
-fn linkage(binding: Binding) -> IrLinkage {
-    match binding.linkage {
-        | Linkage::Internal => IrLinkage::Internal,
-        | Linkage::External | Linkage::None => IrLinkage::External,
-    }
-}
-
 /// Whether every byte of an object of this type is const: its type or,
 /// for an array, its element type is const-qualified.
 /// C99: §6.7.3 paragraph 5, p. 109; PDF p. 121.
@@ -1294,19 +1402,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         target: Target,
         arena: &'ir Bump,
         tables: &'a Bump,
-    ) -> Self {
+    ) -> Result<Self, LoweringError> {
+        let address_taken = address_taken::find(sema, tables)?;
         let mut module = Module::new(arena);
         module.set_target(target.triple(), types::data_layout(target));
-        let mut declarators = ArenaMap::with_capacity_and_hasher_in(
-            sema.bindings.len(),
-            rustc_hash::FxBuildHasher,
-            tables,
-        );
-        for (index, binding) in sema.bindings.iter().enumerate() {
-            _ = declarators
-                .entry((binding.name.name, binding.name.source_vectors))
-                .or_insert(index);
-        }
         let mut definitions = ArenaMap::with_capacity_and_hasher_in(
             sema.definitions.len(),
             rustc_hash::FxBuildHasher,
@@ -1322,7 +1421,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 _ = defined_functions.insert(sema.bindings[binding].name.name);
             }
         }
-        Self {
+        Ok(Self {
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             #[cfg(test)]
             parameter_alias_visits: 0,
@@ -1332,11 +1431,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             tables,
             target,
             names: SymbolNames::new(tables),
-            declarators,
             definitions,
             defined_functions,
             defined_objects,
-            address_taken: address_taken::find(sema, context, tables),
+            address_taken,
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             compound_literals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
@@ -1346,7 +1444,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             generated_globals: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
-        }
+        })
     }
 }
 

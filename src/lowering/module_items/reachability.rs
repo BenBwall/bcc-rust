@@ -13,8 +13,10 @@ use super::{
 };
 
 impl<'a> Unit<'a, '_, '_> {
-    /// External definitions are roots. Internal objects and functions are
-    /// reached through references from emitted definitions and initializers.
+    /// External definitions are roots, and so are constructors, destructors,
+    /// aliases and their targets, and `used` entities. Internal objects and
+    /// functions are reached through references from emitted definitions
+    /// and initializers.
     /// Inline-only bodies supply no external definition, even when referenced:
     /// at O0 calls and addresses continue to name the external declaration.
     /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p3-5,
@@ -49,6 +51,26 @@ impl<'a> Unit<'a, '_, '_> {
             }
             if binding.linkage == Linkage::External {
                 work.push(canonical[definition.binding]);
+            }
+        }
+        // GNU symbol attributes keep definitions without references, as
+        // Clang emits them: constructors and destructors run at startup and
+        // exit, every alias is emitted and names its target, and `used`
+        // retains its entity. GNU extension: GCC manual, "Common Function
+        // Attributes" (alias, constructor, destructor, used).
+        for init in self.sema.symbols.init_functions {
+            work.push(canonical[init.binding]);
+        }
+        for alias in self.sema.symbols.aliases {
+            work.extend([canonical[alias.binding], canonical[alias.target]]);
+        }
+        for binding in 0..canonical.len() {
+            if self
+                .sema
+                .entity_attributes(binding)
+                .is_some_and(|attributes| attributes.used)
+            {
+                work.push(canonical[binding]);
             }
         }
         let mut reached = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);

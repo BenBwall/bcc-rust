@@ -11,6 +11,7 @@ use super::{
     types,
 };
 use crate::{
+    builtins::FloatOperation,
     ir::{
         Align,
         FloatCC,
@@ -23,10 +24,7 @@ use crate::{
     },
     translation_phases::{
         SourceVectors,
-        semantic_analysis::{
-            FloatOperation,
-            TypeId,
-        },
+        semantic_analysis::TypeId,
     },
 };
 

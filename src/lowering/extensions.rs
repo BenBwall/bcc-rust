@@ -1,6 +1,9 @@
-//! Vendor declaration modifiers retained by semantic analysis's iterative
-//! type traversal. Resolve symbol aliases before planning reachability, then
-//! check modifiers belonging to emitted definitions and file declarations.
+//! Vendor declaration modifiers. Semantic analysis validates attributes and
+//! conventions once and retains the meanings code generation lacks as
+//! capability refusals, wherever they were written: declarations, typedefs,
+//! abstract casts or function pointers. This file records GNU assembler
+//! labels before reachability merges linked declarations, then reports the
+//! refusals and label errors of emitted definitions and file declarations.
 //! C99: §6.7, p. 97; PDF p. 109; §6.7.5-6.7.6, pp. 114-122;
 //! PDF pp. 126-134 (GNU/MSVC extensions to declarations and type names).
 
@@ -10,24 +13,15 @@ use super::{
     module_items::Unit,
 };
 use crate::{
-    target::Target,
     translation_phases::{
-        SourceVectors,
-        parsing::{
-            AttributeSpecifier,
-            SpecifierExtension,
-            SpecifierExtensionKind,
-            declaration_syntax::DirectDeclarator,
-        },
+        parsing::declaration_syntax::DirectDeclarator,
         preprocessing::{
-            KeywordTokenType,
             StringTokenType,
             Token,
             TokenType,
         },
         semantic_analysis::{
             BindingKind,
-            Duration,
             Linkage,
         },
     },
@@ -42,57 +36,65 @@ use crate::{
 };
 
 impl<'a, 'tu> Unit<'a, 'tu, '_> {
-    /// Records assembler labels before reachability merges linked declarations.
+    /// Records assembler labels before reachability merges linked
+    /// declarations; each error carries its declarator's index.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (linked declarations);
     /// §6.7, p. 97; PDF p. 109 (GNU/MSVC declaration extensions).
     pub(super) fn prepare_symbol_names(&mut self) -> ArenaVec<'a, (usize, LoweringError)> {
         let mut errors = ArenaVec::new_in(self.tables);
         for (index, declarator) in self.sema.declarators.iter().enumerate() {
             for direct in declarator.kind {
-                if let DirectDeclarator::AsmLabel(label) = *direct
-                    && self
+                if let DirectDeclarator::AsmLabel(label) = *direct {
+                    if self
+                        .sema
+                        .correspondence
+                        .declaration(*declarator)
+                        .and_then(|fact| fact.binding)
+                        .is_none()
+                    {
+                        errors.push((
+                            index,
+                            LoweringError::missing(
+                                "assembler-label declaration occurrence is not retained",
+                                declarator.source_vectors,
+                            ),
+                        ));
+                        continue;
+                    }
+                    if self
                         .record_label(*declarator, label.template, label.recovered)
                         .is_err()
-                {
-                    errors.push((
-                        index,
-                        LoweringError::unsupported(Construct::AssemblerLabel, label.source_vectors),
-                    ));
+                    {
+                        errors.push((
+                            index,
+                            LoweringError::unsupported(
+                                Construct::AssemblerLabel,
+                                label.source_vectors,
+                            ),
+                        ));
+                    }
                 }
             }
         }
         errors
     }
 
-    /// Retained ownership keeps unsupported modifiers in unreachable bodies
-    /// from refusing the module. File declarations still constrain emitted
-    /// uses. C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
+    /// Refuses the attribute meanings code generation lacks, except those
+    /// written in bodies the module does not emit: retained ownership keeps
+    /// them from refusing the module, while file declarations still
+    /// constrain emitted uses. C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
     pub(super) fn check_extensions(&self, errors: &mut ArenaVec<'_, LoweringError>) {
-        for (index, &chain) in self.sema.spec_extensions.iter().enumerate() {
-            if self.sema.specifier_functions[index].is_some_and(|owner| !self.emits_function(owner))
-            {
-                continue;
-            }
-            self.check_chain(Some(chain), errors);
-        }
-        for (index, declarator) in self.sema.declarators.iter().enumerate() {
-            if self.sema.declarator_functions[index]
+        for refusal in self.sema.symbols.refusals {
+            if refusal
+                .owner
                 .is_some_and(|owner| !self.emits_function(owner))
             {
                 continue;
             }
-            for level in declarator.pointer.levels {
-                self.check_chain(level.attributes, errors);
-            }
-            for direct in declarator.kind {
-                match *direct {
-                    | DirectDeclarator::Attributes(attribute) =>
-                        self.check_attribute(attribute, errors),
-                    | DirectDeclarator::MsModifier(keyword, source) =>
-                        Self::check_keyword(keyword, source, errors),
-                    | _ => {},
-                }
-            }
+            errors.push(LoweringError::unsupported(
+                Construct::Attribute(refusal.capability),
+                refusal.source,
+            ));
         }
     }
 
@@ -110,100 +112,6 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         name
     }
 
-    fn check_chain(
-        &self,
-        mut chain: Option<&SpecifierExtension<'_>>,
-        errors: &mut ArenaVec<'_, LoweringError>,
-    ) {
-        while let Some(item) = chain {
-            match item.kind {
-                | SpecifierExtensionKind::Attributes(a) => self.check_attribute(a, errors),
-                | SpecifierExtensionKind::MsModifier(k) =>
-                    Self::check_keyword(k, item.source_vectors, errors),
-                | _ => {},
-            }
-            chain = item.next;
-        }
-    }
-
-    fn check_keyword(
-        keyword: KeywordTokenType,
-        source: SourceVectors,
-        errors: &mut ArenaVec<'_, LoweringError>,
-    ) {
-        if keyword == KeywordTokenType::Vectorcall {
-            errors.push(LoweringError::unsupported(
-                Construct::CallingConvention,
-                source,
-            ));
-        }
-    }
-
-    /// Attribute names occur at list depth, never inside argument tokens.
-    /// C99: §6.7, p. 97; PDF p. 109 (GNU/MSVC attribute extension).
-    fn check_attribute(
-        &self,
-        attribute: &AttributeSpecifier<'_>,
-        errors: &mut ArenaVec<'_, LoweringError>,
-    ) {
-        let list_depth = match attribute.tokens.first().map(|token| {
-            self.context
-                .string_cache
-                .at(token.contents)
-                .trim_matches('_')
-        }) {
-            | Some("attribute") => 2,
-            | Some("declspec") => 1,
-            | _ => 0,
-        };
-        let mut depth = 0_usize;
-        for token in attribute.tokens {
-            let name = self
-                .context
-                .string_cache
-                .at(token.contents)
-                .trim_end_matches('\0');
-            match name {
-                | "(" => depth += 1,
-                | ")" => depth = depth.saturating_sub(1),
-                | _ if depth == list_depth && !self.default_convention(name.trim_matches('_')) => {
-                    errors.push(LoweringError::unsupported(
-                        Construct::CallingConvention,
-                        attribute.source_vectors,
-                    ));
-                },
-                | _ => {},
-            }
-        }
-    }
-
-    /// Bundled Clang 23 leaves stdcall/cdecl/fastcall/thiscall/regparm at
-    /// the x86-64 default. Explicit ABI selection must match the target.
-    /// C99: §6.5.2.2, pp. 71-72; PDF pp. 83-84 (vendor call extensions).
-    fn default_convention(&self, name: &str) -> bool {
-        let windows = matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc);
-        match name {
-            | "ms_abi" => windows,
-            | "sysv_abi" => !windows,
-            | "vectorcall"
-            | "regcall"
-            | "preserve_most"
-            | "preserve_all"
-            | "preserve_none"
-            | "swiftcall"
-            | "swiftasynccall"
-            | "intel_ocl_bicc"
-            | "pcs"
-            | "aarch64_vector_pcs"
-            | "aarch64_sve_pcs"
-            | "riscv_vector_cc"
-            | "no_caller_saved_registers"
-            | "no_callee_saved_registers"
-            | "interrupt" => false,
-            | _ => true,
-        }
-    }
-
     /// GNU asm labels extend the name of a linked or static-duration entity.
     /// Automatic register labels and non-narrow, empty or NUL-bearing names
     /// cannot be represented by this lowering.
@@ -215,11 +123,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         template: Option<Token>,
         recovered: bool,
     ) -> Result<(), ()> {
-        let binding = self.declarator_binding(declarator).ok_or(())?;
+        let binding = self
+            .sema
+            .correspondence
+            .declaration(declarator)
+            .and_then(|fact| fact.binding)
+            .ok_or(())?;
         let data = self.sema.bindings[binding];
         if recovered
             || !matches!(data.kind, BindingKind::Object | BindingKind::Function)
-            || (data.linkage == Linkage::None && data.duration != Duration::Static)
+            || (data.linkage == Linkage::None && !data.duration.is_static_or_thread())
         {
             return Err(());
         }

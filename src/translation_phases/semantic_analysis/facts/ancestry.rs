@@ -172,8 +172,28 @@ impl<'s> Ancestry<'s> {
         regions: &[Region],
         transition: Transition,
     ) -> Option<RegionId> {
+        self.first_entered(regions, transition, |region| region.nearest_vm)
+    }
+
+    /// The outermost entered GNU cleanup declaration, found as VM regions are.
+    pub(in crate::translation_phases::semantic_analysis) fn first_entered_cleanup(
+        &self,
+        regions: &[Region],
+        transition: Transition,
+    ) -> Option<RegionId> {
+        self.first_entered(regions, transition, |region| {
+            region.nearest_cleanup_declaration
+        })
+    }
+
+    fn first_entered(
+        &self,
+        regions: &[Region],
+        transition: Transition,
+        nearest_of: impl Fn(&Region) -> Option<RegionId>,
+    ) -> Option<RegionId> {
         let common = transition.entered.stop_before;
-        let nearest = regions[transition.entered.first.0].nearest_vm?;
+        let nearest = nearest_of(&regions[transition.entered.first.0])?;
         if ancestor(regions, nearest, common) {
             return None;
         }
@@ -188,10 +208,7 @@ impl<'s> Ancestry<'s> {
                 break;
             }
             let parent = regions[h.0].parent.expect("entered path has a parent");
-            if regions[parent.0]
-                .nearest_vm
-                .is_none_or(|vm| ancestor(regions, vm, common))
-            {
+            if nearest_of(&regions[parent.0]).is_none_or(|vm| ancestor(regions, vm, common)) {
                 break;
             }
             vertex = parent;
@@ -206,8 +223,7 @@ impl<'s> Ancestry<'s> {
         while low < high {
             self.step();
             let mid = low + (high - low) / 2;
-            let new_vm = regions[self.order[mid].0]
-                .nearest_vm
+            let new_vm = nearest_of(&regions[self.order[mid].0])
                 .is_some_and(|vm| !ancestor(regions, vm, common));
             if new_vm {
                 high = mid;
@@ -215,7 +231,7 @@ impl<'s> Ancestry<'s> {
                 low = mid + 1;
             }
         }
-        regions[self.order[low].0].nearest_vm
+        nearest_of(&regions[self.order[low].0])
     }
 
     #[cfg_attr(

@@ -25,18 +25,22 @@
 //!   `expressions/` type expressions and conversions; `initializers.rs` walks
 //!   subobjects; `statements.rs` checks jumps and returns; `functions.rs`
 //!   checks definitions and completes the translation unit.
-//! - Control and lifetime facts: `facts/` records lexical/VM/block-expression
-//!   regions and resolved destinations on the same work stack, then finalizes
-//!   compact transitions using iterative heavy-light indexing.
+//! - Retained facts: `facts/` records lexical/VM/block-expression regions and
+//!   resolved destinations on the same work stack, then finalizes compact
+//!   transitions using iterative heavy-light indexing. It also retains
+//!   declaration/parameter correspondence, typed bound sites, size DAGs,
+//!   expression effect summaries and effects-only evaluation recipes.
 //! - Types and values: `types.rs` interns and compares types and computes
 //!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
 //!   floating values.
 //! - Language extensions: `generic.rs` selects C11 generic associations;
 //!   `type_generic.rs` checks GNU type selections and math calls; `vectors.rs`
-//!   constructs vector types and checks operators; `attributes.rs` retains
-//!   packing, alignment and scalar machine modes; `bound_sites.rs` retains
-//!   typeof operand execution at written type sites; `builtins.rs` and
-//!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
+//!   constructs vector types and checks operators; `attributes.rs` and
+//!   `attributes/` check attribute names once, apply entity attributes (weak,
+//!   alias, section, constructors, cleanup) and retain packing, alignment and
+//!   scalar machine modes; `bound_sites.rs` retains typeof operand execution at
+//!   written type sites; `builtins.rs` and `builtins/` recognize and check
+//!   header intrinsics, atomics and x86 calls.
 //! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
 //!   extensions; `errors.rs` defines diagnostic kinds and renders them;
 //!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
@@ -90,22 +94,10 @@ mod inspection;
 use std::cell::Cell;
 
 pub(crate) use builtins::{
-    BitOperation,
-    CommonBuiltin,
-    ExpressionEffects,
-    FloatOperation,
-    OverflowOperation,
-    common_builtin,
     implemented_builtin,
-    keyword_call,
-    library_builtin_name,
     named_builtin,
 };
 use collection::Collection;
-#[expect(
-    unused_imports,
-    reason = "The retained semantic vocabulary is the crate interface for lowering and inspection."
-)]
 pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
@@ -118,14 +110,13 @@ pub(crate) use expressions::{
     ConversionKind,
     ExpressionInfo,
     ValueCategory,
-    selected_designator,
-    statement_expression_tail,
 };
 pub(crate) use facts::*;
 pub(crate) use integer::Integer;
 pub(crate) use results::{
     Binding,
     BindingKind,
+    BindingOrigin,
     BoundSiteFacts,
     Definition,
     DefinitionKind,
@@ -168,6 +159,7 @@ use super::{
     SourceVectors,
     parsing::{
         AttributeSpecifier,
+        AttributeSyntax,
         ExtendedType,
         ParsedTranslationUnit,
         SpecifierExtension,
@@ -236,36 +228,67 @@ pub(crate) fn analyze<'tu>(
     }
     analyzer.assert_balanced();
     analyzer.finish_translation_unit();
+    let symbols = analyzer.finish_attributes();
     analyzer.check_builtin_designators();
     let index = analyzer.retain_expression_index();
+    let sizes = SizeFacts::retain(&analyzer.types, &scratch);
+    analyzer.retain_runtime_bounds(&sizes);
+    let type_names =
+        analyzer
+            .types
+            .tu
+            .alloc_slice_fill_iter(analyzer.type_names.iter().enumerate().map(
+                |(index, &(syntax, resolved))| {
+                    let id = TypeNameId(index);
+                    _ = analyzer
+                        .retained_type_names
+                        .insert(type_name_identity(syntax), id);
+                    let size_query = analyzer
+                        .type_name_sites
+                        .get(&type_name_identity(syntax))
+                        .copied()
+                        .map(|site| SizeQueryFacts {
+                            site,
+                            formula: sizes.formula(resolved),
+                            operand: None,
+                        });
+                    TypeNameFacts {
+                        id,
+                        syntax,
+                        resolved,
+                        size_query,
+                    }
+                },
+            ));
     SemanticTranslationUnit {
         declarator_functions: analyzer.declarator_functions.leak(),
-        specifier_functions:  analyzer.specifier_functions.leak(),
-        references:           analyzer.references.leak(),
-        binding_bounds:       analyzer.binding_bounds,
-        control:              analyzer.control.retain(analyzer.types.tu),
-        expression_effects:   analyzer.expression_effects.leak(),
-        expression_actions:   analyzer.expression_actions,
-        declarators:          analyzer.declarators.leak(),
-        spec_extensions:      analyzer.spec_extensions.leak(),
-        expressions:          analyzer.expressions.leak(),
-        expression_indices:   index.expressions,
-        string_initializers:  analyzer.string_initializers,
-        flexible_arrays:      analyzer.flexible_arrays,
-        conversions:          index.conversions,
-        conversion_starts:    index.conversion_starts,
-        types:                analyzer.types.finish(),
-        bindings:             analyzer.bindings.leak(),
-        definitions:          analyzer.definitions.leak(),
-        functions:            analyzer.function_records.leak(),
-        scopes:               analyzer.scopes.leak(),
-        type_names:           analyzer.type_names.leak(),
-        declaration_sites:    analyzer.declaration_sites,
-        type_name_sites:      analyzer.type_name_sites,
-        size_query_sites:     analyzer.size_query_sites,
-        parameters:           analyzer.parameter_lists.leak(),
-        tag_declarations:     analyzer.tag_declarations.leak(),
-        errors:               analyzer.error_diagnostics,
+        references: analyzer.references.leak(),
+        resolved: analyzer.resolved.retain(),
+        correspondence: analyzer.correspondence.retain(),
+        sizes,
+        runtime_bounds: analyzer.runtime_bounds.leak(),
+        control: analyzer.control.retain(analyzer.types.tu),
+        effects: analyzer.effects.retain(),
+        expression_actions: analyzer.expression_actions,
+        declarators: analyzer.declarators.leak(),
+        symbols,
+        expressions: analyzer.expressions.leak(),
+        expression_indices: index.expressions,
+        string_initializers: analyzer.string_initializers,
+        flexible_arrays: analyzer.flexible_arrays,
+        conversions: index.conversions,
+        conversion_starts: index.conversion_starts,
+        types: analyzer.types.finish(),
+        bindings: analyzer.bindings.leak(),
+        definitions: analyzer.definitions.leak(),
+        functions: analyzer.function_records.leak(),
+        scopes: analyzer.scopes.leak(),
+        type_names,
+        type_name_indices: analyzer.retained_type_names,
+        declaration_sites: analyzer.declaration_sites,
+        size_query_sites: analyzer.size_query_sites,
+        tag_declarations: analyzer.tag_declarations.leak(),
+        errors: analyzer.error_diagnostics,
     }
 }
 
@@ -352,6 +375,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.reject_standard_alignment(d.declaration_specifiers.extensions);
                 }
                 for init in d.init_declarators.iter().rev() {
+                    if attributes::written_on(d.declaration_specifiers.extensions, init.declarator)
+                    {
+                        self.work.push(Work::DeclarationEnd(
+                            init.declarator.kind.as_slice().as_ptr().addr(),
+                        ));
+                    }
                     if let Some(initializer) = init.initializer {
                         self.work
                             .push(Work::InitializeDeclaration(init.declarator, initializer));
@@ -381,13 +410,41 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Bind(d, s, initialized, bound_start) => {
                 let ty = self.take_type();
                 let prior = self.bindings.len();
+                let errors_before = self.semantic_errors;
                 self.bind_declaration(d, s, ty, initialized);
-                if self.bindings.len() > prior {
-                    _ = self
-                        .binding_bounds
-                        .insert(self.bindings.len() - 1, self.bound_actions(ty, bound_start));
+                let bounds = self.bound_actions(ty, bound_start);
+                let binding = (self.bindings.len() > prior).then(|| self.bindings.len() - 1);
+                if let Some(binding) = binding {
+                    _ = self.binding_bounds.insert(binding, bounds);
+                }
+                let accepted = binding.filter(|&binding| {
+                    if self.semantic_errors != errors_before || self.tainted {
+                        return false;
+                    }
+
+                    d.identifier().is_some_and(|name| {
+                        self.lookup(Namespace::Ordinary, name.name)
+                            .is_some_and(|entry| entry.binding == binding)
+                    })
+                });
+                let parameters = self.prototype_parameter_facts(d);
+                let id = self.correspondence.declaration(
+                    d,
+                    accepted.map(|i| (i, self.bindings[i])),
+                    BoundSiteFacts {
+                        ty,
+                        bounds,
+                        operand_evaluations: &[],
+                    },
+                    parameters,
+                );
+                self.record_bound_origins(bounds, BoundEvaluationSite::Declaration(id));
+                if let Some(binding) = binding {
+                    let subject = self.declaration_subject(binding, d, s, initialized);
+                    self.declaration_attributes(subject, s.extensions, Some(d));
                 }
             },
+            | Work::DeclarationEnd(declarator) => self.open_cleanup(declarator),
             | Work::Function(f) => {
                 self.taint(f.recovered);
                 self.prepare_function(f);
@@ -402,9 +459,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::FunctionBody(f) => self.function_body(f),
             | Work::OldSignature(f) => self.old_signature(f),
             | Work::BlockItem(item) => match item {
-                | BlockItem::Declaration(d) => self.work.push(Work::Declaration(d)),
+                | BlockItem::Declaration(d) => {
+                    self.unsummarized_block_item();
+                    self.work.push(Work::Declaration(d));
+                },
                 | BlockItem::Statement(s) => self.work.push(Work::Statement(s, true)),
-                | BlockItem::FunctionDefinition(f) => self.work.push(Work::Function(f)),
+                | BlockItem::FunctionDefinition(f) => {
+                    self.unsummarized_block_item();
+                    self.work.push(Work::Function(f));
+                },
             },
             | Work::Statement(statement, new_scope) => self.statement(statement, new_scope),
             | Work::Expression(expression) => self.expression(expression),
@@ -418,6 +481,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::Initializer(initializer));
             },
             | Work::InitializeDeclaration(declarator, initializer) => {
+                self.correspondence.initializer(declarator, initializer);
                 self.work
                     .push(Work::RestoreReferenceOwner(self.functions.initializer));
                 if let Some(entry) = declarator
@@ -542,6 +606,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
                     | _ => None,
                 };
+                self.check_extension_chain(attributes);
                 self.attribute_chain_operands(attributes);
             },
             | Work::SpecDone(s, q, source, force) => self.resolve_spec(s, q, source, force),
@@ -589,7 +654,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.values.push(ty);
             },
             | Work::TypeName(name) => {
-                if let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr()) {
+                if let Some(site) = self.type_name_sites.get(&type_name_identity(name)) {
                     self.values.push(site.ty);
                     return;
                 }
@@ -614,13 +679,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::TypeNameDone(name, bound_start) =>
                 if let Some(&ty) = self.values.last() {
-                    self.type_names.push((name.source_vectors, ty));
-                    _ = self.resolved_type_names.insert(name.source_vectors, ty);
+                    let bounds = self.site_bounds(
+                        ty,
+                        bound_start,
+                        name.declaration_specifiers.type_specifiers,
+                    );
+                    self.record_bound_origins(
+                        bounds,
+                        BoundEvaluationSite::TypeName(self.type_names.len()),
+                    );
+                    self.type_names.push((name, ty));
+                    _ = self
+                        .resolved_type_names
+                        .insert(type_name_identity(name), ty);
                     if let Some(operand_evaluations) =
                         self.spec_evaluations(name.declaration_specifiers.type_specifiers)
                     {
                         _ = self.type_name_sites.insert(
-                            std::ptr::from_ref(name).addr(),
+                            type_name_identity(name),
                             BoundSiteFacts {
                                 bounds: self.site_bounds(
                                     ty,
@@ -634,6 +710,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                 },
             | Work::Declarator(d, base, parameter) => {
+                self.check_declarator_attributes(d);
                 self.work.push(Work::DeclaratorDone(d, base, parameter));
                 for level in d.pointer.levels {
                     self.attribute_chain_operands(level.attributes);
@@ -811,7 +888,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         !list.is_empty() || self.context.configuration.standard() >= CStandard::C23;
                     let parameters = self.types.tu.alloc_slice_copy(&parameters);
                     _ = self.parameters.insert(identity, (params, scope));
-                    self.parameter_lists.push((source, params));
                     self.values.push(self.types.intern(TypeKind::Function {
                         result,
                         parameters,
@@ -840,25 +916,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.values.push(base);
                 }
             },
-            | Work::ParameterDone(p, params, bound_start, identity) => {
+            | Work::ParameterDone(p, params, bound_start, _identity) => {
                 let mut ty = self.take_type();
                 let original = ty;
-                if let Some(operand_evaluations) =
-                    self.spec_evaluations(p.declaration_specifiers.type_specifiers)
-                {
-                    _ = self.parameter_sites.insert(
-                        identity,
-                        BoundSiteFacts {
-                            ty: original,
-                            operand_evaluations,
-                            bounds: self.site_bounds(
-                                original,
-                                bound_start,
-                                p.declaration_specifiers.type_specifiers,
-                            ),
-                        },
-                    );
-                }
+                let site = self
+                    .spec_evaluations(p.declaration_specifiers.type_specifiers)
+                    .map(|operand_evaluations| BoundSiteFacts {
+                        ty: original,
+                        operand_evaluations,
+                        bounds: self.site_bounds(
+                            original,
+                            bound_start,
+                            p.declaration_specifiers.type_specifiers,
+                        ),
+                    });
                 let array_minimum = if let TypeKind::Array(_, bound) = self.types.nodes[ty.index] {
                     p.declarator
                         .filter(|d| {
@@ -888,6 +959,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if p.declaration_specifiers
                     .storage_class
                     .is_some_and(|s| s != StorageClass::Register)
+                    || self.thread_storage(p.declaration_specifiers.extensions)
                 {
                     self.error(
                         SemanticErrorKind::InvalidParameter,
@@ -906,7 +978,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         None,
                     );
                 }
-                if let Some(name) = name {
+                let binding = name.map(|name| {
                     self.bind(
                         name,
                         ty,
@@ -915,10 +987,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         Duration::Automatic,
                         None,
                     );
+                    let binding = self.bindings.len() - 1;
+                    if let Some(minimum) = array_minimum {
+                        _ = self
+                            .correspondence
+                            .parameter_minimums
+                            .insert(binding, minimum);
+                    }
+                    binding
+                });
+                if let Some(site) = site {
+                    self.record_bound_origins(
+                        site.bounds,
+                        BoundEvaluationSite::Parameter(self.next_parameter),
+                    );
                 }
+                self.declaration_attributes(
+                    attributes::Subject::Parameter,
+                    p.declaration_specifiers.extensions,
+                    p.declarator,
+                );
+                self.next_parameter += 1;
                 params.push(
                     self.scratch,
                     Parameter {
+                        site,
+                        binding,
                         name,
                         ty,
                         array_minimum,
@@ -941,6 +1035,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.work.push(Work::Expression(assertion.expression));
                         return;
                     }
+                    self.check_extension_chain(member.extensions);
                     self.work.push(Work::RecordMemberBase(tag, member, members));
                     self.work
                         .push(Work::VectorAttributes(member.extensions, false));
@@ -999,6 +1094,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     spec_packed,
                     members,
                 ));
+                self.check_extension_chain(d.attributes);
                 self.attribute_chain_operands(d.attributes);
             },
             | Work::MemberBaseDone(tag, d, base, extensions, spec_packed, members) => {
@@ -1031,6 +1127,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::MemberDone(tag, d, members, errors_before, packed, extensions) => {
                 let ty = self.take_type();
+                self.declaration_attributes(
+                    attributes::Subject::Member,
+                    d.attributes,
+                    d.declarator,
+                );
                 let explicit_alignment = if self.semantic_errors == errors_before {
                     self.explicit_member_alignment(extensions, d.attributes, d.declarator)
                 } else {
@@ -1138,6 +1239,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::EnumMembers(tag, list, index, previous) => {
                 if let Some(item) = list.as_slice().get(index) {
+                    self.check_extension_chain(item.attributes);
                     self.work.push(Work::EnumeratorDone(
                         tag,
                         list,
@@ -1441,6 +1543,9 @@ enum Work<'tu, 's> {
     DeclarationBase(&'tu Declaration<'tu>),
     DeclarationDeclarator(Declarator<'tu>, DeclarationSpecifiers<'tu>, TypeId, bool),
     Bind(Declarator<'tu>, DeclarationSpecifiers<'tu>, bool, usize),
+    /// A declarator and its initializer are complete; a cleanup variable's
+    /// region opens here.
+    DeclarationEnd(usize),
     Function(&'tu FunctionDefinition<'tu>),
     FunctionBase(&'tu FunctionDefinition<'tu>),
     FunctionBody(&'tu FunctionDefinition<'tu>),
@@ -1493,7 +1598,7 @@ enum Work<'tu, 's> {
     FunctionParameters(
         ArenaList<'tu, ParameterDeclaration<'tu>>,
         usize,
-        &'s Collection<'s, Parameter>,
+        &'s Collection<'s, Parameter<'tu>>,
         TypeId,
         bool,
         SourceVectors,
@@ -1501,12 +1606,12 @@ enum Work<'tu, 's> {
     ),
     ParameterBase(
         ParameterDeclaration<'tu>,
-        &'s Collection<'s, Parameter>,
+        &'s Collection<'s, Parameter<'tu>>,
         usize,
     ),
     ParameterDone(
         ParameterDeclaration<'tu>,
-        &'s Collection<'s, Parameter>,
+        &'s Collection<'s, Parameter<'tu>>,
         usize,
         usize,
     ),
@@ -1571,80 +1676,84 @@ enum Work<'tu, 's> {
 }
 
 struct Analyzer<'a, 'tu, 's> {
-    declarator_functions: ArenaVec<'tu, Option<usize>>,
-    specifier_functions:  ArenaVec<'tu, Option<usize>>,
-    references:           ArenaVec<'tu, EntityReference>,
+    declarator_functions:    ArenaVec<'tu, Option<usize>>,
+    references:              ArenaVec<'tu, EntityReference>,
     // Deterministic scaling-test counts: VM ancestors, offset members,
     // initializer type nodes. They are absent from production compilation.
     #[cfg(test)]
-    review_steps:         Cell<[usize; 3]>,
-    context:              &'a mut Context<'tu>,
-    scratch:              &'s Bump,
-    types:                TypeInterner<'tu, 's>,
-    pack_alignments:      &'s [(usize, u32)],
-    bindings:             ArenaVec<'tu, Binding>,
-    declarators:          ArenaVec<'tu, Declarator<'tu>>,
-    spec_extensions:      ArenaVec<'tu, &'tu SpecifierExtension<'tu>>,
-    definitions:          ArenaVec<'tu, Definition>,
+    review_steps:            Cell<[usize; 3]>,
+    context:                 &'a mut Context<'tu>,
+    scratch:                 &'s Bump,
+    types:                   TypeInterner<'tu, 's>,
+    pack_alignments:         &'s [(usize, u32)],
+    bindings:                ArenaVec<'tu, Binding>,
+    declarators:             ArenaVec<'tu, Declarator<'tu>>,
+    definitions:             ArenaVec<'tu, Definition>,
     /// Indexed by the function definition's traversal id.
-    function_records:     ArenaVec<'tu, FunctionRecord<'tu>>,
-    scopes:               ArenaVec<'tu, Scope>,
-    type_names:           ArenaVec<'tu, (SourceVectors, TypeId)>,
-    declaration_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    type_name_sites:      ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    size_query_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    typeof_sites:         ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
-    parameter_lists:      ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
-    scope:                usize,
-    entries:              ArenaVec<'s, Entry>,
-    visible:              ArenaMap<'s, (Namespace, StringCacheId), usize>,
-    external:             ArenaMap<'s, StringCacheId, usize>,
-    scope_entries:        ArenaVec<'s, &'s Collection<'s, usize>>,
-    parameters:           ArenaMap<'s, usize, (&'tu [Parameter], usize)>,
-    work:                 ArenaVec<'s, Work<'tu, 's>>,
-    values:               ArenaVec<'s, TypeId>,
-    integers:             ArenaVec<'s, Option<Integer>>,
-    tainted:              bool,
-    function_name:        Option<Identifier>,
-    old_parameter_mode:   bool,
+    function_records:        ArenaVec<'tu, FunctionRecord<'tu>>,
+    scopes:                  ArenaVec<'tu, Scope>,
+    type_names:              ArenaVec<'s, (&'tu TypeName<'tu>, TypeId)>,
+    retained_type_names:     ArenaMap<'tu, usize, TypeNameId>,
+    declaration_sites:       ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    type_name_sites:         ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
+    size_query_sites:        ArenaMap<'tu, usize, SizeQueryFacts<'tu>>,
+    typeof_sites:            ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
+    scope:                   usize,
+    entries:                 ArenaVec<'s, Entry>,
+    visible:                 ArenaMap<'s, (Namespace, StringCacheId), usize>,
+    external:                ArenaMap<'s, StringCacheId, usize>,
+    scope_entries:           ArenaVec<'s, &'s Collection<'s, usize>>,
+    parameters:              ArenaMap<'s, usize, (&'tu [Parameter<'tu>], usize)>,
+    work:                    ArenaVec<'s, Work<'tu, 's>>,
+    values:                  ArenaVec<'s, TypeId>,
+    integers:                ArenaVec<'s, Option<Integer>>,
+    tainted:                 bool,
+    function_name:           Option<Identifier>,
+    old_parameter_mode:      bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
-    runtime_bound:        bool,
+    runtime_bound:           bool,
     /// Reported constraint diagnostics, warnings included: local checks
     /// compare it with an earlier value to learn whether a check failed.
-    semantic_errors:      usize,
+    semantic_errors:         usize,
     /// Reported diagnostics of error severity only, retained for lowering.
-    error_diagnostics:    usize,
-    member_indices:       ArenaMap<'s, (usize, StringCacheId), usize>,
-    member_names:         ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
-    tag_declarations:     ArenaVec<'tu, (usize, usize)>,
-    resolved_type_names:  ArenaMap<'s, SourceVectors, TypeId>,
-    integer_models:       ArenaMap<'s, usize, Option<(u32, bool)>>,
-    expressions:          ArenaVec<'tu, ExpressionInfo<'tu>>,
-    expression_effects:   ArenaVec<'tu, ExpressionEffects>,
-    expression_actions:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    binding_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
-    parameter_sites:      ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
-    function_controls:    ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
-    expression_indices:   ArenaMap<'s, usize, usize>,
-    string_initializers:  ArenaMap<'tu, usize, TypeId>,
-    flexible_arrays:      ArenaMap<'tu, usize, TypeId>,
+    error_diagnostics:       usize,
+    member_indices:          ArenaMap<'s, (usize, StringCacheId), usize>,
+    member_names:            ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
+    tag_declarations:        ArenaVec<'tu, (usize, usize)>,
+    resolved_type_names:     ArenaMap<'s, usize, TypeId>,
+    correspondence:          correspondence::CorrespondenceBuilder<'tu, 's>,
+    runtime_bounds:          ArenaVec<'tu, RuntimeBound<'tu>>,
+    bound_origins:           ArenaMap<'s, usize, BoundEvaluationSite>,
+    bound_expression_starts: ArenaMap<'s, usize, usize>,
+    integer_models:          ArenaMap<'s, usize, Option<(u32, bool)>>,
+    resolved:                resolved::ResolvedBuilder<'tu, 's>,
+    expressions:             ArenaVec<'tu, ExpressionInfo<'tu>>,
+    effects:                 effects::EffectBuilder<'tu, 's>,
+    expression_actions:      ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    binding_bounds:          ArenaMap<'tu, usize, &'tu [usize]>,
+    next_parameter:          usize,
+    function_controls:       ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
+    expression_indices:      ArenaMap<'s, usize, usize>,
+    string_initializers:     ArenaMap<'tu, usize, TypeId>,
+    flexible_arrays:         ArenaMap<'tu, usize, TypeId>,
     /// Unions whose definition requests `transparent_union`, until their
     /// completion decides whether they qualify.
-    transparent_unions:   ArenaMap<'s, usize, SourceVectors>,
+    transparent_unions:      ArenaMap<'s, usize, SourceVectors>,
     /// Conversion records in the order they were applied, grouped by
     /// expression when analysis ends.
-    conversions:          ArenaVec<'s, Conversion<'tu>>,
-    const_members:        ArenaMap<'s, usize, bool>,
-    register_bindings:    ArenaMap<'s, usize, bool>,
-    ice_operands:         ArenaMap<'s, (usize, bool), bool>,
-    functions:            functions::State<'tu, 's>,
-    va_list_type:         Option<TypeId>,
-    statements:           statements::State<'tu, 's>,
-    control:              builder::Builder<'tu, 's>,
+    conversions:             ArenaVec<'s, Conversion<'tu>>,
+    const_members:           ArenaMap<'s, usize, bool>,
+    register_bindings:       ArenaMap<'s, usize, bool>,
+    ice_operands:            ArenaMap<'s, (usize, bool), bool>,
+    functions:               functions::State<'tu, 's>,
+    va_list_type:            Option<TypeId>,
+    statements:              statements::State<'tu, 's>,
+    control:                 builder::Builder<'tu, 's>,
+    attributes:              attributes::AttributeState<'tu, 's>,
     /// Tags whose member or enumerator list is open.
-    defining:             ArenaMap<'s, usize, ()>,
+    defining:                ArenaMap<'s, usize, ()>,
     /// Least and greatest enumerator values of an open enumeration.
-    enum_ranges:          ArenaMap<'s, usize, (i128, i128)>,
+    enum_ranges:             ArenaMap<'s, usize, (i128, i128)>,
 }
 
 // Tests

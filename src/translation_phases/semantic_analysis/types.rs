@@ -351,10 +351,9 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     pub(crate) fn finish(self) -> Types<'tu> {
         Types {
-            nodes:          self.nodes.leak(),
-            runtime_bounds: self.runtime_bounds.leak(),
-            tags:           self.tags.leak(),
-            target:         self.target,
+            nodes:  self.nodes.leak(),
+            tags:   self.tags.leak(),
+            target: self.target,
         }
     }
 
@@ -486,11 +485,9 @@ pub(crate) enum TypeKind<'tu> {
 /// Durable type graph, retained after semantic working storage is released.
 #[derive(Debug)]
 pub(crate) struct Types<'tu> {
-    pub(crate) runtime_bounds:
-        &'tu [&'tu crate::translation_phases::parsing::syntax::Expression<'tu>],
-    pub(crate) nodes:          &'tu [TypeKind<'tu>],
-    pub(crate) tags:           &'tu [&'tu Tag<'tu>],
-    pub(crate) target:         TargetLayout,
+    pub(crate) nodes:  &'tu [TypeKind<'tu>],
+    pub(crate) tags:   &'tu [&'tu Tag<'tu>],
+    pub(crate) target: TargetLayout,
 }
 
 /// Retained nominal type; completion mutates only its member/layout cells.
@@ -583,7 +580,9 @@ pub(crate) struct FieldPath<'tu> {
 /// Function parameter name and declared (adjusted) type.
 /// C99: §6.7.5.3p7-8, p. 119; PDF p. 131.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Parameter {
+pub(crate) struct Parameter<'tu> {
+    pub(crate) site:          Option<super::BoundSiteFacts<'tu>>,
+    pub(crate) binding:       Option<usize>,
     pub(crate) name:          Option<super::Identifier>,
     pub(crate) ty:            TypeId,
     pub(crate) array_minimum: Option<ArrayBound>,

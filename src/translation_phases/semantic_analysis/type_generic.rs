@@ -130,7 +130,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: &[&'tu Expression<'tu>],
     ) -> Option<ExpressionInfo<'tu>> {
         use super::ExpressionType as E;
-        let function = super::selected_designator(function, |e| Some(self.expression_info(e)));
+        let function = self.selected_designator(function);
         let E::Identifier(name) = function.kind else {
             return None;
         };
@@ -138,7 +138,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self
             .expression_info(function)
             .binding
-            .is_some_and(|id| self.bindings[id].builtin)
+            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
         {
             return None;
         }
@@ -205,12 +205,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     pub(super) fn classify_type_callee(&self, function: &'tu Expression<'tu>) -> bool {
         use super::ExpressionType as E;
-        let function = super::selected_designator(function, |e| Some(self.expression_info(e)));
+        let function = self.selected_designator(function);
         matches!(function.kind, E::Identifier(name) if named_builtin(self.context.string_cache.at(name.name)))
             && self
                 .expression_info(function)
                 .binding
-                .is_some_and(|id| self.bindings[id].builtin)
+                .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
     }
 
     pub(super) fn binary128_type(&self, ty: TypeId) -> bool {

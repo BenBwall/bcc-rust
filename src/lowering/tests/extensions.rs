@@ -29,6 +29,29 @@ fn generated_globals_skip_all_user_symbol_names() {
 }
 
 #[test]
+fn returns_twice_refuses_calls_but_not_declarations() {
+    // MinGW's <setjmp.h> declares `_setjmp` and friends this way.
+    let declared = "int __attribute__((__nothrow__, __returns_twice__)) save(void *, void *);";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let source = format!("{declared} int main(void) {{ return 42; }}");
+        let text = lower_for(&source, target).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        assert_eq!(
+            run_text(&text, "main").result.unwrap().termination,
+            Termination::Returned(Some(RuntimeValue::Int(42))),
+            "{text}"
+        );
+        let source = format!("{declared} int main(void) {{ return save(0, 0); }}");
+        let errors = lower_for(&source, target).expect_err(&source);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("not yet supported by lowering: the `returns_twice` attribute")),
+            "{target:?}: {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn nondefault_calling_conventions_are_refused() {
     for (target, attribute) in [
         (Target::LinuxGnu, "ms_abi"),

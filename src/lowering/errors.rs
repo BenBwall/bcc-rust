@@ -15,6 +15,7 @@ use crate::{
         Context,
         ErrorSeverity,
         SourceVectors,
+        semantic_analysis::UnsupportedAttribute,
     },
     util::bump::Bump,
 };
@@ -58,12 +59,12 @@ pub(crate) enum Construct {
     Vector,
     VariableLengthArray,
     LabelAddress,
-    ComputedGoto,
     InlineAssembly,
     AssemblerLabel,
-    CallingConvention,
+    /// An attribute semantic analysis accepted whose meaning code generation
+    /// lacks.
+    Attribute(UnsupportedAttribute),
     StructuredExceptionHandling,
-    LocalLabel,
     NamedJump,
     Designator,
     NestedFunction,
@@ -73,6 +74,7 @@ pub(crate) enum Construct {
     SelectionDeclaration,
     Setjmp,
     Extension,
+    CompoundLiteralStorage,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -114,12 +116,10 @@ impl Construct {
             | Self::Vector => "vector types",
             | Self::VariableLengthArray => "variable length arrays",
             | Self::LabelAddress => "label addresses",
-            | Self::ComputedGoto => "computed goto",
             | Self::InlineAssembly => "inline assembly",
             | Self::AssemblerLabel => "assembler labels",
-            | Self::CallingConvention => "calling conventions",
+            | Self::Attribute(attribute) => attribute.description(),
             | Self::StructuredExceptionHandling => "structured exception handling",
-            | Self::LocalLabel => "local labels",
             | Self::NamedJump => "named break and continue",
             | Self::Designator => "designated initializers",
             | Self::NestedFunction => "nested functions",
@@ -129,6 +129,8 @@ impl Construct {
             | Self::SelectionDeclaration => "declarations in selection statements",
             | Self::Setjmp => "setjmp",
             | Self::Extension => "this extension",
+            | Self::CompoundLiteralStorage =>
+                "compound literals with static or thread storage duration",
         }
     }
 }
@@ -139,7 +141,8 @@ impl LoweringErrorKind {
             | Self::UnitHasErrors => "code is not generated for a translation unit with errors",
             | Self::Unsupported(_) => "not yet supported by lowering",
             | Self::UnanalyzedType =>
-                "construct not supported by code generation: its type was not analyzed",
+                "not yet supported by lowering: a type built from an extension semantic analysis \
+                 does not model",
             | Self::MissingFact(_) => "internal error: lowering is missing a semantic fact",
         }
     }
@@ -168,7 +171,13 @@ impl ToDiagnostic for LoweringError {
             | LoweringErrorKind::Unsupported(_) => explanation
                 .label("lowering stops here")
                 .note("the program is valid C; this compiler cannot translate it yet"),
-            | LoweringErrorKind::UnanalyzedType => explanation.label("type unavailable"),
+            | LoweringErrorKind::UnanalyzedType => explanation
+                .label("this expression or object has that type")
+                .note(
+                    "unmodeled are `constexpr` objects, `_BitInt`, decimal floating, inferred and \
+                     fixed-underlying enum types, MSVC pointer-size modifiers, and attributes \
+                     that change layout, such as `align` or `ext_vector_type`",
+                ),
             | _ => explanation,
         };
         explanation.at(ErrorSeverity::Error, source)

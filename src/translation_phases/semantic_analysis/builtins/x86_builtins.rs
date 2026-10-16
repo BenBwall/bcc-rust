@@ -116,7 +116,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(binding) = function.binding else {
             return;
         };
-        if !self.bindings[binding].builtin {
+        if !self.bindings[binding].origin.is_intrinsic() {
             return;
         }
         let name = self
@@ -166,15 +166,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         function: &'tu Expression<'tu>,
         args: super::ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
-        let function =
-            super::super::selected_designator(function, |e| Some(self.expression_info(e)));
+        let function = self.selected_designator(function);
         let super::ExpressionType::Identifier(id) = function.kind else {
             return None;
         };
         if !self
             .expression_info(function)
             .binding
-            .is_some_and(|id| self.bindings[id].builtin)
+            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
         {
             return None;
         }

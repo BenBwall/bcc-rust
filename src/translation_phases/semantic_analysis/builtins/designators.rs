@@ -5,7 +5,6 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
 //! C99: §6.5.1p5, p. 69; PDF p. 81 (parentheses preserve designation).
 
-use super::library_builtin_name;
 use crate::{
     translation_phases::{
         parsing::{
@@ -73,8 +72,10 @@ impl Analyzer<'_, '_, '_> {
             let Some(binding) = info.binding.map(|id| self.bindings[id]) else {
                 continue;
             };
-            if binding.builtin
-                && library_builtin_name(self.context.string_cache.at(binding.name.name)).is_none()
+            if binding.origin.is_intrinsic()
+                && binding.origin.descriptor().is_none_or(|d| {
+                    d.designator == crate::builtins::DesignatorPolicy::DirectCallOnly
+                })
             {
                 self.error(
                     SemanticErrorKind::BuiltinRequiresCall,

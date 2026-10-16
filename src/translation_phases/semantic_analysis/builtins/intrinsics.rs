@@ -64,6 +64,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !modeled(b.keyword) || b.recovered {
             return Self::expression_result(e, self.types.unknown());
         }
+        let Some(descriptor) = super::registry::keyword_descriptor(b.keyword) else {
+            return Self::expression_result(e, self.types.unknown());
+        };
+        let crate::builtins::BuiltinOperation::Varargs(operation) = descriptor.operation else {
+            return Self::expression_result(e, self.types.unknown());
+        };
+        let mut operands = crate::util::bump::ArenaVec::new_in(self.scratch);
+        for &operand in b.operands {
+            if let SyntaxOperand::Expression(expression) = operand {
+                operands.push(expression);
+            }
+        }
+        let type_operand = b.operands.get(1).and_then(|operand| match operand {
+            | SyntaxOperand::Type(name) => Some(*name),
+            | _ => None,
+        });
+        self.type_varargs(e, operation, &operands, type_operand)
+    }
+
+    /// Both ordinary and keyword calls use the same operand checker, without
+    /// allocating an adapter in the immutable syntax arena.
+    /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262;
+    /// §7.15.1.4p4, p. 251; PDF p. 263.
+    pub(in crate::translation_phases::semantic_analysis) fn type_varargs(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        operation: crate::builtins::VaOperation,
+        operands: &[&'tu Expression<'tu>],
+        type_operand: Option<
+            &'tu crate::translation_phases::parsing::declaration_syntax::TypeName<'tu>,
+        >,
+    ) -> ExpressionInfo<'tu> {
         let list = self.builtin_va_list();
         let pointer = match self.types.nodes[list.index] {
             | TypeKind::Array(record, _) => self.types.intern(TypeKind::Pointer(record)),
@@ -71,11 +103,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => unreachable!("target va_list is an array or pointer"),
         };
         let mut failed_operand = false;
-        for (index, &operand) in b.operands.iter().enumerate() {
-            if index != 0 && b.keyword != K::BuiltinVaCopy {
+        for (index, &operand) in operands.iter().enumerate() {
+            if index != 0 && operation != crate::builtins::VaOperation::Copy {
                 continue;
             }
-            if let SyntaxOperand::Expression(operand) = operand {
+            {
                 let info = self.expression_info(operand);
                 let ty = self.converted(info);
                 let requires_lvalue = self.types.target.va_list_is_pointer;
@@ -95,7 +127,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
-        if b.keyword == K::BuiltinVaStart {
+        if operation == crate::builtins::VaOperation::Start {
             let variadic = self
                 .functions
                 .current
@@ -116,12 +148,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let mut result = self.types.scalar(Scalar::Void);
-        if b.keyword == K::BuiltinVaArg
-            && let Some(&SyntaxOperand::Type(name)) = b.operands.get(1)
+        if operation == crate::builtins::VaOperation::Arg
+            && let Some(name) = type_operand
         {
             result = self
                 .resolved_type_names
-                .get(&name.source_vectors)
+                .get(&super::super::type_name_identity(name))
                 .copied()
                 .unwrap_or_else(|| self.types.unknown());
             if !self.types.unanalyzed(result)
@@ -156,7 +188,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut ty = self
             .resolved_type_names
-            .get(&name.source_vectors)
+            .get(&super::super::type_name_identity(name))
             .copied()
             .unwrap_or_else(|| self.types.unknown());
         if self.types.unanalyzed(ty) {
@@ -307,7 +339,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | SyntaxOperand::Expression(e) => self.expression_info(e).ty,
             | SyntaxOperand::Type(name) => self
                 .resolved_type_names
-                .get(&name.source_vectors)
+                .get(&super::super::type_name_identity(name))
                 .copied()
                 .unwrap_or_else(|| self.types.unknown()),
         }

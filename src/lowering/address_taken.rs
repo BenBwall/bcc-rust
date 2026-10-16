@@ -10,17 +10,11 @@
 
 use crate::{
     translation_phases::{
-        Context,
         parsing::syntax::{
             ExpressionType,
             UnaryOperator,
         },
-        semantic_analysis::{
-            CommonBuiltin,
-            SemanticTranslationUnit,
-            common_builtin,
-            selected_designator,
-        },
+        semantic_analysis::SemanticTranslationUnit,
     },
     util::bump::{
         ArenaSet,
@@ -32,59 +26,34 @@ use crate::{
 /// `__extension__` and generic selections.
 pub(super) fn find<'a>(
     sema: &SemanticTranslationUnit<'_>,
-    context: &Context<'_>,
     arena: &'a Bump,
-) -> ArenaSet<'a, usize> {
+) -> Result<ArenaSet<'a, usize>, super::LoweringError> {
     let mut taken = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
     for info in sema.expressions {
-        if let ExpressionType::Call {
-            function_expression: callee,
-            arguments,
-        } = info.expression.kind
-        {
-            let callee = selected_designator(callee, |e| sema.expression_info(e).copied());
-            if let ExpressionType::Identifier(name) = callee.kind
-                && sema
-                    .expression_info(callee)
-                    .and_then(|info| info.binding)
-                    .is_some_and(|id| sema.bindings[id].builtin)
-                && let Some(CommonBuiltin::Varargs(keyword)) =
-                    common_builtin(context.string_cache.at(name.name))
+        if matches!(info.expression.kind, ExpressionType::Call { .. }) {
+            let call = sema.call_facts(info.expression).ok_or_else(|| {
+                super::LoweringError::missing(
+                    "call facts are not retained",
+                    info.expression.source_vectors,
+                )
+            })?;
+            if let crate::translation_phases::semantic_analysis::Callee::Builtin {
+                binding: Some(binding),
+                instance: None,
+                ..
+            } = call.callee
+                && sema.bindings[binding].origin.descriptor().is_some()
             {
-                // Win64 cursors need storage even though these intrinsics use
-                // ordinary call syntax. C99: §7.15.1, pp. 249-251; PDF pp.
-                // 261-263.
-                let count = if keyword
-                    == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy
-                {
-                    2
-                } else {
-                    1
-                };
-                for &operand in arguments.iter().take(count) {
-                    if let Some(binding) =
-                        sema.expression_info(operand).and_then(|info| info.binding)
-                    {
-                        _ = taken.insert(binding);
-                    }
-                }
+                return Err(super::LoweringError::missing(
+                    "checked named builtin is not retained",
+                    info.expression.source_vectors,
+                ));
             }
         }
-        if let ExpressionType::Builtin(b) = info.expression.kind {
-            use crate::translation_phases::{
-                parsing::SyntaxOperand,
-                preprocessing::KeywordTokenType as K,
-            };
-            if matches!(
-                b.keyword,
-                K::BuiltinVaStart | K::BuiltinVaArg | K::BuiltinVaCopy | K::BuiltinVaEnd
-            ) {
-                for &operand in b.operands {
-                    if let SyntaxOperand::Expression(e) = operand
-                        && let Some(binding) = sema.expression_info(e).and_then(|info| info.binding)
-                    {
-                        _ = taken.insert(binding);
-                    }
+        if let Some(instance) = sema.builtin_call_facts(info.expression) {
+            for operand in instance.operands {
+                if let Some(binding) = operand.storage_binding {
+                    _ = taken.insert(binding);
                 }
             }
         }
@@ -95,11 +64,26 @@ pub(super) fn find<'a>(
         else {
             continue;
         };
-        let operand = selected_designator(operand_expression, |e| sema.expression_info(e).copied());
-        if matches!(operand.kind, ExpressionType::Identifier(_))
-            && let Some(binding) = sema.expression_info(operand).and_then(|info| info.binding)
+        let operand = sema.designation(operand_expression).ok_or_else(|| {
+            super::LoweringError::missing(
+                "designation facts are not retained",
+                operand_expression.source_vectors,
+            )
+        })?;
+        if matches!(operand.leaf.kind, ExpressionType::Identifier(_))
+            && let Some(binding) = operand.binding
         {
             _ = taken.insert(binding);
+        }
+    }
+    // A GNU cleanup function receives its variable's address on every exit.
+    // GNU extension: GCC manual, "Common Variable Attributes", cleanup.
+    for region in sema.control.regions {
+        if let crate::translation_phases::semantic_analysis::CleanupKind::Call {
+            variable, ..
+        } = region.cleanup
+        {
+            _ = taken.insert(variable.0);
         }
     }
     // Prototype bound expressions and body uses designate the same parameter
@@ -113,5 +97,5 @@ pub(super) fn find<'a>(
             }
         }
     }
-    taken
+    Ok(taken)
 }

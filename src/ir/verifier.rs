@@ -36,9 +36,12 @@ use super::{
     module::{
         Extension,
         GlobalInit,
+        Linkage,
         ParamAbi,
+        RelocationTarget,
         Signature,
         Symbol,
+        Visibility,
     },
     types::Type,
 };
@@ -63,7 +66,118 @@ pub(crate) fn verify_module<'m, 's>(
     for (func, _) in module.functions() {
         verify_function_into(module, func, profile, scratch, &mut errors);
     }
+    verify_init_functions(module, &mut errors);
     errors
+}
+
+/// An alias names an existing definition of its own kind that is not itself
+/// an alias, and has no body or initializer of its own; a section name is
+/// nonempty and free of quotes, newlines and NUL, so every back end and the
+/// textual form can carry it; an internal symbol has default visibility, as
+/// LLVM requires of local linkage. An alias is thread-local exactly when its
+/// target is: it names the same storage, one copy per thread or one shared.
+/// GNU extension: GCC manual, "Common Function Attributes", alias/section.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
+fn verify_symbol_attributes(
+    module: &Module<'_>,
+    symbol: Symbol,
+    mut error: impl FnMut(VerifierErrorKind),
+) {
+    let attributes = module.symbol_attributes(symbol);
+    let linkage = match symbol {
+        | Symbol::Function(func) => module.function(func).linkage,
+        | Symbol::Global(global) => module.global(global).linkage,
+    };
+    if linkage == Linkage::Internal && attributes.visibility != Visibility::Default {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an internal symbol has default visibility",
+        ));
+    }
+    if let Some(section) = attributes.section
+        && (section.is_empty() || section.contains(['"', '\n', '\r', '\0']))
+    {
+        error(VerifierErrorKind::SymbolAttribute(
+            "a section name is nonempty and has no quote, newline or NUL",
+        ));
+    }
+    let Some(target) = attributes.alias else {
+        return;
+    };
+    let exists = match target {
+        | Symbol::Function(func) => module.get_function(func).is_some(),
+        | Symbol::Global(global) => module.get_global(global).is_some(),
+    };
+    if !exists {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias target does not exist",
+        ));
+        return;
+    }
+    let defined = |symbol| match symbol {
+        | Symbol::Function(func) => module.function(func).body.is_some(),
+        | Symbol::Global(global) => module.global(global).init.is_some(),
+    };
+    if matches!(
+        (symbol, target),
+        (Symbol::Function(_), Symbol::Global(_)) | (Symbol::Global(_), Symbol::Function(_))
+    ) {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias and its target are both functions or both globals",
+        ));
+    }
+    if defined(symbol) {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias has no body or initializer of its own",
+        ));
+    }
+    if !defined(target) || module.symbol_attributes(target).alias.is_some() {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias target is a definition that is not itself an alias",
+        ));
+    }
+    let thread_local = |symbol| match symbol {
+        | Symbol::Function(_) => false,
+        | Symbol::Global(global) => module.global(global).thread_local,
+    };
+    if thread_local(symbol) != thread_local(target) {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias is thread-local exactly when its target is",
+        ));
+    }
+}
+
+/// Constructors and destructors are existing functions that take no
+/// parameters and are defined in the module, directly or through an alias.
+/// GNU extension: GCC manual, "Common Function Attributes",
+/// constructor/destructor.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
+fn verify_init_functions<'m>(module: &'m Module<'_>, errors: &mut ArenaVec<'_, VerifierError<'m>>) {
+    for init in module.init_functions() {
+        let Some(function) = module.get_function(init.func) else {
+            errors.push(VerifierError {
+                item:     "",
+                location: Location::Item,
+                kind:     VerifierErrorKind::InvalidReference(
+                    EntityKind::Function,
+                    init.func.as_u32(),
+                ),
+            });
+            continue;
+        };
+        let defined = function.body.is_some() || function.attributes.alias.is_some();
+        let no_params = module
+            .get_signature(function.signature)
+            .is_some_and(|signature| signature.params.is_empty() && !signature.variadic);
+        if !defined || !no_params {
+            errors.push(VerifierError {
+                item:     function.name,
+                location: Location::Item,
+                kind:     VerifierErrorKind::SymbolAttribute(
+                    "a constructor or destructor is a defined function without parameters",
+                ),
+            });
+        }
+    }
 }
 
 /// Verifies one function, returning the errors in `scratch`.
@@ -93,6 +207,13 @@ fn verify_function_into<'m, 's>(
             kind:     VerifierErrorKind::NulSymbolName,
         });
     }
+    verify_symbol_attributes(module, Symbol::Function(func), |kind| {
+        errors.push(VerifierError {
+            item: function.name,
+            location: Location::Item,
+            kind,
+        });
+    });
     let Some(signature) = module.get_signature(function.signature) else {
         errors.push(VerifierError {
             item:     function.name,
@@ -137,6 +258,7 @@ fn verify_function_into<'m, 's>(
         return;
     }
     verifier.definitions();
+    verifier.labels();
     if !verifier.pools() {
         return;
     }
@@ -464,6 +586,26 @@ impl Verifier<'_, '_, '_, '_> {
         }
     }
 
+    /// Checks that each label names a distinct block other than the entry,
+    /// which has no address (LLVM's `blockaddress` rule).
+    fn labels(&mut self) {
+        let body = self.body;
+        let mut seen: ArenaSet<'_, Block> =
+            ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
+        for (_, block) in body.labels() {
+            if block.index() >= body.block_count() {
+                self.error(
+                    Location::Item,
+                    VerifierErrorKind::InvalidReference(EntityKind::Block, block.as_u32()),
+                );
+            } else if Some(block) == body.entry_block() {
+                self.error(Location::Block(block), VerifierErrorKind::LabeledEntry);
+            } else if !seen.insert(block) {
+                self.error(Location::Block(block), VerifierErrorKind::DuplicateLabel);
+            }
+        }
+    }
+
     /// Checks one instruction's flags, profile, types and edges.
     fn instruction(&mut self, inst: Inst) {
         let data = *self.body.inst(inst);
@@ -628,6 +770,14 @@ impl Verifier<'_, '_, '_, '_> {
                     ));
                 }
             },
+            | InstData::BlockAddr { label } => {
+                if checker.verifier.body.label_block(label).is_none() {
+                    checker.report(VerifierErrorKind::InvalidReference(
+                        EntityKind::Label,
+                        label.as_u32(),
+                    ));
+                }
+            },
             | InstData::Load { addr, .. } => checker.operand(0, addr, Type::Ptr),
             | InstData::Store { ty, args, .. } => checker.operands(&args, &[ty, Type::Ptr]),
             | InstData::MemoryRange { args, .. } => match opcode {
@@ -680,6 +830,7 @@ impl Verifier<'_, '_, '_, '_> {
                 default,
                 cases,
             } => checker.switch(value, default, cases),
+            | InstData::IndirectBr { addr, dests } => checker.indirect_br(addr, dests),
             | InstData::Return { value } => {
                 let expected = checker.verifier.signature.result;
                 let found = value.and_then(|value| checker.value_type(value));
@@ -872,6 +1023,35 @@ impl InstChecker<'_, '_, '_, '_, '_> {
         }
     }
 
+    /// Checks an indirect branch: a `ptr` address and distinct targets that
+    /// are all address-taken blocks of this function, as LLVM's
+    /// `indirectbr` requires of a `blockaddress` destination.
+    fn indirect_br(&mut self, addr: Value, list: super::BlockList) {
+        let body = self.verifier.body;
+        self.operand(0, addr, Type::Ptr);
+        let mut labeled: ArenaSet<'_, Block> =
+            ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.verifier.scratch);
+        labeled.extend(body.labels().map(|(_, block)| block));
+        let mut seen: ArenaSet<'_, Block> =
+            ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.verifier.scratch);
+        let mut dests =
+            ArenaVec::with_capacity_in(body.block_list(list).len(), self.verifier.scratch);
+        for dest in body.block_list(list) {
+            dests.push(dest);
+            let target = body.block_call(dest).0;
+            if target.index() >= body.block_count() {
+                continue;
+            }
+            if !labeled.contains(&target) {
+                self.report(VerifierErrorKind::IndirectTarget(target));
+            }
+            if !seen.insert(target) {
+                self.report(VerifierErrorKind::DuplicateIndirectTarget(target));
+            }
+        }
+        self.edges(&dests);
+    }
+
     /// Checks a switch: an integer value, cases that fit its type and are
     /// distinct, and its edges.
     ///
@@ -941,6 +1121,7 @@ fn verify_global<'m>(
     if data.name.contains('\0') {
         error(VerifierErrorKind::NulSymbolName);
     }
+    verify_symbol_attributes(module, Symbol::Global(global), &mut error);
     let Some(GlobalInit::Bytes { bytes, relocations }) = data.init else {
         return;
     };
@@ -953,25 +1134,57 @@ fn verify_global<'m>(
     for relocation in relocations {
         if relocation
             .offset
-            .checked_add(8)
+            .checked_add(relocation.size())
             .is_none_or(|end| end > data.size)
         {
             error(VerifierErrorKind::RelocationRange(relocation.offset));
         }
-        let (kind, index, exists) = match relocation.symbol {
-            | Symbol::Function(func) => (
+        let label_exists = |func: FuncId, label: super::BlockLabel| {
+            module
+                .get_function(func)
+                .and_then(|function| function.body.as_ref())
+                .is_some_and(|body| body.label_block(label).is_some())
+        };
+        let (kind, index, exists) = match relocation.target {
+            | RelocationTarget::Symbol(Symbol::Function(func)) => (
                 EntityKind::Function,
                 func.as_u32(),
                 module.get_function(func).is_some(),
             ),
-            | Symbol::Global(target) => (
+            | RelocationTarget::Symbol(Symbol::Global(target)) => (
                 EntityKind::Global,
                 target.as_u32(),
                 module.get_global(target).is_some(),
             ),
+            | RelocationTarget::Label { func, label } =>
+                (EntityKind::Label, label.as_u32(), label_exists(func, label)),
+            | RelocationTarget::LabelDifference {
+                func,
+                label,
+                base,
+                width,
+            } => {
+                if !matches!(width, Type::I8 | Type::I16 | Type::I32 | Type::I64) {
+                    error(VerifierErrorKind::RelocationWidth(width));
+                }
+                let missing = if label_exists(func, label) {
+                    base
+                } else {
+                    label
+                };
+                (
+                    EntityKind::Label,
+                    missing.as_u32(),
+                    label_exists(func, label) && label_exists(func, base),
+                )
+            },
         };
         if !exists {
             error(VerifierErrorKind::InvalidReference(kind, index));
+        } else if let RelocationTarget::Symbol(Symbol::Global(target)) = relocation.target
+            && module.global(target).thread_local
+        {
+            error(VerifierErrorKind::ThreadLocalRelocation(relocation.offset));
         }
     }
 }
@@ -1002,6 +1215,9 @@ pub(crate) enum VerifierErrorKind {
     Noundef(&'static str),
     /// LLVM and the native symbol interfaces require NUL-free names.
     NulSymbolName,
+    /// An alias, section, constructor or destructor request breaks the rule
+    /// named.
+    SymbolAttribute(&'static str),
     /// A defined function has no blocks.
     NoBlocks,
     EmptyBlock,
@@ -1106,8 +1322,22 @@ pub(crate) enum VerifierErrorKind {
         expected: u64,
         found:    u64,
     },
-    /// A relocation's eight bytes do not fit in the global.
+    /// A relocation's bytes do not fit in the global.
     RelocationRange(u64),
+    /// A label difference is not an `i8`, `i16`, `i32` or `i64`.
+    RelocationWidth(Type),
+    /// A label names the entry block, which has no address.
+    LabeledEntry,
+    /// Two labels name one block.
+    DuplicateLabel,
+    /// An `indirect_br` lists a block that no label names.
+    IndirectTarget(Block),
+    /// An `indirect_br` lists a block twice.
+    DuplicateIndirectTarget(Block),
+    /// A relocation names a thread-local global, whose address differs per
+    /// thread and so is no link-time constant.
+    /// C11: §6.6 paragraph 9, p. 107; PDF p. 125.
+    ThreadLocalRelocation(u64),
 }
 
 /// What is wrong with an aggregate parameter of a signature.
@@ -1154,6 +1384,8 @@ pub(crate) enum EntityKind {
     ValueList,
     BlockCall,
     CaseList,
+    BlockList,
+    Label,
 }
 
 impl fmt::Display for VerifierError<'_> {
@@ -1176,6 +1408,7 @@ impl fmt::Display for VerifierErrorKind {
                 f.write_str("invalid trailing variadic argument descriptions"),
             | Self::Noundef(problem) => write!(f, "invalid noundef: {problem}"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
+            | Self::SymbolAttribute(rule) => write!(f, "invalid symbol attribute: {rule}"),
             | Self::NoBlocks => f.write_str("a defined function has no blocks"),
             | Self::EmptyBlock => f.write_str("the block is empty"),
             | Self::MissingTerminator => f.write_str("the block does not end in a terminator"),
@@ -1295,6 +1528,18 @@ impl fmt::Display for VerifierErrorKind {
                 f,
                 "the relocation at offset {offset} does not fit in the global"
             ),
+            | Self::RelocationWidth(ty) => write!(f, "a label difference cannot have type {ty}"),
+            | Self::LabeledEntry => f.write_str("a label names the entry block"),
+            | Self::DuplicateLabel => f.write_str("two labels name the block"),
+            | Self::IndirectTarget(target) =>
+                write!(f, "indirect_br lists {target}, which no label names"),
+            | Self::DuplicateIndirectTarget(target) =>
+                write!(f, "indirect_br lists {target} twice"),
+            | Self::ThreadLocalRelocation(offset) => write!(
+                f,
+                "the relocation at offset {offset} names a thread-local global, whose address is \
+                 not a link-time constant"
+            ),
         }
     }
 }
@@ -1313,6 +1558,8 @@ impl fmt::Display for EntityKind {
             | Self::ValueList => "value list",
             | Self::BlockCall => "block call",
             | Self::CaseList => "case list",
+            | Self::BlockList => "block list",
+            | Self::Label => "label",
         })
     }
 }

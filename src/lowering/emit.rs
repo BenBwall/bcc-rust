@@ -2,6 +2,8 @@
 //!
 //! Emission keeps only the blocks reachable from the entry and lays them out
 //! in reverse post-order, so every value is defined before the text uses it.
+//! A labeled block nothing reaches still exists, since a label names it, as
+//! an `unreachable` stub after them: no computed goto can reach it.
 //! Before that it removes the block parameters SSA construction made
 //! redundant: a parameter whose incoming arguments, ignoring itself, are all
 //! one value is that value (Braun et al., section 3.1). The check repeats
@@ -58,6 +60,15 @@ pub(super) fn emit<'s>(
         } else {
             builder.create_block()
         });
+    }
+    for &label in &draft.labels {
+        if blocks[label.index()].is_none() {
+            let stub = builder.create_block();
+            blocks[label.index()] = Some(stub);
+            builder.switch_to_block(stub);
+            builder.unreachable();
+        }
+        _ = builder.create_label(blocks[label.index()].expect("labels have blocks"));
     }
     let mut values: ArenaVec<'_, Option<Value>> =
         ArenaVec::with_capacity_in(draft.values.len(), scratch);
@@ -160,6 +171,18 @@ pub(super) fn emit<'s>(
                 }
                 builder.switch(value, (target_of(default), &default_args), &list);
             },
+            | Some(Terminator::IndirectBr(addr, edges)) => {
+                let addr = map(*addr, &values)?;
+                let mut edge_list = ArenaVec::with_capacity_in(edges.len(), scratch);
+                for edge in edges {
+                    edge_list.push(edge_args(edge)?);
+                }
+                let mut list = ArenaVec::with_capacity_in(edges.len(), scratch);
+                for (edge, args) in edges.iter().zip(&edge_list) {
+                    list.push((target_of(edge), args.as_slice()));
+                }
+                builder.indirect_br(addr, &list);
+            },
             | Some(Terminator::Return(value)) => {
                 let value = value.map(|value| map(value, &values)).transpose()?;
                 builder.ret(value);
@@ -211,6 +234,7 @@ fn used_poison<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, bool> {
         match *terminator {
             | Terminator::Brif(value, _)
             | Terminator::Switch { value, .. }
+            | Terminator::IndirectBr(value, _)
             | Terminator::Return(Some(value)) => mark(value),
             | _ => {},
         }

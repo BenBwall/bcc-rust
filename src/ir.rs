@@ -7,8 +7,10 @@
 //! function's parameters. Values are dense `u32` entities, instruction
 //! records are 16 bytes, and longer operand lists live in a per-function
 //! pool. Memory is explicit: stack slots, loads and stores ordered by their
-//! position, and aggregates that are never values. The IR follows LLVM's
-//! poison semantics without `undef`.
+//! position, and aggregates that are never values. Address-taken blocks have
+//! labels, which `block_addr` and relocations name and an `indirect_br`
+//! targets, so renumbering never invalidates a block address. The IR follows
+//! LLVM's poison semantics without `undef`.
 //!
 //! A [`FunctionBuilder`] appends instructions, [`Module`]'s `Display` prints
 //! the textual form, [`parse_module`] reads it back, [`verify_module`] checks
@@ -78,6 +80,7 @@ pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
     AccessTag,
     Block,
+    BlockLabel,
     ConstId,
     Entity,
     FuncId,
@@ -98,6 +101,7 @@ pub(crate) use instructions::{
     Align,
     Bits64,
     BlockCall,
+    BlockList,
     CaseList,
     FloatCC,
     InstData,
@@ -117,12 +121,17 @@ pub(crate) use module::{
     Global,
     GlobalDecl,
     GlobalInit,
+    InitFunction,
+    InitKind,
     Linkage,
     ParamAbi,
     Relocation,
+    RelocationTarget,
     ResultRegisters,
     Signature,
     Symbol,
+    SymbolAttributes,
+    Visibility,
 };
 pub(crate) use parser::{
     ParseError,
@@ -142,32 +151,40 @@ pub(crate) use verifier::{
 
 use crate::util::bump::{
     ArenaMap,
+    ArenaVec,
     Bump,
 };
 
 /// A translation unit's IR: its functions, globals and interned signatures,
 /// and the target they are for. Everything it holds lives in its `'ir` arena.
 pub(crate) struct Module<'ir> {
-    arena:         &'ir Bump,
-    triple:        &'ir str,
-    data_layout:   &'ir str,
+    arena:          &'ir Bump,
+    triple:         &'ir str,
+    data_layout:    &'ir str,
     /// Whether ABI lowering has run.
-    profile:       Profile,
-    functions:     Table<'ir, FuncId, Function<'ir>>,
-    globals:       Table<'ir, GlobalId, Global<'ir>>,
-    signatures:    Table<'ir, SigId, Signature<'ir>>,
-    signature_ids: ArenaMap<'ir, Signature<'ir>, SigId>,
+    profile:        Profile,
+    functions:      Table<'ir, FuncId, Function<'ir>>,
+    globals:        Table<'ir, GlobalId, Global<'ir>>,
+    signatures:     Table<'ir, SigId, Signature<'ir>>,
+    signature_ids:  ArenaMap<'ir, Signature<'ir>, SigId>,
     /// Functions and globals share one namespace.
-    symbols:       ArenaMap<'ir, &'ir str, Symbol>,
+    symbols:        ArenaMap<'ir, &'ir str, Symbol>,
+    /// Functions run before or after the program's entry, in this order of
+    /// registration; back ends sort them by priority.
+    init_functions: ArenaVec<'ir, InitFunction>,
 }
 
 /// A function of a module. It is defined if it has a body.
 #[derive(Debug)]
 pub(crate) struct Function<'ir> {
-    pub(crate) name:      &'ir str,
-    pub(crate) signature: SigId,
-    pub(crate) linkage:   Linkage,
-    pub(crate) body:      Option<Body<'ir>>,
+    pub(crate) name:       &'ir str,
+    pub(crate) signature:  SigId,
+    pub(crate) linkage:    Linkage,
+    pub(crate) body:       Option<Body<'ir>>,
+    /// Alias target, section and retention requests.
+    pub(crate) attributes: SymbolAttributes<'ir>,
+    /// A requested minimum alignment of the function's code.
+    pub(crate) align:      Option<Align>,
 }
 
 // Tests

@@ -996,10 +996,10 @@ fn parameter_names(
         Duration,
     };
     record
-        .parameters
+        .parameter_facts
         .iter()
         .map(|parameter| {
-            parameter.map(|b| {
+            parameter.body_binding.map(|b| {
                 let binding = sema.bindings[b];
                 assert_eq!(binding.kind, BindingKind::Parameter);
                 assert_eq!(binding.duration, Duration::Automatic);
@@ -1027,7 +1027,10 @@ fn function_records_link_a_prototype_definition_to_its_bindings() {
             assert!(sema.lowerable(context));
             assert_eq!(sema.functions.len(), 2);
             let helper = function_record(context, sema, "helper");
-            assert!(helper.parameters.is_empty(), "a lone void declares nothing");
+            assert!(
+                helper.parameter_facts.is_empty(),
+                "a lone void declares nothing"
+            );
             let add = function_record(context, sema, "add");
             let ExternalDeclaration::FunctionDefinition(syntax) = unit.external_declarations()[1]
             else {
@@ -1046,13 +1049,13 @@ fn function_records_link_a_prototype_definition_to_its_bindings() {
                 parameter_names(context, sema, add),
                 [Some(String::from("a")), Some(String::from("b"))]
             );
-            let b = sema.bindings[add.parameters[1].unwrap()];
+            let b = sema.bindings[add.parameter_facts[1].body_binding.unwrap()];
             assert_eq!(sema.types.kind(b.ty), TypeKind::Scalar(Scalar::Long));
             // A use of the parameter in the body resolves to the same binding.
             assert!(
                 sema.expressions
                     .iter()
-                    .any(|info| info.binding == add.parameters[1])
+                    .any(|info| info.binding == add.parameter_facts[1].body_binding)
             );
         },
     );
@@ -1079,7 +1082,7 @@ fn function_records_list_old_style_parameters_in_identifier_order() {
             );
             // The body sees the declared float; callers pass the promoted
             // double that the composite function type lists (C99 §6.9.1p10).
-            let b = sema.bindings[old.parameters[1].unwrap()];
+            let b = sema.bindings[old.parameter_facts[1].body_binding.unwrap()];
             assert_eq!(sema.types.kind(b.ty), TypeKind::Scalar(Scalar::Float));
             let function = sema.bindings[old.binding.unwrap()];
             let TypeKind::Function {
@@ -1190,7 +1193,10 @@ fn member_access_retains_the_selected_field() {
                 .expect("(p->in.x) is typed");
             let field = sema.selected_field(parenthesized.expression).unwrap();
             assert_eq!(context.string_cache.at(field.name.name), "x");
-            assert_eq!(parenthesized.field_index(), Some(0));
+            assert_eq!(
+                sema.member_facts(parenthesized.expression).unwrap().field,
+                0
+            );
             assert!(
                 sema.selected_field(returned).is_none(),
                 "a sum selects nothing"

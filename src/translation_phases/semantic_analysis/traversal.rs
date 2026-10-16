@@ -29,10 +29,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         self.control.expression(e);
+        self.discover_implicit_callee(e);
         if !e.recovered
             && let E::LabelAddress(name) = e.kind
         {
-            self.label_address(name);
+            self.label_address(e, name);
         }
         // Reserved builtin designators need their binding even before a
         // compile-time selection becomes a callee, or an address is checked.
@@ -105,7 +106,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 for &argument in arguments.iter().rev() {
                     self.work.push(Work::Expression(argument));
                 }
-                self.implicit_function(function_expression);
+                self.mark_implicit_callee(function_expression);
                 self.work.push(Work::Expression(function_expression));
             },
             | E::DirectMember {
@@ -150,6 +151,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.taint(s.recovered);
         let outside = self.control.current;
         _ = self.control.statement(s);
+        self.work.push(Work::StatementWork(W::RetainTail(s)));
         match s.kind {
             | S::Compound { items } => {
                 if !new_scope {
@@ -168,7 +170,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Declaration(d) => self.work.push(Work::Declaration(d)),
-            | S::Attributed(s) => self.work.push(Work::Statement(s.statement, new_scope)),
+            | S::Attributed(s) => {
+                self.check_attribute_list(s.attributes);
+                self.work.push(Work::Statement(s.statement, new_scope));
+            },
             | S::Label(name, child) => {
                 self.label(s, name, true);
                 self.work.push(Work::Statement(child, new_scope));
@@ -314,7 +319,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ),
             | S::Break => self.control_jump(s, false),
             | S::Continue => self.control_jump(s, true),
-            | S::Expression(e) | S::ComputedGoto(e) => self.expression_slot(e),
+            | S::Expression(e) => self.expression_slot(e),
+            | S::ComputedGoto(e) => self.computed_goto(s, e),
             | _ => {},
         }
     }

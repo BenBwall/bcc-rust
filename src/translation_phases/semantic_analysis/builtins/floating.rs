@@ -4,20 +4,22 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>;
 //! C99 §6.6p10, p. 96; PDF p. 108 (additional constant expressions).
 
-use super::FloatOperation;
-use crate::translation_phases::{
-    parsing::syntax::Expression,
-    semantic_analysis::{
-        Analyzer,
-        ConstantClass,
-        ConversionKind,
-        ExpressionInfo,
-        Integer,
-        Scalar,
-        SemanticErrorKind,
-        TypeId,
-        TypeKind,
-        constants::Floating,
+use crate::{
+    builtins::FloatOperation,
+    translation_phases::{
+        parsing::syntax::Expression,
+        semantic_analysis::{
+            Analyzer,
+            ConstantClass,
+            ConversionKind,
+            ExpressionInfo,
+            Integer,
+            Scalar,
+            SemanticErrorKind,
+            TypeId,
+            TypeKind,
+            constants::Floating,
+        },
     },
 };
 

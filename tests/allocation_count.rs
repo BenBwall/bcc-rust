@@ -884,6 +884,45 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
     }
 
     #[test]
+    fn semantic_resolved_designations_calls_tails_and_members_allocate_only_from_arenas() {
+        let source = "struct S{volatile int x;unsigned bits:3;};int f(int x){return x;}
+            int g(int n,...){__builtin_va_list ap;(__extension__ (__builtin_va_start))(ap,n);
+            struct S s={1,2};int (*p)(int)=f;
+            (__builtin_choose_expr(1,__builtin_va_end,0))(ap);
+            return _Generic(0,int:f)(p(s.bits))+({L:s.x;});}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(summary.diagnostics, 0);
+        assert_eq!(
+            allocations.calls, 0,
+            "M3 retained resolved expression facts"
+        );
+    }
+
+    #[test]
+    fn semantic_checked_scalar_and_keyword_builtins_allocate_only_from_arenas() {
+        let source = "void f(int n,...){__builtin_va_list a,b;__builtin_va_start(a,n);
+            __builtin_va_copy(b,a);n=__builtin_va_arg(b,int);__builtin_va_end(b);
+            (void)__builtin_object_size(&n,2);(void)__builtin_expect_with_probability(n,1,0.5);
+            (void)__builtin_add_overflow(n,1,&n);(void)__builtin_clz((unsigned)n);
+            (void)__builtin_fabsf(1.0f);__builtin_va_end(a);}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(summary.diagnostics, 0);
+        assert_eq!(allocations.calls, 0, "M4 checked builtin instances");
+    }
+
+    #[test]
+    fn semantic_occurrence_parameter_and_size_facts_allocate_only_from_arenas() {
+        let source = "int proto(int,int a[static 3]);
+            int old(c,r) char c; float r; {return c+(int)r;}
+            int f(int n,int (*p)[n]){typedef int A[n++];A a;
+            int b[sizeof a/sizeof(int)];void *q=(int (*)[n])p;
+            (void)q;return sizeof b;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(summary.diagnostics, 0);
+        assert_eq!(allocations.calls, 0, "M2 retained correspondence and sizes");
+    }
+
+    #[test]
     fn semantic_control_regions_and_type_actions_allocate_only_from_arenas() {
         for (source, diagnostics) in [
             (

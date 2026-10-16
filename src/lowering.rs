@@ -33,16 +33,17 @@
 //! Files by role:
 //! - Translation unit: `module_items.rs` declares functions and globals and
 //!   lays out static initializers; `address_taken.rs` finds the locals that
-//!   need memory; `extensions.rs` checks calling conventions and records asm
-//!   labels from the retained declaration syntax.
+//!   need memory; `extensions.rs` reports retained attribute refusals and
+//!   records asm labels; `symbols.rs` maps retained entity attributes to weak
+//!   linkage, aliases, sections and constructor/destructor lists.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `places.rs` lvalues, loads and
 //!   stores; `alignment.rs` owns backing-place guarantees and all memory and
 //!   allocation alignment; `bit_fields.rs` bit-field reads and writes;
 //!   `initializers.rs` walks braced initializers; `vla.rs` evaluates saved
-//!   array extents and restores dynamic stack storage when declaration
-//!   lifetimes end.
+//!   array extents and runs the cleanups of the regions an exit leaves: dynamic
+//!   stack restores, and GNU cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; `floats.rs` turns folded floating constants into IR bits.
@@ -58,12 +59,14 @@
 mod address_taken;
 mod extensions;
 mod module_items;
+mod symbols;
 
 // Function bodies
 mod alignment;
 mod bit_fields;
 mod builtin_effects;
 mod builtins;
+mod cleanup;
 mod expressions;
 mod gnu;
 mod initializers;
@@ -160,7 +163,10 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
         });
     }
     let tables = Bump::new();
-    let mut unit = Unit::new(context, sema, target, arena, &tables);
+    let mut unit =
+        Unit::new(context, sema, target, arena, &tables).map_err(|error| LoweringErrors {
+            errors: arena.alloc_slice_copy(&[error]),
+        })?;
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);
     for record in functions {
@@ -260,7 +266,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.declare_binding(binding, initializer, source),
             | Task::FinishBound(index) => self.finish_bound(index),
             | Task::Sizeof(object, result, source) => {
-                let size = self.runtime_size(object, source)?;
+                let size = self.emit_size_formula(object, source)?;
                 let ty = self.value_type(result, source)?;
                 let size = self.extend(size, false, ty);
                 self.push_item(Operand::Value(size), result);
@@ -286,6 +292,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 Ok(())
             },
             | Task::Return(statement) => self.return_value(statement),
+            | Task::IndirectJump(statement) => self.indirect_jump(statement),
             | Task::Switch { statement, exit } => self.switch(statement, exit),
             | Task::EndSwitch { statement, exit } => {
                 self.end_switch(statement, exit);
@@ -348,12 +355,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.evaluate_raw(expression)
             },
             | Task::EvaluateRaw(expression) => self.evaluate_raw(expression),
-            | Task::BuiltinEffects(expression, read) => self.builtin_effects(expression, read),
+            | Task::BuiltinEffects(expression, context) =>
+                self.builtin_effects(expression, context),
             | Task::SnapshotArgument(expression) => self.snapshot_argument(expression),
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
             | Task::FinishBuiltin(expression, builtin) => self.finish_builtin(expression, builtin),
-            | Task::FinishKeyword(expression, builtin) => self.finish_keyword(expression, builtin),
             | Task::OmittedConditional {
                 expression,
                 conditional,
@@ -421,6 +428,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     result:             TypeId,
     bounds:             ArenaMap<'s, usize, ssa::Var>,
     vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
+    /// The block computed gotos branch through, once one exists.
+    indirect:           Option<Block>,
 }
 
 // Tests

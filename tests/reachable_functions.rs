@@ -95,6 +95,40 @@ mod tests {
                 "gnu99",
                 vec!["main", "n"],
             ),
+            // GNU symbol attributes keep unreferenced internal definitions.
+            (
+                "constructor",
+                "__attribute__((constructor)) static void init(void) {}                  \
+                 __attribute__((destructor)) static void fini(void) {}",
+                "gnu99",
+                vec![
+                    "fini",
+                    "init",
+                    "llvm.global_ctors",
+                    "llvm.global_dtors",
+                    "main",
+                ],
+            ),
+            (
+                "alias",
+                "static int target(void) { return 1; } int other(void)                  \
+                 __attribute__((alias(\"target\")));",
+                "gnu99",
+                vec!["main", "other", "target"],
+            ),
+            (
+                "cleanup",
+                "static void done(int *p) { (void)p; } int run(void) { int x                  \
+                 __attribute__((cleanup(done))) = 0; return x; }",
+                "gnu99",
+                vec!["done", "main", "run"],
+            ),
+            (
+                "used",
+                "__attribute__((used)) static int keep(void) { return 1; }",
+                "gnu99",
+                vec!["keep", "llvm.used", "main"],
+            ),
         ] {
             let source = format!("{source}\nint main(void) {{ return 0; }}\n");
             std::fs::write(&source_path, &source).unwrap();
@@ -213,6 +247,35 @@ int main(void) { return 0; }";
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(symbols(&result.stdout).contains("f"));
+    }
+
+    /// An attribute meaning code generation lacks refuses the module only
+    /// when the body that wrote it is emitted.
+    #[test]
+    fn attribute_refusals_in_unreachable_bodies_are_not_reported() {
+        let body = "static int f(void) { typedef void (__attribute__((vectorcall)) *fp)(void);                     return 0; }";
+        let unused = format!(
+            "{body} int main(void) {{ return 0; }}
+"
+        );
+        let result = bcc(&unused, &["--emit=llvm", "-std=gnu99"]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let used = format!(
+            "{body} int main(void) {{ return f(); }}
+"
+        );
+        let result = bcc(&used, &["--emit=llvm", "-std=gnu99"]);
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("vectorcall")
+                || String::from_utf8_lossy(&result.stderr).contains("convention"),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     #[test]

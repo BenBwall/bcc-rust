@@ -14,6 +14,7 @@ use super::{
     JumpFacts,
     JumpId,
     LabelFacts,
+    LabelId,
     LoopFacts,
     Region,
     RegionId,
@@ -65,6 +66,9 @@ pub(in crate::translation_phases::semantic_analysis) struct Builder<'tu, 's> {
     statement_indices: ArenaMap<'s, usize, StatementId>,
     expression_points: ArenaMap<'s, usize, ControlPoint>,
     vla_regions: ArenaMap<'s, BindingId, RegionId>,
+    address_taken: ArenaMap<'s, FunctionId, ArenaVec<'s, LabelId>>,
+    label_addresses: ArenaMap<'s, usize, LabelId>,
+    label_differences: ArenaMap<'s, usize, (LabelId, LabelId)>,
     normal_destinations: ArenaVec<'s, (RegionId, RegionId)>,
     pub(in crate::translation_phases::semantic_analysis) ancestry: Option<Ancestry<'s>>,
 }
@@ -94,10 +98,15 @@ impl<'tu, 's> Builder<'tu, 's> {
             } else {
                 previous.nearest_vm
             },
-            nearest_cleanup: if matches!(cleanup, CleanupKind::AutomaticVla(_)) {
+            nearest_cleanup: if cleanup == CleanupKind::None {
+                previous.nearest_cleanup
+            } else {
+                Some(id)
+            },
+            nearest_cleanup_declaration: if matches!(kind, RegionKind::CleanupDeclaration(_)) {
                 Some(id)
             } else {
-                previous.nearest_cleanup
+                previous.nearest_cleanup_declaration
             },
             nearest_statement_expression: if matches!(kind, RegionKind::StatementExpression(_)) {
                 Some(id)
@@ -131,6 +140,7 @@ impl<'tu, 's> Builder<'tu, 's> {
             subtree_end: usize::MAX,
             nearest_vm: None,
             nearest_cleanup: None,
+            nearest_cleanup_declaration: None,
             nearest_statement_expression: None,
         });
         self.current = Some(root);
@@ -247,6 +257,72 @@ impl<'tu, 's> Builder<'tu, 's> {
         self.statements[id.0].jump = Some(jump);
     }
 
+    /// Records that `expression` takes the address of `label`, numbering the
+    /// label among its function's address-taken labels on first use.
+    /// GNU extension: GCC "Labels as Values".
+    pub(in crate::translation_phases::semantic_analysis) fn take_address(
+        &mut self,
+        expression: &Expression<'_>,
+        label: LabelId,
+        scratch: &'s Bump,
+    ) {
+        _ = self
+            .label_addresses
+            .insert(std::ptr::from_ref(expression).addr(), label);
+        let facts = &mut self.labels[label.0];
+        if facts.address.is_some() {
+            return;
+        }
+        let taken = self
+            .address_taken
+            .entry(facts.function)
+            .or_insert_with(|| ArenaVec::new_in(scratch));
+        facts.address = Some(u32::try_from(taken.len()).expect("fewer than 2^32 labels"));
+        taken.push(label);
+    }
+
+    /// The label an `&&label` expression names, once taken.
+    pub(in crate::translation_phases::semantic_analysis) fn address_label(
+        &self,
+        expression: &Expression<'_>,
+    ) -> Option<LabelId> {
+        self.label_addresses
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+    }
+
+    /// The labels of a constant label difference recorded for `expression`.
+    pub(in crate::translation_phases::semantic_analysis) fn difference_labels(
+        &self,
+        expression: &Expression<'_>,
+    ) -> Option<(LabelId, LabelId)> {
+        self.label_differences
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+    }
+
+    /// Records that `expression` is the constant label difference
+    /// `label - base`.
+    pub(in crate::translation_phases::semantic_analysis) fn record_difference(
+        &mut self,
+        expression: &Expression<'_>,
+        labels: (LabelId, LabelId),
+    ) {
+        _ = self
+            .label_differences
+            .insert(std::ptr::from_ref(expression).addr(), labels);
+    }
+
+    /// Every address-taken label of `function`, in address order.
+    pub(in crate::translation_phases::semantic_analysis) fn taken(
+        &self,
+        function: FunctionId,
+    ) -> &[LabelId] {
+        self.address_taken
+            .get(&function)
+            .map_or(&[], |labels| labels.as_slice())
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn forbidden_vm(
         &self,
         from: RegionId,
@@ -322,6 +398,16 @@ impl<'tu, 's> Builder<'tu, 's> {
         expressions.extend(self.expression_points);
         let mut vlas = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tu);
         vlas.extend(self.vla_regions);
+        let mut address_taken = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tu);
+        address_taken.extend(
+            self.address_taken
+                .iter()
+                .map(|(&function, labels)| (function, &*tu.alloc_slice_copy(labels))),
+        );
+        let mut label_addresses = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tu);
+        label_addresses.extend(self.label_addresses);
+        let mut label_differences = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tu);
+        label_differences.extend(self.label_differences);
         ControlFacts {
             regions: tu.alloc_slice_copy(&self.regions),
             statements: tu.alloc_slice_copy(&self.statements),
@@ -332,6 +418,9 @@ impl<'tu, 's> Builder<'tu, 's> {
             statement_indices: copy_map(self.statement_indices),
             expression_points: expressions,
             vla_regions: vlas,
+            address_taken,
+            label_addresses,
+            label_differences,
             #[cfg(test)]
             construction_work: self.ancestry.as_ref().map_or(0, |a| a.construction_work),
             #[cfg(test)]
@@ -361,6 +450,9 @@ impl<'tu, 's> Builder<'tu, 's> {
             statement_indices: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             expression_points: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             vla_regions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            address_taken: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            label_addresses: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            label_differences: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         }
     }
 }

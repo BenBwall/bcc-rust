@@ -3,6 +3,8 @@
 //! `sizeof` stays the structure's. Checked in every interpreter stage on each
 //! target and natively on the host; the expected values are Clang's and
 //! GCC's. Empty lists may initialize any flexible array member, as in Clang.
+//! A thread-local object has global storage too, so Clang accepts its
+//! flexible array initializer as well.
 
 use super::*;
 
@@ -15,6 +17,7 @@ struct H h = { 1, { 2, 3 } };
 static struct F elided = { 1, 2, 3, 4 };
 static struct F designated = { .v = { [3] = 9, [1] = 8 }, .n = 2 };
 static struct F empty = { 1, {} };
+static _Thread_local struct F per_thread = { 2, { 5, 6 } };
 static struct F twice = { .v = { 1, 2, 3 }, .n = 1, .v = { 4 } };
 struct G { struct F f; int after; } nested = { { 1, {} }, 2 };
 struct F *literal = &(struct F){ 4, {} };
@@ -40,6 +43,7 @@ int main(void) {
     if (elided_pairs.v[0].a != 2 || elided_pairs.v[0].b != 3) return 11;
     if (braced_pairs.v[0].b != 5 || braced_pairs.v[1].a != 6 || braced_pairs.v[1].b != 7) return 12;
     if (braced_pairs.v[2].a || braced_pairs.v[3].b != 8) return 13;
+    if (per_thread.n != 2 || sum(per_thread.v, 2) != 11) return 14;
     return 0;
 }
 "#;

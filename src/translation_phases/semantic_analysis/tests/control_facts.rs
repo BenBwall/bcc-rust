@@ -246,12 +246,16 @@ fn m1_parameter_actions_and_cast_effects_are_retained_once() {
         |context, s| {
             assert_eq!(context.pending_error_count(), 0);
             let f = s.functions[0];
-            assert_eq!(f.parameter_sites.len(), 3);
-            assert_eq!(f.parameter_sites[0].bounds.len(), 0);
-            assert_eq!(f.parameter_sites[1].bounds.len(), 1);
-            assert_eq!(f.parameter_sites[2].operand_evaluations.len(), 1);
-            assert_eq!(f.parameter_sites[2].bounds.len(), 0);
-            for site in f.parameter_sites {
+            assert_eq!(f.parameter_facts.len(), 3);
+            assert_eq!(f.parameter_facts[0].site.unwrap().bounds.len(), 0);
+            assert_eq!(f.parameter_facts[1].site.unwrap().bounds.len(), 1);
+            assert_eq!(
+                f.parameter_facts[2].site.unwrap().operand_evaluations.len(),
+                1
+            );
+            assert_eq!(f.parameter_facts[2].site.unwrap().bounds.len(), 0);
+            for parameter in f.parameter_facts {
+                let site = parameter.site.unwrap();
                 for &expression in site.operand_evaluations {
                     assert_eq!(
                         s.control.expression_point(expression).unwrap().function,
@@ -261,7 +265,7 @@ fn m1_parameter_actions_and_cast_effects_are_retained_once() {
                 for &bound in site.bounds {
                     assert_eq!(
                         s.control
-                            .expression_point(s.types.runtime_bounds[bound])
+                            .expression_point(s.runtime_bounds[bound].expression)
                             .unwrap()
                             .function,
                         f.control.id
@@ -286,9 +290,13 @@ fn m1_parameter_actions_and_cast_effects_are_retained_once() {
                     .len(),
                 1
             );
-            assert_eq!(s.effect_pure(cast, true), Some(false));
-            assert_eq!(s.effect_pure(cast, false), Some(false));
-            assert_eq!(s.expressions.len(), s.expression_effects.len());
+            for context in [EffectContext::Value, EffectContext::Designation] {
+                assert!(
+                    s.effect_summary(cast, context)
+                        .is_some_and(|effects| !effects.is_empty())
+                );
+            }
+            assert_eq!(s.expressions.len(), s.effects.summaries.len());
         },
     );
 }

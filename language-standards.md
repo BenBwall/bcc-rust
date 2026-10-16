@@ -135,18 +135,19 @@ attributes; `__declspec(a)` expands to `__attribute__((a))`. Both ISO and GNU
 target tables retain these eleven definitions exactly. Linux does not define
 them, and the MSVC keyword contract is unchanged. Function declarators,
 function pointers, parameters, members and typedefs use the existing balanced
-attribute parser. `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
-`restrict`, `deprecated(...)`, `noinline`, `naked`, `allocate(...)`, `uuid(...)`
-and ABI annotations such as `__ms_abi__` are accepted without backend effects.
-MSVC `align(...)` remains unanalyzed. GNU `aligned(...)` retains the requested
-declaration/type alignment; GNU `packed` and scalar `mode` retain their layouts
-and representation types. GNU `transparent_union` on a union definition or a
-typedef naming a union lets a prototyped call pass an argument of a member's
-type as the union, selecting the member as Clang does; a union with no member,
-a floating or vector first member, or a member of another size or a stricter
-alignment ignores the attribute with Clang's warning. Clang itself ignores
-some of these macro-expanded attributes with warnings; bcc's current attribute
-pass preserves their syntax without applicability warnings.
+attribute parser. Each macro-expanded attribute follows the
+[attribute status](#gnu-entity-attributes-and-attribute-status-2026-10-14)
+table: `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany` and
+`noinline` are accepted, `__ms_abi__` is the target's own convention, `naked`
+is refused, and `restrict`, `allocate(...)` and `uuid(...)` warn as unknown, as
+bundled Clang's MinGW mode does. MSVC `align(...)` remains unanalyzed. GNU
+`aligned(...)` retains the requested declaration/type alignment; GNU `packed`
+and scalar `mode` retain their layouts and representation types. GNU
+`transparent_union` on a union definition or a typedef naming a union lets a
+prototyped call pass an argument of a member's type as the union, selecting
+the member as Clang does; a union with no member, a floating or vector first
+member, or a member of another size or a stricter alignment ignores the
+attribute with Clang's warning.
 
 Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
 in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the
@@ -415,7 +416,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | Alignas | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering |
 | Alignof | - | - | - | Y | Y | Y | Y | extension | parser |
 | Noreturn | - | - | - | Y | Y | Y | Y | extension | parser |
-| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser |
+| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering |
 | Atomic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
 | AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | parser |
 | TypedefRedefinition | - | - | - | Y | Y | Y | Y | extension | semantic analysis |
@@ -434,7 +435,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode/transparent_union sema and lowering; vector_size sema |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; sema attribute pass; packed/aligned/scalar mode, transparent_union, cleanup, constructor/destructor, alias, weak, section, used, visibility lowering; vector_size sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -444,8 +445,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | VectorBuiltins | - | - | - | - | - | - | - | extension (GNU native) | shuffle/convert/bitcast and x86 signatures |
 | BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
-| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
+| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -473,6 +474,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | FlexibleArrayExtensions | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | FlexibleArrayInitializers | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | ConstantFolding | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
+| VoidPointerArithmetic | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
 | MsIntTypes | - | - | - | - | - | - | - | MS flag | parser |
 | MsCallingConventions | - | - | - | - | - | - | - | MS flag | parser |
@@ -634,6 +636,28 @@ suffix, matching [GCC's integer extension](https://gcc.gnu.org/onlinedocs/gcc/_0
 Preprocessor arithmetic remains the target's 64-bit intmax/uintmax model
 (C99 §6.10.1p4, printed p. 148; PDF p. 160).
 
+`__thread` is a reserved GNU alternate spelling of `_Thread_local`, a keyword
+in every mode, as in GCC and Clang ([GCC Thread-Local
+Storage](https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html)). Under the
+unified policy `-pedantic` reports it as a GNU extension, which Clang does
+not; Clang's separate pedantic warning for `__thread` written before `static`
+or `extern` is not reproduced. The three spellings mean the same storage
+class, but `__thread` beside `_Thread_local` or `thread_local` is an error and
+the same one repeated is a repeated-specifier warning, as in Clang. With
+`static` or `extern` only (and `auto` from C23), thread storage obeys C11
+§6.7.1p2-4 (C23 (N3220) §6.7.2p2-3): parameters and functions reject it, a
+block-scope object needs `static` or `extern`, and every declaration of the
+object agrees. A thread-local object's address is no address constant (C11
+§6.6p9), and the objects become thread-local globals. C23 storage-class
+specifiers in a compound literal parse, but lowering refuses a `static` one in
+a function and any `thread_local` one by name, rather than giving it automatic
+or shared storage.
+MSVC `__declspec(thread)` (on MinGW, where `__declspec(a)` expands to
+`__attribute__((a))`, the attribute `thread`) is the same storage duration
+under an attribute's spelling: analysis gives the object thread storage and
+applies the function, parameter, block-scope and agreement constraints to it,
+so it is never shared silently. The parser's combination checks do not see it.
+
 GNU attributes accept declaration, aggregate, enumerator, pointer, parameter,
 nested declarator, array, bit-field, function and label positions from
 [GCC Attribute Syntax](https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html).
@@ -775,7 +799,8 @@ token or directive boundary.
 `_Noreturn`, including double-underscore forms, and 0 for other names. GNU
 `__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
 `noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`,
-`noinline`, `gnu_inline`, and `transparent_union`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`noinline`, `gnu_inline`, `transparent_union`, `cleanup`, `constructor`,
+`destructor`, `alias` and `used`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -927,7 +952,7 @@ the diagnostic is reported, so withheld diagnostics are not counted.
   and `asm`, and GNU89 `inline`, are exceptions. `restrict` stays an identifier
   before C99 unless written with a reserved GNU alternate spelling.
 - `_Alignas`/`alignas`, `_Static_assert`/`static_assert`, `_Bool`/`bool`, and
-  `_Thread_local`/`thread_local` share kinds. Aliases keep their original
+  `_Thread_local`/`thread_local`/GNU `__thread` share kinds. Aliases keep their original
   spelling for policy diagnostics, and token contents preserve it for parser
   consumers.
 - GNU alternate keywords map to existing C99 kinds where they exist. `__asm__`
@@ -1235,7 +1260,8 @@ and [other builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html).
 ISO constraints and arithmetic/address constant classification remain those of
 C99 §6.6 and §6.7.8; standard alignment follows C11 §6.7.5. GNU range expressions
 execute once for the entire selected range. Vector and complex execution, inline
-assembly, nested functions and label relocations remain outside this change.
+assembly and nested functions remain outside this change; label relocations
+arrived with labels as values below.
 
 PR #42 round-1 repairs complete explicit alignment of packed System V
 bit-fields, occupied-bit sizing of packed unions and lowering/static packing
@@ -1246,6 +1272,117 @@ its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
 checking natural alignment, including runtime-sized arrays and VLA typedefs.
 See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
 and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
+
+## GNU entity attributes and attribute status (2026-10-14)
+
+Semantic analysis validates every attribute once and retains its meaning as
+facts; lowering consumes the facts and never reads attribute tokens
+([semantic-analysis.md](semantic-analysis.md#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
+Each name in an attribute list, in any position (declarations, type names,
+pointer levels, members, tags, enumerators and statements), is looked up once
+in `semantic_analysis/attributes/catalog.rs`. Unknown names warn as Clang's
+`-Wunknown-attributes` ("unknown attribute ignored"); a vendor prefix other than
+`gnu::` or `clang::` is unknown, as in Clang. Warnings are withheld inside
+system headers, so library headers stay quiet.
+
+Implemented meanings, with Clang's applicability diagnostics:
+
+- `cleanup(f)` on an automatic variable calls `f(&var)` on every exit from its
+  scope (fallthrough, `break`, `continue`, `return`, `goto`, the end of a
+  statement expression), innermost variable first and interleaved with VLA
+  storage release, after the return or tail value is computed. `f` must be a
+  function taking one parameter that `&var` converts to; discarded qualifiers
+  and `void *` are accepted, as Clang does. Elsewhere it warns as ignored. A
+  goto or switch case that enters the variable's scope, and an indirect goto
+  that enters or leaves it, are errors, as in Clang. `longjmp` does not run
+  cleanups. For a returned structure, GCC's value semantics apply: Clang's
+  named return value optimization lets a cleanup modify the returned copy,
+  bcc's and GCC's results do not see that change.
+- `constructor`/`destructor` with an optional integer constant priority
+  (default 65535) register a function definition: `llvm.global_ctors` and
+  `llvm.global_dtors` in the LLVM back end; the interpreter runs constructors
+  before `main` in increasing priority (ties in definition order) and
+  destructors after `main` returns or `exit`, in decreasing priority (ties in
+  reverse order), not after `abort`. Priorities outside 0-65535 are errors and
+  0-100 warn as reserved, as GCC does (bundled Clang accepts both silently).
+  A constructor or destructor with parameters is refused.
+- `alias("target")` makes a declaration another name for a definition of the
+  same translation unit, resolved through alias chains (an LLVM global alias).
+  Clang's errors apply: the target must be defined (by its C name), an alias
+  cannot be a definition (a non-`static` file-scope object without `extern`
+  is a tentative definition), functions alias functions and objects objects,
+  and cycles are rejected; differing function types warn
+  (`-Wattribute-alias`). A target or alias with an assembler label is refused.
+  A thread-local alias of a thread-local object is a `thread_local` LLVM
+  alias, as Clang emits it; an alias whose storage duration differs from its
+  target's, which Clang accepts and emits as an alias of the wrong storage,
+  is refused.
+- `weak` gives definitions weak linkage and declarations `extern_weak`
+  linkage, so an undefined weak function or object has a null address, on
+  every target: bundled Clang emits the same LLVM linkage for COFF, where LLD
+  resolves it as a weak external (checked by linking with Clang-compiled
+  units on x86_64-w64-windows-gnu and, under WSL, x86_64-unknown-linux-gnu).
+  Internal or no linkage is an error. Thread-local objects keep their thread
+  storage: a weak definition is a weak `thread_local` global and a weak
+  declaration an `extern_weak` one, as in Clang. Natively the address of an
+  undefined weak thread-local object is computed from the thread's TLS
+  block and is not reliably null, with Clang as with bcc; the interpreter
+  gives it the null address of any undefined weak object. The bcc inliner never inlines a weak
+  definition; the interpreter resolves a weak declaration to its default
+  host function when the host provides one, else to null.
+- `section("name")`, `used`, `visibility("default"|"hidden"|"internal"|
+  "protected")` and `aligned(N)` on functions are emitted on the symbol;
+  `section` and `alias` on an automatic variable are errors, `used` warns.
+  Visibility on an entity with internal linkage is accepted silently and has
+  no effect, as in Clang.
+
+| Status | Attributes |
+| --- | --- |
+| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions |
+| Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
+| Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
+| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `returns_twice` (at each direct call; declarations nothing calls, as in MinGW's `<setjmp.h>`, are accepted), `overloadable`, `cpu_dispatch`, `cpu_specific`, `target_version`, `pass_object_size`, `pass_dynamic_object_size`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
+| Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `always_inline`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `noinline`, `noipa`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, and the C23 standard attributes; see the catalog for the full list |
+| Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), and MSVC `restrict`, `uuid`, `allocate` through MinGW's `__declspec` macro |
+
+`__declspec` modifiers use the MSVC catalog: `align` stays an unanalyzed
+representation, `allocate` is `section`, `thread` is thread storage duration
+(also in the GNU spelling MinGW's `__declspec` macro produces; see the
+thread-local storage notes), `naked` is refused, and
+`dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`, `noinline`,
+`deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
+declaration annotations are accepted.
+
+## GNU labels as values (2026-10-14)
+
+`&&label` and `goto *expression`
+([GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html))
+keep their parser-owned `LabelsAsValues` diagnostics: silent in GNU dialects,
+`'label address'` and `'computed goto'` GNU-origin extension reports under
+Warn/Deny in ISO modes, as Clang's `-Wgnu-label-as-value`. Semantic analysis
+and lowering then follow Clang: `&&label` is a `void *` address constant of
+the enclosing function, `goto *e` converts `e` to `const void *` by simple
+assignment, and a computed goto is an error when its function takes no label
+address, when the operand is not convertible, or when one of its possible
+targets lies inside a statement expression or the scope of a variably
+modified identifier that the goto is outside of. `&&label` outside a function
+is an error. `&&a - &&b` for labels of one function is a link-time constant
+in static initializers, converted to an integer of 32 to 64 bits that is no
+wider than the value it converts. Clang rejects other widths (`_Bool`, `short`,
+`__int128`), widening a narrowed difference, bit-field destinations and
+arithmetic on the difference, and so does bcc. GNU `__label__` local labels now lower as ordinary labels.
+
+`VoidPointerArithmetic` is a new GNU-origin feature, accepted in every mode
+([GCC Pointer Arith](https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html)):
+addition, subtraction, increments, compound assignment and subscripts on
+`void *` use an element size of 1, also in address constants and constant
+differences, and report `'arithmetic on a pointer to void'` or
+`'subscript of a pointer to void'` under Warn/Deny, like Clang's
+`-Wgnu-pointer-arith`. `p[i]` is a `void` rvalue that is never read; `&p[i]`
+is its address. `sizeof` of `void` is 1 in every mode (`'sizeof of void'`
+under Warn/Deny, as Clang's `-Wpointer-arith`); `sizeof` of a function type
+stays GNU-only. Function-pointer arithmetic is not accepted.
 
 ## Pointer diagnostic defaults (2026-10-14, issue #46)
 

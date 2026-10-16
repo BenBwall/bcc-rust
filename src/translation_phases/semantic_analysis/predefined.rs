@@ -17,6 +17,7 @@ use super::{
     Analyzer,
     Binding,
     BindingKind,
+    BindingOrigin,
     Duration,
     Linkage,
     SemanticErrorKind,
@@ -196,7 +197,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
         let binding = self.bindings.len();
         self.bindings.push(Binding {
-            builtin: false,
+            origin: BindingOrigin::User,
             name,
             ty,
             scope,

@@ -67,6 +67,7 @@ mod lowering;
 mod optimizer;
 
 // Invocation and language choices
+mod builtins;
 mod cli;
 pub(crate) mod configuration;
 mod headers;

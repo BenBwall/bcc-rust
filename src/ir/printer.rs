@@ -1,9 +1,10 @@
 //! The textual form, as the printer writes it.
 //!
-//! A module prints its target lines, then its globals one per line, then each
-//! function, with a blank line between these sections. Entities print as
-//! their raw numbers (`v3`, `block1`, `slot0`), so verifier errors and printed
-//! text name the same things. The parser reads this form back unchanged.
+//! A module prints its target lines, then its globals one per line, then its
+//! constructors and destructors one per line, then each function, with a
+//! blank line between these sections. Entities print as their raw numbers
+//! (`v3`, `block1`, `slot0`, `label0`), so verifier errors and printed text
+//! name the same things. The parser reads this form back unchanged.
 
 use std::fmt::{
     self,
@@ -26,9 +27,12 @@ use super::{
     module::{
         AggregateFlags,
         GlobalInit,
+        InitFunction,
         ParamAbi,
+        RelocationTarget,
         Signature,
         Symbol,
+        SymbolAttributes,
     },
     types::Type,
     verifier::Profile,
@@ -50,6 +54,13 @@ impl fmt::Display for Module<'_> {
             f.write_str(separator)?;
             for (global, _) in self.globals() {
                 writeln!(f, "{}", self.display_global(global))?;
+            }
+            separator = "\n";
+        }
+        if !self.init_functions().is_empty() {
+            f.write_str(separator)?;
+            for &init in self.init_functions() {
+                writeln!(f, "{}", self.display_init_function(init))?;
             }
             separator = "\n";
         }
@@ -75,6 +86,10 @@ impl<'ir> Module<'ir> {
                 self.display_signature(function.signature),
                 function.linkage.name()
             )?;
+            if let Some(align) = function.align {
+                write!(f, " align {}", align.bytes())?;
+            }
+            write!(f, "{}", self.display_symbol_attributes(function.attributes))?;
             let Some(body) = &function.body else {
                 return f.write_char('\n');
             };
@@ -86,6 +101,9 @@ impl<'ir> Module<'ir> {
                     data.size,
                     data.align.bytes()
                 )?;
+            }
+            for (label, block) in body.labels() {
+                writeln!(f, "    {label} = block_label {block}")?;
             }
             for block in body.blocks() {
                 write!(f, "{block}")?;
@@ -163,6 +181,7 @@ impl<'ir> Module<'ir> {
                 | InstData::GlobalAddr { global } =>
                     write!(f, " {}", self.display_global_name(global)),
                 | InstData::FuncAddr { func } => write!(f, " {}", self.display_func_name(func)),
+                | InstData::BlockAddr { label } => write!(f, " {label}"),
                 | InstData::Load {
                     align, tag, addr, ..
                 } => {
@@ -237,6 +256,14 @@ impl<'ir> Module<'ir> {
                     f.write_char(']')
                 },
                 | InstData::Return { value } => value.map_or(Ok(()), |value| write!(f, " {value}")),
+                | InstData::IndirectBr { addr, dests } => {
+                    write!(f, " {addr}, [")?;
+                    for (index, dest) in body.block_list(dests).enumerate() {
+                        let separator = if index == 0 { "" } else { ", " };
+                        write!(f, "{separator}{}", display_block_call(body, dest))?;
+                    }
+                    f.write_char(']')
+                },
             }
         })
     }
@@ -251,10 +278,14 @@ impl<'ir> Module<'ir> {
                 display_name(data.name),
                 data.linkage.name()
             )?;
+            if data.thread_local {
+                f.write_str(" thread_local")?;
+            }
             if data.constant {
                 f.write_str(" constant")?;
             }
             write!(f, " size {}, align {}", data.size, data.align.bytes())?;
+            write!(f, "{}", self.display_symbol_attributes(data.attributes))?;
             match data.init {
                 | None => Ok(()),
                 | Some(GlobalInit::Zero) => f.write_str(" = zero"),
@@ -274,7 +305,7 @@ impl<'ir> Module<'ir> {
                             f,
                             "{separator}{}: {}",
                             relocation.offset,
-                            self.display_symbol(relocation.symbol)
+                            self.display_relocation_target(relocation.target)
                         )?;
                         match relocation.addend {
                             | 0 => {},
@@ -294,6 +325,62 @@ impl<'ir> Module<'ir> {
         fmt::from_fn(move |f| match self.get_signature(sig) {
             | Some(signature) => write!(f, "{}", display_signature(signature)),
             | None => write!(f, "{sig}"),
+        })
+    }
+
+    /// ` hidden`/` protected`, ` section "name"`, ` used` and
+    /// ` alias @target`, each when present.
+    fn display_symbol_attributes<'a>(
+        &'a self,
+        attributes: SymbolAttributes<'a>,
+    ) -> impl fmt::Display + 'a {
+        fmt::from_fn(move |f| {
+            if let Some(visibility) = attributes.visibility.keyword() {
+                write!(f, " {visibility}")?;
+            }
+            if let Some(section) = attributes.section {
+                write!(f, " section \"{section}\"")?;
+            }
+            if attributes.used {
+                f.write_str(" used")?;
+            }
+            if let Some(target) = attributes.alias {
+                write!(f, " alias {}", self.display_symbol(target))?;
+            }
+            Ok(())
+        })
+    }
+
+    /// `constructor @f priority N` or `destructor @f priority N`.
+    pub(crate) fn display_init_function(&self, init: InitFunction) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| {
+            write!(
+                f,
+                "{} {} priority {}",
+                init.kind.keyword(),
+                self.display_func_name(init.func),
+                init.priority
+            )
+        })
+    }
+
+    /// `@symbol`, `blockaddress(@f, label0)` or
+    /// `labeldiff.i32(@f, label1, label0)`.
+    fn display_relocation_target(&self, target: RelocationTarget) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| match target {
+            | RelocationTarget::Symbol(symbol) => write!(f, "{}", self.display_symbol(symbol)),
+            | RelocationTarget::Label { func, label } =>
+                write!(f, "blockaddress({}, {label})", self.display_func_name(func)),
+            | RelocationTarget::LabelDifference {
+                func,
+                label,
+                base,
+                width,
+            } => write!(
+                f,
+                "labeldiff.{width}({}, {label}, {base})",
+                self.display_func_name(func)
+            ),
         })
     }
 

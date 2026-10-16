@@ -57,10 +57,11 @@ fn builder_covers_memory_calls_and_switches() {
     let mut module = Module::new(&arena);
     module.set_target("x86_64-pc-windows-msvc", "e-m:w");
     let word = GlobalDecl {
-        linkage:  Linkage::Internal,
-        size:     8,
-        align:    Align::from_bytes(8).unwrap(),
-        constant: false,
+        linkage:      Linkage::Internal,
+        size:         8,
+        align:        Align::from_bytes(8).unwrap(),
+        constant:     false,
+        thread_local: false,
     };
     let cell = module.declare_global("cell", word);
     module.define_global(cell, GlobalInit::Zero);
@@ -68,6 +69,7 @@ fn builder_covers_memory_calls_and_switches() {
         "pointer",
         GlobalDecl {
             constant: true,
+            thread_local: false,
             ..word
         },
     );
@@ -77,7 +79,7 @@ fn builder_covers_memory_calls_and_switches() {
             bytes:       &[0; 8],
             relocations: &[Relocation {
                 offset: 0,
-                symbol: Symbol::Global(cell),
+                target: RelocationTarget::Symbol(Symbol::Global(cell)),
                 addend: 4,
             }],
         },

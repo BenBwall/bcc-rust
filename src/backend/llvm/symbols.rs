@@ -1,0 +1,253 @@
+//! Module symbols as LLVM sees them: functions and globals with their
+//! linkage, alignment and section, aliases created once their targets
+//! exist, and the special `llvm.global_ctors`, `llvm.global_dtors` and
+//! `llvm.used` arrays, which match bundled Clang's output for the GNU
+//! attributes.
+//! GNU extension: GCC manual, "Common Function Attributes" and "Common
+//! Variable Attributes" (alias, constructor, destructor, section, used,
+//! weak). <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
+
+use super::{
+    EmitError,
+    api::{
+        self,
+        Linkage,
+        Session,
+        Ty,
+        Val,
+    },
+    function,
+    global,
+};
+use crate::{
+    ir::{
+        Entity,
+        InitKind,
+        Linkage as IrLinkage,
+        Module,
+        Symbol,
+        SymbolAttributes,
+        Type,
+        Visibility,
+    },
+    target::Target,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
+};
+
+/// Declares every function and global, then every alias, returning their
+/// values indexed by `FuncId` and `GlobalId`.
+pub(super) fn declare<'id, 'a, 'm>(
+    module: &'m Module<'_>,
+    api: &Session<'id>,
+    platform: Target,
+    arena: &'a Bump,
+) -> Result<(ArenaVec<'a, Val<'id>>, ArenaVec<'a, Val<'id>>), EmitError<'m>> {
+    let mut functions = ArenaVec::new_in(arena);
+    for (_, function) in module.functions() {
+        let signature = module.signature(function.signature);
+        let ty = function::signature_type(api, signature, arena);
+        if function.attributes.alias.is_some() {
+            // Placeholder until the alias exists; nothing reads it before.
+            functions.push(api.null(api.ty(Type::Ptr)));
+            continue;
+        }
+        let value = api.function(api.name(function.name), ty);
+        function::attributes(api, value, signature, false);
+        if let Some(linkage) = linkage(function.linkage, function.body.is_some()) {
+            api.linkage(value, linkage);
+        }
+        if let Some(align) = function.align {
+            api.alignment(value, align.bytes());
+        }
+        sections(api, value, function.attributes);
+        functions.push(value);
+    }
+    let mut globals = ArenaVec::new_in(arena);
+    // Declare every global before constructing any relocated initializer.
+    for (_, global) in module.globals() {
+        let ty = global::global_type(api, global, arena)?;
+        if global.attributes.alias.is_some() {
+            globals.push(api.null(api.ty(Type::Ptr)));
+            continue;
+        }
+        let value = api.global(api.name(global.name), ty);
+        api.alignment(value, global.align.bytes());
+        api.constant_global(value, global.constant);
+        if let Some(linkage) = linkage(global.linkage, global.init.is_some()) {
+            api.linkage(value, linkage);
+        }
+        if global.thread_local {
+            // Clang marks a definition `dso_local`, so in a position-
+            // independent ELF executable LLVM gives it the local-exec model
+            // and a declaration initial-exec. LLVM-C cannot mark a global
+            // `dso_local`, so a definition (weak ones included, as Clang
+            // marks them `dso_local` too) requests local-exec directly.
+            // Windows has one model, through `_tls_index` and the TEB.
+            api.thread_local(
+                value,
+                global.init.is_some() && api::position_independent(platform),
+            );
+        }
+        sections(api, value, global.attributes);
+        globals.push(value);
+    }
+    // Verified alias targets are definitions, never aliases themselves.
+    for (id, function) in module.functions() {
+        if let Some(target) = function.attributes.alias {
+            let ty = function::signature_type(api, module.signature(function.signature), arena);
+            let value = alias(
+                api,
+                function.name,
+                ty,
+                target,
+                function.linkage,
+                &functions,
+                &globals,
+            );
+            visibility(api, value, function.attributes);
+            functions[id.index()] = value;
+        }
+    }
+    for (id, global) in module.globals() {
+        if let Some(target) = global.attributes.alias {
+            let value = if global.thread_local {
+                // A verified thread-local alias names a thread-local
+                // definition, whose model it shares, as in Clang.
+                let Symbol::Global(aliasee) = target else {
+                    unreachable!("a thread-local alias names a global")
+                };
+                let value = api.thread_local_alias(
+                    global.name,
+                    global.size,
+                    globals[aliasee.index()],
+                    api::position_independent(platform),
+                );
+                alias_linkage(api, value, global.linkage);
+                value
+            } else {
+                let ty = api.array(api.ty(Type::I8), global.size);
+                alias(
+                    api,
+                    global.name,
+                    ty,
+                    target,
+                    global.linkage,
+                    &functions,
+                    &globals,
+                )
+            };
+            visibility(api, value, global.attributes);
+            globals[id.index()] = value;
+        }
+    }
+    Ok((functions, globals))
+}
+
+/// The LLVM linkage of a symbol, when it differs from LLVM's external
+/// default. An undefined internal function stays an external declaration.
+fn linkage(linkage: IrLinkage, defined: bool) -> Option<Linkage> {
+    match (linkage, defined) {
+        | (IrLinkage::External, _) | (IrLinkage::Internal, false) => None,
+        | (IrLinkage::Internal, true) => Some(Linkage::Internal),
+        | (IrLinkage::Weak, true) => Some(Linkage::Weak),
+        | (IrLinkage::Weak, false) => Some(Linkage::ExternWeak),
+    }
+}
+
+fn sections<'id>(api: &Session<'id>, value: Val<'id>, attributes: SymbolAttributes<'_>) {
+    if let Some(section) = attributes.section {
+        api.section(value, section);
+    }
+    visibility(api, value, attributes);
+}
+
+fn visibility<'id>(api: &Session<'id>, value: Val<'id>, attributes: SymbolAttributes<'_>) {
+    match attributes.visibility {
+        | Visibility::Default => {},
+        | Visibility::Hidden => api.hidden(value, false),
+        | Visibility::Protected => api.hidden(value, true),
+    }
+}
+
+fn alias<'id>(
+    api: &Session<'id>,
+    name: &str,
+    ty: Ty<'id>,
+    target: Symbol,
+    linkage: IrLinkage,
+    functions: &[Val<'id>],
+    globals: &[Val<'id>],
+) -> Val<'id> {
+    let aliasee = match target {
+        | Symbol::Function(func) => functions[func.index()],
+        | Symbol::Global(global) => globals[global.index()],
+    };
+    let value = api.alias(api.name(name), ty, aliasee);
+    alias_linkage(api, value, linkage);
+    value
+}
+
+/// An alias is a definition, so `weak` gives it weak linkage.
+fn alias_linkage<'id>(api: &Session<'id>, value: Val<'id>, linkage: IrLinkage) {
+    match linkage {
+        | IrLinkage::External => {},
+        | IrLinkage::Internal => api.linkage(value, Linkage::Internal),
+        | IrLinkage::Weak => api.linkage(value, Linkage::Weak),
+    }
+}
+
+/// Emits `llvm.global_ctors` and `llvm.global_dtors` entries in
+/// registration order with null associated data, and `llvm.used` for every
+/// symbol requesting retention, as Clang does.
+pub(super) fn special_arrays<'id>(
+    module: &Module<'_>,
+    api: &Session<'id>,
+    arena: &Bump,
+    functions: &[Val<'id>],
+    globals: &[Val<'id>],
+) {
+    let ptr = api.ty(Type::Ptr);
+    let entry = api.structure(&[api.ty(Type::I32), ptr, ptr], false);
+    for (kind, name) in [
+        (InitKind::Constructor, c"llvm.global_ctors"),
+        (InitKind::Destructor, c"llvm.global_dtors"),
+    ] {
+        let mut entries = ArenaVec::new_in(arena);
+        for init in module
+            .init_functions()
+            .iter()
+            .filter(|init| init.kind == kind)
+        {
+            entries.push(api.const_record(&[
+                api.bits(Type::I32, u128::from(init.priority)),
+                functions[init.func.index()],
+                api.null(ptr),
+            ]));
+        }
+        if !entries.is_empty() {
+            let array = api.global(name, api.array(entry, entries.len() as u64));
+            api.linkage(array, Linkage::Appending);
+            api.initializer(array, api.const_array(entry, &entries));
+        }
+    }
+    let mut used = ArenaVec::new_in(arena);
+    for (id, function) in module.functions() {
+        if function.attributes.used {
+            used.push(functions[id.index()]);
+        }
+    }
+    for (id, global) in module.globals() {
+        if global.attributes.used {
+            used.push(globals[id.index()]);
+        }
+    }
+    if !used.is_empty() {
+        let array = api.global(c"llvm.used", api.array(ptr, used.len() as u64));
+        api.linkage(array, Linkage::Appending);
+        api.initializer(array, api.const_array(ptr, &used));
+        api.section(array, "llvm.metadata");
+    }
+}

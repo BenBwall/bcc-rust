@@ -21,19 +21,25 @@ use llvm_sys::{
     LLVMLinkage,
     LLVMOpcode,
     LLVMRealPredicate,
+    LLVMThreadLocalMode,
+    LLVMVisibility,
     analysis::{
         LLVMVerifierFailureAction,
         LLVMVerifyModule,
     },
     core::{
+        LLVMAddAlias2,
         LLVMAddAttributeAtIndex,
         LLVMAddCallSiteAttribute,
         LLVMAddCase,
+        LLVMAddDestination,
         LLVMAddFunction,
         LLVMAddGlobal,
         LLVMAddIncoming,
+        LLVMAliasSetAliasee,
         LLVMAppendBasicBlockInContext,
         LLVMArrayType2,
+        LLVMBlockAddress,
         LLVMBuildAlloca,
         LLVMBuildArrayAlloca,
         LLVMBuildBinOp,
@@ -48,6 +54,7 @@ use llvm_sys::{
         LLVMBuildGEP2,
         LLVMBuildICmp,
         LLVMBuildInBoundsGEP2,
+        LLVMBuildIndirectBr,
         LLVMBuildInsertValue,
         LLVMBuildLoad2,
         LLVMBuildPhi,
@@ -58,16 +65,22 @@ use llvm_sys::{
         LLVMBuildSwitch,
         LLVMBuildUnreachable,
         LLVMBuildVAArg,
+        LLVMConstAdd,
+        LLVMConstArray2,
         LLVMConstBitCast,
         LLVMConstGEP2,
         LLVMConstIntOfArbitraryPrecision,
         LLVMConstNull,
+        LLVMConstPtrToInt,
         LLVMConstStringInContext2,
         LLVMConstStructInContext,
+        LLVMConstSub,
+        LLVMConstTrunc,
         LLVMContextCreate,
         LLVMContextDispose,
         LLVMCreateBuilderInContext,
         LLVMCreateEnumAttribute,
+        LLVMCreateMemoryBufferWithMemoryRange,
         LLVMCreateMessage,
         LLVMCreateTypeAttribute,
         LLVMDisposeBuilder,
@@ -80,10 +93,13 @@ use llvm_sys::{
         LLVMFunctionType,
         LLVMGetBufferSize,
         LLVMGetBufferStart,
+        LLVMGetDataLayoutStr,
         LLVMGetEnumAttributeKindForName,
         LLVMGetIntrinsicDeclaration,
+        LLVMGetNamedGlobalAlias,
         LLVMGetParam,
         LLVMGetPoison,
+        LLVMGetTarget,
         LLVMInstructionEraseFromParent,
         LLVMInt1TypeInContext,
         LLVMInt8TypeInContext,
@@ -107,8 +123,11 @@ use llvm_sys::{
         LLVMSetNSW,
         LLVMSetNUW,
         LLVMSetOperand,
+        LLVMSetSection,
         LLVMSetTarget,
+        LLVMSetThreadLocalMode,
         LLVMSetValueName2,
+        LLVMSetVisibility,
         LLVMSetVolatile,
         LLVMStructTypeInContext,
         LLVMTypeOf,
@@ -120,6 +139,8 @@ use llvm_sys::{
         LLVMDisposeErrorMessage,
         LLVMGetErrorMessage,
     },
+    ir_reader::LLVMParseIRInContext2,
+    linker::LLVMLinkModules2,
     prelude::{
         LLVMBasicBlockRef,
         LLVMBuilderRef,
@@ -178,6 +199,19 @@ pub(super) struct Session<'id> {
     context: LLVMContextRef,
     arena:   &'id Bump,
     _brand:  PhantomData<fn(&'id ()) -> &'id ()>,
+}
+
+/// The non-default linkages the back end assigns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Linkage {
+    Internal,
+    /// A definition that a strong one replaces at link time.
+    Weak,
+    /// A declaration that may stay undefined, with a null address.
+    ExternWeak,
+    /// The special `llvm.global_ctors`, `llvm.global_dtors` and `llvm.used`
+    /// arrays.
+    Appending,
 }
 
 #[derive(Clone, Copy)]
@@ -430,12 +464,171 @@ impl<'id> Session<'id> {
         }
     }
 
-    pub(super) fn internal(&self, value: Val<'id>) {
-        // SAFETY: The type system ties handles to this live session;
-        // operands have the verified IR types.
+    /// Makes a global thread-local. `local_exec` requests the local-exec
+    /// model, which addresses the executable's own TLS block directly;
+    /// otherwise LLVM chooses from the relocation model and DSO locality.
+    pub(super) fn thread_local(&self, global: Val<'id>, local_exec: bool) {
+        let mode = if local_exec {
+            LLVMThreadLocalMode::LLVMLocalExecTLSModel
+        } else {
+            LLVMThreadLocalMode::LLVMGeneralDynamicTLSModel
+        };
+        // SAFETY: The type system ties the global to this live session.
         unsafe {
-            LLVMSetLinkage(value.0, LLVMLinkage::LLVMInternalLinkage);
+            LLVMSetThreadLocalMode(global.0, mode);
         }
+    }
+
+    pub(super) fn linkage(&self, value: Val<'id>, linkage: Linkage) {
+        let linkage = match linkage {
+            | Linkage::Internal => LLVMLinkage::LLVMInternalLinkage,
+            | Linkage::Weak => LLVMLinkage::LLVMWeakAnyLinkage,
+            | Linkage::ExternWeak => LLVMLinkage::LLVMExternalWeakLinkage,
+            | Linkage::Appending => LLVMLinkage::LLVMAppendingLinkage,
+        };
+        // SAFETY: The type system ties handles to this live session; every
+        // caller passes a function, global or alias.
+        unsafe {
+            LLVMSetLinkage(value.0, linkage);
+        }
+    }
+
+    pub(super) fn hidden(&self, value: Val<'id>, protected: bool) {
+        let visibility = if protected {
+            LLVMVisibility::LLVMProtectedVisibility
+        } else {
+            LLVMVisibility::LLVMHiddenVisibility
+        };
+        // SAFETY: The value is a function, global or alias of this session.
+        unsafe {
+            LLVMSetVisibility(value.0, visibility);
+        }
+    }
+
+    pub(super) fn section(&self, value: Val<'id>, name: &str) {
+        let name = self.name(name);
+        // SAFETY: The value is a function or global of this live session;
+        // LLVM copies the NUL-terminated section name.
+        unsafe {
+            LLVMSetSection(value.0, name.as_ptr());
+        }
+    }
+
+    /// A global alias of `aliasee` whose value has type `ty`.
+    pub(super) fn alias(&self, name: &CStr, ty: Ty<'id>, aliasee: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session; the
+        // aliasee is a function or global constant in address space 0.
+        let raw = unsafe { LLVMAddAlias2(self.module, ty.0, 0, aliasee.0, name.as_ptr()) };
+        Val(raw, PhantomData)
+    }
+
+    /// A `thread_local` alias of `size` bytes named `name` for the
+    /// thread-local global `aliasee`, as Clang emits for an alias of a
+    /// thread-local object. LLVM-C can mark only a global variable
+    /// thread-local, so the alias is parsed from textual IR in a module of
+    /// its own (aliasing null), linked into this one, and then pointed at
+    /// its aliasee. `local_exec` requests the local-exec model, as
+    /// `thread_local` does for a global.
+    pub(super) fn thread_local_alias(
+        &self,
+        name: &str,
+        size: u64,
+        aliasee: Val<'id>,
+        local_exec: bool,
+    ) -> Val<'id> {
+        let mode = if local_exec { "(localexec)" } else { "" };
+        // Every byte as `\XX`, which a quoted LLVM name always accepts.
+        let quoted = fmt::from_fn(|f| name.bytes().try_for_each(|byte| write!(f, "\\{byte:02X}")));
+        let text = crate::diagnostics::format_in!(
+            self.arena,
+            "@\"{quoted}\" = thread_local{mode} alias [{size} x i8], ptr null\n\0"
+        );
+        // SAFETY: The buffer borrows `text` up to its final NUL, which the IR
+        // lexer requires, and is disposed below while `text` lives.
+        let buffer = unsafe {
+            LLVMCreateMemoryBufferWithMemoryRange(
+                text.as_ptr().cast(),
+                text.len() - 1,
+                c"bcc.thread_local_alias".as_ptr(),
+                1,
+            )
+        };
+        let mut source = ptr::null_mut();
+        let mut message = ptr::null_mut();
+        // SAFETY: The session owns the live context; the buffer is live, and
+        // the parser does not take it.
+        let failed = unsafe {
+            LLVMParseIRInContext2(self.context, buffer, &raw mut source, &raw mut message)
+        };
+        // SAFETY: This disposes the buffer created above exactly once.
+        unsafe {
+            LLVMDisposeMemoryBuffer(buffer);
+        }
+        let message = Message(message);
+        assert!(failed == 0, "thread-local alias IR parses: {message}");
+        // SAFETY: The session's module is live; LLVM returns its layout.
+        let layout = unsafe { LLVMGetDataLayoutStr(self.module) };
+        // SAFETY: The parsed module is live, and LLVM copies the layout.
+        unsafe {
+            LLVMSetDataLayout(source, layout);
+        }
+        // SAFETY: The session's module is live; LLVM returns its triple.
+        let triple = unsafe { LLVMGetTarget(self.module) };
+        // SAFETY: The parsed module is live, and LLVM copies the triple. The
+        // same layout and triple leave linking nothing to report.
+        unsafe {
+            LLVMSetTarget(source, triple);
+        }
+        // SAFETY: Both modules are live in this session's context; linking
+        // destroys the parsed source module.
+        let failed = unsafe { LLVMLinkModules2(self.module, source) };
+        assert!(failed == 0, "a fresh thread-local alias links");
+        let name = self.name(name);
+        // SAFETY: The session's module is live and the name NUL-terminated.
+        let raw =
+            unsafe { LLVMGetNamedGlobalAlias(self.module, name.as_ptr(), name.count_bytes()) };
+        assert!(!raw.is_null(), "the linked alias keeps its name");
+        // SAFETY: The alias and its thread-local aliasee are globals of this
+        // session's module.
+        unsafe {
+            LLVMAliasSetAliasee(raw, aliasee.0);
+        }
+        Val(raw, PhantomData)
+    }
+
+    /// A constant array of `element` values.
+    pub(super) fn const_array(&self, element: Ty<'id>, values: &[Val<'id>]) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session. Val is
+        // ABI-identical to LLVMValueRef; every value has type `element`.
+        // LLVM only reads the counted array despite its *mut parameter.
+        Val(
+            unsafe {
+                LLVMConstArray2(
+                    element.0,
+                    values.as_ptr().cast::<LLVMValueRef>().cast_mut(),
+                    values.len() as u64,
+                )
+            },
+            PhantomData,
+        )
+    }
+
+    /// A constant structure with natural (unpacked) field layout.
+    pub(super) fn const_record(&self, values: &[Val<'id>]) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session. Val is
+        // ABI-identical to LLVMValueRef; LLVM only reads the counted array
+        // despite its *mut parameter.
+        Val(
+            unsafe {
+                LLVMConstStructInContext(
+                    self.context,
+                    values.as_ptr().cast::<LLVMValueRef>().cast_mut(),
+                    count(values.len()),
+                    0,
+                )
+            },
+            PhantomData,
+        )
     }
 
     pub(super) fn null(&self, ty: Ty<'id>) -> Val<'id> {
@@ -536,6 +729,50 @@ impl<'id> Session<'id> {
                     1,
                 )
             },
+            PhantomData,
+        )
+    }
+
+    /// The address of `block`, a block of `function` other than its entry.
+    pub(super) fn block_address(&self, function: Val<'id>, block: Block<'id>) -> Val<'id> {
+        // SAFETY: The type system ties both handles to this live session; the
+        // verifier keeps labels off the entry block, as LLVM requires.
+        Val(
+            unsafe { LLVMBlockAddress(function.0, block.0) },
+            PhantomData,
+        )
+    }
+
+    /// `label - base + addend` truncated to `width`, for two block addresses
+    /// of one function: the constant expression Clang emits for a GNU label
+    /// difference in a static initializer.
+    pub(super) fn label_difference(
+        &self,
+        label: Val<'id>,
+        base: Val<'id>,
+        addend: i64,
+        width: Type,
+    ) -> Val<'id> {
+        let i64_ty = self.ty(Type::I64);
+        // SAFETY: Both operands are pointer constants of this session and
+        // i64 is a live integer type; LLVM folds or retains the expression.
+        let label = unsafe { LLVMConstPtrToInt(label.0, i64_ty.0) };
+        // SAFETY: As for the label.
+        let base = unsafe { LLVMConstPtrToInt(base.0, i64_ty.0) };
+        // SAFETY: Both operands are i64 constants of this session.
+        let difference = unsafe { LLVMConstSub(label, base) };
+        let difference = if addend == 0 {
+            difference
+        } else {
+            // SAFETY: Both operands are i64 constants of this session.
+            unsafe { LLVMConstAdd(difference, self.bits(Type::I64, addend as u128).0) }
+        };
+        if width == Type::I64 {
+            return Val(difference, PhantomData);
+        }
+        // SAFETY: The verifier restricts the width to a narrower integer.
+        Val(
+            unsafe { LLVMConstTrunc(difference, self.ty(width).0) },
             PhantomData,
         )
     }
@@ -687,6 +924,23 @@ impl<'id> Session<'id> {
         // operands have the verified IR types.
         let raw = unsafe { LLVMBuildSwitch(self.builder, value.0, default.0, cases) };
         Val(raw, PhantomData)
+    }
+
+    /// An `indirectbr` to `addr` with room for `dests` destinations, which
+    /// [`Session::add_destination`] lists.
+    pub(super) fn indirect_br(&self, addr: Val<'id>, dests: u32) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session; the
+        // address has pointer type.
+        let raw = unsafe { LLVMBuildIndirectBr(self.builder, addr.0, dests) };
+        Val(raw, PhantomData)
+    }
+
+    pub(super) fn add_destination(&self, indirect: Val<'id>, block: Block<'id>) {
+        // SAFETY: The type system ties handles to this live session; the
+        // value is an indirectbr built by this session.
+        unsafe {
+            LLVMAddDestination(indirect.0, block.0);
+        }
     }
 
     pub(super) fn ret(&self, value: Val<'id>) -> Val<'id> {
@@ -1173,6 +1427,6 @@ impl fmt::Debug for Session<'_> {
 
 /// Whether the target links position-independent executables by default,
 /// as Clang and GCC do on Linux; code for them must be PIC.
-fn position_independent(target: Target) -> bool {
+pub(super) fn position_independent(target: Target) -> bool {
     matches!(target, Target::LinuxGnu | Target::LinuxMusl)
 }

@@ -70,9 +70,9 @@ The semantic working arena (`'s`) owns continuations, value stacks, interning
 lookup, visible-binding lookup, linkage lookup and scope restoration lists. It
 is dropped before returning `SemanticTranslationUnit<'tu>`. Retained values have
 no destruction requirements. Lowering also receives vendor-modified declarators visited by
-type construction and their specifier extension chains. It uses these to honor
-GNU assembler labels and reject unsupported calling conventions on declarations,
-typedefs, parameters and abstract type names before constructing IR symbols.
+type construction; it reads only their GNU assembler labels. Attribute and
+calling-convention meanings are retained as symbol facts and capability
+refusals (see [GNU entity attributes](#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
 Collections use the repository's arena-backed
 `ArenaMap`/`ArenaVec`; no compiler global allocator collections are introduced.
 
@@ -353,7 +353,15 @@ functions are external unless inheriting prior function linkage. Internal/extern
 mixes are diagnosed (§6.2.2p7). Typedefs, enumerators, members and automatic objects
 have no linkage. Objects at file scope, with linkage, or block static have static
 duration; parameters/other local objects have automatic duration. Functions and
-non-object bindings have no object duration. Same-scope no-linkage duplicates are
+non-object bindings have no object duration. Such an object declared with
+`_Thread_local`, `thread_local` or GNU `__thread` has `Duration::Thread` instead
+(C11 §6.2.4p4), the retained fact lowering turns into a thread-local global; its
+initializer is constant like a static one (C11 §6.7.9p4), and an inline
+definition rejects a modifiable one (C11 §6.7.4p3). The parser rejects thread
+storage beside a storage class other than `static`/`extern` (§6.7.1p2);
+semantic analysis rejects it on functions (§6.7.1p4) and parameters
+(§6.7.6.3p2), on a block-scope object without `static` or `extern`, and on one
+declaration of an object but not another (§6.7.1p3). Same-scope no-linkage duplicates are
 rejected. A typedef repeated with the same, not variably modified, type is
 accepted (C11 §6.7p3); before C11, GNU modes included, it is a C11 extension
 under the pedantic policy, as in GCC and Clang.
@@ -416,7 +424,7 @@ Stage-1 boundaries, with their current disposition:
   `__int16`, `__int32` and `__int64` are not: as in Clang, they are `char`,
   `short`, `int` and `long long`, and `signed` or `unsigned` selects that
   variant. Only alignment
-  specifiers, thread/constexpr storage, MSVC pointer-size modifiers and
+  specifiers, constexpr storage, MSVC pointer-size modifiers and
   attributes naming `align`, `packed`, `mode` or `ext_vector_type`
   (and non-vector `aligned`) make that one declaration's type unavailable; other
   attributes and the calling conventions that x86-64 ignores leave it intact. A
@@ -553,11 +561,12 @@ to the member path, the qualifiers of the anonymous members on that path and the
 byte/bit offset from the record's start. Member access and designators use it
 through a scratch index with expected O(1) lookup; const-member queries cache
 explicit postorder results rather than rescanning aggregate trees for every use.
-A `.` or `->` record retains the index of the field it selected
-(`ExpressionInfo::field_index`, in four bytes the record's padding already
-had), and `SemanticTranslationUnit::selected_field` returns that `Field`
-without a name search, through parentheses, `__extension__` and generic
-selections.
+`MemberFacts` retains the owning tag, field index, qualified access type,
+guaranteed place alignment and bit-field width. `member_facts` and
+`selected_field` use the normalized designation and expression indices;
+neither query peels wrappers or recovers the owning record from base syntax.
+Parentheses, `__extension__`, generic and choose-expr selections preserve the
+member identity. The former relative field index in `ExpressionInfo` is deleted.
 
 #### Constant expressions
 
@@ -572,6 +581,7 @@ Unevaluated sizeof operands and unselected logical/conditional arms follow the
 
 Arithmetic constant expressions and address constants govern static-duration
 initializers (§6.6p7-9, pp. 95-96, PDF pp. 107-108; §6.7.8p4, p. 125, PDF p. 137).
+A thread-local object's address is not an address constant (C11 §6.6p9).
 Addresses track static storage/function/string/compound-literal designations,
 including members, subscripts, casts and integer offsets, without reading stored
 object values. This is constant eligibility, not backend relocation lowering:
@@ -731,7 +741,8 @@ continuations use the same explicit work stack as expression typing.
 
 Each function has a separate label map. GNU `__label__` declarations install
 lexically scoped label identities, also available to nested functions. Label
-addresses count as references; computed-goto destinations remain opaque.
+addresses count as references and make their label a possible computed-goto
+target (see [Labels as values](#labels-as-values-2026-10-14)).
 Duplicate labels are diagnosed immediately, and unresolved references after
 the translation unit has been walked. The parser retains ownership of the
 duplicate-default diagnostic, so it is emitted once. Case/default placement
@@ -775,7 +786,8 @@ resolve before goto diagnostics. Switch diagnostics retain their discovery order
 their secondary VM labels are finalized to the outermost entered declaration.
 Entering statement expressions or VM scope reads this same graph, preserving text,
 order and secondary labels. GNU nonlocal jumps retain the existing conservative
-semantic handling and remain unsupported by lowering.
+semantic handling and remain unsupported by lowering. A computed goto is a
+jump to `ControlTarget::IndirectGoto(function)` with an empty transition.
 
 GNU statement-expression tails consume their expression statement's converted
 value: arrays/functions decay, lvalues become values and bit-field identity does
@@ -824,10 +836,11 @@ linked redeclarations keep their binding identities. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.
-Retained declarator and specifier occurrences also identify their enclosing
-function definition. Lowering checks unsupported vendor modifiers only when
-that definition is emitted; file declarations remain checked. Symbol aliases
-are resolved before the planner joins linked entities.
+Retained assembler-label declarators and attribute capability refusals also
+identify their enclosing function definition. Lowering reports a refusal or
+label error only when that definition is emitted; file declarations remain
+checked. A `cleanup(f)` variable records a use of `f` by its body. Symbol
+aliases are resolved before the planner joins linked entities.
 Inline restrictions are deferred until all file-scope declarations are known:
 a later non-inline or `extern` declaration can make the body an external
 definition (§6.7.4p3,p6, printed p. 112, PDF p. 124). Inline-only external bodies
@@ -852,7 +865,7 @@ known calls. Opaque results suppress dependent return-conversion errors.
   runtime VLA allocation/extent evaluation, automatic lifetime cleanup, return
   value lowering and a calling convention. The syntax and conversion graph remain
   available, but statement constraints do not provide an executable control-flow
-  graph or computed-goto target set.
+  graph; the computed-goto target set is retained per function.
 - GNU statement-expression result types, intrinsic signatures, local-label
   nonlocal-jump mechanics, other attributes and calling-convention
   effects remain conservative. The five requested GNU statement forms retain
@@ -1477,12 +1490,12 @@ an unavailable variadic fallback make this a separate feature; it is deferred.
 
 ### Common GCC scalar builtin coverage (2026-10-12)
 
-`builtins/common.rs` owns the fixed GCC scalar signatures, target-dependent
-parameter widths and fixed-width type identities, overloaded overflow
-constraints, control-argument validation,
-and conservative constant/object-size queries. Lowering shares its name
-classifier. `GnuBuiltins` reports these GNU-only calls through the common
-extension policy; prefetch now belongs to this family rather than vector
+The neutral registry in `src/builtins.rs` owns fixed GCC scalar signatures,
+target-dependent parameter widths, fixed-width type identities, operand rules,
+constant constraints and operation/effect identities. `builtins/common.rs`
+checks these descriptors, with dedicated overflow and floating handlers and
+conservative constant/object-size folds. Lowering consumes checked instances.
+`GnuBuiltins` reports these GNU-only calls through the common extension policy; prefetch now belongs to this family rather than vector
 builtins. Statement expressions retain the final expression statement's converted
 value type but never discard the block's effects by folding its tail. New focused
 semantic tests exercise signatures, rejected arities and types, ICE overflow
@@ -1620,12 +1633,12 @@ commit groups are recorded in `target/commit-plan.md`.
 ### PR #41 round-6 review repairs (2026-10-13)
 
 Reserved builtin identifiers acquire their semantic binding before expression
-reduction, including inside compile-time selections. Shared iterative lookup
-follows parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
-to the selected binding. Scalar intrinsic dispatch uses that binding in both
+reduction, including inside compile-time selections. Bottom-up designation facts
+retain the leaf and binding through parentheses, `__extension__`, `_Generic`
+and `__builtin_choose_expr`. Scalar intrinsic dispatch uses that binding in both
 semantic checking and lowering; user declarations and local function pointers
-keep ordinary-call behavior. Direct callee lookup also follows retained
-selections before falling back to an indirect call.
+keep ordinary-call behavior. `CallFacts` retains directness once at the call site,
+including all conservative indirect cases.
 
 Intrinsic-only builtin designators outside a call now report Clang's "builtin
 functions must be directly called" diagnostic instead of producing external
@@ -1636,9 +1649,9 @@ builtin aliases retain addressability. See
 and [Library Builtins](https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html);
 C99 6.5.1p5 (printed p. 69, PDF p. 81) preserves parenthesized designation.
 
-Statement-expression tail lookup iteratively strips ordinary, case/default,
-case-range and attributed labels. Lowering keeps the final statement on its
-task stack with a value-preserving flag: each label enters its usual jump
+Statement completion forwards the immediate ordinary, case/default, case-range
+or attributed child's value-tail result in constant work. Lowering keeps the
+retained outer tail statement on its task stack with a value-preserving flag: each label enters its usual jump
 target before the converted tail is evaluated. C99 6.8.1p4 (printed p. 132,
 PDF p. 144) and
 [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html)
@@ -1676,19 +1689,158 @@ were preserved, and nothing was staged or committed. The whole-file commit
 plan is `target/commit-plan.md`; check logs are under `target/round6/`.
 
 
-### Runtime array metadata consumed by lowering (2026-10-13)
+## Retained occurrence, parameter and runtime-size correspondence
 
-`ArrayBound::Variable` retains a unique bound index into `Types::runtime_bounds`,
-whose entries are typed expression references. Distinct array derivations keep
-distinct identities even when their element types match. `Parameter::original`
-and `FunctionRecord::parameter_types` preserve parameter array types before
-adjustment, allowing the middle end to execute bounds on function entry.
-Lowering evaluates each retained bound at its declaration, saves its extent,
-and implements dynamic storage, strides, runtime sizeof and lifetime cleanup.
-The retained control graph rejects jumps into VM declaration regions, including
-typedefs and pointers to VLAs; those protection regions have no stack cleanup.
-C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.9.1p10, p. 142;
-PDF p. 154; §6.8.6.1p1, p. 137; PDF p. 149.
+`CorrespondenceFacts` retains source-ordered `DeclarationFacts` with typed
+`OccurrenceId` and `EntityId`, accepted binding, initializer association,
+prototype parameter facts and new declarator-bound actions. Named declarators
+are copied values: their arena-owned suffix-list identity indexes the occurrence,
+including parenthesized suffix aliases. No copied-value address or source-vector
+comparison identifies an occurrence. Rejected declarations keep an occurrence
+with no accepted binding/entity. The initializer association is retained now;
+subobject placement plans belong to the initializer-plan migration.
+
+`Parameter` retains its prototype binding and checked type-site actions during
+parameter-list construction. `FunctionRecord::parameter_facts` keeps prototype
+and body bindings, declared and incoming/promoted types, the original type before
+array/function adjustment, and entry actions in parameter order. Unnamed and
+invalid entries retain their ordinal with absent bindings. K&R declaration-list
+actions retain their written order separately from identifier-list incoming
+argument order. Bound expressions and the body use the same parameter storage
+through the retained alias pairs. Inspection reads static minima by binding ID.
+Correspondence construction and consumption visit parameters and occurrences;
+there is no per-function translation-unit binding scan.
+
+`TypeNameFacts` gives each written type name a deterministic `TypeNameId`,
+resolved type and size-query record. Both producer lookup and retained queries
+use syntax identity. `RuntimeBound` retains the typed integer expression, its
+required size_t conversion, written evaluation site and saved-extent dependencies.
+Distinct derivations keep distinct bound IDs, even when their expression spelling
+or element type agrees.
+Declaration, parameter, cast and type-operand sites retain the ordered actions
+that execute; typedef uses reuse saved extents. Dependency reduction includes
+size and stride uses in embedded statement expressions.
+
+`SizeFacts` interns a shared `SizeFormula` DAG of byte constants and products
+with constant extents or `BoundId`s. Finalization visits canonical types once,
+after nominal tag layouts complete, sharing each child formula. Cached constant
+sizes preserve fixed-size emission. Allocation, runtime `sizeof`, subscript,
+pointer arithmetic and increment strides query this same graph. Lowering assigns
+SSA extent variables and emits formula products; it does not rediscover bounds
+or reconstruct products from types.
+
+`SizeQueryFacts` records a formula and exactly which operand and written bound
+or typeof actions execute. Constant queries suppress both operand and type-site
+effects, including VM pointers with fixed pointer size. Runtime VLA queries
+execute the retained actions and, for expression operands, the retained operand.
+Missing required facts in a lowerable modeled node produce `MissingFact` with
+provenance. The control graph still rejects entry into VM declaration regions;
+VM typedef/pointer protection does not allocate stack storage.
+C99 §6.7.5.2p5, p. 117 (PDF p. 129), §6.9.1p7,10, p. 142 (PDF p. 154),
+§6.5.3.4p2, p. 80 (PDF p. 92), and §6.5.6p8, p. 83 (PDF p. 95).
+Validation and corpus evidence: [M2 receipt](docs/research/semantic-facts-m2.md).
+
+## Retained resolved expressions, calls, tails and members
+
+**M3 is complete.** `ResolvedFacts` retains one `Designation` per expression
+ordinal and sparse call, member and statement-expression records. Expression
+completion copies one immediate selected child's leaf/binding and conversion
+summary. Parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
+therefore cost O(1) per edge, without recursion or repeated chain walks.
+Conversions on the outer node remain separate from conversions on its selected
+children. Scratch conversion summaries track count, first kind and final type
+while the existing contextual conversion records are produced.
+
+`CallFacts` records `Callee::Direct` with entity and binding, `Indirect` with
+the callee expression ordinal, or `Builtin` with its optional named binding,
+designation-preserving directness and checked instance. It retains the point-of-use
+function type, fixed prefix, prototype/ellipsis status and each argument's expression ordinal
+and converted type. Argument ordinals reference the existing conversion runs;
+later composite binding types never replace the written call's type. M4 now
+retains checked scalar/library/varargs instances; remaining family descriptors
+are M6 work. Overloaded builtins may lack an ordinary function type; ordinary lowerable calls require it.
+The existing known-definition/open-external ABI policy remains downstream until
+M7. Returns-twice and unsupported-builtin capability refusals are unchanged.
+
+GNU implicit function declarations still precede identifier typing. Discovery
+forwards callee context through immediate parentheses/extension children on the
+ordinary work stack; it does not walk a chain before every reduction. Compile-time
+selections reuse completed designation facts. Function pointers, casts, address
+and dereference operators, comma/conditional expressions, converted block values,
+extra outer conversions and conversion-changing children stay indirect.
+
+`StatementExpressionFacts` retains the block, outer labeled tail, optional value
+expression, prefix length and converted result type. Statement continuations
+forward one child's tail result; block reduction inspects only its last immediate
+item. Empty/declaration/nested-compound endings yield void. Labels execute before
+the converted tail value, and aggregate snapshots still precede lifetime cleanup.
+The retained expression-effects record summarizes the block's statements.
+
+Lowering's linear address-use scan and builtin dispatch read retained callee and
+designation records. Call scheduling and completion share `CallFacts`; member
+access reads `MemberFacts`; GNU block scheduling reads its retained tail/prefix.
+The old chain-walking helpers, repeated direct-callee checks and owning-record
+recovery are deleted. Constant-time selection/tail helpers are semantic-private.
+Missing required facts report `MissingFact` with the written node's provenance,
+including member references in static address initializers.
+C99 §6.5.1p5, p. 69 (PDF p. 81), §6.5.2.2p6-7, pp. 71-72
+(PDF pp. 83-84), §6.5.2.3p3-4, p. 73 (PDF p. 85), and §6.8.1p4,
+p. 132 (PDF p. 144); C11/GNU selections and GNU statement expressions.
+Validation and corpus evidence: [M3 receipt](docs/research/semantic-facts-m3.md).
+
+## Retained builtin contracts and checked instances
+
+**M4 is complete.** `src/builtins.rs` is a phase-neutral, static descriptor index.
+The scalar and library shards own exact spellings, append-only `BuiltinId`s,
+signatures expressed in target scalar/size/pointer patterns, closed type and
+operation rules, operand conversion/evaluation/constant constraints, feature and
+naming policy, effect classes and library equivalence. The generated sorted name
+index maps one spelling to one ID; `scripts/generate_builtin_index.py` preserves
+IDs when rows move or new entries are added. Descriptors contain no syntax,
+semantic types, IR opcodes, checker/lowerer callbacks or diagnostic messages.
+Constraint identities adapt to the existing `SemanticErrorKind` catalog.
+
+Lookup first respects a visible user binding. `BindingOrigin` then distinguishes
+`User`, `Intrinsic(BuiltinId)`, `ImplicitOrdinary`, the explicit temporary M6
+`LegacyIntrinsic` bridge and unknown reserved `OpaqueIntrinsic` bindings.
+Unknown reserved names keep opaque signatures. Plain implicit alloca is GNU-only;
+ordinary implicit library names are hosted-only. Reserved library aliases keep
+their signatures in freestanding mode. The fabs/fabsf/fabsl aliases share the
+registry's double/float/long-double contracts; host implementations remain backend
+capabilities.
+
+Named scalar, library and varargs calls and keyword varargs/offsetof retain an
+arena-owned `BuiltinCallFacts` in M3's `Callee::Builtin`. Keyword forms have no
+named binding. Instances retain descriptor ID, checked operation, result and
+operation types, result folds, effects and normalized operands. Each operand
+retains its converted type/constants, bit-field precision and evaluation mode:
+value, storage address, adjusted list pointer, effects only, unevaluated or type.
+System V pointer parameters read an adjusted list pointer; Win64 cursors retain
+storage-address uses. Lowering's address-use scan consumes the retained binding
+uses. No synthetic `Builtin` AST is allocated for ordinary varargs calls in either
+phase, and lowering does not decode scalar spellings or reconstruct operand shape.
+IR emission and varargs ABI expansion keep their existing algorithms.
+
+Fixed-parameter constants are checked after target conversion; probability rounds
+to double before finite endpoint checks. Prefetch constraints retain original ICE
+width, including 128-bit immediates. Assignment compatibility precedes dependent
+constant diagnostics. Dedicated overflow, floating and varargs handlers keep their
+type/precision/layout rules. Existing semantic/diagnostic/IR goldens are unchanged.
+
+Atomic, generated x86, vector and type-generic recognition and keyword checking,
+plus reserved builtin type spellings, remain explicit M6 bridges. The named
+capability adapter in `builtins/names.rs` joins the registry with those families;
+`__has_builtin` still uses the existing keyword classifier/semantic capability
+adapter. Exhaustive scalar/library agreement tests cover all current targets,
+strict/GNU modes and hosted/freestanding environments. M5 later consumed the
+registry's effect classes in the retained expression effects; the
+external/returns-twice symbol policy remains later work.
+
+C99 §6.5.2.2p7, p. 72 (PDF p. 84), §6.2.1p4, pp. 29-30
+(PDF pp. 41-42), §7.15.1, pp. 249-251 (PDF pp. 261-263),
+and §7.1.4, pp. 166-167 (PDF pp. 178-179); scalar intrinsics are GNU
+extensions. Validation and corpus evidence: [M4 receipt](docs/research/semantic-facts-m4.md).
+
 ## 2026-10-13: Torture representation types and constant forms
 
 GNU `packed`, `aligned` and scalar `mode` now retain concrete types and layouts.
@@ -1781,8 +1933,8 @@ operand effects, including `typeof` of a pointer to VLA. Runtime VLA size querie
 execute the retained operand list.
 The new tables are arena-owned and keyed by syntax identity; provenance remains
 for diagnostics. Existing runtime-bound identities and extent SSA storage are
-unchanged. This is the minimal operand-evaluation part of the bound-site design,
-not the full proposed bound-action/formula migration.
+unchanged. The retained occurrence, parameter and size records above complete
+the bound-action and formula interface.
 
 Address-taking uses `FunctionRecord::parameter_aliases` to share the memory
 requirement between prototype and body bindings before parameter storage is
@@ -1791,21 +1943,163 @@ expressions then address the same parameter object.
 
 ## Shared expression effects and entry actions
 
-Semantic analysis produces one `ExpressionEffects` record per expression in
-child-before-parent order, with value-read and designation/effects-only purity.
-ICE eligibility remains separate from purity. Cast type-site actions are normalized
-into `expression_actions`; both the summary producer and value/effect-only lowering
-consume that same record. An evaluated VM typeof operand or new bound therefore
-prevents an overflow predicate from folding away its effects. Short-circuit and
-selected branches preserve conditional execution, and address-only operations keep
-their existing volatile distinctions. There are no per-query semantic purity caches
-or lowering-owned summary caches. Full sparse evaluation recipes remain M5 work.
+**M5 is complete.** `facts/effects.rs` produces one four-byte `ExpressionEffects`
+record per expression ordinal, in child-before-parent order, when
+`retain_expression` runs. It holds two contexts: reading the value and only
+designating it (address-only and effects-only uses). Each context carries an
+`EffectSet` of `WRITE`, `CALL`, `VOLATILE`, `CONTROL`, `LIFETIME` and
+`UNKNOWN`, and a recipe kind. An empty set means the evaluation may be omitted;
+it is not an optimizer promise that arithmetic cannot trap or be poison. Each
+summary combines the retained summaries of the node's immediate children once,
+so production is O(1) per operand edge with no recursion or suffix walk.
 
-`FunctionRecord::parameter_sites` keeps entry actions in written order alongside
-original types and parameter aliases. Lowering initializes incoming parameters and
+- Assignments and increments write; a store to a volatile lvalue is also a
+  volatile access. Ordinary and indirect calls are `CALL`.
+- A volatile read is `VOLATILE` only in the value context; `&v`, `&*vp` and
+  `&p->vm` designate without access. Member bases and address-of operands use
+  the designation context.
+- `_Generic` and `__builtin_choose_expr` forward their retained selection only.
+- Checked builtins use the registry instance: the descriptor's
+  `BuiltinEffectClass` (pure/query none, write, control, allocate as
+  `LIFETIME`, library as `CALL`) plus the operands their evaluation modes
+  evaluate. Unevaluated and type operands contribute nothing; effects-only
+  operands contribute their value context. Temporary M6 bridges are `UNKNOWN`.
+- Constant `sizeof`, and `typeof` outside a VM type site, contribute nothing. A
+  VLA `sizeof` takes its retained size-query operand and new bound expressions;
+  a cast takes its `expression_actions` typeof operands and new bounds.
+- A GNU statement expression opens a body summary; each completed statement
+  adds its own expressions, loops and jumps add `CONTROL`, and declarations and
+  nested definitions add `UNKNOWN`. The block closes the summary.
+- Compound literals and unmodeled forms are conservatively effectful.
+
+ICE eligibility remains separate. The existing rule still clears constant
+eligibility when a cast's evaluated type-site actions are effectful, and an
+overflow predicate folds only when its third operand's value summary is empty.
+
+The same postorder retains effects-only recipes once the node's ICE state is
+final. `EffectRecipe::None` and `EvaluateValue` or `StatementBlock` of the node
+itself live in the dense record. `Sequence` (the node's own type-site actions,
+then child uses) and `Conditional` (a condition evaluated once as a branch and
+optional arm uses) live in a sparse map keyed by ordinal and context. A use
+names a child ordinal and context. Short circuits and conditionals keep a
+branch only when an arm's summary is non-empty; omitted conditionals branch on
+their saved condition. ICE nodes execute nothing; volatile reads evaluate.
+`SemanticTranslationUnit::effect_summary`/`effect_recipe` are the queries. A
+child without a record makes the recipe unavailable, and lowering reports that
+missing fact. The old per-node boolean purity pair and the lowering's
+operator/volatility classification are deleted.
+C99 §5.1.2.3p2, p. 13 (PDF p. 25), §6.7.3p6, p. 109 (PDF p. 121),
+§6.5.3.4p2, p. 80 (PDF p. 92), §6.5.13p4-§6.5.15p4, pp. 89-90 (PDF pp. 101-102);
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+Validation and corpus evidence: [M5 receipt](docs/research/semantic-facts-m5.md).
+
+`FunctionRecord::parameter_facts` keeps each prototype-style entry action with
+its original type and binding correspondence; `parameter_sites` keeps K&R
+shared declaration actions in written order. Lowering initializes incoming parameters and
 aliases first, then runs each site's typeof operand evaluations and newly introduced
 bounds before the body. Prototype-only declarations do not execute entry actions.
-This is the required M2 slice; occurrence IDs and runtime-size formula graphs remain
-future work. C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
+C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
 [GCC Typeof](https://gcc.gnu.org/onlinedocs/gcc/Typeof.html) and
 [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+
+## GNU entity attributes and cleanup regions (2026-10-14)
+
+This is the attribute part of semantic-facts migration M7: semantic analysis
+validates attributes once and lowering consumes retained facts. The attribute
+pass lives in `attributes.rs` and `attributes/`:
+
+- **Name pass.** `check_attribute_list` visits each attribute specifier once
+  (keyed by its arena identity) from every position the work stack reaches:
+  declaration specifiers, declarators and pointer levels (abstract ones
+  included), record, enum, member and enumerator attributes, and attributed
+  statements. `catalog.rs` gives each name a rule; unknown names and dropped
+  meanings warn, conventions are checked against the target, and meanings
+  code generation cannot honor become `SymbolFacts::refusals`, which lowering
+  reports as unsupported constructs at their provenance. Lowering's former
+  calling-convention token parsing is deleted.
+- **Entity pass.** After a declaration binds (and for a function definition
+  when its binding is installed), `declaration_attributes` applies the entity
+  attributes of its specifier chain, declarator, pointer levels and grouped
+  declarators to a `Subject` (function, object, typedef, parameter or member)
+  with Clang's applicability diagnostics. Weak, section, used, visibility and
+  function alignment merge into `EntityAttributes` keyed by `EntityId`; the
+  correspondence retains the linked-name entity map so lowering can find a
+  binding's entity (`SemanticTranslationUnit::entity_attributes`).
+- **Completion.** `finish_attributes` runs after translation-unit definitions
+  are final: alias requests resolve through chains to a definition by C name
+  (`SymbolFacts::aliases`), with target, kind, cycle and type checks; alias
+  declarations never become tentative definitions. Function definitions with
+  constructor or destructor requests are registered in definition order
+  (`SymbolFacts::init_functions`); parameters are refused.
+- **Cleanup regions.** `cleanup(f)` is validated at the declaration and opened
+  by a `DeclarationEnd` continuation after the declarator's initializer, as a
+  `RegionKind::CleanupDeclaration` region with `CleanupKind::Call { variable,
+  function }`. It joins the M1 region tree additively: `nearest_cleanup` now
+  links both VLA and call cleanups, so every retained transition (normal
+  exits, jumps, returns, switch dispatch) lists the calls to make, innermost
+  first; `nearest_cleanup_declaration` and `Ancestry::first_entered_cleanup`
+  (the VM query, generalized over the link) find entered cleanup scopes in
+  O(log R). `attributes/jumps.rs` reports gotos and switch cases entering a
+  cleanup scope; the computed-goto check below reports indirect gotos that
+  could enter or leave one. Lowering marks cleanup variables address-taken and emits the
+  calls from the same transitions that release VLA storage.
+
+The constructor/destructor priority operand is parsed as an expression, as
+`aligned`'s is, so the ordinary constant evaluator checks it. GNU extension:
+GCC manual, "Common Function Attributes" and "Common Variable Attributes";
+Clang Attributes Reference. C99 §6.2.2p2, p. 30 (PDF p. 42); §6.2.4p5, p. 32
+(PDF p. 44); §6.8.6.1p1, p. 137 (PDF p. 149).
+
+**What remains of M7.** Assembler labels are still decoded and inherited in
+lowering (`extensions.rs::record_label`), and alias targets are resolved by C
+name, so aliases involving assembler labels are refused. The known-definition
+name set for open externals (`Unit::new`/`unprototyped_external`), the
+name-based `main` end policy, readonly/volatile object predicates, and the
+shared external-signature and returns-twice catalog are unchanged. MSVC
+convention keywords other than `__vectorcall` remain accepted as the default
+convention without a retained `CallingConvention` on types.
+
+#### Labels as values (2026-10-14)
+
+GNU `&&label` ([GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html))
+types as a `void *` rvalue address constant (`ConstantClass::Address`) and
+resolves through the ordinary label lookup, so GNU local labels keep their
+lexical identity. Outside a function it is `LabelAddressOutsideFunction`.
+The first `&&` of a label numbers it among its function's address-taken labels:
+`ControlFacts::address_taken(function)` lists them in that order,
+`LabelFacts::address` holds each position, and `ControlFacts::label_address`
+maps every `&&label` expression to its `LabelId`. Lowering uses the position as
+the IR label number, so static initializers lowered before the body agree.
+
+`goto *e` records a jump to `ControlTarget::IndirectGoto(function)` with an
+empty transition (like Clang, it releases no VLA storage it leaves) and
+converts `e` to `const void *` under simple-assignment constraints
+(`InvalidComputedGoto` otherwise; C99 §6.5.16.1p1, p. 92; PDF p. 104). After
+the unit is walked, each computed goto is checked against its function's
+address-taken labels as Clang's jump checker does: none at all is
+`IndirectGotoWithoutLabels`; a target inside a statement expression or the
+scope of a variably modified identifier that the goto is outside of is
+`IndirectJumpIntoStatementExpression` or `IndirectJumpIntoVariableScope`
+(C99 §6.8.6.1p1, p. 137; PDF p. 149), reported once per goto at its first
+such target with the region's start as secondary label. As in Clang, whose
+jump checker treats a GNU cleanup scope as one an indirect jump may neither
+enter nor leave, a target inside a cleanup variable's scope that the goto is
+outside of, or any address-taken label outside the innermost cleanup scope
+around the goto, is `IndirectJumpCleanupScope`. Each function's labels inside
+a protecting region, and the first and last of its labels in region
+preorder, are collected once, so the work is O(gotos + labels) plus one check
+per goto and protected label; plain dispatch tables need no pairwise check
+at all.
+
+`&&a - &&b` for two labels of one function is `ConstantClass::LabelDifference`:
+a constant with no folded value whose two labels `ControlFacts::label_difference`
+retains. It survives parentheses and conversions to an integer of 32 to 64
+bits no wider than the converted value, which static initializers accept
+unless the destination is a bit-field, matching Clang; `_Bool`, narrower and
+128-bit types, a narrowed difference widened again and arithmetic on it are not
+constants. GNU `void *` arithmetic
+([GCC Pointer Arith](https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html),
+`Feature::VoidPointerArithmetic`) uses element size 1 for `+`, `-`, increments,
+compound assignment and subscripts, and in address constants and constant
+differences; a `void` subscript is an rvalue that is never read, and `sizeof`
+of `void` is 1 in every mode.

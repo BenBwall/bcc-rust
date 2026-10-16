@@ -1,17 +1,18 @@
 //! Byte-addressed memory with provenance.
 //!
 //! Memory is a set of objects: stack slots, globals, heap allocations,
-//! functions (size zero, so a function's address is unique) and `va_list`
-//! cursors. Each object has a fresh base address, a size and an array of
-//! cells, with backing capacity rounded up to a power of two for reuse.
-//! Logical bounds remain the requested size. A cell holds the byte, whether it
-//! was ever written with a defined value, and, for the eight bytes of a stored
-//! pointer, which fragment of which pointer it is. Loading a pointer whose
-//! eight cells are the fragments of one pointer in order gives that pointer
-//! back with its provenance; loading it from other bytes treats them as an
-//! integer address, as `inttoptr` does.
-//! Unresolved globals retain their declared bounds for pointer arithmetic,
-//! but have no backing cells; any data access reports the missing symbol.
+//! functions (size zero, so a function's address is unique), each function's
+//! labels (one byte per label, holding no data) and `va_list` cursors. Each
+//! object has a fresh base address, a size and an array of cells, with backing
+//! capacity rounded up to a power of two for reuse. Logical bounds remain the
+//! requested size. A cell holds the byte, whether it was ever written with a
+//! defined value, and, for the eight bytes of a stored pointer, which fragment
+//! of which pointer it is. Loading a pointer whose eight cells are the
+//! fragments of one pointer in order gives that pointer back with its
+//! provenance; loading it from other bytes treats them as an integer address,
+//! as `inttoptr` does. Unresolved globals retain their declared bounds for
+//! pointer arithmetic, but have no backing cells; any data access reports the
+//! missing symbol.
 //!
 //! A [`Pointer`] is an address with an optional [`ObjectRef`]. An access
 //! through it checks, in order: that it has provenance (null and wild
@@ -103,6 +104,11 @@ pub(crate) enum ObjectKind {
     Heap,
     /// A function, whose address `func_addr` takes. It holds no data.
     Function(FuncId),
+    /// The addresses of a function's labels: label `n` is the object's
+    /// byte `n`, so label differences are small offsets and a label address
+    /// plus a difference names another label. It holds no data.
+    /// GNU extension: GCC "Labels as Values".
+    Labels(FuncId),
     /// A `va_list` cursor, which `va_start` and `va_copy` create. Its state
     /// is the object's [`VaCursor`].
     VaCursor,
@@ -380,7 +386,8 @@ impl<'a> Memory<'a> {
             .ok_or(UbKind::DanglingPointer)?;
         match object.kind {
             | ObjectKind::UnresolvedGlobal(global) => return Err(Fault::UnknownGlobal(global)),
-            | ObjectKind::Function(_) | ObjectKind::VaCursor => return Err(UbKind::NotData.into()),
+            | ObjectKind::Function(_) | ObjectKind::Labels(_) | ObjectKind::VaCursor =>
+                return Err(UbKind::NotData.into()),
             | ObjectKind::ConstantGlobal if write => return Err(UbKind::WriteToConstant.into()),
             | _ => {},
         }
@@ -438,6 +445,31 @@ impl<'a> Memory<'a> {
                 ..
             }) if base == pointer.address => Ok(func),
             | _ => Err(UbKind::CallThroughNonFunction.into()),
+        }
+    }
+
+    /// The index of the label of `func` that `target` addresses, if it
+    /// addresses one: an `indirect_br` may only continue at such a label.
+    pub(crate) fn label_at(&self, target: RuntimeValue, func: FuncId) -> Result<usize, Fault> {
+        let RuntimeValue::Ptr(pointer) = target else {
+            return Err(UbKind::BranchOnPoison.into());
+        };
+        let object = pointer
+            .provenance
+            .and_then(|provenance| self.live_object(provenance));
+        match object {
+            | Some(&Object {
+                base,
+                size,
+                kind: ObjectKind::Labels(owner),
+                ..
+            }) if owner == func
+                && pointer
+                    .address
+                    .checked_sub(base)
+                    .is_some_and(|offset| offset < size as u64) =>
+                usize::try_from(pointer.address - base).map_err(|_| UbKind::IndirectBranch.into()),
+            | _ => Err(UbKind::IndirectBranch.into()),
         }
     }
 }
@@ -604,6 +636,22 @@ impl Memory<'_> {
                     byte:       truncate_u8(u128::from(value.address >> (8 * position))),
                     tag:        Cell::FRAGMENT_TAG + truncate_u8(u128::from(position)),
                 };
+            }
+        }
+    }
+
+    /// Writes defined bytes into a fresh object at `offset`, as a label
+    /// difference relocation does, ignoring alignment and constness.
+    pub(crate) fn initialize_bytes(&mut self, object: Pointer, offset: u64, bytes: &[u8]) {
+        let index = object.provenance.expect("a fresh object").index();
+        let object = &mut self.objects[index];
+        let cells = &mut object.cells[..object.size];
+        for (position, &byte) in bytes.iter().enumerate() {
+            let cell = usize::try_from(offset + position as u64)
+                .ok()
+                .and_then(|cell| cells.get_mut(cell));
+            if let Some(cell) = cell {
+                *cell = Cell::data(byte);
             }
         }
     }

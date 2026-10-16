@@ -5,10 +5,7 @@
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60;
 //! §6.5, pp. 67-94; PDF pp. 79-106.
 
-use std::num::{
-    NonZeroU8,
-    NonZeroU32,
-};
+use std::num::NonZeroU8;
 
 use rustc_hash::FxBuildHasher;
 
@@ -160,6 +157,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
             }
+            if let Some(target) = self.pointer_target(ty) {
+                self.report_void_arithmetic(e, target);
+            }
             let mut result = Self::expression_result(e, ty);
             if matches!(op, U::PreIncrement | U::PreDecrement) {
                 result.promotion_width = operand.promotion_width;
@@ -301,8 +301,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if !self.pointer_arithmetic_target(target) {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidSubscript);
                 }
+                if self.void_type(target) {
+                    self.context.report_extension(
+                        crate::configuration::Feature::VoidPointerArithmetic,
+                        "subscript of a pointer to void",
+                        e.source_vectors,
+                    );
+                }
                 info.ty = target;
-                info.category = self.object_category(target);
+                // A `void` element is no object, so it is never read; GNU
+                // `&p[i]` still takes its address through the subscript.
+                info.category = if self.void_type(target) {
+                    ValueCategory::Rvalue
+                } else {
+                    self.object_category(target)
+                };
                 info.static_address = self.address_value(pointer)
                     && if std::ptr::eq(pointer.expression, left.expression) {
                         right.ice && right.integer.is_some()
@@ -334,6 +347,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
                     if self.integer_type(rt).is_some() {
+                        self.report_void_arithmetic(e, target);
                         info.ty = lt;
                         if self.address_value(left) && right.ice && right.integer.is_some() {
                             info.constant = ConstantClass::Address;
@@ -344,11 +358,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 && self.pointer_compatible(target, t, false)
                         })
                     {
+                        self.report_void_arithmetic(e, target);
                         info.ty = self.types.scalar(self.types.target.ptrdiff_t);
                         info.integer = self.address_difference(left, right, target);
                         if info.integer.is_some() {
                             info.constant = ConstantClass::Arithmetic;
                             info.folding = ConstantFolding::AddressDifference;
+                        } else if let Some(labels) = self.label_difference(left, right) {
+                            info.constant = ConstantClass::LabelDifference;
+                            self.control.record_difference(e, labels);
                         }
                     } else {
                         return self
@@ -360,6 +378,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .pointer_target(rt)
                         .is_some_and(|t| self.pointer_arithmetic_target(t))
                 {
+                    if let Some(target) = self.pointer_target(rt) {
+                        self.report_void_arithmetic(e, target);
+                    }
                     info.ty = rt;
                     if self.address_value(right) && left.ice && left.integer.is_some() {
                         info.constant = ConstantClass::Address;
@@ -865,12 +886,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info.place_alignment = u8::try_from(alignment.trailing_zeros() + 1)
             .ok()
             .and_then(NonZeroU8::new);
+        _ = self.resolved.members.insert(
+            self.expressions.len(),
+            super::super::facts::resolved::MemberFacts {
+                tag:         id,
+                field:       index,
+                access_type: field_ty,
+                alignment:   u32::try_from(alignment).unwrap_or(1),
+                bit_field:   field.width,
+            },
+        );
         info.bit_field = field.width;
         info.promotion_width = field
             .width
             .and_then(|width| u8::try_from(width).ok())
             .and_then(NonZeroU8::new);
-        info.field = u32::try_from(index + 1).ok().and_then(NonZeroU32::new);
         info.register = !indirect && base.register;
         info.static_address = if indirect {
             self.address_value(base)
@@ -1047,6 +1077,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.constant = ConstantClass::Arithmetic;
         }
+        // GNU extension: GCC "Labels as Values". A label difference
+        // converted to an integer of 32 to 64 bits, no wider than the value
+        // it converts, stays a link-time constant, as in Clang.
+        if operand.constant == ConstantClass::LabelDifference
+            && self.label_difference_fits(target, from)
+            && let Some(labels) = self.control.difference_labels(operand.expression)
+        {
+            info.constant = ConstantClass::LabelDifference;
+            self.control.record_difference(e, labels);
+        }
         info
     }
 
@@ -1067,6 +1107,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.nodes[ty.index],
                 TypeKind::Scalar(Scalar::Void) | TypeKind::Function { .. }
             );
+        // `void` has size 1 for GNU pointer arithmetic, also in ISO modes,
+        // as Clang accepts it with `-Wpointer-arith` off. GNU extension: GCC
+        // "Pointer Arith".
+        let gnu = gnu
+            || (bit_field.is_none() && !align && self.void_type(ty) && {
+                self.context.report_extension(
+                    crate::configuration::Feature::VoidPointerArithmetic,
+                    "sizeof of void",
+                    e.source_vectors,
+                );
+                self.context
+                    .configuration
+                    .accepts(crate::configuration::Feature::VoidPointerArithmetic)
+            });
         if bit_field.is_some() || (!gnu && !self.complete_object(ty)) {
             return self.invalid_expression(e, SemanticErrorKind::InvalidSizeof);
         }
@@ -1095,12 +1149,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         _ = self.expression_indices.insert(key, self.expressions.len());
+        // Call and builtin-instance facts precede their effect summaries.
+        self.retain_designation(info);
         let effects = self.summarize_effects(info);
         if self
             .expression_actions
             .get(&key)
             .is_some_and(|site| !site.operand_evaluations.is_empty() || !site.bounds.is_empty())
-            && !effects.value_pure
+            && !effects[0].is_empty()
         {
             // Written type-site effects prohibit folding the enclosing value;
             // an empty action list preserves its existing constant eligibility.
@@ -1109,7 +1165,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.floating = None;
             info.constant = ConstantClass::None;
         }
-        self.expression_effects.push(effects);
+        _ = self.retain_effect_recipes(info, effects);
         self.expressions.push(info);
     }
 
@@ -1186,7 +1242,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding: None,
             bit_field: None,
             promotion_width: None,
-            field: None,
             register: false,
             vector_element: false,
             static_address: false,
@@ -1300,8 +1355,76 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
     /// unanalyzed target, such as a GNU vector, is not checked.
     /// C99: §6.5.6 paragraphs 2-3, pp. 82-83; PDF pp. 94-95.
+    /// Whether a label difference of type `from` can convert to `target` and
+    /// remain a link-time constant. Clang accepts an integer of 32 to 64
+    /// bits (the x86-64 pointer width) that is no wider than `from`, so a
+    /// difference that was narrowed cannot widen again; `_Bool`, 128-bit
+    /// integers and narrower types are refused. GNU extension: GCC "Labels as
+    /// Values".
+    pub(in crate::translation_phases::semantic_analysis) fn label_difference_fits(
+        &self,
+        target: TypeId,
+        from: TypeId,
+    ) -> bool {
+        let bits = |ty| {
+            self.integer_type(ty).filter(|_| {
+                !matches!(
+                    self.types.nodes[self.types.non_atomic(ty).index],
+                    TypeKind::Scalar(Scalar::Bool)
+                )
+            })
+        };
+        match (bits(target), bits(from)) {
+            | (Some((target, _)), Some((from, _))) => (32..=64).contains(&target) && target <= from,
+            | _ => false,
+        }
+    }
+
+    /// Whether a pointer to `target` supports addition, subtraction and
+    /// increments: a complete object type, or `void` as a GNU extension.
+    /// C99: §6.5.6p2-3, p. 82; PDF p. 94; GNU extension: GCC "Pointer Arith".
     fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
-        self.complete_object(target) || self.types.unanalyzed(target)
+        self.complete_object(target)
+            || self.types.unanalyzed(target)
+            || (self.void_type(target)
+                && self
+                    .context
+                    .configuration
+                    .accepts(crate::configuration::Feature::VoidPointerArithmetic))
+    }
+
+    /// Reports arithmetic on a `void *` operand under the extension policy;
+    /// its element size is 1. GNU extension: GCC "Pointer Arith",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html>.
+    fn report_void_arithmetic(&mut self, e: &'tu Expression<'tu>, target: TypeId) {
+        if self.void_type(target) {
+            self.context.report_extension(
+                crate::configuration::Feature::VoidPointerArithmetic,
+                "arithmetic on a pointer to void",
+                e.source_vectors,
+            );
+        }
+    }
+
+    /// The size pointer arithmetic on a pointer to `target` steps by: the
+    /// layout's size, or 1 for `void` under the GNU extension.
+    /// GNU extension: GCC "Pointer Arith".
+    pub(in crate::translation_phases::semantic_analysis) fn arithmetic_size(
+        &self,
+        target: TypeId,
+    ) -> Option<u64> {
+        if self.void_type(target) {
+            return self
+                .context
+                .configuration
+                .accepts(crate::configuration::Feature::VoidPointerArithmetic)
+                .then_some(1);
+        }
+        self.types.layout(target).map(|layout| layout.size)
+    }
+
+    fn void_type(&self, ty: TypeId) -> bool {
+        matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void))
     }
 
     /// Whether `ty` is an integer type exactly as wide as a pointer, which
@@ -1332,6 +1455,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty: TypeId,
         kind: ConversionKind,
     ) {
+        self.resolved.conversion(e, ty, kind);
         self.conversions.push(Conversion {
             expression: e,
             ty,
@@ -1643,7 +1767,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.tainted {
             return;
         }
-        let e = super::selected_designator(e, |e| Some(self.expression_info(e)));
+        let e = self.selected_designator(e);
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
             && self.builtin_name(name)
@@ -1651,9 +1775,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
-            let ty = if let Some(ty) = self
-                .common_builtin_type(name)
-                .or_else(|| self.library_builtin_type(name))
+            let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name));
+            let ty = if let Some(ty) = descriptor
+                .map(|descriptor| self.descriptor_type(descriptor))
                 .or_else(|| self.x86_builtin_type(name))
             {
                 ty
@@ -1675,7 +1799,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
-            self.bindings[index].builtin = true;
+            self.bindings[index].origin = if let Some(descriptor) = descriptor {
+                super::super::BindingOrigin::Intrinsic(descriptor.id)
+            } else if super::super::builtins::legacy_named_builtin(
+                self.context.string_cache.at(name.name),
+            ) {
+                super::super::BindingOrigin::LegacyIntrinsic
+            } else {
+                super::super::BindingOrigin::OpaqueIntrinsic
+            };
             return;
         }
         if let ExpressionType::Identifier(name) = e.kind
@@ -1703,6 +1835,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
+            self.bindings.last_mut().expect("implicit binding").origin =
+                super::super::BindingOrigin::ImplicitOrdinary;
             self.context.report_extension(
                 crate::configuration::Feature::ImplicitFunctionDeclaration,
                 "implicit function declaration",
@@ -1719,9 +1853,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &self,
         name: Identifier,
     ) -> bool {
-        (self.context.configuration.gnu_extensions()
-            && self.context.string_cache.at(name.name) == "alloca")
-            || super::atomics::modeled(self.context.string_cache.at(name.name))
+        crate::builtins::lookup(self.context.string_cache.at(name.name)).is_some_and(|descriptor| {
+            descriptor.availability.naming == crate::builtins::NamingPolicy::GnuOrdinary
+                && self.context.configuration.gnu_extensions()
+        }) || super::atomics::modeled(self.context.string_cache.at(name.name))
             || self
                 .context
                 .string_cache
