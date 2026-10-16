@@ -127,7 +127,15 @@ mod tests {
                 "used",
                 "__attribute__((used)) static int keep(void) { return 1; }",
                 "gnu99",
-                vec!["keep", "llvm.used", "main"],
+                vec![
+                    "keep",
+                    if cfg!(windows) {
+                        "llvm.used"
+                    } else {
+                        "llvm.compiler.used"
+                    },
+                    "main",
+                ],
             ),
         ] {
             let source = format!("{source}\nint main(void) {{ return 0; }}\n");

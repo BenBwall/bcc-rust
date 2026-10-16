@@ -1014,7 +1014,6 @@ fn annotation_takes_wide_string_literals() {
         for source in [
             "void f(void) { __annotation(L\"a\", \"narrow\"); }",
             "void f(void) { __annotation((L\"a\" + 0)); }",
-            "void f(void) { __annotation(u\"a\"); }",
         ] {
             assert_eq!(
                 kinds(source, configuration),
@@ -1022,5 +1021,14 @@ fn annotation_takes_wide_string_literals() {
                 "{target:?}: {source}"
             );
         }
+        // The UTF-16 prefix is a C11 token; C99 rejects it before semantics.
+        let c11 = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
+            .with_target(target)
+            .with_msvc_extensions(true);
+        assert_eq!(
+            kinds("void f(void) { __annotation(u\"a\"); }", c11),
+            [SemanticErrorKind::AnnotationArgument],
+            "{target:?}: UTF-16 is not a wide string"
+        );
     }
 }

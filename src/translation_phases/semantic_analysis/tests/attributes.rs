@@ -801,7 +801,7 @@ _Static_assert(_Alignof(struct Q)==1 && sizeof(struct Q)==5 && __builtin_offseto
                     0,
                     "{target:?}: {:?}",
                     context.take_pending_errors()
-                )
+                );
             },
         );
     }

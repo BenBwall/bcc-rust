@@ -190,8 +190,8 @@ fn clang_ir(name: &str, source: &str, target: Target) -> String {
 }
 
 /// Array variables of at least 16 bytes for the System V large-array rule
-/// (#69), with the alignment Clang 23 gives each on the GNU targets and on
-/// MSVC (whose own minimum global alignment is not modeled).
+/// (#69), with Clang 23's GNU array alignment and MSVC size-based global
+/// minima. Automatic MSVC arrays retain their declared alignment.
 const LARGE_ARRAYS: &str = "\
 char g16[16]; char g15[15]; char gi[4][4]; struct M { char a[32]; } gm;
 char ga[32] __attribute__((aligned(2))); _Alignas(4) char gb[32];
@@ -220,6 +220,8 @@ fn large_array_variables_get_the_psabi_alignment() {
         let text = module.to_string();
         let gnu = target != Target::WindowsMsvc;
         let large = if gnu { 16 } else { 1 };
+        let global_large = if gnu { 16 } else { 8 };
+        let global_other = if gnu { 1 } else { 8 };
         let global = |name: &str| {
             let line = text
                 .lines()
@@ -233,15 +235,15 @@ fn large_array_variables_get_the_psabi_alignment() {
                 .unwrap()
         };
         for (name, align) in [
-            ("g16", large),
-            ("g15", 1),
-            ("gi", large),
-            ("gm", 1),
+            ("g16", global_large),
+            ("g15", global_other),
+            ("gi", global_large),
+            ("gm", global_other),
             ("ga", 2),
             ("gb", 4),
-            ("gt", large),
-            ("ext", large),
-            ("f.ls", large),
+            ("gt", 16),
+            ("ext", global_large),
+            ("f.ls", global_large),
         ] {
             assert_eq!(global(name), align, "@{name} for {target:?}\n{text}");
         }
