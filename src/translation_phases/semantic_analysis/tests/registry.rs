@@ -30,6 +30,11 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
         }
         for suffix in ["x", "lll", "_bad"] {
             let spelling = format!("{}{suffix}", descriptor.spelling);
+            // A suffix can form another exact builtin, such as fma + x = fmax.
+            // Every registered spelling is already a positive probe above.
+            if crate::builtins::test_descriptors().any(|other| other.spelling == spelling) {
+                continue;
+            }
             assert!(lookup(&spelling).is_none());
             write!(
                 source,
