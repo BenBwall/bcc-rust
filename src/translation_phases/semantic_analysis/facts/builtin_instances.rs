@@ -95,7 +95,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 rule
             };
-            operands.push(self.checked_operand(expression, rule));
+            let mut operand = self.checked_operand(expression, rule);
+            if index == 0
+                && matches!(descriptor.operation, BuiltinOperation::ObjectSize(true))
+                && matches!(
+                    self.function_extensions.object_size(info.expression),
+                    Some(super::super::ObjectSize::Remainder { .. })
+                )
+            {
+                operand.evaluation = ArgumentEvaluation::Value;
+            }
+            operands.push(operand);
         }
         self.builtin_instance(info, descriptor, operands.leak())
     }

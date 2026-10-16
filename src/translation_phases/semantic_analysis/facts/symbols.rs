@@ -147,12 +147,8 @@ pub(crate) enum UnsupportedAttribute {
     Weakref,
     /// GNU/MSVC `naked`: a body without prologue or epilogue.
     Naked,
-    /// Clang `overloadable`: mangled C function names.
-    Overloadable,
     /// Clang `cpu_dispatch`/`cpu_specific`/`target_version` multiversioning.
     Multiversioning,
-    /// Clang `pass_object_size`: an implicit size argument at every call.
-    PassObjectSize,
     /// `ms_struct` or `gcc_struct` naming the other target's record layout.
     RecordLayout,
     /// A constructor or destructor function that takes parameters.
@@ -182,9 +178,7 @@ impl UnsupportedAttribute {
             | Self::Ifunc => "the `ifunc` attribute",
             | Self::Weakref => "the `weakref` attribute",
             | Self::Naked => "naked functions",
-            | Self::Overloadable => "the `overloadable` attribute",
             | Self::Multiversioning => "function multiversioning attributes",
-            | Self::PassObjectSize => "the `pass_object_size` attribute",
             | Self::RecordLayout => "this record layout attribute",
             | Self::InitFunctionParameters => "constructors and destructors with parameters",
             | Self::SectionName => "this section name",

@@ -103,8 +103,7 @@ impl Unit<'_, '_, '_> {
         errors: &mut ArenaVec<'_, LoweringError>,
     ) {
         for alias in self.sema.symbols.aliases {
-            let names =
-                [alias.binding, alias.target].map(|binding| self.sema.bindings[binding].name.name);
+            let names = [alias.binding, alias.target].map(|binding| self.binding_identity(binding));
             if names.iter().any(|&name| self.names.linked(name).is_some()) {
                 errors.push(LoweringError::unsupported(
                     Construct::Attribute(UnsupportedAttribute::AliasAssemblerLabel),

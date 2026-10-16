@@ -626,6 +626,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         }
+        if kind == BindingKind::Function {
+            let definition = self.functions.current.is_none()
+                && self
+                    .functions
+                    .reference_function
+                    .is_some_and(|function| self.function_controls.contains_key(&function));
+            if let Some(contract) = self.function_contract(
+                declarator,
+                spec.extensions,
+                ty,
+                definition,
+                linkage == Linkage::Internal,
+            ) {
+                self.correspondence
+                    .identify(self.bindings.len(), contract.identity);
+                _ = self
+                    .function_extensions
+                    .functions
+                    .insert(self.bindings.len(), contract);
+            }
+        }
+        if kind == BindingKind::Function {
+            self.inherit_call_contract(self.bindings.len(), name.name);
+        }
         self.bind(name, ty, kind, linkage, duration, None);
         self.record_declaration(self.bindings.len() - 1, spec, declarator, initialized);
         if spec.storage_class == Some(StorageClass::Register) {
@@ -649,6 +673,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         value: Option<Integer>,
     ) {
         let visible = self.lookup(Namespace::Ordinary, name.name);
+        if self.bind_overload(
+            name,
+            ty,
+            kind,
+            linkage,
+            duration,
+            visible.map(|entry| entry.binding),
+        ) {
+            return;
+        }
         let previous = visible
             .filter(|p| p.scope == self.scope)
             .map(|p| p.binding)

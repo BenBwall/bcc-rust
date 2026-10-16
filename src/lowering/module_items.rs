@@ -186,7 +186,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             if let Some(name) = name {
                 _ = self.reserved_names.insert(name);
                 if binding.origin.is_intrinsic()
-                    && self.names.linked(binding.name.name).is_none()
+                    && self.names.linked(self.binding_identity(index)).is_none()
                     && let Some(runtime) = binding.origin.library()
                 {
                     _ = self.reserved_names.insert(runtime);
@@ -377,7 +377,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Ok(Some(func));
         }
         let signature = self
-            .signature(self.sema.bindings[binding].ty)
+            .signature_for_binding(binding)
             .map_err(|kind| at(kind, source))?;
         let base = format_in!(self.tables, "{external}.always_inline");
         let name = self.unique_name(base);
@@ -417,7 +417,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         // label chosen by the user (GNU extension to C99 §6.2.2p2).
         let runtime = self
             .names
-            .linked(data.name.name)
+            .linked(self.binding_identity(binding))
             .is_none()
             .then(|| data.origin.library())
             .flatten();
@@ -446,7 +446,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             let signature = self.signature_of([], result, true, self.tables)?;
             self.module.intern(signature)
         } else {
-            self.signature(data.ty)?
+            self.signature_for_binding(binding)?
         };
         let func = self
             .module
@@ -455,7 +455,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         // Semantic analysis classifies the C spelling; an assembler label,
         // which only lowering decodes until M7, can name a cataloged symbol
         // instead. GNU extension: GCC manual, "Asm Labels".
-        if self.names.linked(data.name.name).is_some() && crate::builtins::returns_twice(name) {
+        if self.names.linked(self.binding_identity(binding)).is_some()
+            && crate::builtins::returns_twice(name)
+        {
             self.module.function_mut(func).returns_twice = true;
         }
         Ok(func)
@@ -471,14 +473,50 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 prototype: false,
                 ..
             }
-        ) && !self
-            .defined_functions
-            .contains(&self.sema.bindings[binding].name.name)
+        ) && !self.defined_functions.contains(
+            &self
+                .sema
+                .function_extensions
+                .function(binding)
+                .map_or(self.sema.bindings[binding].name.name, |extension| {
+                    extension.identity
+                }),
+        )
     }
 
     /// The IR signature of a C function type: one parameter per declared
     /// parameter, after the adjustments of §6.7.5.3 paragraphs 7-8, p. 119;
     /// PDF p. 131. An unprototyped type has no fixed parameters.
+    fn signature_for_binding(&mut self, binding: usize) -> Result<SigId, LoweringErrorKind> {
+        let ty = self.sema.bindings[binding].ty;
+        let Some(extension) = self.sema.function_extensions.function(binding) else {
+            return self.signature(ty);
+        };
+        let TypeKind::Function {
+            result,
+            parameters,
+            variadic,
+            ..
+        } = self.sema.types.kind(ty)
+        else {
+            return self.signature(ty);
+        };
+        let mut expanded = ArenaVec::new_in(self.tables);
+        for (index, &parameter) in parameters.iter().enumerate() {
+            expanded.push(parameter);
+            if extension
+                .sizes
+                .iter()
+                .any(|size| size.index as usize == index)
+            {
+                expanded.push(extension.size_type);
+            }
+        }
+        let signature =
+            self.signature_of(expanded.iter().copied(), result, variadic, self.tables)?;
+        Ok(self.module.intern(signature))
+    }
+
     pub(super) fn signature(&mut self, ty: TypeId) -> Result<SigId, LoweringErrorKind> {
         let TypeKind::Function {
             result,
@@ -1546,7 +1584,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let mut private_inline = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         for function in sema.functions {
             if let Some(binding) = function.binding {
-                _ = defined_functions.insert(sema.bindings[binding].name.name);
+                _ = defined_functions.insert(
+                    sema.function_extensions
+                        .function(binding)
+                        .map_or(sema.bindings[binding].name.name, |extension| {
+                            extension.identity
+                        }),
+                );
                 if definitions.get(&binding) == Some(&DefinitionKind::Inline)
                     && !function.assembly
                     && sema

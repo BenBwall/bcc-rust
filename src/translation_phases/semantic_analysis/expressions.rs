@@ -94,7 +94,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let binding = self.bindings[index];
                     info.ty = binding.ty;
                     info.binding = Some(index);
-                    self.record_binding_use(index, name);
+                    if self.function_extensions.function(index).is_none()
+                        && !self.overload_previous.contains_key(&index)
+                    {
+                        self.record_binding_use(index, name);
+                    }
                     info.register = self.register_bindings.contains_key(&index);
                     info.static_address = binding.duration == Duration::Static
                         || binding.kind == BindingKind::Function;

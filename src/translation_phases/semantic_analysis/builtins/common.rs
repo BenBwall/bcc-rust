@@ -146,23 +146,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },
-            | CommonBuiltin::ObjectSize(_) => {
+            | CommonBuiltin::ObjectSize(dynamic) => {
                 let ConversionRule::Parameter(pattern) = descriptor.arguments[1].conversion else {
                     return None;
                 };
                 let int = self.signature_type(pattern);
-                let value = self
+                let mode = self
                     .common_integer_constant(args[1], int)
-                    .and_then(Integer::to_u64);
-                {
+                    .and_then(Integer::to_u64)
+                    .and_then(|mode| u8::try_from(mode).ok())
+                    .unwrap_or(0);
+                let size = if self.effects_pure(args[0], super::super::EffectContext::Value) {
+                    self.infer_object_size(args[0], mode, dynamic)
+                } else {
+                    super::super::ObjectSize::Unknown
+                };
+                let size = match size {
+                    | super::super::ObjectSize::Unknown =>
+                        super::super::ObjectSize::Constant(if mode >= 2 { 0 } else { u64::MAX }),
+                    | size => size,
+                };
+                if let super::super::ObjectSize::Constant(size) = size {
                     let (bits, signed) = self.integer_type(result)?;
-                    info.integer = Some(
-                        Integer::int(if value.is_some_and(|v| v >= 2) { 0 } else { -1 })
-                            .cast(bits, signed),
-                    );
+                    info.integer = Some(Integer::int(i128::from(size)).cast(bits, signed));
                     info.ice = true;
                     info.constant = ConstantClass::Arithmetic;
                 }
+                _ = self
+                    .function_extensions
+                    .object_sizes
+                    .insert(std::ptr::from_ref(e).addr(), size);
             },
             | CommonBuiltin::Overflow(operation, scalar, predicate) => {
                 for &arg in &args[..2] {

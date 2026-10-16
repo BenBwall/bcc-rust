@@ -35,6 +35,7 @@ pub(crate) struct CorrespondenceFacts<'tu> {
     /// Linked names to their entity: every declaration of an identifier
     /// with linkage denotes one entity. C99: §6.2.2p2, p. 30; PDF p. 42.
     entities: ArenaMap<'tu, StringCacheId, EntityId>,
+    identities: ArenaMap<'tu, usize, StringCacheId>,
     pub(crate) parameter_minimums: ArenaMap<'tu, usize, super::super::ArrayBound>,
     #[cfg(test)]
     pub(crate) work: usize,
@@ -92,7 +93,13 @@ impl<'tu> CorrespondenceFacts<'tu> {
             EntityId(index)
         } else {
             self.entities
-                .get(&binding.name.name)
+                .get(
+                    &self
+                        .identities
+                        .get(&index)
+                        .copied()
+                        .unwrap_or(binding.name.name),
+                )
                 .copied()
                 .unwrap_or(EntityId(index))
         }
@@ -118,6 +125,7 @@ pub(in crate::translation_phases::semantic_analysis) struct CorrespondenceBuilde
     declarations: ArenaVec<'tu, DeclarationFacts<'tu>>,
     indices: ArenaMap<'tu, usize, OccurrenceId>,
     entities: ArenaMap<'tu, StringCacheId, EntityId>,
+    identities: ArenaMap<'tu, usize, StringCacheId>,
     pub(in crate::translation_phases::semantic_analysis) parameter_minimums:
         ArenaMap<'tu, usize, super::super::ArrayBound>,
     #[cfg(test)]
@@ -125,11 +133,22 @@ pub(in crate::translation_phases::semantic_analysis) struct CorrespondenceBuilde
 }
 
 impl<'tu> CorrespondenceBuilder<'tu> {
-    pub(in crate::translation_phases::semantic_analysis) fn new(tu: &'tu Bump) -> Self {
+    pub(in crate::translation_phases::semantic_analysis) fn identify(
+        &mut self,
+        binding: usize,
+        name: StringCacheId,
+    ) {
+        _ = self.identities.insert(binding, name);
+    }
+
+    pub(in crate::translation_phases::semantic_analysis) fn new(
+        tu: &'tu Bump,
+    ) -> Self {
         Self {
             declarations:       ArenaVec::new_in(tu),
             indices:            ArenaMap::with_hasher_in(FxBuildHasher, tu),
             entities:           ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            identities:         ArenaMap::with_hasher_in(FxBuildHasher, tu),
             parameter_minimums: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             #[cfg(test)]
             work:               0,
@@ -146,7 +165,12 @@ impl<'tu> CorrespondenceBuilder<'tu> {
         } else {
             *self
                 .entities
-                .entry(binding.name.name)
+                .entry(
+                    self.identities
+                        .get(&index)
+                        .copied()
+                        .unwrap_or(binding.name.name),
+                )
                 .or_insert(EntityId(index))
         }
     }
@@ -210,6 +234,7 @@ impl<'tu> CorrespondenceBuilder<'tu> {
             declarations:       self.declarations.leak(),
             indices:            self.indices,
             entities:           self.entities,
+            identities:         self.identities,
             parameter_minimums: self.parameter_minimums,
             #[cfg(test)]
             work:               self.work,

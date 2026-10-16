@@ -266,7 +266,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         expression: &'tu Expression<'tu>,
         arguments: &[&'tu Expression<'tu>],
     ) {
-        let designation = self.designation(expression);
+        let mut designation = self.designation(expression);
+        let selected = self.function_extensions.call(info.expression);
+        if let Some(selected) = selected {
+            designation.binding = Some(selected.binding);
+        }
         let conversion = self.resolved.conversions.get(&identity(expression));
         let direct = conversion
             .is_some_and(|c| c.count == 1 && c.kind == ConversionKind::FunctionDecay)
@@ -291,7 +295,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | _ => Callee::Indirect(ExprId(self.expression_indices[&identity(expression)])),
         };
-        let ty = self.expression_info(expression).ty;
+        let ty = selected.map_or_else(
+            || self.expression_info(expression).ty,
+            |selected| self.bindings[selected.binding].ty,
+        );
         let function_type = match self.types.nodes[self.types.non_atomic(ty).index] {
             | TypeKind::Function { .. } => Some(ty),
             | TypeKind::Pointer(target)

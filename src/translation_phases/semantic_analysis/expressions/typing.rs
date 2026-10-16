@@ -87,6 +87,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
         }
         if op == U::AddressOf {
+            let operand = self.resolve_function_value(operand, None);
             if operand.vector_element {
                 return self.vector_error(e);
             }
@@ -114,6 +115,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let ty = self.types.intern(TypeKind::Pointer(operand.ty));
             let mut info = Self::expression_result(e, ty);
+            info.binding = operand
+                .binding
+                .filter(|&binding| self.bindings[binding].kind == BindingKind::Function);
             if operand.static_address {
                 info.constant = ConstantClass::Address;
                 info.integer = self
@@ -684,6 +688,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         function: ExpressionInfo<'tu>,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> ExpressionInfo<'tu> {
+        let function = self.select_extension_call(e, function, arguments);
         self.x86_immediates(function, arguments);
         self.check_nonnull_arguments(function.binding, arguments);
         let ty = self.converted(function);
@@ -966,6 +971,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         operand: ExpressionInfo<'tu>,
     ) -> ExpressionInfo<'tu> {
+        let operand = self.resolve_function_value(operand, Some(target));
         let from = self.converted(operand);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return Self::expression_result(e, self.types.unknown());
@@ -1588,6 +1594,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         info: ExpressionInfo<'tu>,
     ) -> TypeId {
+        let info = if matches!(self.types.nodes[info.ty.index], TypeKind::Function { .. })
+            && self.function_extensions.value(info.expression).is_none()
+        {
+            let resolved = self.resolve_function_value(info, None);
+            if resolved
+                .binding
+                .is_some_and(|binding| self.overload_previous.contains_key(&binding))
+                && self
+                    .function_extensions
+                    .value(resolved.expression)
+                    .is_none()
+                && !self.types.unanalyzed(resolved.ty)
+            {
+                self.error(
+                    SemanticErrorKind::AmbiguousOverload,
+                    resolved.expression.source_vectors,
+                    resolved
+                        .binding
+                        .map(|binding| self.bindings[binding].name.name),
+                    None,
+                );
+                return self.types.unknown();
+            }
+            resolved
+        } else {
+            info
+        };
         let (ty, kind) = self.value_conversion(info);
         if let Some(kind) = kind {
             self.convert(info.expression, ty, kind);
@@ -1598,7 +1631,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Determines the value type without recording a second conversion for
     /// an already-converted expression statement's tail.
     /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58.
-    pub(super) fn value_conversion(
+    pub(in crate::translation_phases::semantic_analysis) fn value_conversion(
         &mut self,
         info: ExpressionInfo<'tu>,
     ) -> (TypeId, Option<ConversionKind>) {
@@ -1843,7 +1876,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether `source`, whose value conversion has type `from`, may be
     /// assigned to `target` without a diagnostic. Records no conversion.
     /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
-    fn assignable(&mut self, target: TypeId, source: ExpressionInfo<'tu>, from: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn assignable(
+        &mut self,
+        target: TypeId,
+        source: ExpressionInfo<'tu>,
+        from: TypeId,
+    ) -> bool {
         let target = self.types.non_atomic(target);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return true;

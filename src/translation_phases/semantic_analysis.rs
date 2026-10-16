@@ -81,6 +81,7 @@ mod attributes;
 mod bound_sites;
 mod builtins;
 mod generic;
+mod object_sizes;
 mod packing;
 mod type_generic;
 mod vectors;
@@ -274,6 +275,7 @@ pub(crate) fn analyze<'tu>(
         expression_actions: analyzer.expression_actions,
         declarators: analyzer.declarators.leak(),
         symbols,
+        function_extensions: analyzer.function_extensions,
         expressions: analyzer.expressions.leak(),
         expression_indices: index.expressions,
         string_initializers: analyzer.string_initializers,
@@ -414,6 +416,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::Bind(d, s, initialized, bound_start) => {
                 let ty = self.take_type();
+                self.work
+                    .push(Work::BindReady(d, s, initialized, bound_start, ty));
+                self.prepare_function_attributes(d, s.extensions);
+            },
+            | Work::BindReady(d, s, initialized, bound_start, ty) => {
                 let prior = self.bindings.len();
                 let errors_before = self.semantic_errors;
                 self.bind_declaration(d, s, ty, initialized);
@@ -461,7 +468,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::FunctionBody(f));
                 self.work.push(Work::Declarator(f.declarator, base, false));
             },
-            | Work::FunctionBody(f) => self.function_body(f),
+            | Work::FunctionBody(f) => {
+                let ty = self.take_type();
+                self.work.push(Work::FunctionBodyReady(f, ty));
+                self.prepare_function_attributes(f.declarator, f.declaration_specifiers.extensions);
+            },
+            | Work::FunctionBodyReady(f, ty) => self.function_body(f, ty),
             | Work::OldSignature(f) => self.old_signature(f),
             | Work::BlockItem(item) => match item {
                 | BlockItem::Declaration(d) => {
@@ -1547,6 +1559,13 @@ enum Work<'tu, 's> {
     Declaration(&'tu Declaration<'tu>),
     DeclarationBase(&'tu Declaration<'tu>),
     DeclarationDeclarator(Declarator<'tu>, DeclarationSpecifiers<'tu>, TypeId, bool),
+    BindReady(
+        Declarator<'tu>,
+        DeclarationSpecifiers<'tu>,
+        bool,
+        usize,
+        TypeId,
+    ),
     Bind(Declarator<'tu>, DeclarationSpecifiers<'tu>, bool, usize),
     /// A declarator and its initializer are complete; a cleanup variable's
     /// region opens here.
@@ -1554,6 +1573,7 @@ enum Work<'tu, 's> {
     Function(&'tu FunctionDefinition<'tu>),
     FunctionBase(&'tu FunctionDefinition<'tu>),
     FunctionBody(&'tu FunctionDefinition<'tu>),
+    FunctionBodyReady(&'tu FunctionDefinition<'tu>, TypeId),
     FunctionWork(functions::FunctionWork<'tu>),
     StatementWork(statements::StatementWork<'tu>),
     Statement(&'tu Statement<'tu>, bool),
@@ -1754,6 +1774,9 @@ struct Analyzer<'a, 'tu, 's> {
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
     control:                 builder::Builder<'tu, 's>,
+    function_extensions:     FunctionExtensions<'tu>,
+    extension_parameters:    ArenaMap<'s, usize, SizeParameter>,
+    overload_previous:       ArenaMap<'s, usize, usize>,
     attributes:              attributes::AttributeState<'tu, 's>,
     /// Tags whose member or enumerator list is open.
     defining:                ArenaMap<'s, usize, ()>,

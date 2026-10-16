@@ -801,7 +801,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The text of a single string-literal argument, or an error. An
     /// encoding prefix has no effect on the text, with Clang's warning.
-    fn string_argument(&mut self, attribute: WrittenAttribute<'_>) -> Option<&'tu str> {
+    pub(super) fn string_argument(&mut self, attribute: WrittenAttribute<'_>) -> Option<&'tu str> {
         let arguments = attribute.arguments.unwrap_or_default();
         let mut text: Option<&str> = None;
         let mut valid = !arguments.is_empty();

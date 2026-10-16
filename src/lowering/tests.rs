@@ -9,6 +9,7 @@ mod correspondence;
 mod effects;
 mod extensions;
 mod floats;
+mod fortify;
 mod golden;
 mod inline;
 mod layout;
