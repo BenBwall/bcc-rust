@@ -259,6 +259,7 @@ fn atomic_issue_62_reproducer_matches_reference_output() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .expect("compile issue 62 reproducer");
@@ -296,6 +297,7 @@ fn atomic_programs_execute_in_all_llvm_arms() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .expect("compile atomics");
@@ -337,6 +339,7 @@ int main(void) { pthread_t threads[4]; for(int i=0;i<4;i++) if(pthread_create(&t
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Object,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();
@@ -407,6 +410,7 @@ int main(void) {
                     disable_llvm_passes: arm.disable_llvm_passes,
                     target,
                     kind: OutputKind::Executable,
+                    code: crate::target::CodeOptions::default(),
                 },
             )
             .unwrap();
