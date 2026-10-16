@@ -1,7 +1,6 @@
 //! Regressions for standard- and dialect-gated preprocessing found in review.
 
 use std::{
-    fmt::Write as _,
     sync::mpsc,
     time::Duration,
 };
