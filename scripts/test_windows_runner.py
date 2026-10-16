@@ -17,6 +17,14 @@ spec.loader.exec_module(client)
 
 
 class SubmissionTests(unittest.TestCase):
+    def test_github_cli_scoping_and_environment(self):
+        with patch.object(client.subprocess, 'run') as run:
+            client.gh('run', 'list')
+            self.assertEqual(run.call_args.args[0], ['gh', 'run', 'list', '--repo', client.REPOSITORY])
+            self.assertEqual(run.call_args.kwargs['env']['GH_NO_UPDATE_NOTIFIER'], '1')
+            client.gh('api', f'repos/{client.REPOSITORY}/actions/runners')
+            self.assertNotIn('--repo', run.call_args.args[0])
+
     def test_argument_boundaries_and_concurrent_run_identity(self):
         calls = []
 
