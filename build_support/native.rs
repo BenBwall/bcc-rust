@@ -139,6 +139,34 @@ pub(super) fn compile(out_dir: &str) {
         _ = native.flags(&clang_args).flag("-flto=full");
     }
     native.compile("float_parsing");
+    let mut target_options = cc::Build::new();
+    // LLVM's headers are external code; keep warnings on the bridge itself.
+    let llvm_headers = format!("-isystem{}", prefix.join("include").display());
+    _ = target_options
+        .compiler(&clang)
+        .archiver(&archiver)
+        .cpp(true)
+        .cpp_link_stdlib(None)
+        .file("build_support/llvm_target_options.cpp")
+        .opt_level(3)
+        .debug(true)
+        .inherit_rustflags(false)
+        .static_crt(true)
+        .out_dir(out_dir);
+    if windows_msvc {
+        _ = target_options
+            .flags(clang_args.iter().map(|arg| format!("/clang:{arg}")))
+            .flag(format!("/clang:{llvm_headers}"))
+            .flag("/std:c++17")
+            .flag("/clang:-flto=full");
+    } else {
+        _ = target_options
+            .flags(&clang_args)
+            .flag(llvm_headers)
+            .flag("-std=c++17")
+            .flag("-flto=full");
+    }
+    target_options.compile("llvm_target_options");
     bindgen::Builder::default()
         .header("build_support/float_parsing.h")
         .clang_args(&clang_args)

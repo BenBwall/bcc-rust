@@ -269,6 +269,10 @@ GCC's libstdc++. LLVM's own allocations use the C++ heap; Rust compilation
 buffers still use arenas. LLVM owners live outside arenas and dispose their
 objects on every return path.
 
+A small C++ bridge selects ELF initialization arrays, a target-machine option
+LLVM-C does not expose. This makes constructor and destructor registrations use
+the Linux runtime's `.init_array` and `.fini_array` sections.
+
 libclang is loaded only by the binding generator during the build. It is not
 linked into the resulting executable. Rust's `llvm-tools` component supplies
 optional symbol and disassembly tools for inspecting the executable.

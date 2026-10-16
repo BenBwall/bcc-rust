@@ -42,6 +42,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build_support/float_parsing.h");
     println!("cargo:rerun-if-changed=build_support/native.rs");
     println!("cargo:rerun-if-changed=build_support/llvm.rs");
+    println!("cargo:rerun-if-changed=build_support/llvm_target_options.cpp");
     println!("cargo:rerun-if-changed=build_support/llvm/cache.rs");
     native::compile(&OUT_DIR);
     #[cfg(feature = "benchmarking-internals")]

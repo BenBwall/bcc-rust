@@ -1233,6 +1233,11 @@ impl<'id> Session<'id> {
                 LLVMCreateMessage(c"Cannot create LLVM target machine".as_ptr())
             }));
         }
+        if matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
+            // SAFETY: The machine is live and exclusively owned here, before
+            // emission initializes its ELF sections. LLVM-C omits this option.
+            unsafe { bcc_llvm_use_init_array(machine.0) };
+        }
         if !skip_passes {
             let pipeline = match opt.unwrap_or(OptLevel::O0) {
                 | OptLevel::O0 => c"default<O0>",
@@ -1373,6 +1378,11 @@ impl Drop for Buffer {
 }
 #[derive(Debug)]
 struct Machine(LLVMTargetMachineRef);
+
+unsafe extern "C" {
+    /// Selects ELF initialization arrays on a live, unused target machine.
+    fn bcc_llvm_use_init_array(machine: LLVMTargetMachineRef);
+}
 impl Drop for Machine {
     fn drop(&mut self) {
         // SAFETY: This owner disposes its target machine exactly once.
