@@ -1,143 +1,106 @@
-name: CI
+name: Windows runner
+run-name: Windows ${{ inputs.suite }} · ${{ inputs.commit_sha }} · ${{ inputs.request_id }}
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Trusted full commit SHA already pushed to this repository
+        required: true
+        type: string
+      suite:
+        description: Windows workload
+        required: true
+        default: ci
+        type: choice
+        options: [ci, test, bench]
+      cargo_args_json:
+        description: JSON argument array appended to cargo test or cargo bench
+        required: false
+        default: '[]'
+        type: string
+      request_id:
+        description: Optional unique submission identifier
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  CARGO_TERM_COLOR: always
+  group: bcc-win-x64
+  cancel-in-progress: false
 
 jobs:
-  agentbus:
-    name: Agentbus
-    runs-on: ubuntu-24.04
+  windows:
+    runs-on: [self-hosted, Windows, X64, bcc-windows]
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
     env:
-      RUSTFLAGS: ""
-      CARGO_ENCODED_RUSTFLAGS: ""
+      RUSTUP_TOOLCHAIN: 1.99.0-x86_64-pc-windows-gnu
+      MINGW_ROOT: C:\Strawberry\c
+      CARGO_BUILD_JOBS: 8
+      CARGO_TERM_COLOR: never
+      BCC_EVIDENCE: ${{ runner.temp }}/bcc-windows-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
-      - run: rustup toolchain install
-      - run: python -m unittest discover -s scripts/agentbus/tests -p 'test_*.py'
-      - run: python -m unittest discover -s scripts -p 'test_codegraph_mcp.py'
-      - run: cargo test --manifest-path scripts/agentbus/Cargo.toml
-
-  format:
-    name: Formatting
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install nightly rustfmt
-        run: rustup toolchain install nightly --profile minimal --component rustfmt
-      - run: cargo +nightly fmt --check
-
-  llvm:
-    name: Pinned LLVM toolchain
-    runs-on: ubuntu-24.04
-    # A cold build compiles Clang, libclang, and LLD from source.
-    timeout-minutes: 300
-    outputs:
-      key: ${{ steps.key.outputs.key }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: Compute cache key
-        id: key
+      - name: Validate request
+        env:
+          EXACT_SHA: ${{ inputs.commit_sha }}
+          CARGO_ARGS_JSON: ${{ inputs.cargo_args_json }}
         run: |
-          rust=$(git rev-parse HEAD:vendor/rust)
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "key=llvm-${{ runner.os }}-$rust-${{ hashFiles('build_support/llvm.rs', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
-      - name: Restore LLVM installation
-        id: cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            target/llvm
-            !target/llvm/build
-          key: ${{ steps.key.outputs.key }}
-          lookup-only: true
-      - name: Install LLVM build tools
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: Fetch pinned Rust and LLVM sources
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          sparse_fetch() {
-            git init -q "$1"
-            git -C "$1" remote add origin "$2"
-            git -C "$1" config remote.origin.promisor true
-            git -C "$1" config remote.origin.partialclonefilter blob:none
-            git -C "$1" config core.sparseCheckout true
-            git -C "$1" config core.sparseCheckoutCone false
-            cp "$3" "$1/.git/info/sparse-checkout"
-            git -C "$1" fetch -q --depth 1 --filter=blob:none origin "$4"
-            git -C "$1" checkout -q --detach "$4"
+          if ($env:EXACT_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'A full lowercase commit SHA is required.' }
+          $arguments = ConvertFrom-Json -InputObject $env:CARGO_ARGS_JSON -NoEnumerate
+          if ($arguments -isnot [array] -or @($arguments | Where-Object { $_ -isnot [string] }).Count) {
+            throw 'cargo_args_json must be a JSON array of strings.'
           }
-          sparse_fetch vendor/rust https://github.com/rust-lang/rust.git \
-            build_support/rust.sparse "${{ steps.key.outputs.rust }}"
-          llvm=$(git -C vendor/rust rev-parse HEAD:src/llvm-project)
-          sparse_fetch vendor/rust/src/llvm-project https://github.com/rust-lang/llvm-project.git \
-            build_support/llvm.sparse "$llvm"
-      - name: Install Rust toolchain
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: rustup toolchain install
-      - name: Build LLVM through the build script
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: cargo check --lib
-      - name: Save LLVM installation
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            target/llvm
-            !target/llvm/build
-          key: ${{ steps.key.outputs.key }}
+          New-Item -ItemType Directory -Path $env:BCC_EVIDENCE | Out-Null
 
-  clippy:
-    name: Clippy
-    needs: llvm
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup
+      - name: Check out dispatcher helpers
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          llvm-key: ${{ needs.llvm.outputs.key }}
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo clippy --all-targets --features benchmarking-internals -- -D warnings
+          ref: ${{ github.workflow_sha }}
+          path: runner-kit
+          persist-credentials: false
+          submodules: false
 
-  test:
-    name: Tests
-    needs: llvm
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup
+      - name: Check out requested compiler commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          llvm-key: ${{ needs.llvm.outputs.key }}
-      - run: cargo test --all-targets --no-fail-fast
-      - run: cargo test --features benchmarking-internals --test allocation_count
+          ref: ${{ inputs.commit_sha }}
+          path: source
+          clean: false
+          persist-credentials: false
+          submodules: false
 
-  bench:
-    name: Benchmarks
-    needs: llvm
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup
-        with:
-          llvm-key: ${{ needs.llvm.outputs.key }}
-      - run: cargo bench --features benchmarking-internals --bench bench -- --noplot
-      - name: Upload Criterion results
+      - name: Prepare native Windows toolchain and exact source pins
+        run: |
+          & "$env:GITHUB_WORKSPACE/runner-kit/.github/scripts/windows/Initialize-Windows.ps1" `
+            -Repository "$env:GITHUB_WORKSPACE/source"
+          & "$env:GITHUB_WORKSPACE/runner-kit/.github/scripts/windows/prepare-sources.ps1" `
+            -Repository "$env:GITHUB_WORKSPACE/source" 2>&1 |
+            Tee-Object -FilePath "$env:BCC_EVIDENCE/source-setup.log"
+
+      - name: Run requested Windows workload
+        env:
+          EXACT_SHA: ${{ inputs.commit_sha }}
+          SUITE: ${{ inputs.suite }}
+          CARGO_ARGS_JSON: ${{ inputs.cargo_args_json }}
+        run: |
+          & "$env:GITHUB_WORKSPACE/runner-kit/.github/scripts/windows/Invoke-Windows.ps1" `
+            -Repository "$env:GITHUB_WORKSPACE/source" -ExpectedSha $env:EXACT_SHA `
+            -Suite $env:SUITE -CargoArgumentsJson $env:CARGO_ARGS_JSON -ResultsDirectory $env:BCC_EVIDENCE
+          exit $LASTEXITCODE
+
+      - name: Upload results and benchmark reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: criterion
-          path: target/criterion
-          if-no-files-found: ignore
+          name: windows-${{ inputs.suite }}-${{ inputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.BCC_EVIDENCE }}
+            ${{ github.workspace }}/source/target/criterion
+            ${{ github.workspace }}/source/target/x86_64-pc-windows-gnu/criterion
+          if-no-files-found: warn
+          retention-days: 14
