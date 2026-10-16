@@ -997,7 +997,9 @@ pub(super) fn with_identity_macros<'a>(
     } else {
         "#define __GNUC_STDC_INLINE__ 1\n"
     });
-    if configuration.msvc_compatibility() {
+    if configuration.msvc_compatibility()
+        && configuration.target() == crate::target::Target::WindowsMsvc
+    {
         out.push_str(
             "#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n#define _MSC_BUILD \
              1\n#define _MSC_EXTENSIONS 1\n",
