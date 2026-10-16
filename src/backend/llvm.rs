@@ -51,24 +51,59 @@ use crate::{
         Module,
         SigId,
     },
-    target::Target,
+    target::{
+        CodeOptions,
+        Target,
+    },
     util::bump::{
         ArenaVec,
         Bump,
     },
 };
 
-/// Prints the LLVM-C module, after checking the ABI and target contracts.
+/// Prints the LLVM-C module, after checking the ABI and target contracts,
+/// with the default code options.
 pub(crate) fn emit_module<'m>(
     module: &'m Module<'_>,
     target: Target,
     out: &mut dyn fmt::Write,
 ) -> Result<(), EmitError<'m>> {
+    emit_module_with(module, target, CodeOptions::default(), out)
+}
+
+/// Prints the LLVM-C module with the relocation and TLS models of `code`.
+pub(crate) fn emit_module_with<'m>(
+    module: &'m Module<'_>,
+    target: Target,
+    code: CodeOptions,
+    out: &mut dyn fmt::Write,
+) -> Result<(), EmitError<'m>> {
     let arena = Bump::new();
-    Session::with(&arena, target, |api| {
+    Session::with_code(&arena, target, code, |api| {
         build_module(module, target, api, &arena)?;
         out.write_str(api.print().text())?;
         Ok(())
+    })
+}
+
+/// The assembly LLVM generates for the module with the relocation and TLS
+/// models of `code`, at `opt`, as `compile_module` would assemble it.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Tests compare the assembly as an owned string."
+)]
+pub(crate) fn emit_assembly(
+    module: &Module<'_>,
+    target: Target,
+    code: CodeOptions,
+    opt: Option<OptLevel>,
+) -> String {
+    let arena = Bump::new();
+    Session::with_code(&arena, target, code, |api| {
+        build_module(module, target, api, &arena).unwrap();
+        let buffer = api.emit(target, opt, false, true).unwrap();
+        String::from_utf8(buffer.bytes().to_vec()).unwrap()
     })
 }
 

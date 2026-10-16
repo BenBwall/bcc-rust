@@ -43,6 +43,7 @@ fn function_names_match_native_clang_in_every_arm() {
                 disable_llvm_passes: false,
                 target,
                 kind: OutputKind::Executable,
+                code: crate::target::CodeOptions::default(),
             },
         );
         _ = command.arg("-std=gnu99");
@@ -65,6 +66,7 @@ fn function_names_match_native_clang_in_every_arm() {
                     disable_llvm_passes: arm.disable_llvm_passes,
                     target,
                     kind: OutputKind::Executable,
+                    code: crate::target::CodeOptions::default(),
                 },
             )
             .unwrap();

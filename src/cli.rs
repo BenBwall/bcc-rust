@@ -48,6 +48,7 @@ use arguments::{
     SourceDateEpochParser,
     StandardParser,
     TargetParser,
+    TlsModelParser,
     normalize_language_arguments,
     preprocessing_option,
 };
@@ -94,6 +95,16 @@ pub fn run() -> Result<i32, MainError> {
         return Ok(print_default_passes());
     }
     let args = Cli::try_parse_from(arguments)?;
+    if let Some(option) = args.unsupported_relocation_flag() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "The error carries the option out of `run`, past every arena."
+        )]
+        return Err(MainError::UnsupportedOption {
+            option: option.to_owned(),
+            target: args.target.triple(),
+        });
+    }
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {
@@ -185,9 +196,17 @@ struct Cli {
     /// GCC language flags: -pedantic, -Wpedantic, -pedantic-errors,
     /// -ffreestanding, -fhosted, -f[no-]gnu89-inline, -fms-extensions, and
     /// -f[no-]ms-{declspec,int-types,calling-conventions,type-qualifiers,
-    /// inline,seh,asm,pragma,anonymous-structs,va-args}.
+    /// inline,seh,asm,pragma,anonymous-structs,va-args}; and the relocation
+    /// models -fpic, -fPIC, -fpie, -fPIE and -fno-{pic,PIC,pie,PIE}.
     #[arg(long, hide = true)]
     language_option: Vec<String>,
+    /// Select the ELF thread-local storage model (also accepts GCC
+    /// -ftls-model=MODEL): global-dynamic (the default), local-dynamic,
+    /// initial-exec or local-exec. The compiler may still choose a more
+    /// specific model, as Clang does.
+    #[arg(long, value_name = "MODEL", value_parser = TlsModelParser,
+        action = clap::ArgAction::Set, overrides_with = "tls_model")]
+    tls_model: Option<crate::target::TlsModel>,
     /// GCC startup preprocessing options, normalized with their operation.
     #[arg(long, hide = true, allow_hyphen_values = true, value_parser = preprocessing_option)]
     preprocessing_option: Vec<String>,

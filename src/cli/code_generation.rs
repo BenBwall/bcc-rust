@@ -65,7 +65,10 @@ use crate::{
         lower_translation_unit,
         parse_translation_unit,
     },
-    target::Target,
+    target::{
+        CodeOptions,
+        Target,
+    },
     translation_phases::Context,
     util::bump::{
         ArenaString,
@@ -136,6 +139,7 @@ pub(super) fn generate_code<'tu>(
     };
     drop(reporter.finish(context, stderr));
     let target = context.configuration.target();
+    let code = context.configuration.code_options();
     if let Some(conflict) = options.back_end_conflict() {
         report_stderr(format_args!("error: {conflict}"));
         return FAILURE_STATUS;
@@ -162,11 +166,11 @@ pub(super) fn generate_code<'tu>(
     }
     match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => print_stdout(format_args!("{module}")),
-        | (Some(Emit::Llvm), _) => print_llvm(&module, target),
-        | (Some(Emit::Asm), _) => print_native(&module, target),
+        | (Some(Emit::Llvm), _) => print_llvm(&module, target, code),
+        | (Some(Emit::Asm), _) => print_native(&module, target, code),
         | (None, Some(path)) if options.backend == BackEnd::Native =>
-            build_native(&module, target, path, options),
-        | (None, Some(path)) => build(&module, target, path, options),
+            build_native(&module, target, code, path, options),
+        | (None, Some(path)) => build(&module, target, code, path, options),
         | (None, None) => interpret(&module, target, options.interpret_step_limit),
     }
 }
@@ -221,6 +225,18 @@ pub(super) struct CodeGeneration {
     /// With -o, compile to an object file instead of linking an executable.
     #[arg(short = 'c', requires = "output_path")]
     pub(super) object:               bool,
+    /// With -o, link a shared library (also accepts GCC -shared); its code
+    /// needs -fpic or -fPIC.
+    #[arg(long, requires = "output_path", conflicts_with_all = ["object", "pie", "no_pie"])]
+    pub(super) shared:               bool,
+    /// With -o, link a position-independent executable, the default on
+    /// Linux (also accepts GCC -pie).
+    #[arg(long, requires = "output_path", overrides_with = "no_pie")]
+    pub(super) pie:                  bool,
+    /// With -o, link an executable at a fixed address (also accepts GCC
+    /// -no-pie), as code compiled with -fno-pic needs.
+    #[arg(long, requires = "output_path", overrides_with = "pie")]
+    pub(super) no_pie:               bool,
     /// Select the middle-end optimizer: none, or bcc's pass pipeline.
     #[arg(long, value_enum, default_value = "none", requires = "back_end")]
     pub(super) opt:                  MiddleEnd,
@@ -363,8 +379,21 @@ impl CodeGeneration {
         })
     }
 
+    /// What `-o` builds.
+    fn output_kind(&self) -> OutputKind {
+        if self.object {
+            OutputKind::Object
+        } else if self.shared {
+            OutputKind::SharedLibrary
+        } else if self.no_pie {
+            OutputKind::PositionDependentExecutable
+        } else {
+            OutputKind::Executable
+        }
+    }
+
     /// LLVM IR passes and code generation for `target`.
-    fn llvm_options(&self, target: Target) -> LlvmOptions {
+    fn llvm_options(&self, target: Target, code: CodeOptions) -> LlvmOptions {
         LlvmOptions {
             opt: match self.llvm_opt {
                 | LlvmOpt::None => None,
@@ -375,11 +404,8 @@ impl CodeGeneration {
             },
             disable_llvm_passes: self.llvm_codegen_only,
             target,
-            kind: if self.object {
-                OutputKind::Object
-            } else {
-                OutputKind::Executable
-            },
+            kind: self.output_kind(),
+            code,
         }
     }
 }
@@ -434,10 +460,10 @@ fn interpret(module: &Module<'_>, target: Target, steps: Option<u64>) -> i32 {
 }
 
 /// Prints the module as LLVM IR for `target` to stdout.
-fn print_llvm(module: &Module<'_>, target: Target) -> i32 {
+fn print_llvm(module: &Module<'_>, target: Target, code: CodeOptions) -> i32 {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
-    match llvm::emit_module(module, target, &mut text) {
+    match llvm::emit_module_with(module, target, code, &mut text) {
         | Ok(()) => print_stdout(format_args!("{text}")),
         | Err(error) => {
             report_stderr(format_args!("error: {error}"));
@@ -448,10 +474,10 @@ fn print_llvm(module: &Module<'_>, target: Target) -> i32 {
 
 /// Prints the native back end's assembly for `target` to stdout, or
 /// reports what it does not support.
-fn print_native(module: &Module<'_>, target: Target) -> i32 {
+fn print_native(module: &Module<'_>, target: Target, code: CodeOptions) -> i32 {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
-    match native::emit_assembly(module, target, &mut text) {
+    match native::emit_assembly_with(module, target, code, &mut text) {
         | Ok(()) => print_stdout(format_args!("{text}")),
         | Err(error) => {
             report_stderr(format_args!("error: {error}"));
@@ -464,21 +490,26 @@ fn print_native(module: &Module<'_>, target: Target) -> i32 {
 fn build_native(
     module: &Module<'_>,
     target: Target,
+    code: CodeOptions,
     output: &Path,
     options: &CodeGeneration,
 ) -> i32 {
+    // The back end's code assumes it ends up in an executable, which
+    // `-shared` would break even with the default relocation model.
+    if options.output_kind() == OutputKind::SharedLibrary {
+        report_stderr(format_args!(
+            "error: {}",
+            native::NativeError::SharedLibraryCode
+        ));
+        return FAILURE_STATUS;
+    }
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
-    if let Err(error) = native::emit_assembly(module, target, &mut text) {
+    if let Err(error) = native::emit_assembly_with(module, target, code, &mut text) {
         report_stderr(format_args!("error: {error}"));
         return FAILURE_STATUS;
     }
-    let kind = if options.object {
-        OutputKind::Object
-    } else {
-        OutputKind::Executable
-    };
-    match native::assemble(&text, output, target, kind) {
+    match native::assemble(&text, output, target, options.output_kind()) {
         | Ok(()) => 0,
         | Err(error) => {
             report_stderr(format_args!(
@@ -510,8 +541,14 @@ fn stdout_error(error: &io::Error) -> i32 {
 }
 
 /// Emits an object in-process and links an executable when requested.
-fn build(module: &Module<'_>, target: Target, output: &Path, options: &CodeGeneration) -> i32 {
-    let result = llvm::compile_module(module, output, options.llvm_options(target));
+fn build(
+    module: &Module<'_>,
+    target: Target,
+    code: CodeOptions,
+    output: &Path,
+    options: &CodeGeneration,
+) -> i32 {
+    let result = llvm::compile_module(module, output, options.llvm_options(target, code));
     match result {
         | Ok(()) => 0,
         | Err(error) => {

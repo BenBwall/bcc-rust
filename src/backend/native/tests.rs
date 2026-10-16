@@ -75,7 +75,15 @@ fn with_allocation<R>(
     let definition = module.function(id);
     let body = definition.body.as_ref().expect("a defined function");
     let scratch = Bump::new();
-    let mut func = isel::select(&module, definition, body, target, &scratch).unwrap();
+    let mut func = isel::select(
+        &module,
+        definition,
+        body,
+        target,
+        crate::target::TlsModel::default(),
+        &scratch,
+    )
+    .unwrap();
     let allocation = regalloc::allocate(&mut func, CallConv::of(target), &scratch);
     then(&module, &func, &allocation)
 }

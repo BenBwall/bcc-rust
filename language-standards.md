@@ -1105,8 +1105,8 @@ backend work before they can be enabled.
 | `__OPENCL_MEMORY_SCOPE_SUB_GROUP` | Scoped atomic operations and memory scopes are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_WORK_GROUP` | Scoped atomic operations and memory scopes are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_WORK_ITEM` | Scoped atomic operations and memory scopes are not implemented. |
-| `__PIC__` | Code generation, relocation and optimization policy are not implemented. |
-| `__PIE__` | Code generation, relocation and optimization policy are not implemented. |
+| `__PIC__` | Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros. |
+| `__PIE__` | Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros. |
 | `__PRAGMA_REDEFINE_EXTNAME` | The advertised pragma/attribute semantics are not implemented. |
 | `__SEG_FS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__SEG_GS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
@@ -1120,8 +1120,8 @@ backend work before they can be enabled.
 | `__STDC__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STRICT_ANSI__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__code_model_small__` | Code generation, relocation and optimization policy are not implemented. |
-| `__pic__` | Code generation, relocation and optimization policy are not implemented. |
-| `__pie__` | Code generation, relocation and optimization policy are not implemented. |
+| `__pic__` | Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros. |
+| `__pie__` | Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros. |
 | `__seg_fs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__seg_gs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__tune_k8__` | Code generation, relocation and optimization policy are not implemented. |

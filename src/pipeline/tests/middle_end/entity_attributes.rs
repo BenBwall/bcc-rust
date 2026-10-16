@@ -232,6 +232,7 @@ fn entity_attributes_match_native_arms_and_clang() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();
@@ -256,6 +257,7 @@ fn entity_attributes_match_native_arms_and_clang() {
                         disable_llvm_passes: false,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .output()
@@ -318,6 +320,7 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
                 disable_llvm_passes: arm.disable_llvm_passes,
                 target:              Target::WindowsGnu,
                 kind:                OutputKind::Executable,
+                code:                crate::target::CodeOptions::default(),
             };
             with_module(
                 BCC_UNIT,
@@ -330,6 +333,7 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
                         &object,
                         LlvmOptions {
                             kind: OutputKind::Object,
+                            code: crate::target::CodeOptions::default(),
                             ..options
                         },
                     )
@@ -379,6 +383,7 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target:              Target::LinuxGnu,
                         kind:                OutputKind::Object,
+                        code:                crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();
@@ -455,6 +460,7 @@ fn single_unit_programs_run_on_system_v_under_wsl() {
                             disable_llvm_passes: arm.disable_llvm_passes,
                             target:              Target::LinuxGnu,
                             kind:                OutputKind::Object,
+                            code:                crate::target::CodeOptions::default(),
                         },
                     )
                     .unwrap();

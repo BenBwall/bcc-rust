@@ -69,6 +69,7 @@ impl CompilerConfiguration {
 )]
 pub(crate) struct CompilerConfiguration {
     target: crate::target::Target,
+    code_options: crate::target::CodeOptions,
     standard: CStandard,
     gnu: bool,
     /// One bit per `MsvcFeature`, plus

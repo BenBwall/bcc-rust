@@ -669,12 +669,14 @@ fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
             disable_llvm_passes: false,
             target,
             kind: OutputKind::Executable,
+            code: crate::target::CodeOptions::default(),
         };
         compile_module(
             module,
             &object,
             LlvmOptions {
                 kind: OutputKind::Object,
+                code: crate::target::CodeOptions::default(),
                 ..options
             },
         )

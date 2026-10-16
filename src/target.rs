@@ -13,6 +13,7 @@
 //! - Target names and queries: `selection.rs`.
 //! - Scalar types and layout tables: `model.rs`.
 //! - Frozen macro lookup: `predefined.rs`; its `.h` tables stay beside it.
+//! - Relocation and thread-local storage models: `code_options.rs`.
 //!
 //! C99: implementation-defined representations, §6.2.5, pp. 33-37;
 //! PDF pp. 45-49. Record layout: §6.7.2.1 paragraphs 10-11, p. 102;
@@ -28,6 +29,14 @@ mod selection;
 // Predefined macros
 mod predefined;
 
+// Code generation options
+mod code_options;
+
+pub(crate) use code_options::{
+    CodeOptions,
+    Relocation,
+    TlsModel,
+};
 pub(crate) use model::{
     Layout,
     Scalar,

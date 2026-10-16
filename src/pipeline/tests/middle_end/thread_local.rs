@@ -7,9 +7,16 @@
 //! C11: §6.2.4 paragraph 4, p. 38; PDF p. 56.
 
 use super::*;
-use crate::configuration::{
-    CStandard,
-    ExtensionPolicy,
+use crate::{
+    configuration::{
+        CStandard,
+        ExtensionPolicy,
+    },
+    target::{
+        CodeOptions,
+        Relocation,
+        TlsModel,
+    },
 };
 
 /// Every kind of thread-local declaration, used from one thread.
@@ -609,12 +616,220 @@ fn linux_threads_keep_their_own_copies_under_wsl() {
     }
 }
 
+/// Every kind of thread-local symbol a module refers to: a definition, an
+/// internal and a hidden one, a declaration, a weak definition and an
+/// alias.
+/// GNU extension: GCC manual, "Common Variable Attributes" (alias,
+/// visibility, weak) and "Thread-Local Storage".
+const MODELS: &str = r#"
+__thread int def = 1;
+static __thread int loc;
+extern __thread int ext;
+__attribute__((visibility("hidden"))) __thread int hid;
+__attribute__((weak)) __thread int wk;
+extern __thread int def_alias __attribute__((alias("def")));
+int *f(int i) {
+    switch (i) {
+    case 0: return &def;
+    case 1: return &loc;
+    case 2: return &ext;
+    case 3: return &hid;
+    case 4: return &def_alias;
+    default: return &wk;
+    }
+}
+"#;
+
+/// The relocation and `-ftls-model` flags whose TLS models must match
+/// Clang's.
+const MODEL_FLAGS: [&[&str]; 11] = [
+    &[],
+    &["-fPIE"],
+    &["-fpie"],
+    &["-fno-pic"],
+    &["-fPIC"],
+    &["-fpic"],
+    &["-fPIC", "-ftls-model=initial-exec"],
+    &["-fPIC", "-ftls-model=local-dynamic"],
+    &["-fPIC", "-ftls-model=local-exec"],
+    &["-ftls-model=local-exec"],
+    &["-fno-pic", "-ftls-model=initial-exec"],
+];
+
+/// The code options `flags` select, as the command line reads them.
+fn code_options(flags: &[&str]) -> CodeOptions {
+    CodeOptions {
+        relocation: flags
+            .iter()
+            .filter_map(|flag| Relocation::parse(flag))
+            .next_back(),
+        tls_model:  flags
+            .iter()
+            .filter_map(|flag| TlsModel::parse(flag.strip_prefix("-ftls-model=")?))
+            .next_back()
+            .unwrap_or_default(),
+    }
+}
+
+/// The TLS relocation operators (`sym@TPOFF`, `sym@GOTTPOFF`, `sym@TLSGD`,
+/// `sym@TLSLD`, `sym@DTPOFF`) an assembly listing applies to each symbol,
+/// which name the access model each symbol got (Drepper, "ELF Handling For
+/// Thread-Local Storage", §4.3). An access through `def_alias` counts as
+/// one of `def`, which Clang's code names instead.
+fn tls_relocations(assembly: &str) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for (index, _) in assembly.match_indices('@') {
+        let operator: String = assembly[index + 1..]
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect();
+        if !matches!(
+            operator.as_str(),
+            "TPOFF" | "GOTTPOFF" | "TLSGD" | "TLSLD" | "DTPOFF"
+        ) {
+            continue;
+        }
+        let symbol: String = assembly[..index]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let symbol = if symbol == "def_alias" {
+            "def"
+        } else {
+            &symbol
+        };
+        _ = found.insert(format!("{symbol}@{operator}"));
+    }
+    found
+}
+
+/// Each relocation and `-ftls-model` choice gives every kind of
+/// thread-local symbol the access model Clang's code gives it: local-exec
+/// for an executable's definitions and initial-exec for its declarations;
+/// general-dynamic in a shared library, local-dynamic for its internal and
+/// hidden symbols; and never less specific than `-ftls-model`.
+#[test]
+fn elf_tls_models_match_clang_for_each_relocation_and_tls_model() {
+    let target = Target::LinuxGnu;
+    let Ok(toolchain) = Toolchain::bundled(target) else {
+        eprintln!("skipping: no bundled toolchain");
+        return;
+    };
+    let directory = TempDir::new("thread-local-models");
+    let input = directory.join("models.c");
+    std::fs::write(&input, MODELS).unwrap();
+    for flags in MODEL_FLAGS {
+        let code = code_options(flags);
+        for opt in [OptLevel::O0, OptLevel::O2] {
+            let clang = crate::test_support::native::run_native(
+                Command::new(toolchain.clang())
+                    .args([
+                        "--target=x86_64-unknown-linux-gnu",
+                        opt.flag(),
+                        "-S",
+                        "-o",
+                        "-",
+                    ])
+                    .args(flags)
+                    .arg(&input),
+            )
+            .unwrap();
+            assert!(clang.status.success(), "{flags:?}: {clang:?}");
+            let expected = tls_relocations(&String::from_utf8_lossy(&clang.stdout));
+            assert!(!expected.is_empty(), "{flags:?}");
+            for optimize in [false, true] {
+                let actual =
+                    with_module(MODELS, target, optimize, Profile::PostAbi, |module, _| {
+                        crate::backend::llvm::emit_assembly(module, target, code, Some(opt))
+                    });
+                assert_eq!(
+                    tls_relocations(&actual),
+                    expected,
+                    "{flags:?} {opt:?} bcc optimizer {optimize}\n{actual}"
+                );
+            }
+        }
+    }
+}
+
+/// The LLVM IR states the models as Clang's does, up to `dso_local`, which
+/// LLVM-C cannot set and the local-exec request replaces; only code for an
+/// executable carries the PIE level.
+#[test]
+fn elf_tls_models_and_pic_levels_appear_in_llvm_ir() {
+    let target = Target::LinuxGnu;
+    for (flags, lines, absent) in [
+        (
+            &[][..],
+            &[
+                "@def = thread_local(localexec) global",
+                "@loc = internal thread_local(localexec) global",
+                "@ext = external thread_local global",
+                "@wk = weak thread_local(localexec) global",
+                "@def_alias = thread_local(localexec) alias",
+                "!\"PIC Level\", i32 2}",
+                "!\"PIE Level\", i32 2}",
+            ][..],
+            &[][..],
+        ),
+        (
+            &["-fPIC"],
+            &[
+                "@def = thread_local global",
+                "@loc = internal thread_local global",
+                "@ext = external thread_local global",
+                "@hid = hidden thread_local global",
+                "@wk = weak thread_local global",
+                "@def_alias = thread_local alias",
+                "!\"PIC Level\", i32 2}",
+            ],
+            &["PIE Level", "localexec"],
+        ),
+        (
+            &["-fpie"],
+            &["!\"PIC Level\", i32 1}", "!\"PIE Level\", i32 1}"],
+            &[],
+        ),
+        (
+            &["-fno-pic"],
+            &["@def = thread_local(localexec) global"],
+            &["PIC Level", "PIE Level"],
+        ),
+        (
+            &["-fPIC", "-ftls-model=initial-exec"],
+            &[
+                "@def = thread_local(initialexec) global",
+                "@ext = external thread_local(initialexec) global",
+                "@def_alias = thread_local(initialexec) alias",
+            ],
+            &[],
+        ),
+    ] {
+        with_module(MODELS, target, false, Profile::PostAbi, |module, target| {
+            let mut text = String::new();
+            crate::backend::llvm::emit_module_with(module, target, code_options(flags), &mut text)
+                .unwrap();
+            for line in lines {
+                assert!(text.contains(line), "{flags:?}: {line}\n{text}");
+            }
+            for word in absent {
+                assert!(!text.contains(word), "{flags:?}: {word}\n{text}");
+            }
+        });
+    }
+}
+
 fn options(arm: &Arm, target: Target, kind: OutputKind) -> LlvmOptions {
     LlvmOptions {
         opt: Some(arm.opt),
         disable_llvm_passes: arm.disable_llvm_passes,
         target,
         kind,
+        code: CodeOptions::default(),
     }
 }
 
@@ -663,6 +878,7 @@ fn clang_runs(
                         disable_llvm_passes: false,
                         target,
                         kind: OutputKind::Executable,
+                        code: CodeOptions::default(),
                     },
                 )
                 .output()

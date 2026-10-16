@@ -8,10 +8,12 @@
 //! null, through a `.refptr` stub holding its address, as Clang does.
 //!
 //! A thread-local global's address is computed where `global_addr` names
-//! it, with the sequences Clang emits. ELF uses the thread pointer at
-//! `%fs:0` and the local-exec model (`sym@TPOFF`) for globals the module
-//! defines, the initial-exec model (`sym@GOTTPOFF`) for the rest (Drepper,
-//! "ELF Handling For Thread-Local Storage", §4.3.6 and §4.3.5). Windows
+//! it, with the sequences Clang emits for an executable, the only code the
+//! back end generates. ELF uses the thread pointer at `%fs:0` and the
+//! local-exec model (`sym@TPOFF`) for globals the module defines, or for
+//! every global with `-ftls-model=local-exec`, and the initial-exec model
+//! (`sym@GOTTPOFF`) for the rest (Drepper, "ELF Handling For Thread-Local
+//! Storage", §4.3.6 and §4.3.5). Windows
 //! indexes the TEB's `ThreadLocalStoragePointer` (`%gs:0x58`) with the
 //! image's `_tls_index` and adds the symbol's offset in the `.tls` section
 //! (`sym@SECREL32`; Microsoft Learn, "PE Format", "The .tls Section").
@@ -62,7 +64,10 @@ use crate::{
         Value,
         ValueDef,
     },
-    target::Target,
+    target::{
+        Target,
+        TlsModel,
+    },
 };
 
 /// The Windows image's TLS index, which the CRT's TLS directory names.
@@ -106,7 +111,9 @@ impl Selector<'_, '_, '_> {
                 base: block,
                 symbol,
             });
-        } else if defines(self.module, Symbol::Global(global)) {
+        } else if self.tls_model == TlsModel::LocalExec
+            || defines(self.module, Symbol::Global(global))
+        {
             let pointer = self.vreg();
             self.emit(MInst::ThreadPointer { dst: pointer });
             self.emit(MInst::TlsLea {

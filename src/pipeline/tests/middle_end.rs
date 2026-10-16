@@ -288,6 +288,7 @@ fn aggregate_reinitialization_matches_native_arms_and_clang() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();
@@ -307,6 +308,7 @@ fn aggregate_reinitialization_matches_native_arms_and_clang() {
                         disable_llvm_passes: false,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .output()
@@ -536,6 +538,7 @@ fn llvm_arms_match_the_interpreter() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     };
                     let expected = with_module(
                         source,

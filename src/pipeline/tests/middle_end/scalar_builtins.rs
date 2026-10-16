@@ -362,6 +362,7 @@ fn gcc_scalar_builtins_execute_in_native_arms() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();
@@ -553,6 +554,7 @@ void *memcpy(void *p,const void *q,unsigned long n){volatile unsigned char *a=p;
                 disable_llvm_passes: arm.disable_llvm_passes,
                 target,
                 kind: OutputKind::Executable,
+                code: crate::target::CodeOptions::default(),
             };
             with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {
                 compile_module(
@@ -560,6 +562,7 @@ void *memcpy(void *p,const void *q,unsigned long n){volatile unsigned char *a=p;
                     &object,
                     LlvmOptions {
                         kind: OutputKind::Object,
+                        code: crate::target::CodeOptions::default(),
                         ..options
                     },
                 )

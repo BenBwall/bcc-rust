@@ -36,6 +36,12 @@ use crate::{
         MsvcFeature,
         WarningOption,
     },
+    target::{
+        CodeOptions,
+        Relocation,
+        Target,
+        TlsModel,
+    },
     translation_phases::Context,
 };
 
@@ -83,6 +89,13 @@ pub(super) fn normalize_language_arguments(
             }
         } else if text.starts_with("-D") || text.starts_with("-U") {
             normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
+        } else if let Some(value) = text.strip_prefix("-ftls-model=") {
+            normalized.push(format!("--tls-model={value}").into());
+        } else if let Some(flag) = SINGLE_DASH_LINK_FLAGS
+            .iter()
+            .find(|flag| text.strip_prefix('-') == Some(**flag))
+        {
+            normalized.push(format!("--{flag}").into());
         } else if let Some(value) = text.strip_prefix("-std=") {
             normalized.push(format!("--std={value}").into());
         } else if text == "-std" {
@@ -117,6 +130,7 @@ pub(super) fn normalize_language_arguments(
                     | "--idirafter"
                     | "--sysroot"
                     | "--source-date-epoch"
+                    | "--tls-model"
                     | "--language-option"
                     | "--preprocessing-option"
                     | "-o"
@@ -140,8 +154,39 @@ impl Cli {
             .fold(configuration, |configuration, flag| {
                 flag.apply(configuration)
             })
+            .with_code_options(self.code_options())
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
+    }
+
+    /// The relocation model of the last `-fpic`-family flag, and the TLS
+    /// model.
+    fn code_options(&self) -> CodeOptions {
+        CodeOptions {
+            relocation: self
+                .language_option
+                .iter()
+                .filter_map(|option| Relocation::parse(option))
+                .next_back(),
+            tls_model:  self.tls_model.unwrap_or_default(),
+        }
+    }
+
+    /// The last `-fpic`-family flag if it asks for position independence
+    /// on the MSVC target, which Clang rejects as unsupported there.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Clap owns startup arguments as `String`s; the flag is borrowed from them."
+    )]
+    pub(super) fn unsupported_relocation_flag(&self) -> Option<&str> {
+        if self.target != Target::WindowsMsvc {
+            return None;
+        }
+        self.language_option
+            .iter()
+            .rfind(|option| Relocation::parse(option).is_some())
+            .filter(|option| Relocation::parse(option) != Some(Relocation::Static))
+            .map(String::as_str)
     }
 
     pub(super) fn configure_preprocessing(&self, context: &mut Context<'_>) {
@@ -174,6 +219,8 @@ enum LanguageFlag {
     Hosted(bool),
     /// `-fgnu89-inline` or `-fno-gnu89-inline`.
     Gnu89Inline(bool),
+    /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
+    Relocation,
 }
 
 impl LanguageFlag {
@@ -188,6 +235,9 @@ impl LanguageFlag {
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
             | _ => {},
+        }
+        if Relocation::parse(text).is_some() {
+            return Some(Self::Relocation);
         }
         if let Some(text) = text.strip_prefix("-W") {
             let (name, option) = if let Some(name) = text.strip_prefix("error=") {
@@ -222,6 +272,7 @@ impl LanguageFlag {
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
+            | Self::Relocation => configuration,
         }
     }
 }
@@ -265,6 +316,10 @@ pub(super) struct StandardParser;
 #[derive(Clone)]
 pub(super) struct TargetParser;
 
+/// Parses `-ftls-model=MODEL`, which clap receives as `--tls-model`.
+#[derive(Clone)]
+pub(super) struct TlsModelParser;
+
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
@@ -289,6 +344,10 @@ const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
     "nobuiltininc",
 ];
 
+/// GCC's single-dash link options, which clap receives with two dashes:
+/// `-shared` would otherwise read as `-s hared`.
+const SINGLE_DASH_LINK_FLAGS: [&str; 3] = ["shared", "pie", "no-pie"];
+
 /// The seconds since the Unix epoch that a date can represent.
 const SOURCE_DATE_EPOCH_RANGE: RangeInclusive<i64> =
     DateTime::<Utc>::MIN_UTC.timestamp()..=DateTime::<Utc>::MAX_UTC.timestamp();
@@ -302,7 +361,7 @@ const SOURCE_DATE_EPOCH_RANGE: RangeInclusive<i64> =
 pub(super) struct SourceDateEpochParser;
 
 impl TypedValueParser for TargetParser {
-    type Value = crate::target::Target;
+    type Value = Target;
 
     fn parse_ref(
         &self,
@@ -310,17 +369,42 @@ impl TypedValueParser for TargetParser {
         _arg: Option<&Arg>,
         value: &OsStr,
     ) -> Result<Self::Value, clap::Error> {
-        value
-            .to_str()
-            .and_then(crate::target::Target::parse)
-            .ok_or_else(|| {
-                clap::Error::raw(
-                    clap::error::ErrorKind::InvalidValue,
-                    "unsupported target triple; supported targets: x86_64-unknown-linux-gnu, \
-                     x86_64-unknown-linux-musl, x86_64-w64-windows-gnu (aliases: \
-                     x86_64-w64-mingw32, x86_64-pc-windows-gnu), x86_64-pc-windows-msvc",
-                )
-            })
+        value.to_str().and_then(Target::parse).ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidValue,
+                "unsupported target triple; supported targets: x86_64-unknown-linux-gnu, \
+                 x86_64-unknown-linux-musl, x86_64-w64-windows-gnu (aliases: x86_64-w64-mingw32, \
+                 x86_64-pc-windows-gnu), x86_64-pc-windows-msvc",
+            )
+        })
+    }
+}
+
+impl TypedValueParser for TlsModelParser {
+    type Value = TlsModel;
+
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "Clap argument errors own their startup message."
+    )]
+    fn parse_ref(
+        &self,
+        _cmd: &Command,
+        _arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<TlsModel, clap::Error> {
+        value.to_str().and_then(TlsModel::parse).ok_or_else(|| {
+            // Clang's wording, with the accepted models.
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidValue,
+                format!(
+                    "invalid value '{}' in '-ftls-model={}'\nnote: use 'global-dynamic', \
+                     'local-dynamic', 'initial-exec', or 'local-exec'\n",
+                    value.to_string_lossy(),
+                    value.to_string_lossy()
+                ),
+            )
+        })
     }
 }
 

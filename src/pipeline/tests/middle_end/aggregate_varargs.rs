@@ -190,6 +190,7 @@ fn round4_storage_alignment_matches_bundled_clang() {
                         opt: Some(opt),
                         disable_llvm_passes: false,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     };
                     let output = crate::test_support::native::run_native(&mut toolchain.command(
                         &input,

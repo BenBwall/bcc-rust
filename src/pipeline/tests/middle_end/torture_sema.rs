@@ -220,6 +220,7 @@ fn torture_sema_matches_clang_and_native_arms() {
             disable_llvm_passes: false,
             target,
             kind: OutputKind::Executable,
+            code: crate::target::CodeOptions::default(),
         };
         let mut command = toolchain.command(&input, &oracle, options);
         _ = command.args(["-std=gnu11", "-Wno-constant-conversion"]);

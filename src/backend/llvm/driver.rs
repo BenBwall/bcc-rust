@@ -22,7 +22,10 @@ use std::{
     },
 };
 
-use crate::target::Target;
+use crate::target::{
+    CodeOptions,
+    Target,
+};
 
 /// Builds a verified post-ABI module with LLVM-C and links only when requested.
 pub(crate) fn compile_module(
@@ -31,7 +34,7 @@ pub(crate) fn compile_module(
     options: LlvmOptions,
 ) -> io::Result<()> {
     let arena = crate::util::bump::Bump::new();
-    let buffer = super::api::Session::with(&arena, options.target, |api| {
+    let buffer = super::api::Session::with_code(&arena, options.target, options.code, |api| {
         super::build_module(module, options.target, api, &arena)
             .map_err(|error| io::Error::other(error.to_string()))?;
         api.emit(
@@ -117,6 +120,8 @@ pub(crate) struct LlvmOptions {
     pub(crate) disable_llvm_passes: bool,
     pub(crate) target:              Target,
     pub(crate) kind:                OutputKind,
+    /// The relocation and thread-local storage models.
+    pub(crate) code:                CodeOptions,
 }
 
 /// An LLVM optimization level.
@@ -129,7 +134,7 @@ pub(crate) enum OptLevel {
 }
 
 impl OptLevel {
-    pub(super) const fn flag(self) -> &'static str {
+    pub(crate) const fn flag(self) -> &'static str {
         match self {
             | Self::O0 => "-O0",
             | Self::O1 => "-O1",
@@ -144,8 +149,27 @@ impl OptLevel {
 pub(crate) enum OutputKind {
     /// An object file (`-c`).
     Object,
-    /// A linked executable.
+    /// A linked executable, position-independent on Linux as clang links
+    /// it by default.
     Executable,
+    /// An executable linked at a fixed address (`-no-pie`), which code
+    /// compiled with `-fno-pic` needs.
+    PositionDependentExecutable,
+    /// A shared library (`-shared`), which code compiled with `-fpic` or
+    /// `-fPIC` can go into.
+    SharedLibrary,
+}
+
+impl OutputKind {
+    /// The clang driver flag that links this kind, if it needs one.
+    pub(crate) const fn link_flag(self) -> Option<&'static str> {
+        match self {
+            | Self::Object => Some("-c"),
+            | Self::Executable => None,
+            | Self::PositionDependentExecutable => Some("-no-pie"),
+            | Self::SharedLibrary => Some("-shared"),
+        }
+    }
 }
 
 /// Where clang and the target's system root are.
@@ -232,10 +256,10 @@ impl Toolchain {
         if let Some(sysroot) = &self.sysroot {
             _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
         }
-        _ = match kind {
-            | OutputKind::Object => command.arg("-c"),
-            | OutputKind::Executable => command.arg("-fuse-ld=lld"),
-        };
+        if kind != OutputKind::Object {
+            _ = command.arg("-fuse-ld=lld");
+        }
+        _ = command.args(kind.link_flag());
         _ = command.arg(assembly).arg("-o").arg(out_path);
         let output = command.output()?;
         if output.status.success() {
@@ -256,6 +280,7 @@ impl Toolchain {
         }
         _ = command
             .arg("-fuse-ld=lld")
+            .args(options.kind.link_flag())
             .arg(object)
             .arg("-o")
             .arg(out_path);

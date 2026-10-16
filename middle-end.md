@@ -439,12 +439,22 @@ analysis's `Duration::Thread` such a global, file-scope or static local
 alike. The interpreter runs one thread and has no thread-creating host
 operation, so its thread-local globals are ordinary globals of that thread.
 The LLVM back end marks them `thread_local` and computes each access with
-`llvm.threadlocal.address`, as Clang does. Clang marks definitions
-`dso_local`, which gives them the local-exec model in an ELF executable;
-LLVM-C cannot set `dso_local`, so definitions on the position-independent
-ELF targets request local-exec directly, and declarations keep the default
-that becomes initial-exec. Windows targets use native TLS through
-`_tls_index` and the TEB, as Clang does for both MinGW and MSVC.
+`llvm.threadlocal.address`, as Clang does. The ELF access model follows the
+relocation model and `-ftls-model`, as Clang's (`target/code_options.rs`).
+In an executable (the default position-independent one, `-fpie`/`-fPIE`, or
+`-fno-pic`) Clang marks definitions `dso_local`, which gives them the
+local-exec model; LLVM-C cannot set `dso_local`, so definitions (weak ones and
+aliases included) request local-exec directly, and declarations keep the
+default that becomes initial-exec. Code for a shared library (`-fpic`/`-fPIC`)
+requests general-dynamic, which LLVM refines to local-dynamic for internal and
+hidden objects, so a library bcc builds can be linked at startup or loaded
+with `dlopen`. `-ftls-model` names the least specific model allowed; a more
+specific implied model wins, as in LLVM. Windows targets use native TLS
+through `_tls_index` and the TEB, as Clang does for both MinGW and MSVC; the
+relocation flags do not change their code. The native back end generates
+executable code only: it uses the same executable models (local-exec for
+declarations too with `-ftls-model=local-exec`) and refuses `-fpic`,
+`-fPIC` and `-shared`.
 
 ### Textual form
 
@@ -980,6 +990,12 @@ bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with cla
     [--llvm-opt=none|O0|O1|O2|O3]   LLVM pipeline and machine level; none means O0
     [--llvm-codegen-only]           skip LLVM IR passes; retain machine level
     [--backend=llvm|native]         code generator for -o; native refuses what it lacks
+    [-fpic|-fPIC|-fpie|-fPIE|-fno-pic]  relocation model; Linux defaults to -fPIE
+    [-ftls-model=MODEL]             least specific ELF TLS model: global-dynamic,
+                                    local-dynamic, initial-exec or local-exec
+    [-shared|-pie|-no-pie]          link a shared library (needs -fpic or -fPIC),
+                                    a position-independent executable (the Linux
+                                    default) or a fixed-address one
 bcc-rust x.c --backend=native --emit=asm   print the native back end's assembly
 bcc-rust --print-default-passes     print the default pass list and exit
 ```
@@ -1009,6 +1025,13 @@ behaviour, an unsupported operation, a limit), and 134 on `abort`. The
 interpreter's C library uses the `--target`'s type widths (`%ld` reads 32 bits
 on Windows). `-o` links with the C library of `--target`, so it needs the host's
 triple to produce a runnable program; `main` is called without arguments.
+The relocation flags follow Clang: the last of `-fpic`, `-fPIC`, `-fpie`,
+`-fPIE` and the `-fno-` spellings wins, defines `__PIC__`/`__pic__` (and
+`__PIE__`/`__pie__` for an executable) with its level, and is ignored on
+Windows GNU, where Clang forces position-independent code; the MSVC target
+rejects the position-independent ones, as Clang does. As with Clang,
+`-shared` does not imply `-fPIC`: linking executable code into a shared
+library is left to the linker to reject.
 
 ## Testing
 

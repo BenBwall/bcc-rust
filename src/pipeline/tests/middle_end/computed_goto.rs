@@ -325,6 +325,7 @@ fn computed_goto_native_arms_match_clang() {
                             opt: Some(opt),
                             disable_llvm_passes: false,
                             kind: OutputKind::Executable,
+                            code: crate::target::CodeOptions::default(),
                         };
                         let output = toolchain.command(&input, &clang, options).output().unwrap();
                         assert!(
@@ -341,6 +342,7 @@ fn computed_goto_native_arms_match_clang() {
                             disable_llvm_passes: arm.disable_llvm_passes,
                             target,
                             kind: OutputKind::Executable,
+                            code: crate::target::CodeOptions::default(),
                         };
                         let interpreted =
                             with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {

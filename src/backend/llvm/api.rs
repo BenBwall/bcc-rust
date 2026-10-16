@@ -182,7 +182,12 @@ use crate::{
         InstFlags,
         Type,
     },
-    target::Target,
+    target::{
+        CodeOptions,
+        Relocation,
+        Target,
+        TlsModel,
+    },
     util::bump::Bump,
 };
 
@@ -198,6 +203,8 @@ pub(super) struct Session<'id> {
     module:  LLVMModuleRef,
     context: LLVMContextRef,
     arena:   &'id Bump,
+    /// The relocation and thread-local storage models.
+    code:    CodeOptions,
     _brand:  PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
@@ -228,9 +235,21 @@ pub(super) struct Val<'id>(LLVMValueRef, PhantomData<fn(&'id ()) -> &'id ()>);
 pub(super) struct Block<'id>(LLVMBasicBlockRef, PhantomData<fn(&'id ()) -> &'id ()>);
 
 impl Session<'_> {
+    /// A session for `target` with the default code options.
     pub(super) fn with<R>(
         arena: &Bump,
         target: Target,
+        body: impl for<'id> FnOnce(&Session<'id>) -> R,
+    ) -> R {
+        Self::with_code(arena, target, CodeOptions::default(), body)
+    }
+
+    /// A session for `target` whose module and code generation follow
+    /// `code`.
+    pub(super) fn with_code<R>(
+        arena: &Bump,
+        target: Target,
+        code: CodeOptions,
         body: impl for<'id> FnOnce(&Session<'id>) -> R,
     ) -> R {
         // SAFETY: Creates a new independently owned LLVM context.
@@ -244,6 +263,7 @@ impl Session<'_> {
             module,
             context,
             arena,
+            code,
             _brand: PhantomData,
         };
         let triple = session.name(target.triple());
@@ -257,17 +277,27 @@ impl Session<'_> {
         unsafe {
             LLVMSetDataLayout(module, layout.as_ptr());
         }
-        if position_independent(target) {
-            // Clang marks ELF executables as PIC and PIE (level 2), which
-            // lets code generation use direct references to symbols the
-            // executable defines.
-            for key in ["PIC Level", "PIE Level"] {
+        // Clang marks position-independent ELF code with its PIC level, and
+        // an executable's with its PIE level too, which lets code generation
+        // use direct references to symbols the executable defines.
+        let (level, pie) = match session.elf_relocation(target) {
+            | Some(Relocation::Pie(level)) => (Some(level), true),
+            | Some(Relocation::Pic(level)) => (Some(level), false),
+            | Some(Relocation::Static) | None => (None, false),
+        };
+        if let Some(level) = level {
+            let keys: &[&str] = if pie {
+                &["PIC Level", "PIE Level"]
+            } else {
+                &["PIC Level"]
+            };
+            for key in keys {
                 // SAFETY: The context is live.
                 let int = unsafe { LLVMInt32TypeInContext(context) };
                 // SAFETY: A constant of the live i32 type.
-                let two = unsafe { llvm_sys::core::LLVMConstInt(int, 2, 0) };
+                let level = unsafe { llvm_sys::core::LLVMConstInt(int, u64::from(level as u8), 0) };
                 // SAFETY: Wraps the live constant as metadata.
-                let value = unsafe { llvm_sys::core::LLVMValueAsMetadata(two) };
+                let value = unsafe { llvm_sys::core::LLVMValueAsMetadata(level) };
                 // SAFETY: Module, key bytes and metadata are live; LLVM copies
                 // the key.
                 unsafe {
@@ -464,14 +494,15 @@ impl<'id> Session<'id> {
         }
     }
 
-    /// Makes a global thread-local. `local_exec` requests the local-exec
-    /// model, which addresses the executable's own TLS block directly;
-    /// otherwise LLVM chooses from the relocation model and DSO locality.
-    pub(super) fn thread_local(&self, global: Val<'id>, local_exec: bool) {
-        let mode = if local_exec {
-            LLVMThreadLocalMode::LLVMLocalExecTLSModel
-        } else {
-            LLVMThreadLocalMode::LLVMGeneralDynamicTLSModel
+    /// Makes a global thread-local with at least the specificity of
+    /// `model`; LLVM may choose a more specific model from the relocation
+    /// model and DSO locality.
+    pub(super) fn thread_local(&self, global: Val<'id>, model: TlsModel) {
+        let mode = match model {
+            | TlsModel::GlobalDynamic => LLVMThreadLocalMode::LLVMGeneralDynamicTLSModel,
+            | TlsModel::LocalDynamic => LLVMThreadLocalMode::LLVMLocalDynamicTLSModel,
+            | TlsModel::InitialExec => LLVMThreadLocalMode::LLVMInitialExecTLSModel,
+            | TlsModel::LocalExec => LLVMThreadLocalMode::LLVMLocalExecTLSModel,
         };
         // SAFETY: The type system ties the global to this live session.
         unsafe {
@@ -527,16 +558,21 @@ impl<'id> Session<'id> {
     /// thread-local object. LLVM-C can mark only a global variable
     /// thread-local, so the alias is parsed from textual IR in a module of
     /// its own (aliasing null), linked into this one, and then pointed at
-    /// its aliasee. `local_exec` requests the local-exec model, as
-    /// `thread_local` does for a global.
+    /// its aliasee. `model` is requested as `thread_local` requests it for
+    /// a global.
     pub(super) fn thread_local_alias(
         &self,
         name: &str,
         size: u64,
         aliasee: Val<'id>,
-        local_exec: bool,
+        model: TlsModel,
     ) -> Val<'id> {
-        let mode = if local_exec { "(localexec)" } else { "" };
+        let mode = match model {
+            | TlsModel::GlobalDynamic => "",
+            | TlsModel::LocalDynamic => "(localdynamic)",
+            | TlsModel::InitialExec => "(initialexec)",
+            | TlsModel::LocalExec => "(localexec)",
+        };
         // Every byte as `\XX`, which a quoted LLVM name always accepts.
         let quoted = fmt::from_fn(|f| name.bytes().try_for_each(|byte| write!(f, "\\{byte:02X}")));
         let text = crate::diagnostics::format_in!(
@@ -1218,10 +1254,10 @@ impl<'id> Session<'id> {
                 c"x86-64".as_ptr(),
                 c"".as_ptr(),
                 level,
-                if position_independent(target) {
-                    LLVMRelocMode::LLVMRelocPIC
-                } else {
-                    LLVMRelocMode::LLVMRelocDefault
+                match self.elf_relocation(target) {
+                    | Some(Relocation::Pie(_) | Relocation::Pic(_)) => LLVMRelocMode::LLVMRelocPIC,
+                    | Some(Relocation::Static) => LLVMRelocMode::LLVMRelocStatic,
+                    | None => LLVMRelocMode::LLVMRelocDefault,
                 },
                 LLVMCodeModel::LLVMCodeModelDefault,
             )
@@ -1425,8 +1461,21 @@ impl fmt::Debug for Session<'_> {
     }
 }
 
-/// Whether the target links position-independent executables by default,
-/// as Clang and GCC do on Linux; code for them must be PIC.
-pub(super) fn position_independent(target: Target) -> bool {
-    matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+impl Session<'_> {
+    /// The relocation model of ELF `target`s, or `None` on Windows, where
+    /// LLVM's default model is kept and the one TLS model ignores it.
+    pub(super) fn elf_relocation(&self, target: Target) -> Option<Relocation> {
+        matches!(target, Target::LinuxGnu | Target::LinuxMusl).then(|| self.code.relocation(target))
+    }
+
+    /// The TLS model a thread-local global of ELF `target` requests;
+    /// `defined` tells whether the module defines it. Windows has one
+    /// model, through `_tls_index` and the TEB.
+    pub(super) fn thread_local_model(&self, target: Target, defined: bool) -> TlsModel {
+        if self.elf_relocation(target).is_some() {
+            self.code.thread_local_model(target, defined)
+        } else {
+            TlsModel::GlobalDynamic
+        }
+    }
 }

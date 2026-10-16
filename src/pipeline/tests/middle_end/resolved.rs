@@ -62,6 +62,7 @@ fn m3_resolved_expressions_match_native_arms_and_clang() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();
@@ -81,6 +82,7 @@ fn m3_resolved_expressions_match_native_arms_and_clang() {
                         disable_llvm_passes: false,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .output()

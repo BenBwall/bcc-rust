@@ -955,7 +955,9 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
 /// `-fms-compatibility-version`. Clang's own identity (`__clang__`, its
 /// version and literal encodings) is frozen with the target's definitions
 /// (`Target::predefined_macros`). `__bcc__` and its version are defined in
-/// every mode. They are ordinary macros, so `#undef` works as in Clang.
+/// every mode, and `__PIC__`, `__pic__`, `__PIE__` and `__pie__` follow the
+/// relocation model. They are ordinary macros, so `#undef` works as in
+/// Clang.
 ///
 /// C99: further predefined macro names begin with `__` or `_` and an
 /// uppercase letter, §6.10.8 paragraph 4, p. 161; PDF p. 173; reserved
@@ -991,6 +993,17 @@ pub(super) fn with_identity_macros<'a>(
     }
     if configuration.accepts(Feature::C23Keywords) {
         out.push_str(configuration.target().atomic_c23_macros());
+    }
+    // The relocation model `-fpic` and its family select, as Clang spells
+    // it (GCC manual, "Code Gen Options").
+    let relocation = configuration
+        .code_options()
+        .relocation(configuration.target());
+    if let Some((level, pie)) = relocation.macro_level() {
+        _ = write!(out, "#define __PIC__ {level}\n#define __pic__ {level}\n");
+        if pie {
+            _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
+        }
     }
     out.into_str()
 }

@@ -68,6 +68,7 @@ fn fuzzed_record_layouts_match_the_platform_compilers_natively() {
                 disable_llvm_passes: false,
                 target,
                 kind: OutputKind::Executable,
+                code: crate::target::CodeOptions::default(),
             },
         )
         .unwrap();
@@ -135,6 +136,7 @@ fn zero_width_bit_fields_end_the_microsoft_unit_at_run_time() {
                         disable_llvm_passes: arm.disable_llvm_passes,
                         target,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();

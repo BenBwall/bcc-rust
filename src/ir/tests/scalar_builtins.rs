@@ -168,6 +168,7 @@ fn narrow_overflow_predicates_execute_before_and_after_fold_and_in_llvm() {
                     disable_llvm_passes: false,
                     target,
                     kind: OutputKind::Executable,
+                    code: crate::target::CodeOptions::default(),
                 };
                 let clang = directory.join("clang.exe");
                 let output = crate::test_support::native::run_native(

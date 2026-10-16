@@ -10,7 +10,6 @@
 use super::{
     EmitError,
     api::{
-        self,
         Linkage,
         Session,
         Ty,
@@ -80,15 +79,17 @@ pub(super) fn declare<'id, 'a, 'm>(
             api.linkage(value, linkage);
         }
         if global.thread_local {
-            // Clang marks a definition `dso_local`, so in a position-
-            // independent ELF executable LLVM gives it the local-exec model
-            // and a declaration initial-exec. LLVM-C cannot mark a global
-            // `dso_local`, so a definition (weak ones included, as Clang
-            // marks them `dso_local` too) requests local-exec directly.
-            // Windows has one model, through `_tls_index` and the TEB.
+            // In an ELF executable Clang marks a definition `dso_local`, so
+            // LLVM gives it the local-exec model and a declaration
+            // initial-exec. LLVM-C cannot mark a global `dso_local`, so a
+            // definition (weak ones included, as Clang marks them
+            // `dso_local` too) requests local-exec directly. Code for a
+            // shared library requests the `-ftls-model`, general-dynamic by
+            // default, which LLVM refines to local-dynamic for an internal
+            // or hidden global, as for Clang's.
             api.thread_local(
                 value,
-                global.init.is_some() && api::position_independent(platform),
+                api.thread_local_model(platform, global.init.is_some()),
             );
         }
         sections(api, value, global.attributes);
@@ -123,7 +124,7 @@ pub(super) fn declare<'id, 'a, 'm>(
                     global.name,
                     global.size,
                     globals[aliasee.index()],
-                    api::position_independent(platform),
+                    api.thread_local_model(platform, true),
                 );
                 alias_linkage(api, value, global.linkage);
                 value

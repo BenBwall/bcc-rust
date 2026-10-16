@@ -72,6 +72,7 @@ fn compare_native(source: &str) {
             disable_llvm_passes: false,
             target,
             kind: OutputKind::Executable,
+            code: crate::target::CodeOptions::default(),
         };
         let clang = directory.join(format!("clang-{opt:?}.exe"));
         let mut command = toolchain.command(&input, &clang, options);

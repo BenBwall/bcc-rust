@@ -63,6 +63,7 @@ fn changing_union_members_matches_native_execution() {
                 disable_llvm_passes: false,
                 target,
                 kind: OutputKind::Executable,
+                code: crate::target::CodeOptions::default(),
             },
         )
         .unwrap();

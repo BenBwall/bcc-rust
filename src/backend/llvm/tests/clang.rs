@@ -42,6 +42,7 @@ fn llvm_emits_every_golden_module() {
         disable_llvm_passes: false,
         target,
         kind: OutputKind::Object,
+        code: CodeOptions::default(),
     };
     thread::scope(|scope| {
         let runs: Vec<_> = GOLDENS
@@ -123,6 +124,7 @@ block0:
                     disable_llvm_passes: false,
                     target,
                     kind: OutputKind::Executable,
+                    code: CodeOptions::default(),
                 },
             )
             .unwrap();
@@ -340,6 +342,7 @@ fn command_lines_follow_the_options() {
             disable_llvm_passes,
             target: Target::LinuxGnu,
             kind,
+            code: CodeOptions::default(),
         };
         let command = toolchain.command(Path::new("in.o"), Path::new("out"), options);
         command
@@ -355,6 +358,14 @@ fn command_lines_follow_the_options() {
             format!("{target} {} -fuse-ld=lld in.o -o out", level.flag())
         );
     }
+    assert_eq!(
+        arguments(None, false, OutputKind::SharedLibrary),
+        format!("{target} -fuse-ld=lld -shared in.o -o out")
+    );
+    assert_eq!(
+        arguments(None, false, OutputKind::PositionDependentExecutable),
+        format!("{target} -fuse-ld=lld -no-pie in.o -o out")
+    );
 }
 
 #[test]
@@ -456,6 +467,7 @@ fn assert_runs(name: &str, program: &str, status: i32, stdout: &str) {
                     disable_llvm_passes,
                     target,
                     kind: OutputKind::Executable,
+                    code: CodeOptions::default(),
                 };
                 let suffix = if disable_llvm_passes { "a1" } else { "a2" };
                 let executable = directory.join(format!("{name}-{suffix}.exe"));

@@ -76,6 +76,7 @@ fn braced_strings_match_clang_and_native_execution() {
                 opt: Some(opt),
                 disable_llvm_passes: false,
                 kind: OutputKind::Executable,
+                code: crate::target::CodeOptions::default(),
             };
             let clang = directory.join(format!("clang-{index}-{opt:?}.exe"));
             let output = toolchain.command(&input, &clang, options).output().unwrap();
