@@ -407,11 +407,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     initialized,
                     self.types.runtime_bounds.len(),
                 ));
-                self.work.push(Work::DeclaredAlignment(
-                    spec.extensions,
+                self.work.push(Work::DeclaredAlignment(DeclaredAlignment {
+                    extensions: spec.extensions,
+                    attributes: None,
+                    declarator: Some(d),
                     base,
-                    spec.storage_class == Some(StorageClass::Typedef),
-                ));
+                    can_weaken: spec.storage_class == Some(StorageClass::Typedef),
+                    microsoft_object: true,
+                }));
                 self.work.push(Work::Declarator(d, base, false));
             },
             | Work::Bind(d, s, initialized, bound_start) => {
@@ -586,13 +589,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let ty = self.vector_attribute_chain(base, chain, storage_alignment);
                 self.values.push(ty);
             },
-            | Work::DeclaredAlignment(chain, base, can_weaken) => {
+            | Work::DeclaredAlignment(alignment) => {
                 let ty = self.take_type();
-                let attributes = self.layout_attribute_chain(chain);
-                let ty = self.align_declared_type(ty, attributes.alignment);
-                let can_weaken = can_weaken || self.microsoft_alignment(chain);
-                let ty = self.minimum_declared_alignment(ty, base, can_weaken);
-                let ty = self.standard_alignment(ty, chain);
+                let ty = self.declared_alignment(ty, alignment);
                 self.values.push(ty);
             },
             | Work::VectorDeclaratorAttributes(list) => {
@@ -684,11 +683,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work
                     .push(Work::TypeNameDone(name, self.types.runtime_bounds.len()));
                 self.reject_standard_alignment(name.declaration_specifiers.extensions);
-                self.work.push(Work::DeclaredAlignment(
-                    name.declaration_specifiers.extensions,
+                self.work.push(Work::DeclaredAlignment(DeclaredAlignment {
+                    extensions: name.declaration_specifiers.extensions,
+                    attributes: None,
+                    declarator: name.declarator,
                     base,
-                    true,
-                ));
+                    can_weaken: true,
+                    microsoft_object: false,
+                }));
                 if let Some(d) = name.declarator {
                     self.work.push(Work::Declarator(d, base, false));
                 } else {
@@ -922,11 +924,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     identity,
                 ));
                 self.reject_standard_alignment(p.declaration_specifiers.extensions);
-                self.work.push(Work::DeclaredAlignment(
-                    p.declaration_specifiers.extensions,
+                self.work.push(Work::DeclaredAlignment(DeclaredAlignment {
+                    extensions: p.declaration_specifiers.extensions,
+                    attributes: None,
+                    declarator: p.declarator,
                     base,
-                    false,
-                ));
+                    can_weaken: false,
+                    microsoft_object: false,
+                }));
                 if let Some(d) = p.declarator {
                     self.validate_parameter_arrays(d);
                     self.work.push(Work::Declarator(d, base, true));
@@ -1078,8 +1083,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let base = self.take_type();
                 let attributes = self.layout_attribute_chain(member.extensions);
                 if member.struct_declarator_list.is_empty() {
-                    let anonymous_base = self.align_declared_type(base, attributes.alignment);
-                    let anonymous_base = self.standard_alignment(anonymous_base, member.extensions);
+                    let anonymous_base = self.declared_alignment(
+                        base,
+                        DeclaredAlignment {
+                            extensions: member.extensions,
+                            attributes: None,
+                            declarator: None,
+                            base,
+                            can_weaken: attributes.packed || self.types.tags[tag].packed.get(),
+                            microsoft_object: false,
+                        },
+                    );
                     if let Some(anonymous) = self.anonymous_member(tag, member, anonymous_base) {
                         members.push(self.scratch, anonymous);
                     }
@@ -1131,11 +1145,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if d.bitfield_width.is_some() {
                     self.reject_standard_alignment(extensions);
                 }
-                self.work.push(Work::DeclaredAlignment(
+                self.work.push(Work::DeclaredAlignment(DeclaredAlignment {
                     extensions,
+                    attributes: d.attributes,
+                    declarator: d.declarator,
                     base,
-                    packed || self.types.tags[tag].packed.get(),
-                ));
+                    can_weaken: packed || self.types.tags[tag].packed.get(),
+                    microsoft_object: false,
+                }));
                 self.work.push(Work::VectorAttributes(d.attributes, true));
                 if let Some(decl) = d.declarator {
                     self.work.push(Work::Declarator(decl, base, false));
@@ -1548,6 +1565,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 }
 
+/// Temporary declaration syntax used after the complete type is constructed.
+/// C11: §6.7.5 paragraph 4, p. 127; PDF p. 145 (the original requirement
+/// and the combined explicit request must remain distinct).
+#[derive(Clone, Copy)]
+struct DeclaredAlignment<'tu> {
+    extensions:       Option<&'tu SpecifierExtension<'tu>>,
+    attributes:       Option<&'tu SpecifierExtension<'tu>>,
+    declarator:       Option<Declarator<'tu>>,
+    base:             TypeId,
+    can_weaken:       bool,
+    microsoft_object: bool,
+}
+
 // Continuations compose type construction, ICE evaluation and structural
 // walking. No task invokes the driver recursively, including nested
 // record/function types.
@@ -1555,7 +1585,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 enum Work<'tu, 's> {
     RestoreReferenceFunction(Option<usize>),
     RestoreReferenceOwner(Option<usize>),
-    DeclaredAlignment(Option<&'tu SpecifierExtension<'tu>>, TypeId, bool),
+    DeclaredAlignment(DeclaredAlignment<'tu>),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),
     DeclarationBase(&'tu Declaration<'tu>),

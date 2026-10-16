@@ -9,6 +9,7 @@ use super::super::{
     ArenaVec,
     AttributeSpecifier,
     Declarator,
+    DeclaredAlignment,
     DirectDeclarator,
     SemanticErrorKind,
     SpecifierExtension,
@@ -62,9 +63,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         attributes: Option<&'tu SpecifierExtension<'tu>>,
         declarator: Option<Declarator<'tu>>,
     ) -> u32 {
-        let mut alignment = self
+        let alignment = self
             .written_alignment(extensions)
             .max(self.written_alignment(attributes));
+        alignment.max(self.declarator_alignment(declarator))
+    }
+
+    fn declarator_alignment(&self, declarator: Option<Declarator<'tu>>) -> u32 {
+        let mut alignment = 0;
         let mut work = ArenaVec::new_in(self.scratch);
         if let Some(declarator) = declarator {
             work.push(declarator);
@@ -78,6 +84,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => {},
                 }
             }
+        }
+        alignment
+    }
+
+    fn written_chain_alignment(&self, mut chain: Option<&'tu SpecifierExtension<'tu>>) -> u32 {
+        let mut alignment = 0;
+        while let Some(item) = chain {
+            if let SpecifierExtensionKind::Attributes(a) = item.kind {
+                alignment = alignment.max(self.written_attribute_alignment(a));
+            }
+            chain = item.next;
         }
         alignment
     }
@@ -373,6 +390,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty.with_alignment(ty.alignment.max(alignment))
     }
 
+    /// Combine a declaration's own requests without losing inherited typedef
+    /// alignment. Only Microsoft object requests may replace that alignment;
+    /// ordinary members retain their type's requirement. A packed member keeps
+    /// that inherited fact for Microsoft placement, separately from its own
+    /// explicit request and the alignment of a packed member expression.
+    /// C11: §6.7.5 paragraphs 4-6, p. 127; PDF p. 145.
+    /// C99: §6.7.2.1 paragraph 12, p. 103; PDF p. 115 (member alignment).
+    /// GNU extension: GCC manual, "Common Variable Attributes", aligned.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html>
+    pub(in crate::translation_phases::semantic_analysis) fn declared_alignment(
+        &mut self,
+        ty: TypeId,
+        declaration: DeclaredAlignment<'tu>,
+    ) -> TypeId {
+        let attributes = self.layout_attribute_chain(declaration.extensions);
+        let requested = attributes
+            .alignment
+            .max(self.written_chain_alignment(declaration.attributes))
+            .max(self.declarator_alignment(declaration.declarator));
+        // A surviving base type carries inherited typedef alignment. Derived
+        // declarators get their original requirement from their constructed
+        // type (including an array's aligned element), before root attributes.
+        let original = ty.with_alignment(if ty.index == declaration.base.index {
+            declaration.base.alignment
+        } else {
+            0
+        });
+        let minimum = self.types.alignment(original);
+        let microsoft =
+            declaration.microsoft_object && self.microsoft_alignment(declaration.extensions);
+        let ty = if microsoft
+            && requested != 0
+            && !matches!(self.types.nodes[ty.index], TypeKind::Function { .. })
+        {
+            ty.with_alignment(requested)
+        } else {
+            self.align_declared_type(ty, requested)
+        };
+        let ty = Self::minimum_declared_alignment(ty, minimum, declaration.can_weaken || microsoft);
+        self.standard_alignment(ty, declaration.extensions, minimum, requested)
+    }
+
     /// Whether a declaration's specifiers request Microsoft's
     /// `__declspec(align(N))`, which, as Clang's `aligned` attribute does,
     /// also lowers an object's alignment: `TraceLoggingProvider.h` packs
@@ -400,25 +459,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// lower it, and declarations using that typedef inherit its alignment.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
     pub(in crate::translation_phases::semantic_analysis) fn minimum_declared_alignment(
-        &self,
         ty: TypeId,
-        base: TypeId,
+        minimum: Option<u64>,
         can_weaken: bool,
     ) -> TypeId {
         if can_weaken || ty.alignment == 0 {
             return ty;
         }
-        let minimum = if matches!(
-            self.types.nodes[ty.index],
-            TypeKind::Scalar(_) | TypeKind::Tag(_)
-        ) && base.alignment != 0
-        {
-            self.types.layout(base)
-        } else {
-            self.types.layout(ty.with_alignment(0))
-        };
         if let Some(minimum) = minimum {
-            u32::try_from(minimum.align).map_or(ty.with_alignment(0), |alignment| {
+            u32::try_from(minimum).map_or(ty.with_alignment(0), |alignment| {
                 ty.with_alignment(ty.alignment.max(alignment))
             })
         } else {
@@ -433,17 +482,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         ty: TypeId,
         mut chain: Option<&'tu SpecifierExtension<'tu>>,
+        natural: Option<u64>,
+        attributes: u32,
     ) -> TypeId {
         // C11 §6.7.5p4,p6: compare the combined request with the original
         // requirement, not with the alignment strengthened by an earlier
         // specifier. The effective request is independent of source order.
         // Array alignment depends on the element type even when a VLA has
         // no compile-time size; typedefs retain that same requirement.
-        let natural = self.types.alignment(ty);
         let mut requested = 0;
         let mut source = None;
         while let Some(item) = chain {
             if let SpecifierExtensionKind::Alignment(operand) = item.kind {
+                source = Some(item.source_vectors);
                 if matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) {
                     self.error(
                         SemanticErrorKind::InvalidStandardAlignment,
@@ -468,7 +519,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
                     {
                         requested = requested.max(u32::try_from(value).unwrap_or(0));
-                        source = Some(item.source_vectors);
                     } else {
                         self.error(
                             SemanticErrorKind::InvalidStandardAlignment,
@@ -481,7 +531,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             chain = item.next;
         }
-        if requested != 0 && natural.is_some_and(|natural| u64::from(requested) < natural) {
+        let combined = requested.max(attributes);
+        if source.is_some()
+            && combined != 0
+            && natural.is_some_and(|natural| u64::from(combined) < natural)
+        {
             self.error(
                 SemanticErrorKind::InvalidStandardAlignment,
                 source.unwrap_or_default(),
