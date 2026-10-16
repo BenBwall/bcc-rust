@@ -284,36 +284,19 @@ impl Session<'_> {
         }
         // Clang marks position-independent ELF code with its PIC level, and
         // an executable's with its PIE level too, which lets code generation
-        // use direct references to symbols the executable defines.
+        // use direct references to symbols the executable defines. Linking
+        // modules keeps the smallest PIC level and the largest PIE level,
+        // so code of both levels links (with LTO too), as Clang's does.
         let (level, pie) = match session.elf_relocation(target) {
             | Some(Relocation::Pie(level)) => (Some(level), true),
             | Some(Relocation::Pic(level)) => (Some(level), false),
             | Some(Relocation::Static) | None => (None, false),
         };
         if let Some(level) = level {
-            let keys: &[&str] = if pie {
-                &["PIC Level", "PIE Level"]
-            } else {
-                &["PIC Level"]
-            };
-            for key in keys {
-                // SAFETY: The context is live.
-                let int = unsafe { LLVMInt32TypeInContext(context) };
-                // SAFETY: A constant of the live i32 type.
-                let level = unsafe { llvm_sys::core::LLVMConstInt(int, u64::from(level as u8), 0) };
-                // SAFETY: Wraps the live constant as metadata.
-                let value = unsafe { llvm_sys::core::LLVMValueAsMetadata(level) };
-                // SAFETY: Module, key bytes and metadata are live; LLVM copies
-                // the key.
-                unsafe {
-                    llvm_sys::core::LLVMAddModuleFlag(
-                        module,
-                        llvm_sys::LLVMModuleFlagBehavior::LLVMModuleFlagBehaviorOverride,
-                        key.as_ptr().cast(),
-                        key.len(),
-                        value,
-                    );
-                }
+            let level = u64::from(level as u8);
+            session.module_flag(MODULE_FLAG_MIN, "PIC Level", level);
+            if pie {
+                session.module_flag(MODULE_FLAG_MAX, "PIE Level", level);
             }
         }
         body(&session)
@@ -1657,7 +1640,49 @@ impl fmt::Debug for Session<'_> {
     }
 }
 
+/// LLVM's `Module::ModFlagBehavior` values `Max` and `Min`
+/// (`llvm/IR/Module.h`; the LLVM Language Reference, "Module Flags Metadata"),
+/// which LLVM-C's `LLVMModuleFlagBehavior` lacks: linking keeps the larger or
+/// the smaller of two integer values.
+const MODULE_FLAG_MAX: u64 = 7;
+const MODULE_FLAG_MIN: u64 = 8;
+
 impl Session<'_> {
+    /// Adds the integer module flag `key` with the merge `behavior`, as the
+    /// `!{i32 behavior, !"key", i32 value}` operand of `llvm.module.flags`
+    /// that `Module::addModuleFlag` creates; LLVM-C's `LLVMAddModuleFlag`
+    /// cannot express `Min` or `Max`.
+    fn module_flag(&self, behavior: u64, key: &str, value: u64) {
+        // SAFETY: The context is live.
+        let int = unsafe { LLVMInt32TypeInContext(self.context) };
+        let operands = [behavior, value].map(|number| {
+            // SAFETY: A constant of the live i32 type.
+            let constant = unsafe { llvm_sys::core::LLVMConstInt(int, number, 0) };
+            // SAFETY: Wraps the live constant as metadata.
+            unsafe { llvm_sys::core::LLVMValueAsMetadata(constant) }
+        });
+        // SAFETY: The context is live; LLVM copies the key bytes.
+        let key = unsafe {
+            llvm_sys::core::LLVMMDStringInContext2(self.context, key.as_ptr().cast(), key.len())
+        };
+        let mut tuple = [operands[0], key, operands[1]];
+        // SAFETY: The context and the three metadata operands are live.
+        let node = unsafe {
+            llvm_sys::core::LLVMMDNodeInContext2(self.context, tuple.as_mut_ptr(), tuple.len())
+        };
+        // SAFETY: The context and its metadata node are live.
+        let node = unsafe { llvm_sys::core::LLVMMetadataAsValue(self.context, node) };
+        // SAFETY: The module is live, the name is terminated, and the operand
+        // is the context's metadata node as a value.
+        unsafe {
+            llvm_sys::core::LLVMAddNamedMetadataOperand(
+                self.module,
+                c"llvm.module.flags".as_ptr(),
+                node,
+            );
+        }
+    }
+
     /// The relocation model of ELF `target`s, or `None` on Windows, where
     /// LLVM's default model is kept and the one TLS model ignores it.
     pub(super) fn elf_relocation(&self, target: Target) -> Option<Relocation> {

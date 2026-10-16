@@ -242,8 +242,8 @@ block0:
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -311,8 +311,8 @@ block1:                                           ; preds = %block0, %block0
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -383,8 +383,8 @@ attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: wr
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -436,8 +436,8 @@ block0:
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -486,8 +486,8 @@ block3:                                           ; preds = %block2, %block0, %b
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -531,8 +531,8 @@ block0:
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -604,8 +604,8 @@ attributes #0 = { nocallback nofree nosync nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -710,8 +710,8 @@ block0:
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -769,8 +769,8 @@ block0:
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -836,8 +836,8 @@ block0:
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -893,8 +893,8 @@ block3:                                           ; No predecessors!
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
@@ -952,8 +952,8 @@ block0:
 
 !llvm.module.flags = !{!0, !1}
 
-!0 = !{i32 4, !"PIC Level", i32 2}
-!1 = !{i32 4, !"PIE Level", i32 2}
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
 "#,
 };
 
