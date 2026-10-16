@@ -1305,11 +1305,13 @@ impl ParserErrorType<'_> {
                     "expected a name",
                     *token,
                 );
+                // An alternate keyword spelling, such as `__thread`, is named
+                // as written.
                 match token {
                     | Some(TokenType::Keyword(keyword)) => explanation.note(format_in!(
                         arena,
                         "`{}` is a keyword and cannot be used as a name",
-                        keyword.spelling()
+                        spelling.unwrap_or(keyword.spelling())
                     )),
                     | _ => explanation,
                 }
