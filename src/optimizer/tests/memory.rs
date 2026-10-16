@@ -1,6 +1,8 @@
 //! Load CSE, forwarding, alias proofs and memory-scope boundaries on textual
 //! IR.
 
+use std::fmt::Write as _;
+
 use super::*;
 
 #[test]
@@ -310,6 +312,37 @@ block3:
 }
 ";
     assert_pass_leaves(Pass::Gvn, text);
+}
+
+/// A join's region of at most 64 blocks is scanned for writes; one more
+/// block makes the join a full barrier, even though no block writes.
+#[test]
+fn a_join_region_beyond_sixty_four_blocks_is_a_barrier() {
+    for (blocks, reused) in [(63, true), (64, true), (65, false)] {
+        let mut chain = String::new();
+        for block in 1..=blocks {
+            let _ = writeln!(chain, "block{block}:\n    jump block{}", block + 1);
+        }
+        let join = blocks + 1;
+        let text = format!(
+            "\
+function @f(ptr, i1) -> i32 external {{
+block0(v0: ptr, v1: i1):
+    v2 = load.i32 v0, align 4
+    brif v1, block1, block{join}
+{chain}block{join}:
+    v3 = load.i32 v0, align 4
+    return v3
+}}
+"
+        );
+        let (actual, report) = optimize_text(&text, &only(&[Pass::Gvn]));
+        assert_eq!(
+            report.transformations(),
+            u64::from(reused),
+            "{blocks} blocks:\n{actual}"
+        );
+    }
 }
 
 #[test]
