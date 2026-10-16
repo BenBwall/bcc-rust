@@ -1,10 +1,10 @@
 error: expected an identifier or `(` in the declarator, found keyword `return`
  --> parser-macro-expanded-keyword.c:2:5
   |
-1 | #define BAD return
-  |             ------ skipped to recover
 2 | int BAD;
-  |     ^^^ expected a name
+  |     ^^^- parsing resumes here
+  |     |
+  |     expected a name
   |
   = note: `return` is a keyword and cannot be used as a name
 

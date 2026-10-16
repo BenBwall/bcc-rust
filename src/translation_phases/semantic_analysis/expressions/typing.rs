@@ -1104,7 +1104,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if matches!(
             self.types.nodes[target.index],
             TypeKind::Scalar(Scalar::Bool)
-        ) && self.pointer_target(from).is_some()
+        ) && (self.pointer_target(from).is_some() || self.nullptr_type(from))
             && self.address_value(operand)
         {
             let truth = Self::constant_truth(operand).unwrap_or(true);
@@ -1112,7 +1112,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.constant = ConstantClass::Arithmetic;
             info.ice = false;
         }
-        if self.pointer_target(target).is_some()
+        if (self.pointer_target(target).is_some() || self.nullptr_type(target))
             && (self.address_value(operand) || (operand.ice && operand.integer.is_some()))
         {
             info.constant = ConstantClass::Address;
