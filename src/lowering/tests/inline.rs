@@ -260,6 +260,76 @@ fn msvc_inline_retention_follows_declaration_order_and_scope() {
     }
 }
 
+/// An applicable Microsoft export annotation retains the inline body and
+/// its dependencies. An annotation first added after the body is ignored;
+/// the other accepted attributes below do not independently require emission.
+/// This tests retention, not DLL export directives or COMDAT linkage.
+/// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+#[test]
+fn msvc_inline_export_retention_requires_an_applicable_annotation() {
+    for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
+        let config = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+            .with_target(Target::WindowsMsvc)
+            .with_gnu_extensions(true)
+            .with_msvc_extensions(true);
+        for (body, retained) in [
+            ("inline int f(void) { return helper(); }", false),
+            (
+                "__declspec(dllexport) inline int f(void) { return helper(); }",
+                true,
+            ),
+            (
+                "__attribute__((dllexport)) inline int f(void) { return helper(); }",
+                true,
+            ),
+            (
+                "__declspec(dllexport) inline int f(void); inline int f(void) { return helper(); }",
+                true,
+            ),
+            (
+                "inline int f(void) { return helper(); } __declspec(dllexport) inline int f(void);",
+                false,
+            ),
+            (
+                "__attribute__((dllexport)) inline int f(void); inline int f(void) { return \
+                 helper(); }",
+                true,
+            ),
+            (
+                "inline int f(void) { return helper(); } __attribute__((dllexport)) inline int \
+                 f(void);",
+                false,
+            ),
+            (
+                "__attribute__((weak)) inline int f(void) { return helper(); }",
+                false,
+            ),
+            (
+                "__attribute__((retain)) inline int f(void) { return helper(); }",
+                false,
+            ),
+            (
+                "__attribute__((externally_visible)) inline int f(void) { return helper(); }",
+                false,
+            ),
+        ] {
+            let source = format!(
+                "static int helper(void) {{ return 7; }} {body} int main(void) {{ return 0; }}"
+            );
+            let text = lower_with(&source, config).unwrap();
+            let arena = Bump::new();
+            let module = parse_module(&arena, &text).unwrap();
+            for name in ["f", "helper"] {
+                let has_body = match module.symbol(name) {
+                    | Some(crate::ir::Symbol::Function(id)) => module.function(id).body.is_some(),
+                    | _ => false,
+                };
+                assert_eq!(has_body, retained, "{standard:?} {name}: {source}\n{text}");
+            }
+        }
+    }
+}
+
 #[test]
 fn gnu_inline_attribute_and_replacement_bodies_reach_lowering() {
     for source in [

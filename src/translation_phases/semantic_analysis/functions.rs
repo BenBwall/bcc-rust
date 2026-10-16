@@ -619,7 +619,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .functions
                     .entities
                     .get(&self.function_identity(definition.binding))
-                    .is_some_and(|entity| entity.msvc_discardable)
+                    .is_some_and(|entity| {
+                        entity.msvc_inline.emission == InlineEmission::Discardable
+                    })
                 {
                     self.definitions[i].kind = DefinitionKind::DiscardableFunction;
                 }
@@ -1099,21 +1101,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if binding.kind == BindingKind::Function {
             let explicit_extern = spec.storage_class == Some(StorageClass::Extern);
             if self.scopes[binding.scope].kind == ScopeKind::File
-                && entity.msvc_discardable
+                && entity.msvc_inline.emission == InlineEmission::Discardable
                 && ((self.context.configuration.msvc_compatibility()
                     && explicit_extern
-                    && !entity.explicit_extern)
+                    && !entity.msvc_inline.explicit_extern)
                     || (!self.context.configuration.gnu89_inline()
                         && !entity.non_inline
                         && (!spec.function_specifiers.is_inline || explicit_extern)))
             {
-                entity.msvc_discardable = false;
+                entity.msvc_inline.emission = InlineEmission::Required;
             }
             // Inline propagates forward through linked declarations, even
             // from block scope. A block extern can require a later body,
             // but does not itself materialize an earlier deferred body.
-            entity.inline_declared |= spec.function_specifiers.is_inline;
-            entity.explicit_extern |= explicit_extern;
+            entity.msvc_inline.inline_declared |= spec.function_specifiers.is_inline;
+            entity.msvc_inline.explicit_extern |= explicit_extern;
+            // Clang ignores an export annotation first added after the
+            // body. Only applicable annotations retain this definition;
+            // export directives and DLL linkage remain separate support.
+            entity.msvc_inline.dllexport |= entity.function_body.is_none()
+                && self.has_function_attribute(spec, declarator, "dllexport");
         }
         if self.scopes[binding.scope].kind == ScopeKind::File {
             if binding.kind == BindingKind::Function {
@@ -1121,7 +1128,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Clang ignores it without inline or after a unique body.
                 entity.gnu_inline |= spec.function_specifiers.is_inline
                     && !matches!(entity.function_body, Some(FunctionBody::Unique(_)))
-                    && self.has_gnu_inline(spec, declarator);
+                    && self.has_function_attribute(spec, declarator, "gnu_inline");
                 entity.can_redefine = spec.function_specifiers.is_inline
                     && spec.storage_class == Some(StorageClass::Extern)
                     && (entity.gnu_inline || self.context.configuration.gnu89_inline());
@@ -1230,7 +1237,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// when GNU inline semantics allow replacing them.
     /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19:
     /// Clang's basicGVALinkageForFunction defers an inlined definition
-    /// without an earlier explicit extern, unless gnu_inline applies.
+    /// without an explicit extern or applicable `dllexport`, unless
+    /// `gnu_inline` applies. Export retention does not implement DLL codegen.
     fn record_function_definition(&mut self, index: usize, f: &'tu FunctionDefinition<'tu>) {
         if self.tainted {
             return;
@@ -1264,10 +1272,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 FunctionBody::Unique(b.name.source_vectors)
             });
         }
-        entity.msvc_discardable = !self.context.configuration.target().c99_inline_definitions()
-            && !entity.gnu_inline
-            && entity.inline_declared
-            && !entity.explicit_extern;
+        entity.msvc_inline.emission =
+            if !self.context.configuration.target().c99_inline_definitions()
+                && !entity.gnu_inline
+                && entity.msvc_inline.inline_declared
+                && !entity.msvc_inline.explicit_extern
+                && !entity.msvc_inline.dllexport
+            {
+                InlineEmission::Discardable
+            } else {
+                InlineEmission::Required
+            };
         // C99 §6.7.4p6 and §6.9p3: an internal inline body supplies the
         // required definition even when GNU semantics permit its replacement.
         if (!entity.can_redefine || b.linkage == Linkage::Internal)
@@ -1410,22 +1425,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|e| e.can_redefine)
     }
 
-    /// GNU inline attribute semantics follow Clang's canRedefineFunction.
+    /// Reads recognized entity attribute names for GNU inline semantics and
+    /// Microsoft export retention. Names in arguments and unknown namespaces
+    /// do not count. GNU/MSVC extensions under C99: §4p6, p. 7; PDF p. 19.
     /// <https://clang.llvm.org/docs/AttributeReference.html#gnu-inline>
-    /// Only attribute names count; occurrences inside arguments do not.
-    /// GNU extension: GCC manual, "Inline".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
-    fn has_gnu_inline(
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/dllexport-dllimport>
+    fn has_function_attribute(
         &self,
         spec: DeclarationSpecifiers<'tu>,
         declarator: Declarator<'tu>,
+        name: &str,
     ) -> bool {
-        // The catalog's namespace-aware reader, so `[[gnu::gnu_inline]]`
-        // selects GNU inline semantics as `__attribute__((gnu_inline))` does.
+        // The catalog's namespace-aware reader also recognizes GNU-scoped
+        // standard attributes and the Microsoft declspec spelling.
         let attribute_has = |attribute: &super::AttributeSpecifier<'tu>| {
             !attribute.recovered
                 && super::attributes::known_names(attribute, self.context)
-                    .any(|(_, name)| name == "gnu_inline")
+                    .any(|(_, attribute_name)| attribute_name == name)
         };
         let mut chain = spec.extensions;
         while let Some(item) = chain {
@@ -1480,21 +1496,38 @@ pub(super) enum FunctionWork<'tu> {
 /// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Entity {
-    latest:           usize,
-    definition:       Option<SourceVectors>,
-    tentative:        Option<usize>,
-    non_inline:       bool,
-    function_body:    Option<FunctionBody>,
-    /// Source-order facts for Microsoft's inline emission. Inline inherits
-    /// forward; explicit extern includes linked block-scope declarations.
-    /// Extension under C99: §4p6, p. 7; PDF p. 19.
-    inline_declared:  bool,
-    explicit_extern:  bool,
-    msvc_discardable: bool,
+    latest:        usize,
+    definition:    Option<SourceVectors>,
+    tentative:     Option<usize>,
+    non_inline:    bool,
+    function_body: Option<FunctionBody>,
+    msvc_inline:   MsvcInlineState,
     /// Clang's canRedefineFunction: GNU extern inline declarations permit
     /// a later static declaration and a replacement function body.
-    can_redefine:     bool,
-    gnu_inline:       bool,
+    can_redefine:  bool,
+    gnu_inline:    bool,
+}
+
+/// Source facts and the current emission decision for Microsoft inline
+/// definitions. Inline inherits forward; explicit extern includes linked
+/// block-scope declarations; `dllexport` applies only at or before the body.
+/// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+#[derive(Clone, Copy, Default)]
+struct MsvcInlineState {
+    inline_declared: bool,
+    explicit_extern: bool,
+    dllexport:       bool,
+    emission:        InlineEmission,
+}
+
+/// Whether an external Microsoft inline body is an emission root or waits
+/// for a reachable reference. This is independent of C99 definition state.
+/// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum InlineEmission {
+    #[default]
+    Required,
+    Discardable,
 }
 
 /// GNU extern inline bodies may be replaced; ordinary definitions may not.
