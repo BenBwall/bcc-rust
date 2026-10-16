@@ -213,6 +213,17 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
 /// is unchanged; only the variable's own storage, global, static or
 /// automatic, is raised, and code compiled by others may assume it of an
 /// external array it declares.
+/// MSVC static and thread objects instead have size-based storage minima:
+/// 4 bytes at size 2, 8 at size 8, and 16 at size 64. Explicit nonzero
+/// declaration alignment suppresses those increases; type and expression
+/// alignment queries keep their language requirements.
+/// C99: §6.2.4 paragraph 3, p. 32; PDF p. 44 (static storage duration).
+/// C11: §6.2.4 paragraph 4, p. 38; PDF p. 56 (thread storage duration);
+/// §6.7.5 paragraph 6, p. 127; PDF p. 145 (zero alignment has no effect).
+/// MSVC extension: Clang 23, `Microsoft64BitMinGlobalAlign` and
+/// `MicrosoftX86_64TargetInfo::getMinGlobalAlign`.
+/// <https://github.com/llvm/llvm-project/blob/llvmorg-23.1.1/clang/lib/Basic/TargetInfo.cpp>
+/// <https://github.com/llvm/llvm-project/blob/llvmorg-23.1.1/clang/lib/Basic/Targets/X86.cpp>
 /// System V AMD64 psABI §3.1.2, "Aggregates and Unions": "a local or global
 /// array variable of length at least 16 bytes or a C99 variable-length
 /// array variable always has alignment of at least 16 bytes"
@@ -227,24 +238,38 @@ pub(super) fn variable_alignment(
 ) -> Result<Align, LoweringErrorKind> {
     const LARGE: u64 = 16;
     let align = storage_alignment(&sema.types, ty)?;
-    let large = match sema.types.kind(ty) {
-        | TypeKind::Array(_, ArrayBound::Incomplete) => false,
-        | TypeKind::Array(..) => sema
-            .types
-            .layout(ty)
-            .is_none_or(|layout| layout.size >= LARGE),
-        | _ => false,
-    };
-    if !large
-        || target == Target::WindowsMsvc
-        || sema
-            .entity_attributes(binding)
-            .is_some_and(|attributes| attributes.declared_alignment)
+    if sema
+        .entity_attributes(binding)
+        .is_some_and(|attributes| attributes.declared_alignment)
     {
         return Ok(align);
     }
-    let minimum = Align::from_bytes(LARGE).expect("16 is a power of two");
-    Ok(if align.bytes() < LARGE {
+    let minimum = if target == Target::WindowsMsvc {
+        if !sema.bindings[binding].duration.is_static_or_thread() {
+            return Ok(align);
+        }
+        match sema.types.layout(ty).map(|layout| layout.size) {
+            | Some(64..) => 16,
+            | Some(8..) => 8,
+            | Some(2..) => 4,
+            | _ => 1,
+        }
+    } else {
+        let large = match sema.types.kind(ty) {
+            | TypeKind::Array(_, ArrayBound::Incomplete) => false,
+            | TypeKind::Array(..) => sema
+                .types
+                .layout(ty)
+                .is_none_or(|layout| layout.size >= LARGE),
+            | _ => false,
+        };
+        if !large {
+            return Ok(align);
+        }
+        LARGE
+    };
+    let minimum = Align::from_bytes(minimum).expect("storage minima are powers of two");
+    Ok(if align.bytes() < minimum.bytes() {
         minimum
     } else {
         align

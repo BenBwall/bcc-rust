@@ -245,11 +245,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) {
         let mut chain = specifiers;
         while let Some(item) = chain {
-            // C11 §6.7.5p6: `_Alignas` gives the object its alignment.
-            if matches!(item.kind, SpecifierExtensionKind::Alignment(_))
+            // C11 §6.7.5p6: zero has no effect, including on target storage
+            // minima; only nonzero `_Alignas` gives the object its alignment.
+            if let SpecifierExtensionKind::Alignment(operand) = item.kind
                 && let Subject::Object { binding, .. } = subject
             {
-                self.declares_alignment(binding);
+                let alignment = match operand {
+                    | super::SyntaxOperand::Expression(expression) => self
+                        .expression_info(expression)
+                        .integer
+                        .and_then(super::Integer::to_u64),
+                    | super::SyntaxOperand::Type(_) =>
+                        self.types.alignment(self.operand_type(operand)),
+                };
+                if alignment.is_some_and(|alignment| alignment != 0) {
+                    self.declares_alignment(binding);
+                }
             }
             chain = item.next;
         }
