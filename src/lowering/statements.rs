@@ -959,6 +959,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             initializer_values: ArenaVec::new_in(scratch),
             alignments: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            incoming_sizes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             labels: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             targets: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             switch_blocks: ArenaVec::new_in(scratch),
@@ -985,11 +986,36 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 _ = lowerer.alignments.insert(value, layout.align);
             }
         }
+        let extension = lowerer.unit.sema.function_extensions.function(binding);
+        let mut ir_index = first;
         for (index, facts) in record.parameter_facts.iter().enumerate() {
+            let argument_index = ir_index;
+            ir_index += 1;
+            if extension.is_some_and(|extension| {
+                extension
+                    .sizes
+                    .iter()
+                    .any(|size| size.index as usize == index)
+            }) {
+                let size = *lowerer
+                    .draft
+                    .block_params(entry)
+                    .get(ir_index)
+                    .ok_or_else(|| {
+                        LoweringError::missing("hidden size argument is not retained", source)
+                    })?;
+                ir_index += 1;
+                if let Some(body) = facts.body_binding {
+                    _ = lowerer.incoming_sizes.insert(body, size);
+                }
+                if let Some(prototype) = facts.prototype_binding {
+                    _ = lowerer.incoming_sizes.insert(prototype, size);
+                }
+            }
             let Some(parameter) = facts.body_binding else {
                 continue;
             };
-            let Some(&value) = lowerer.draft.block_params(entry).get(first + index) else {
+            let Some(&value) = lowerer.draft.block_params(entry).get(argument_index) else {
                 return Err(LoweringError::missing(
                     "a parameter has no argument",
                     source,

@@ -417,6 +417,7 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
     /// The storage of each automatic object, by binding.
     locals:             ArenaMap<'s, usize, Local>,
+    incoming_sizes:     ArenaMap<'s, usize, crate::ir::Value>,
     /// The block of each label, created at its first `goto` or definition.
     labels:             ArenaMap<'s, LabelId, Block>,
     targets:            ArenaMap<'s, StatementId, JumpTargets>,

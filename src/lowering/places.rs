@@ -60,8 +60,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         info: &ExpressionInfo<'tu>,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
-        let binding = info
-            .binding
+        let binding = self
+            .unit
+            .sema
+            .function_extensions
+            .value(info.expression)
+            .or(info.binding)
             .ok_or_else(|| LoweringError::missing("an identifier has no binding", source))?;
         let data = self.unit.sema.bindings[binding];
         let place = match data.kind {

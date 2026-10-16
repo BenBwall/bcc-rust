@@ -86,8 +86,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// extern/static.
     /// GNU extension: GCC manual, "Nested Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>
-    pub(super) fn function_body(&mut self, f: &'tu FunctionDefinition<'tu>) {
-        let declared_type = self.take_type();
+    pub(super) fn function_body(&mut self, f: &'tu FunctionDefinition<'tu>, declared_type: TypeId) {
         let nested = self.scopes[self.scope].kind != ScopeKind::File;
         let name = f.declarator.identifier();
         let prior = self.bindings.len();
@@ -335,6 +334,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     if let Some(prototype) = parameter.binding {
                         parameter_aliases.push((prototype, self.bindings.len() - 1));
+                        if let Some(&size) = self.extension_parameters.get(&prototype) {
+                            _ = self
+                                .extension_parameters
+                                .insert(self.bindings.len() - 1, size);
+                        }
                     }
                     if let Some(minimum) = parameter.array_minimum {
                         _ = self
@@ -482,7 +486,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         kind:    DefinitionKind::Tentative,
                     });
                 }
-                _ = self.functions.entities.insert(b.name.name, entity);
+                _ = self
+                    .functions
+                    .entities
+                    .insert(self.function_identity(index), entity);
             }
         }
         let mut ignored = ArenaVec::new_in(self.scratch);
@@ -549,7 +556,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             }
             if b.linkage == Linkage::Internal && !usage.sizeof.is_some_and(|s| ignored[s]) {
-                _ = used.entry(b.name.name).or_insert(usage.name);
+                _ = used
+                    .entry(self.function_identity(usage.binding))
+                    .or_insert(usage.name);
             }
         }
         for i in 0..self.functions.inline_objects.len() {
@@ -573,7 +582,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && entity.definition.is_none()
                 && !self.types.unanalyzed(b.ty)
             {
-                if let Some(&usage) = used.get(&b.name.name) {
+                if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
                     self.error(
                         SemanticErrorKind::UndefinedInternal,
                         usage.source_vectors,
@@ -1041,7 +1050,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut entity = self
             .functions
             .entities
-            .get(&binding.name.name)
+            .get(&self.function_identity(index))
             .copied()
             .unwrap_or_default();
         entity.latest = index;
@@ -1078,7 +1087,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
-        _ = self.functions.entities.insert(binding.name.name, entity);
+        _ = self
+            .functions
+            .entities
+            .insert(self.function_identity(index), entity);
     }
 
     /// Inline object restrictions concern the object's own qualification,
@@ -1133,7 +1145,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut entity = self
             .functions
             .entities
-            .get(&b.name.name)
+            .get(&self.function_identity(index))
             .copied()
             .unwrap_or_default();
         entity.latest = index;
@@ -1165,7 +1177,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
             entity.non_inline = true;
         }
-        _ = self.functions.entities.insert(b.name.name, entity);
+        _ = self
+            .functions
+            .entities
+            .insert(self.function_identity(index), entity);
         // GNU extension: GCC manual, "Inline": extern inline supplies no
         // external definition, even after an ordinary declaration. C99
         // §6.7.4p6-7 instead considers all file-scope declarations.
@@ -1268,7 +1283,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self
                 .functions
                 .entities
-                .get(&self.bindings[binding].name.name)
+                .get(&self.function_identity(binding))
                 .is_some_and(|e| {
                     !e.non_inline && !e.gnu_inline && !self.context.configuration.gnu89_inline()
                 })

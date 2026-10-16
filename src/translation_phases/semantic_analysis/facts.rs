@@ -21,6 +21,7 @@ mod builtin_instances;
 mod control;
 pub(super) mod correspondence;
 pub(super) mod effects;
+mod function_extensions;
 mod parameters;
 pub(super) mod resolved;
 mod sizes;
@@ -42,6 +43,7 @@ pub(crate) use effects::{
     EffectFacts,
     EffectRecipe,
 };
+pub(crate) use function_extensions::*;
 pub(crate) use resolved::{
     CallFacts,
     Callee,

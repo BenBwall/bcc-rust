@@ -51,6 +51,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         source: ExpressionInfo<'tu>,
         diagnostic_site: SourceVectors,
     ) -> bool {
+        let source = self.resolve_function_value(source, Some(target));
         if self.assignment_compatible(target, source) {
             if self.pointer_target(target).is_some() && self.null_pointer_constant(source) {
                 self.null_conversion_warning(source, false, diagnostic_site);

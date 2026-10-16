@@ -62,6 +62,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// Validated entity attributes, aliases, constructors, destructors and
     /// attribute capability refusals.
     pub(crate) symbols:              super::SymbolFacts<'tu>,
+    pub(crate) function_extensions:  super::FunctionExtensions<'tu>,
     pub(crate) types:                Types<'tu>,
     pub(crate) bindings:             &'tu [Binding],
     pub(crate) definitions:          &'tu [Definition],

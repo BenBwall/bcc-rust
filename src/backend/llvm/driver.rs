@@ -283,8 +283,7 @@ impl Toolchain {
         }
         _ = command.args(kind.link_flag());
         _ = command.arg(assembly).arg("-o").arg(out_path);
-        if kind != OutputKind::Object && matches!(target, Target::LinuxGnu | Target::LinuxMusl)
-        {
+        if kind != OutputKind::Object && matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
             _ = command.arg("-lm");
         }
         let output = command.output()?;

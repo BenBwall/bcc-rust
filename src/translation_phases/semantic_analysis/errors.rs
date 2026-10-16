@@ -358,6 +358,16 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Other Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     InvalidChooseCondition,
+    /// Clang extension: a selected `diagnose_if` or `unavailable` contract.
+    /// <https://clang.llvm.org/docs/AttributeReference.html#diagnose-if>
+    CallAttribute,
+    /// Clang extension: overload candidates require viable conversions and
+    /// satisfied `enable_if` predicates.
+    /// <https://clang.llvm.org/docs/AttributeReference.html#overloadable>
+    NoViableOverload,
+    /// Clang extension: overload selection requires a unique best candidate.
+    /// <https://clang.llvm.org/docs/AttributeReference.html#overloadable>
+    AmbiguousOverload,
     /// GCC Vector Extensions and Clang Vectors and Extended Vectors.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -470,6 +480,9 @@ impl SemanticErrorKind {
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
+            | Self::CallAttribute => "function attribute diagnostic",
+            | Self::NoViableOverload => "no viable overload",
+            | Self::AmbiguousOverload => "ambiguous overload",
             | Self::UnknownAttribute => "unknown attribute",
             | Self::IgnoredAttribute => "attribute ignored here",
             | Self::IgnoredConvention => "convention ignored on this target",
@@ -620,6 +633,9 @@ impl SemanticErrorKind {
     )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::CallAttribute
+            | Self::NoViableOverload
+            | Self::AmbiguousOverload
             | Self::UnknownAttribute
             | Self::IgnoredAttribute
             | Self::IgnoredConvention
@@ -1283,6 +1299,20 @@ impl SemanticErrorKind {
 
     fn attribute_explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::CallAttribute => (
+                "function attribute diagnostic",
+                "Clang diagnose_if/unavailable: the selected function declaration attaches this \
+                 diagnostic to its calls",
+            ),
+            | Self::NoViableOverload => (
+                "no matching function for call",
+                "Clang overloadable/enable_if: a candidate needs viable argument conversions and \
+                 constant true enable_if predicates",
+            ),
+            | Self::AmbiguousOverload => (
+                "call to overloaded function is ambiguous",
+                "Clang overloadable: no unique best viable candidate",
+            ),
             | Self::UnknownAttribute => (
                 "unknown attribute ignored",
                 "Clang -Wunknown-attributes: bcc does not know this attribute and ignores it",
@@ -1421,6 +1451,10 @@ impl ToDiagnostic for SemanticError {
                 quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
                 context.string_cache.at(ty)
             )
+        } else if self.kind == SemanticErrorKind::CallAttribute {
+            self.name.map_or(message, |name| {
+                arena.alloc_str(context.string_cache.at(name))
+            })
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if let Some(name) = self.name {

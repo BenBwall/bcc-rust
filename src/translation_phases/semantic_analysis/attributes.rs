@@ -35,8 +35,12 @@
 
 mod catalog;
 mod entities;
+mod functions;
 mod jumps;
 mod layout;
+mod mangling;
+mod overloads;
+mod predicates;
 mod transparent;
 mod written;
 
@@ -233,6 +237,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         specifiers: Option<&'tu SpecifierExtension<'tu>>,
         declarator: Option<Declarator<'tu>>,
     ) {
+        let lists = self.declaration_attribute_lists(specifiers, declarator);
+        for &specifier in &lists {
+            if !specifier.recovered {
+                self.entity_attribute_list(subject, specifier);
+            }
+        }
+    }
+
+    /// Source-ordered lists on this declaration, excluding nested function
+    /// parameters, whose attributes have their own semantic subject.
+    pub(super) fn declaration_attribute_lists(
+        &self,
+        specifiers: Option<&'tu SpecifierExtension<'tu>>,
+        declarator: Option<Declarator<'tu>>,
+    ) -> ArenaVec<'s, &'tu AttributeSpecifier<'tu>> {
         let mut lists = ArenaVec::new_in(self.scratch);
         let mut chain = specifiers;
         while let Some(item) = chain {
@@ -265,14 +284,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             }
         }
-        if lists.is_empty() {
-            return;
-        }
-        for &specifier in &lists {
-            if !specifier.recovered {
-                self.entity_attribute_list(subject, specifier);
-            }
-        }
+        lists
     }
 }
 

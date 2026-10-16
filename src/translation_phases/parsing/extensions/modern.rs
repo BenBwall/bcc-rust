@@ -542,7 +542,8 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
-    /// Parses the integer operand or the GNU nonnull parameter list.
+    /// Parses an integer operand, a nonnull index list, or a deferred call
+    /// predicate together with its message and severity.
     /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
     fn attribute_argument(
         &mut self,
@@ -550,12 +551,12 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         token: Option<Token>,
     ) -> ParseAction<'tu, 'p> {
         let list = self.tokens.iter().rev().nth(1).is_some_and(|token| {
-            parser
+            let name = parser
                 .context
                 .string_cache
                 .at(token.contents)
-                .trim_matches('_')
-                == "nonnull"
+                .trim_matches('_');
+            matches!(name, "nonnull" | "diagnose_if" | "enable_if")
         });
         if list
             && token.is_some_and(|token| {
@@ -597,12 +598,26 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             .tokens
             .get(self.tokens.len().saturating_sub(4))
             .is_none_or(|namespace| {
-                parser
+                let namespace = parser
                     .context
                     .string_cache
                     .at(namespace.contents)
-                    .trim_matches('_')
-                    != "gnu"
+                    .trim_matches('_');
+                namespace != "gnu"
+                    && !(namespace == "clang"
+                        && self.tokens.last().is_some_and(|name| {
+                            matches!(
+                                parser
+                                    .context
+                                    .string_cache
+                                    .at(name.contents)
+                                    .trim_matches('_'),
+                                "pass_object_size"
+                                    | "pass_dynamic_object_size"
+                                    | "diagnose_if"
+                                    | "enable_if"
+                            )
+                        }))
             })
         {
             return;
@@ -613,7 +628,17 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 .string_cache
                 .at(name.contents)
                 .trim_matches('_');
-            matches!(name, "aligned" | "constructor" | "destructor" | "nonnull")
+            matches!(
+                name,
+                "aligned"
+                    | "constructor"
+                    | "destructor"
+                    | "nonnull"
+                    | "pass_object_size"
+                    | "pass_dynamic_object_size"
+                    | "diagnose_if"
+                    | "enable_if"
+            )
         }) && parser.cursor.alignment_argument_closes(parser.arena)
         {
             self.argument_index = parser.cursor.consumed - self.attribute_start - 1;

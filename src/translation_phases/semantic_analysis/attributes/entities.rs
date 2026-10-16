@@ -718,7 +718,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The text of a single narrow string-literal argument, or an error.
-    fn string_argument(&mut self, attribute: WrittenAttribute<'_>) -> Option<&'tu str> {
+    pub(super) fn string_argument(&mut self, attribute: WrittenAttribute<'_>) -> Option<&'tu str> {
         let arguments = attribute.arguments.unwrap_or_default();
         let mut text: Option<&str> = None;
         let mut valid = !arguments.is_empty();

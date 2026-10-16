@@ -181,14 +181,15 @@ fn gnu(name: &str) -> Option<Rule> {
         | "naked" => Rule::Unsupported(U::Naked),
         | "returns_twice" => Rule::ReturnsTwice,
         | "nonnull" => Rule::Nonnull,
-        | "overloadable" => Rule::Unsupported(U::Overloadable),
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>
             Rule::Unsupported(U::Multiversioning),
-        | "pass_object_size" | "pass_dynamic_object_size" => Rule::Unsupported(U::PassObjectSize),
         | "transparent_union" => Rule::TransparentUnion,
         // Dropped with a warning: link-time or multi-version effects that a
         // single executable's behavior does not depend on.
         | "common" | "target" | "target_clones" | "weak_import" | "copy" => Rule::Ignored,
+        | "overloadable"
+        | "pass_object_size"
+        | "pass_dynamic_object_size"
         | "access"
         | "alloc_align"
         | "alloc_size"

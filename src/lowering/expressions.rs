@@ -1393,7 +1393,45 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             ));
         }
         let open_external = direct.is_some_and(|binding| self.unit.unprototyped_external(binding));
-        let fixed = if open_external { 0 } else { call.fixed };
+        let extension_call = self.unit.sema.function_extensions.call(info.expression);
+        let hidden_count = extension_call.map_or(0, |call| call.sizes.len());
+        if let Some(extension_call) = extension_call {
+            let extension = self
+                .unit
+                .sema
+                .function_extensions
+                .function(extension_call.binding);
+            if !extension_call.sizes.is_empty() {
+                let size_type = extension
+                    .ok_or_else(|| {
+                        LoweringError::missing("selected function contract is not retained", source)
+                    })?
+                    .size_type;
+                let mut expanded =
+                    ArenaVec::with_capacity_in(items.len() + hidden_count, self.scratch);
+                for (index, &item) in items.iter().enumerate() {
+                    expanded.push(item);
+                    if let Some(size) = extension_call
+                        .sizes
+                        .iter()
+                        .find(|size| size.parameter as usize == index)
+                    {
+                        let pointer = self.value(item, source)?;
+                        let value = self.emit_object_size(size.value, Some(pointer), source)?;
+                        expanded.push(Item {
+                            operand: Operand::Value(value),
+                            ty:      size_type,
+                        });
+                    }
+                }
+                items = expanded;
+            }
+        }
+        let fixed = if open_external {
+            0
+        } else {
+            call.fixed + hidden_count
+        };
         let variadic = open_external || (call.prototype && call.variadic);
         let described = items[fixed..]
             .iter()

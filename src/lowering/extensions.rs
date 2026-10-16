@@ -100,14 +100,26 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
 
     /// C identifiers are NUL-free; assembler names pass the explicit gate.
     /// C99: §6.4.3 paragraph 2, p. 53; PDF p. 65.
+    pub(super) fn binding_identity(&self, binding: usize) -> StringCacheId {
+        self.sema
+            .function_extensions
+            .function(binding)
+            .map_or(self.sema.bindings[binding].name.name, |extension| {
+                extension.identity
+            })
+    }
+
     pub(super) fn symbol_name(&self, binding: usize) -> &'a str {
         let data = self.sema.bindings[binding];
         let name = if data.linkage == Linkage::None {
             self.names.locals.get(&binding).copied()
         } else {
-            self.names.linked.get(&data.name.name).copied()
+            self.names
+                .linked
+                .get(&self.binding_identity(binding))
+                .copied()
         }
-        .unwrap_or_else(|| self.context.string_cache.at(data.name.name));
+        .unwrap_or_else(|| self.context.string_cache.at(self.binding_identity(binding)));
         debug_assert!(!name.contains('\0'), "lowered symbol names are NUL-free");
         name
     }
@@ -149,13 +161,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let map = if data.linkage == Linkage::None {
             &mut self.names.locals
         } else {
-            if let Some(previous) = self.names.linked.get(&data.name.name) {
+            if let Some(previous) = self.names.linked.get(&self.binding_identity(binding)) {
                 return if *previous == name { Ok(()) } else { Err(()) };
             }
             _ = self
                 .names
                 .linked
-                .insert(data.name.name, self.tables.alloc_str(name));
+                .insert(self.binding_identity(binding), self.tables.alloc_str(name));
             return Ok(());
         };
         if let Some(previous) = map.get(&binding) {

@@ -20,6 +20,7 @@ mod correspondence;
 mod diagnostic_parity;
 mod effects;
 mod float128;
+mod fortify;
 mod int128;
 mod labels_as_values;
 mod library_modes;

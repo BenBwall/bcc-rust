@@ -317,13 +317,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(value)
             },
             | CommonBuiltin::ObjectSize(_) => {
-                // Sema folded the query using the converted int mode.
-                // C99 §6.5.2.2p7, p. 72; PDF p. 84.
-                let value = instance.integer.ok_or_else(|| {
-                    LoweringError::missing("object size query has no folded value", source)
-                })?;
-                let ty = self.value_type(instance.result_type, source)?;
-                Operand::Value(self.iconst(ty, value.value))
+                let size = self
+                    .unit
+                    .sema
+                    .function_extensions
+                    .object_size(e)
+                    .ok_or_else(|| {
+                        LoweringError::missing("object size facts are not retained", source)
+                    })?;
+                let pointer = if count == 0 {
+                    None
+                } else {
+                    Some(self.value(items[0], source)?)
+                };
+                Operand::Value(self.emit_object_size(size, pointer, source)?)
             },
             | CommonBuiltin::Expect(_)
             | CommonBuiltin::Aligned
@@ -580,5 +587,68 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             ty,
         )
+    }
+}
+
+impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
+    pub(super) fn emit_object_size(
+        &mut self,
+        size: crate::translation_phases::semantic_analysis::ObjectSize<'tu>,
+        pointer: Option<Value>,
+        source: crate::translation_phases::SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        use crate::translation_phases::semantic_analysis::ObjectSize;
+        let (size, offset) = match size {
+            | ObjectSize::Constant(value) => return Ok(self.iconst(Type::I64, i128::from(value))),
+            | ObjectSize::Dynamic { ty, offset, .. } => (self.runtime_size(ty, source)?, offset),
+            | ObjectSize::Remainder { base, ty } => {
+                let info = *self.info(base)?;
+                let item = if matches!(
+                    base.kind,
+                    crate::translation_phases::parsing::syntax::ExpressionType::StringLiteral(_)
+                ) {
+                    let global = self.unit.string(base)?;
+                    let address = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
+                    Item {
+                        operand: Operand::Place(super::work::Place::Memory(address)),
+                        ty:      info.ty,
+                    }
+                } else {
+                    self.identifier(&info, source)?
+                };
+                let Operand::Place(super::work::Place::Memory(base)) = item.operand else {
+                    return Err(LoweringError::missing(
+                        "an object-size origin has no address",
+                        source,
+                    ));
+                };
+                let pointer = pointer.ok_or_else(|| {
+                    LoweringError::missing("an object-size pointer was not evaluated", source)
+                })?;
+                let pointer = self.convert(Opcode::Ptrtoint, Type::I64, pointer);
+                let base = self.convert(Opcode::Ptrtoint, Type::I64, base);
+                let offset = self.binary_inst(Opcode::Isub, InstFlags::empty(), pointer, base);
+                let size = self.runtime_size(ty, source)?;
+                let remainder = self.binary_inst(Opcode::Isub, InstFlags::empty(), size, offset);
+                let within = self.icmp(IntCC::Ule, offset, size);
+                let zero = self.iconst(Type::I64, 0);
+                return Ok(self.choose(within, remainder, zero));
+            },
+            | ObjectSize::Incoming { binding, offset } => (
+                *self.incoming_sizes.get(&binding).ok_or_else(|| {
+                    LoweringError::missing("incoming object size is not retained", source)
+                })?,
+                offset,
+            ),
+            | ObjectSize::Unknown => return Ok(self.iconst(Type::I64, i128::from(u64::MAX))),
+        };
+        if offset == 0 {
+            return Ok(size);
+        }
+        let offset = self.iconst(Type::I64, i128::from(offset));
+        let remainder = self.binary_inst(Opcode::Isub, InstFlags::empty(), size, offset);
+        let within = self.icmp(IntCC::Ule, offset, size);
+        let zero = self.iconst(Type::I64, 0);
+        Ok(self.choose(within, remainder, zero))
     }
 }
