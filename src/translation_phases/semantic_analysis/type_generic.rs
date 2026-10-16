@@ -143,8 +143,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         }
         let (scalar, count, nan, operation) = match self.context.string_cache.at(name.name) {
-            | "__builtin_huge_val" | "__builtin_inf" => (Scalar::Double, 0, false, false),
-            | "__builtin_nan" | "__builtin_nans" => (Scalar::Double, 1, true, false),
+            | "__builtin_nans" => (Scalar::Double, 1, true, false),
             | "__builtin_huge_valf128" | "__builtin_inff128" => (Scalar::Float128, 0, false, false),
             | "__builtin_nanf128" | "__builtin_nansf128" => (Scalar::Float128, 1, true, false),
             | "__builtin_fabsf128" => (Scalar::Float128, 1, false, true),

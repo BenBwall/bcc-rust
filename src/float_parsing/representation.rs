@@ -125,6 +125,25 @@ impl LongDouble {
         }
     }
 
+    /// Constructs a quiet NaN with the target precision's low payload bits.
+    /// The x87 carrier stores binary32/64 payloads in the corresponding high
+    /// significand positions so narrowing preserves the requested bits.
+    /// C99: §7.12.11.2p2, p. 237; PDF p. 249 (implementation-defined payload).
+    pub(crate) fn quiet_nan(payload: u64, precision: i32) -> Self {
+        let fraction = match precision {
+            | 1 => (payload & ((1 << 22) - 1)) << 29,
+            | _ => payload & ((1 << 51) - 1),
+        };
+        if precision != 3 || ffi::LONG_DOUBLE_VALUE_BYTES == 8 {
+            return Self::from_double(f64::from_bits(0x7FF8_0000_0000_0000 | fraction));
+        }
+        let mut value = Self::ZERO;
+        let significand = (1 << 63) | (1 << 62) | (payload & ((1 << 62) - 1));
+        value.value[..8].copy_from_slice(&significand.to_le_bytes());
+        value.value[8..10].copy_from_slice(&0x7FFF_u16.to_le_bytes());
+        value
+    }
+
     pub(crate) fn is_zero(self) -> bool {
         self.classify() == FloatClass::Zero
     }

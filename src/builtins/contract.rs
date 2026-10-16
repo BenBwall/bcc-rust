@@ -148,6 +148,11 @@ pub(crate) enum BuiltinOperation {
     Bit(BitOperation, Scalar),
     Float(FloatOperation, Option<Scalar>),
     Bswap(u32),
+    /// Clang rotate builtins reduce the count modulo the unsigned operand
+    /// width.
+    Rotate(u32, bool),
+    /// GCC infinity (`false`) and quiet NaN (`true`) constructors.
+    FloatConstant(Scalar, bool),
     Expect(bool),
     Aligned,
     Unreachable,

@@ -237,6 +237,10 @@ impl Toolchain {
             | OutputKind::Executable => command.arg("-fuse-ld=lld"),
         };
         _ = command.arg(assembly).arg("-o").arg(out_path);
+        if kind == OutputKind::Executable && matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+        {
+            _ = command.arg("-lm");
+        }
         let output = command.output()?;
         if output.status.success() {
             Ok(())
@@ -259,6 +263,11 @@ impl Toolchain {
             .arg(object)
             .arg("-o")
             .arg(out_path);
+        // C99 §7.12 real math is provided by a separate library on Linux.
+        // The CLI links the hosted C runtime, including its math functions.
+        if matches!(options.target, Target::LinuxGnu | Target::LinuxMusl) {
+            _ = command.arg("-lm");
+        }
         command
     }
 }

@@ -352,7 +352,7 @@ fn command_lines_follow_the_options() {
     for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::O3] {
         assert_eq!(
             arguments(Some(level), true, OutputKind::Executable),
-            format!("{target} {} -fuse-ld=lld in.o -o out", level.flag())
+            format!("{target} {} -fuse-ld=lld in.o -o out -lm", level.flag())
         );
     }
 }

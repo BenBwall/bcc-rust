@@ -53,6 +53,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         callee: &'tu Expression<'tu>,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
+        let function = callee;
         let callee = self.selected_designator(callee);
         let ExpressionType::Identifier(name) = callee.kind else {
             return None;
@@ -98,6 +99,42 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return Some(self.floating_builtin(e, args, operation, scalar));
             },
             | CommonBuiltin::Complex => return Some(self.complex_builtin(e, args)),
+            | CommonBuiltin::FloatConstant(scalar, nan) => {
+                if nan {
+                    // A dynamic tag lowers as a library call. Retain its
+                    // ordinary function decay on the original callee,
+                    // including transparent selections and parentheses.
+                    // C99: §6.3.2.1p4, p. 46; PDF p. 58.
+                    _ = self.converted(self.expression_info(function));
+                }
+                return Some(self.floating_constant_builtin(e, args, scalar, nan));
+            },
+            | CommonBuiltin::Rotate(width, right) => {
+                let value = self.expression_info(args[0]);
+                let count = self.expression_info(args[1]);
+                if value.ice
+                    && count.ice
+                    && let Some((value, count)) = value.integer.zip(count.integer)
+                {
+                    let value = value.cast(width, false).value.unsigned_abs();
+                    let count = u32::try_from(count.cast(width, false).value % i128::from(width))
+                        .expect("rotation count is reduced modulo a supported width");
+                    let opposite = (width - count) % width;
+                    let value = if right {
+                        (value >> count) | (value << opposite)
+                    } else {
+                        (value << count) | (value >> opposite)
+                    } & ((1_u128 << width) - 1);
+                    info.integer = Some(
+                        Integer::int(
+                            i128::try_from(value).expect("rotation result has at most 64 bits"),
+                        )
+                        .cast(width, false),
+                    );
+                    info.ice = true;
+                    info.constant = ConstantClass::Arithmetic;
+                }
+            },
             | CommonBuiltin::Constant => {
                 let operand = self.expression_info(args[0]);
                 info.integer = Some(Integer::int(i128::from(

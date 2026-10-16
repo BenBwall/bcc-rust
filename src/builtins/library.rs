@@ -425,6 +425,7 @@ pub(crate) fn ordinary(name: &str) -> Option<&'static BuiltinDescriptor> {
         .binary_search_by_key(&name, |d| d.library.expect("library shard"))
         .ok()
         .map(|index| &BUILTINS[index])
+        .or_else(|| super::math::ordinary(name))
 }
 
 const fn descriptor(

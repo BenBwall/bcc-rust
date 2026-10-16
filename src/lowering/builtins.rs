@@ -204,7 +204,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
             return Ok(false); // Explicit temporary M6/opaque-reserved bridge.
         };
-        if instance.operation == CommonBuiltin::Library {
+        if matches!(
+            instance.operation,
+            CommonBuiltin::Library | CommonBuiltin::FloatConstant(_, true)
+        ) {
             return Ok(false);
         }
         self.schedule_instance(e, instance)?;
@@ -361,6 +364,36 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let size = self.value(items[0], source)?;
                 let size = self.extend(size, false, Type::I64);
                 Operand::Value(self.dynamic_object(size, None))
+            },
+            | CommonBuiltin::FloatConstant(_, nan) => {
+                if nan {
+                    return Err(LoweringError::missing(
+                        "NaN constructor must use library scheduling",
+                        source,
+                    ));
+                }
+                let ty = self.value_type(instance.result_type, source)?;
+                let bits = super::floats::constant_parts((false, 0x7FFF, 1 << 63), ty)
+                    .ok_or_else(|| LoweringError::unsupported(super::Construct::Builtin, source))?;
+                Operand::Value(self.fconst(ty, bits))
+            },
+            | CommonBuiltin::Rotate(width, right) => {
+                let value = self.value(items[0], source)?;
+                let count = self.value(items[1], source)?;
+                let ty = self.draft.value_type(value);
+                let mask = self.iconst(ty, i128::from(width - 1));
+                let count = self.plain(Opcode::And, count, mask);
+                let zero = self.iconst(ty, 0);
+                let opposite = self.plain(Opcode::Isub, zero, count);
+                let opposite = self.plain(Opcode::And, opposite, mask);
+                let first =
+                    self.plain(if right { Opcode::Lshr } else { Opcode::Shl }, value, count);
+                let second = self.plain(
+                    if right { Opcode::Shl } else { Opcode::Lshr },
+                    value,
+                    opposite,
+                );
+                Operand::Value(self.plain(Opcode::Or, first, second))
             },
             | CommonBuiltin::Bswap(_) => {
                 let arg = self.value(items[0], source)?;
