@@ -13,9 +13,13 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::syntax::Expression,
-        semantic_analysis::TypeId,
+        semantic_analysis::{
+            Parameter,
+            TypeId,
+        },
     },
     util::{
+        arena_list::ArenaList,
         bump::{
             ArenaMap,
             Bump,
@@ -40,6 +44,15 @@ pub(crate) struct FunctionExtensions<'tu> {
     /// their enclosing function, assigned on first mangled use.
     pub(in crate::translation_phases::semantic_analysis) local_names:
         ArenaMap<'tu, usize, (usize, StringCacheId, usize)>,
+    /// Emitted names indexed by the stable semantic overload identity.
+    pub(in crate::translation_phases::semantic_analysis) abi_names:
+        ArenaMap<'tu, StringCacheId, StringCacheId>,
+    pub(in crate::translation_phases::semantic_analysis) written_types:
+        ArenaMap<'tu, usize, ArenaList<'tu, WrittenFunction<'tu>>>,
+    pub(in crate::translation_phases::semantic_analysis) written_fields:
+        ArenaMap<'tu, (usize, StringCacheId), ArenaList<'tu, WrittenFunction<'tu>>>,
+    pub(in crate::translation_phases::semantic_analysis) written_type_names:
+        ArenaMap<'tu, usize, ArenaList<'tu, WrittenFunction<'tu>>>,
     /// Only a direct typedef in the anonymous tag's defining declaration
     /// grants that tag a typedef name for ABI purposes.
     pub(in crate::translation_phases::semantic_analysis) typedef_names:
@@ -55,14 +68,18 @@ pub(crate) struct FunctionExtensions<'tu> {
 impl<'tu> FunctionExtensions<'tu> {
     pub(in crate::translation_phases::semantic_analysis) fn new(arena: &'tu Bump) -> Self {
         Self {
-            functions:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            calls:           ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            values:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            anonymous_names: ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            local_names:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            typedef_names:   ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            object_sizes:    ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            cleanup_sizes:   ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            functions:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            calls:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            values:             ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            anonymous_names:    ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            local_names:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            abi_names:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_types:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_fields:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_type_names: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            typedef_names:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            object_sizes:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            cleanup_sizes:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
     }
 
@@ -91,17 +108,32 @@ impl<'tu> FunctionExtensions<'tu> {
 /// entity's assembler identity while predicates keep their own provenance.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FunctionExtension<'tu> {
-    pub(crate) overloadable: bool,
-    pub(crate) size_type:    TypeId,
+    pub(crate) overloadable:        bool,
+    pub(crate) size_type:           TypeId,
     /// The mangled identity, or the original identifier for an unmangled
     /// function with call predicates or size parameters.
-    pub(crate) identity:     StringCacheId,
-    pub(crate) sizes:        &'tu [SizeParameter],
+    pub(crate) identity:            StringCacheId,
+    /// Emitted ABI symbol; semantic identity stays independent when the
+    /// Microsoft ABI, or an unmarked C predicate, omits overload distinctions.
+    pub(crate) abi_name:            StringCacheId,
+    /// Written parameter types preserve Microsoft ABI qualifier/array sugar.
+    pub(crate) declared_parameters: &'tu [Parameter<'tu>],
+    pub(crate) written_functions:   ArenaList<'tu, WrittenFunction<'tu>>,
+    pub(crate) sizes:               &'tu [SizeParameter],
     /// Prototype bindings in source parameter order. Predicates refer to
     /// these bindings; call substitution uses their ordinal, never spelling.
-    pub(crate) parameters:   &'tu [Option<usize>],
-    pub(crate) predicates:   &'tu [CallPredicate<'tu>],
-    pub(crate) unavailable:  Option<AttributeMessage>,
+    pub(crate) parameters:          &'tu [Option<usize>],
+    pub(crate) predicates:          &'tu [CallPredicate<'tu>],
+    pub(crate) unavailable:         Option<AttributeMessage>,
+}
+
+/// Microsoft names retain written parameter qualifiers in nested function
+/// types. Depth follows pointer/array/function-result derivations from the
+/// original type; semantic type identity remains canonical.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WrittenFunction<'tu> {
+    pub(crate) depth:      usize,
+    pub(crate) parameters: &'tu [Parameter<'tu>],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -104,6 +104,79 @@ int main(void) { return f(2) + f(-1) + indirect(2); }
 }
 
 #[test]
+fn predicate_abi_collisions_preserve_distinct_bodies() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for marked in ["", "overloadable,"] {
+            let source = format!(
+                "int f(int n) __attribute__(({marked}enable_if(n>0,\"positive\"))) {{return 7;}} \
+                 int f(int n) __attribute__(({marked}enable_if(n<=0,\"nonpositive\"))) {{return \
+                 3;}} int main(void) {{return f(1)+f(0);}}"
+            );
+            let text = lower_for(&source, target).unwrap();
+            assert_eq!(
+                run_text(&text, "main").result.unwrap().termination,
+                Termination::Returned(Some(RuntimeValue::Int(10))),
+                "{target:?}: {source}\n{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn overload_abi_ordinals_follow_first_emitted_use() {
+    for (source, target, expected) in [
+        (
+            "extern int f(struct {int x;}*) __attribute__((overloadable)); extern int g(struct \
+             {double x;}*) __attribute__((overloadable)); int main(void){return g(0);}",
+            Target::LinuxGnu,
+            "_Z1gP3$_0",
+        ),
+        (
+            "static int unused(void) { extern int f(struct {int x;}*) \
+             __attribute__((overloadable)); return f(0); } extern int g(struct {double x;}*) \
+             __attribute__((overloadable)); int main(void){return g(0);}",
+            Target::LinuxGnu,
+            "_Z1gP3$_0",
+        ),
+        (
+            "int test(void) { {struct S{int x;};extern int f(struct S*) \
+             __attribute__((overloadable));} {struct S{double x;};extern int f(struct S*) \
+             __attribute__((overloadable)); return f(0);}}",
+            Target::LinuxGnu,
+            "_Z1fPZ4testE1S",
+        ),
+        (
+            "int test(void) { {struct S{int x;};extern int f(struct S*) \
+             __attribute__((overloadable));} {struct S{double x;};extern int f(struct S*) \
+             __attribute__((overloadable)); return f(0);}}",
+            Target::WindowsMsvc,
+            "?f@@$$J0YAHPEAUS@?1??test@@9@@Z",
+        ),
+    ] {
+        let text = lower_for(source, target).unwrap();
+        assert!(text.contains(expected), "{source}\n{text}");
+    }
+}
+
+#[test]
+fn overload_substitutions_ignore_nested_storage_alignment() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        let text = lower_for(
+            "typedef int I __attribute__((aligned(32))); int f(I*a,int*b) \
+             __attribute__((overloadable)){return *a+*b;}",
+            target,
+        )
+        .unwrap();
+        let expected = if target == Target::WindowsMsvc {
+            "?f@@$$J0YAHPEAH0@Z"
+        } else {
+            "_Z1fPiS_"
+        };
+        assert!(text.contains(expected), "{target:?}\n{text}");
+    }
+}
+
+#[test]
 fn hidden_sizes_preserve_aggregate_results_and_variadic_argument_positions() {
     let _text = returns(
         r"

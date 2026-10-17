@@ -233,6 +233,7 @@ pub(crate) fn analyze<'tu>(
     analyzer.assert_balanced();
     analyzer.finish_translation_unit();
     let symbols = analyzer.finish_attributes();
+    analyzer.finish_function_abi(&symbols);
     analyzer.check_builtin_designators();
     let index = analyzer.retain_expression_index();
     let sizes = SizeFacts::retain(&analyzer.types, &scratch);
@@ -711,6 +712,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::TypeNameDone(name, bound_start) =>
                 if let Some(&ty) = self.values.last() {
+                    if self.context.configuration.target() == crate::target::Target::WindowsMsvc {
+                        let written = self
+                            .written_function_types(name.declaration_specifiers, name.declarator);
+                        _ = self
+                            .function_extensions
+                            .written_type_names
+                            .insert(type_name_identity(name), written);
+                    }
                     let bounds = self.site_bounds(
                         ty,
                         bound_start,
@@ -953,6 +962,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::ParameterDone(p, params, bound_start, _identity) => {
                 let mut ty = self.take_type();
+                let written_functions =
+                    self.written_function_types(p.declaration_specifiers, p.declarator);
                 let original = ty;
                 let site = self
                     .spec_evaluations(p.declaration_specifiers.type_specifiers)
@@ -1029,6 +1040,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }) {
                         _ = self.binding_alignments.insert(binding, alignment);
                     }
+                    self.retain_written_parameter(binding, original, written_functions);
                     if let Some(minimum) = array_minimum {
                         _ = self
                             .correspondence
@@ -1052,6 +1064,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 params.push(
                     self.scratch,
                     Parameter {
+                        written_functions,
                         site,
                         binding,
                         name,
@@ -1121,7 +1134,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         tag,
                         d,
                         base,
-                        member.extensions,
+                        member,
                         attributes.packed,
                         members,
                     ));
@@ -1135,19 +1148,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.types.tags[tag].tainted.set(true);
                 }
             },
-            | Work::MemberBase(tag, d, base, extensions, spec_packed, members) => {
+            | Work::MemberBase(tag, d, base, member, spec_packed, members) => {
                 self.work.push(Work::MemberBaseDone(
                     tag,
                     d,
                     base,
-                    extensions,
+                    member,
                     spec_packed,
                     members,
                 ));
                 self.check_extension_chain(d.attributes);
                 self.attribute_chain_operands(d.attributes);
             },
-            | Work::MemberBaseDone(tag, d, base, extensions, spec_packed, members) => {
+            | Work::MemberBaseDone(tag, d, base, member, spec_packed, members) => {
+                let extensions = member.extensions;
                 let packed = spec_packed
                     || self.layout_attribute_chain(d.attributes).packed
                     || d.declarator
@@ -1158,7 +1172,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     members,
                     self.semantic_errors,
                     packed,
-                    extensions,
+                    member,
                 ));
                 if d.bitfield_width.is_some() {
                     self.reject_standard_alignment(extensions);
@@ -1178,15 +1192,31 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.values.push(base);
                 }
             },
-            | Work::MemberDone(tag, d, members, errors_before, packed, extensions) => {
+            | Work::MemberDone(tag, d, members, errors_before, packed, member) => {
                 let ty = self.take_type();
+                if let Some(name) = d.declarator.and_then(Declarator::identifier) {
+                    let written = self.written_function_types(
+                        DeclarationSpecifiers {
+                            type_specifiers: member.type_specifiers,
+                            type_qualifiers: member.type_qualifiers,
+                            ..DeclarationSpecifiers::default()
+                        },
+                        d.declarator,
+                    );
+                    if !written.is_empty() {
+                        _ = self
+                            .function_extensions
+                            .written_fields
+                            .insert((tag, name.name), written);
+                    }
+                }
                 self.declaration_attributes(
                     attributes::Subject::Member,
                     d.attributes,
                     d.declarator,
                 );
                 let explicit_alignment = if self.semantic_errors == errors_before {
-                    self.explicit_member_alignment(extensions, d.attributes, d.declarator)
+                    self.explicit_member_alignment(member.extensions, d.attributes, d.declarator)
                 } else {
                     0
                 };
@@ -1708,7 +1738,7 @@ enum Work<'tu, 's> {
         usize,
         StructDeclarator<'tu>,
         TypeId,
-        Option<&'tu SpecifierExtension<'tu>>,
+        StructDeclaration<'tu>,
         bool,
         &'s Collection<'s, Member>,
     ),
@@ -1716,7 +1746,7 @@ enum Work<'tu, 's> {
         usize,
         StructDeclarator<'tu>,
         TypeId,
-        Option<&'tu SpecifierExtension<'tu>>,
+        StructDeclaration<'tu>,
         bool,
         &'s Collection<'s, Member>,
     ),
@@ -1726,7 +1756,7 @@ enum Work<'tu, 's> {
         &'s Collection<'s, Member>,
         usize,
         bool,
-        Option<&'tu SpecifierExtension<'tu>>,
+        StructDeclaration<'tu>,
     ),
     MemberWidth(
         usize,

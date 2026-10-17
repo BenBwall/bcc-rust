@@ -15,6 +15,7 @@ pub(crate) use crate::target::{
 use crate::{
     translation_phases::parsing::declaration_syntax::TypeQualifiers,
     util::{
+        arena_list::ArenaList,
         bump::{
             ArenaMap,
             ArenaVec,
@@ -656,12 +657,13 @@ pub(crate) struct FieldPath<'tu> {
 /// C99: §6.7.5.3p7-8, p. 119; PDF p. 131.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Parameter<'tu> {
-    pub(crate) site:          Option<super::BoundSiteFacts<'tu>>,
-    pub(crate) binding:       Option<usize>,
-    pub(crate) name:          Option<super::Identifier>,
-    pub(crate) ty:            TypeId,
-    pub(crate) array_minimum: Option<ArrayBound>,
-    pub(crate) original:      TypeId,
+    pub(crate) written_functions: ArenaList<'tu, super::WrittenFunction<'tu>>,
+    pub(crate) site:              Option<super::BoundSiteFacts<'tu>>,
+    pub(crate) binding:           Option<usize>,
+    pub(crate) name:              Option<super::Identifier>,
+    pub(crate) ty:                TypeId,
+    pub(crate) array_minimum:     Option<ArrayBound>,
+    pub(crate) original:          TypeId,
 }
 
 /// Array completeness and run-time extent; `Star` is prototype-scope `[*]`.

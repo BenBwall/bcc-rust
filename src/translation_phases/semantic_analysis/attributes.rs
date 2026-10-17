@@ -26,6 +26,11 @@
 //!   them;
 //! - `layout.rs` retains packing, alignment and scalar machine modes;
 //! - `transparent.rs` makes qualifying unions transparent.
+//! - `mangling.rs` gives overloads their stable semantic Itanium identities;
+//! - `abi_names.rs` assigns emitted names at first reachable use;
+//! - `msvc_mangling.rs` implements Microsoft C overload names;
+//! - `written_types.rs` retains Microsoft written function-type metadata;
+//! - `abi_types.rs` compares substitution types without storage alignment.
 //!
 //! C99: §6.7, p. 97; PDF p. 109 (declarations, extended by GNU attributes);
 //! §6.2.2p2, p. 30; PDF p. 42 (linked declarations share one entity).
@@ -33,6 +38,8 @@
 //! GNU extension: GCC manual, "Attribute Syntax".
 //! <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
 
+mod abi_names;
+mod abi_types;
 mod call_diagnostics;
 mod catalog;
 mod entities;
@@ -40,10 +47,12 @@ mod functions;
 mod jumps;
 mod layout;
 mod mangling;
+mod msvc_mangling;
 mod overloads;
 mod predicates;
 mod transparent;
 mod written;
+mod written_types;
 
 pub(crate) use catalog::clang_attribute_version;
 pub(super) use entities::{

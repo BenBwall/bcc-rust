@@ -408,12 +408,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let mut list = ArenaVec::new_in(self.types.tu);
                 for &name in parameters {
                     list.push(Parameter {
-                        site:          None,
-                        binding:       None,
-                        name:          Some(name),
-                        ty:            int,
-                        array_minimum: None,
-                        original:      int,
+                        written_functions: crate::util::arena_list::ArenaList::empty(),
+                        site:              None,
+                        binding:           None,
+                        name:              Some(name),
+                        ty:                int,
+                        array_minimum:     None,
+                        original:          int,
                     });
                 }
                 _ = self
@@ -452,6 +453,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(name) = declarator.identifier() else {
             return;
         };
+        let written_functions = self.written_function_types(spec, Some(declarator));
         if self.old_parameter_mode {
             let ty = if self.validate_old_parameter(name, spec, ty, initialized) {
                 ty
@@ -463,6 +465,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let Some(current) = self.functions.current.as_ref() {
                 _ = self.functions.old_types.insert((current.id, name.name), ty);
             }
+            let original = ty;
             let ty = match self.types.nodes[ty.index] {
                 | TypeKind::Array(element, _) => self.types.intern(TypeKind::Pointer(element)),
                 | TypeKind::Function { .. } => self.types.intern(TypeKind::Pointer(ty)),
@@ -488,6 +491,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::Automatic,
                 None,
             );
+            self.retain_written_parameter(self.bindings.len() - 1, original, written_functions);
             self.record_vm(self.bindings.len() - 1);
             // K&R parameters take their storage from the declaration list.
             // C99 §6.5.3.2p1, p. 78; PDF p. 90.
@@ -498,6 +502,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let file = self.scopes[self.scope].kind == ScopeKind::File;
         let typedef = spec.storage_class == Some(StorageClass::Typedef);
+        if !written_functions.is_empty() {
+            _ = self
+                .function_extensions
+                .written_types
+                .insert(self.bindings.len(), written_functions);
+        }
         if typedef
             && let TypeKind::Tag(tag) = self.types.nodes[ty.index]
             && match spec.type_specifiers {
@@ -673,6 +683,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ty,
                 definition,
                 linkage == Linkage::Internal,
+                written_functions,
             ) {
                 self.correspondence
                     .identify(self.bindings.len(), contract.identity);
@@ -1229,6 +1240,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && let TypeKind::Tag(inner) = self.types.nodes[member.ty.index]
             {
                 for field in self.types.tags[inner].fields.get() {
+                    if let Some(&written) = self
+                        .function_extensions
+                        .written_fields
+                        .get(&(inner, field.name.name))
+                    {
+                        _ = self
+                            .function_extensions
+                            .written_fields
+                            .insert((id, field.name.name), written);
+                    }
                     fields.push(Field {
                         path: self.types.tu.alloc(FieldPath::new(index, Some(field.path))),
                         qualifiers: field.qualifiers | member.ty.qualifiers,

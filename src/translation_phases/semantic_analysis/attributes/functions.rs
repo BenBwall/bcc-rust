@@ -89,6 +89,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty: super::super::TypeId,
         definition: bool,
         internal: bool,
+        written_functions: crate::util::arena_list::ArenaList<
+            'tu,
+            super::super::WrittenFunction<'tu>,
+        >,
     ) -> Option<&'tu FunctionExtension<'tu>> {
         if !matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) {
             return None;
@@ -265,6 +269,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !overloadable && sizes.is_empty() && predicates.is_empty() && unavailable.is_none() {
             return None;
         }
+        let declared_parameters = parameters;
         let parameters = self
             .types
             .tu
@@ -279,6 +284,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             overloadable,
             size_type,
             identity: name,
+            abi_name: name,
+            declared_parameters,
+            written_functions,
             sizes,
             parameters,
             predicates,
@@ -286,6 +294,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         if overloadable || predicates.iter().any(|p| p.kind == PredicateKind::Enable) {
             extension.identity = self.mangle_function(name, ty, extension, internal);
+            if overloadable {
+                extension.abi_name = extension.identity;
+            }
         }
         Some(self.types.tu.alloc(extension))
     }
@@ -371,6 +382,9 @@ impl Analyzer<'_, '_, '_> {
                         );
                         predicates.extend_from_slice(new.predicates);
                         let extension = self.types.tu.alloc(FunctionExtension {
+                            abi_name: old.abi_name,
+                            declared_parameters: old.declared_parameters,
+                            written_functions: old.written_functions,
                             predicates: self.types.tu.alloc_slice_copy(&predicates),
                             unavailable: new.unavailable.or(old.unavailable),
                             ..*new

@@ -340,6 +340,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 .insert(self.bindings.len() - 1, alignment);
                         }
                         parameter_aliases.push((prototype, self.bindings.len() - 1));
+                        if let Some(&written) =
+                            self.function_extensions.written_types.get(&prototype)
+                        {
+                            _ = self
+                                .function_extensions
+                                .written_types
+                                .insert(self.bindings.len() - 1, written);
+                        }
                         if let Some(&size) = self.extension_parameters.get(&prototype) {
                             _ = self
                                 .extension_parameters

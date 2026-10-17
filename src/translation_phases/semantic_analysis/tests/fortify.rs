@@ -1,5 +1,9 @@
 //! Selected call diagnostics keep the attribute's own message and provenance.
 use super::*;
+use crate::{
+    configuration::CompilerConfiguration,
+    target::Target,
+};
 
 #[test]
 fn call_predicates_are_deferred_and_unavailable_declarations_can_be_unused() {
@@ -522,4 +526,266 @@ void b(void) { extern int f(double) __attribute__((overloadable)); f(2.0); }
             assert_eq!(sema.errors, 0, "{:?}", context.take_pending_errors());
         },
     );
+}
+
+/// Frozen against LLVM 23.1.1 `MicrosoftMangle`, including the separate
+/// dictionaries shared by nested signatures and vendor template names.
+#[test]
+fn overload_msvc_symbols_match_clang_for_supported_c_signatures() {
+    for (source, expected) in [
+        (
+            "int f(int) __attribute__((overloadable));",
+            "?f@@$$J0YAHH@Z",
+        ),
+        (
+            "static int f(int x) __attribute__((overloadable)){return x;}",
+            "?f@@YAHH@Z",
+        ),
+        (
+            "long f(float,double,long double) __attribute__((overloadable));",
+            "?f@@$$J0YAJMNO@Z",
+        ),
+        (
+            "int f(void) __attribute__((overloadable));",
+            "?f@@$$J0YAHXZ",
+        ),
+        ("int f(...) __attribute__((overloadable));", "?f@@$$J0YAHZZ"),
+        (
+            "int f(int,...) __attribute__((overloadable));",
+            "?f@@$$J0YAHHZZ",
+        ),
+        (
+            "int f(char*,const char*,volatile char*,char*restrict) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEADPEBDPECDPEIAD@Z",
+        ),
+        (
+            "int f(int**,const int**,int*const*,int*volatile*) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAPEAHPEAPEBHPEBQEAHPECREAH@Z",
+        ),
+        (
+            "struct R{int x;}; int f(struct R,struct R*,struct R) __attribute__((overloadable));",
+            "?f@@$$J0YAHUR@@PEAU1@0@Z",
+        ),
+        (
+            "union U{int x;}; int f(union U) __attribute__((overloadable));",
+            "?f@@$$J0YAHTU@@@Z",
+        ),
+        (
+            "enum E{A};int f(enum E) __attribute__((overloadable));",
+            "?f@@$$J0YAHW4E@@@Z",
+        ),
+        (
+            "typedef struct{int x;} Name;int f(Name) __attribute__((overloadable));",
+            "?f@@$$J0YAHUName@@@Z",
+        ),
+        (
+            "int f(int(*)(int),int(*)(),int(*)(void),int(*)[3]) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHH@ZP6AH@ZP6AHXZPEAY02H@Z",
+        ),
+        (
+            "int f(float _Complex,float _Complex,double _Complex,long double _Complex) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHU?$_Complex@M@__clang@@0U?$_Complex@N@2@U?$_Complex@O@2@@Z",
+        ),
+        (
+            "int f(_Atomic(int),_Atomic(int)) __attribute__((overloadable));",
+            "?f@@$$J0YAHU?$_Atomic@H@__clang@@0@Z",
+        ),
+        (
+            "typedef int V __attribute__((vector_size(16)));int f(V,V) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHT?$__vector@H$03@__clang@@0@Z",
+        ),
+        (
+            "int f(char *const p __attribute__((pass_object_size(1)))) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHQEADW4__pass_object_size1@__clang@@@Z",
+        ),
+        (
+            "int f(int *const) __attribute__((overloadable));",
+            "?f@@$$J0YAHQEAH@Z",
+        ),
+        (
+            "int f(long long,long long) __attribute__((overloadable));",
+            "?f@@$$J0YAH_J0@Z",
+        ),
+        (
+            "int f(_Bool,_Bool) __attribute__((overloadable));",
+            "?f@@$$J0YAH_N0@Z",
+        ),
+        (
+            "int f(int(*)(char*,char*),char*,char*) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHPEAD0@Z00@Z",
+        ),
+        (
+            "int f(int(*)(int*const)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);int f(F*) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);int f(int(*)(int*)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHPEAH@Z@Z",
+        ),
+        (
+            "int f(int(*)(int*),int(*)(int*const)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHPEAH@Z1@Z",
+        ),
+        (
+            "typedef int I __attribute__((aligned(32)));int f(I*,int*) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAH0@Z",
+        ),
+        (
+            "typedef int F(int*const);int f(_Atomic(F*)) __attribute__((overloadable));",
+            "?f@@$$J0YAHU?$_Atomic@P6AHQEAH@Z@__clang@@@Z",
+        ),
+        (
+            "typedef int F(int*const);int f(__typeof__(F)*) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);F*value;int f(__typeof__(value)) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "struct S{int(*cb)(int*const);};int f(__typeof__(((struct S*)0)->cb)) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "struct S{struct{int(*cb)(int*const);};};int f(__typeof__(((struct S*)0)->cb)) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "int callback(int*const);int f(__typeof__(&callback)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "int(*produce(void))(int*const);int f(__typeof__(produce())) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);F**pointer;int f(__typeof__(*pointer)) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "int f(int callback(int*const)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);typedef int G(int*);F*a;G*b;int f(__typeof__(1?a:b)) \
+             __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHPEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);F*a;int f(__typeof__(1?a:a)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "void outer(int(*cb)(int*const)){extern int f(__typeof__(cb)) \
+             __attribute__((overloadable));f(cb);}",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "void outer(int cb(int*const)){extern int f(__typeof__(cb)) \
+             __attribute__((overloadable));f(cb);}",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "void outer(cb) int(*cb)(int*const); {extern int f(__typeof__(cb)) \
+             __attribute__((overloadable));f(cb);}",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "int f(int(*)[2][11]) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAY11L@H@Z",
+        ),
+        (
+            "int cb(int*const);int f(__typeof__((0,cb))) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "int cb(int*const);int f(__typeof__(1?cb:cb)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "void outer(void){extern int f(__typeof__(({typedef int F(int*const);(F*)0;}))) \
+             __attribute__((overloadable));f(0);}",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);F*a;int f(__typeof__(1?0:a)) __attribute__((overloadable));",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "void outer(void){typedef int F(int*const);F*a;extern int f(__typeof__(({a;}))) \
+             __attribute__((overloadable));f(a);}",
+            "?f@@$$J0YAHP6AHQEAH@Z@Z",
+        ),
+        (
+            "typedef int F(int*const);F**a;int f(__typeof__(a+=0)) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAP6AHQEAH@Z@Z",
+        ),
+        (
+            "struct R {int x;};struct R f(int) __attribute__((overloadable));",
+            "?f@@$$J0YA?AUR@@H@Z",
+        ),
+        (
+            "enum E{A};enum E f(enum E) __attribute__((overloadable));",
+            "?f@@$$J0YA?AW4E@@W41@@Z",
+        ),
+        (
+            "int f(int(*)[]) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAY0A@H@Z",
+        ),
+        (
+            "int f(const int(*)[3]) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAY02$$CBH@Z",
+        ),
+        (
+            "int f(volatile int(*)[3]) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAY02$$CCH@Z",
+        ),
+        (
+            "int f(const int(*)[2][3]) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAY112$$CBH@Z",
+        ),
+        (
+            "int f(int*const(*)[3]) __attribute__((overloadable));",
+            "?f@@$$J0YAHPEAY02QEAH@Z",
+        ),
+        (
+            "int f(const int[3]) __attribute__((overloadable));",
+            "?f@@$$J0YAHQEBH@Z",
+        ),
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default().with_target(Target::WindowsMsvc),
+            |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{source}: {:?}",
+                    context.take_pending_errors()
+                );
+                let binding = sema
+                    .bindings
+                    .iter()
+                    .enumerate()
+                    .find(|(_, b)| context.string_cache.at(b.name.name) == "f")
+                    .unwrap()
+                    .0;
+                let actual = sema.function_extensions.function(binding).unwrap().abi_name;
+                assert_eq!(context.string_cache.at(actual), expected, "{source}");
+            },
+        );
+    }
 }

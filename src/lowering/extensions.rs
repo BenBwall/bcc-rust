@@ -119,7 +119,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 .get(&self.binding_identity(binding))
                 .copied()
         }
-        .unwrap_or_else(|| self.context.string_cache.at(self.binding_identity(binding)));
+        .unwrap_or_else(|| {
+            let name = self
+                .sema
+                .function_extensions
+                .function(binding)
+                .map_or(self.sema.bindings[binding].name.name, |extension| {
+                    extension.abi_name
+                });
+            self.context.string_cache.at(name)
+        });
         debug_assert!(!name.contains('\0'), "lowered symbol names are NUL-free");
         name
     }

@@ -123,7 +123,21 @@ Unmodeled allocation/conditional/compound-literal origins remain unknown, as do
 runtime member and nested-array offsets in subobject modes 1 and 3. Unsupported
 predicate shapes diagnose rather than being discarded. These contracts cover
 the exercised glibc level-2/3 fortify wrappers and Clang C arithmetic,
-real/complex, pointer-qualification and variadic-fallback overload selection. In MinGW-w64, `__CRT_INLINE` becomes
+real/complex, pointer-qualification and variadic-fallback overload selection.
+Overload symbols use Clang's Itanium ABI on ELF and MinGW and its Microsoft ABI
+on MSVC, including written nested-function qualifiers and shared argument/name
+backreferences. Anonymous and repeated local tags receive ABI ordinals at first
+emitted use, independently of semantic overload identity. Bidirectional BCC/Clang
+multi-translation-unit tests compile and link all four targets, executing on the
+native host. A unique unmarked `enable_if` function keeps its C symbol; a marked
+one keeps the target's Clang symbol. Clang's Microsoft ABI omits `enable_if`
+predicates, and unmarked C predicates also omit overload distinctions. When
+distinct entities actually collide, bcc preserves their bodies under distinct
+private spellings; those colliding APIs cannot interoperate with Clang's symbol
+scheme. Pinned Clang crashes for an anonymous record introduced only in a
+Microsoft prototype, so bcc gives that unshareable type a deterministic private
+name.
+In MinGW-w64, `__CRT_INLINE` becomes
 `extern inline` with `gnu_inline`, `setjmp` passes `__builtin_frame_address (0)`,
 `intrin.h` always includes the x86 intrinsic headers, the printf and strftime
 format archetypes become Clang's, and `intsafe.h` defines its functions as

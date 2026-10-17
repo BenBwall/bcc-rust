@@ -123,8 +123,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             | _ => true,
                         };
                     if substitute {
-                        if let Some(index) =
-                            substitutions.iter().position(|&previous| previous == ty)
+                        if let Some(index) = substitutions
+                            .iter()
+                            .position(|&previous| self.same_abi_type(previous, ty))
                         {
                             output.push('S');
                             if index > 0 {
@@ -363,19 +364,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
             }
         }
-        if !valid
-            && let Some(predicate) = extension
+        if !valid {
+            if let Some(predicate) = extension
                 .predicates
                 .iter()
                 .find(|p| p.kind == PredicateKind::Enable)
-        {
-            let name = self.context.string_cache.intern("enable_if");
-            self.error(
-                super::super::SemanticErrorKind::AttributeArguments,
-                predicate.message.source,
-                Some(name),
-                None,
-            );
+            {
+                let name = self.context.string_cache.intern("enable_if");
+                self.error(
+                    super::super::SemanticErrorKind::AttributeArguments,
+                    predicate.message.source,
+                    Some(name),
+                    None,
+                );
+            }
+            return extension.identity;
         }
         self.context.string_cache.intern(output.as_str())
     }
@@ -401,10 +404,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let Some((_, Some(binding))) = local {
             output.push('Z');
-            let name = self
-                .context
-                .string_cache
-                .at(self.function_identity(binding));
+            let identity = self.function_identity(binding);
+            let name = self.context.string_cache.at(self
+                .function_extensions
+                .abi_names
+                .get(&identity)
+                .copied()
+                .unwrap_or(identity));
             if let Some(encoding) = name.strip_prefix("_Z") {
                 output.push_str(encoding);
             } else {

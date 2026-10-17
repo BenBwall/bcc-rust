@@ -1364,6 +1364,21 @@ selection and an unavailable variadic fallback. Resource-header regressions
 compare C17, GNU17 and C23 on all four targets against pinned Clang. Its
 binary128 calls remain ambiguous in both compilers because the resource
 header does not declare a binary128 promotion overload.
+Overload semantic identities remain separate from emitted ABI names. A final
+source-order reachability pass assigns anonymous and repeated local tag ordinals
+at first emitted use, skipping unused declarations and discarded static bodies.
+ELF/MinGW use Itanium names, while MSVC uses Clang's Microsoft C linkage names,
+including shared name/argument backreferences and sparse written function-type
+metadata for nested parameter qualifiers and array adjustment. This metadata
+follows declarators and typedef bindings without changing canonical type
+identity. Bidirectional BCC/Clang multi-TU regressions compile and link all four
+targets and execute on a native host. Unique `enable_if` functions use Clang's
+ABI spelling, including plain C names for unmarked functions. Microsoft names
+omit enable predicates; unmarked C names likewise cannot distinguish predicates.
+Only actual symbol collisions use distinct private semantic names to retain
+both bodies. Clang cannot represent those colliding APIs interoperably. Its
+pinned Microsoft mangler also crashes for anonymous records introduced only in
+a prototype; bcc uses a deterministic private spelling for that unshareable type.
 The implementation also repairs the glibc macro pattern `cast function ##
 f128`: a multi-token paste operand is pasted at its final token before its
 prefix is rescanned, protected by a reduced preprocessor regression.
