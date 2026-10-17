@@ -118,3 +118,13 @@ including submission from home and selection of a linked worktree;
 PowerShell parsing and actionlint passed. Existing compiler checkouts and
 the default branch were preserved. The source compiler was not changed to
 make these checks pass.
+
+The home-directory fix was also verified live from `/home/agent` with
+`bcc-windows test --wait -- --lib binary128::tests:: -- --nocapture`.
+It automatically selected the sandbox checkout at
+`b9c5ba1bd9bed19169398cd074890ec3d71011c4`.
+Run [39032845961](https://github.com/BenBwall/bcc-rust/actions/runs/39032845961)
+executed one passing library test on `bcc-win-x64`, with no failures or
+ignored tests; the client returned 0. Its successful commit status and
+artifact download from home were verified. This focused run used the
+updated client; the full CI results above refer to `c114b485`.
