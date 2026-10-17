@@ -1797,7 +1797,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         };
-        let ty = self.types.scalar(scalar);
+        // GNU aligned typedef identity survives when no common-type
+        // reconstruction is needed. Different precision/rank selects the
+        // dominant operand; equal real/complex precision follows the left
+        // operand's domain conversion, as in Clang.
+        let alignment = if lt == rt {
+            lt.alignment
+        } else if rank != 0 && float_rank(ls) != float_rank(rs) {
+            if float_rank(ls) > float_rank(rs) {
+                lt.alignment
+            } else {
+                rt.alignment
+            }
+        } else if rank != 0 && complex && ls != rs {
+            lt.alignment
+        } else if rank == 0 && ls != rs {
+            if scalar == ls {
+                lt.alignment
+            } else if scalar == rs {
+                rt.alignment
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let ty = self.types.scalar(scalar).with_alignment(alignment);
         // C99 §6.3.1.8p1: common real precision does not change type domain.
         let complex_scalar = |s| {
             matches!(

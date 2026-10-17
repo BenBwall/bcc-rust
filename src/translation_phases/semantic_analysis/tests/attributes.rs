@@ -914,3 +914,158 @@ _Static_assert(_Alignof(__typeof__(packed.inherited)) == 8 && __alignof__(packed
         );
     }
 }
+
+/// C23 §6.7.3.6p4: parameter storage alignment is independent of the
+/// parameter's type, including when prototype bindings are replayed.
+#[test]
+fn typeof_parameter_discards_storage_alignment_and_keeps_typedef_alignment() {
+    let source = r#"
+typedef int T8 __attribute__((aligned(8)));
+void direct(int x __attribute__((aligned(32))), T8 y __attribute__((aligned(32)))) {
+    _Static_assert(_Alignof(__typeof__(x)) == 4 && __alignof__(x) == 32, "direct scalar");
+    _Static_assert(_Alignof(__typeof__(y)) == 8 && __alignof__(y) == 32, "direct typedef");
+}
+void prior(int prototype_x __attribute__((aligned(32))), T8 prototype_y __attribute__((aligned(32))));
+void prior(int x __attribute__((aligned(32))), T8 y __attribute__((aligned(32)))) {
+    _Static_assert(_Alignof(__typeof__(x)) == 4 && __alignof__(x) == 32, "prior scalar");
+    _Static_assert(_Alignof(__typeof__(y)) == 8 && __alignof__(y) == 32, "prior typedef");
+}
+void oldstyle(x, y) int x __attribute__((aligned(32))); T8 y __attribute__((aligned(32))); {
+    _Static_assert(_Alignof(__typeof__(x)) == 4 && __alignof__(x) == 32, "old scalar");
+    _Static_assert(_Alignof(__typeof__(y)) == 8 && __alignof__(y) == 32, "old typedef");
+}
+"#;
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |context, _| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                )
+            },
+        );
+    }
+}
+
+/// GNU aligned typedefs survive the usual arithmetic conversions when both
+/// promoted operands have that type. C99 §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
+#[test]
+fn typeof_arithmetic_retains_equal_intrinsic_typedef_alignment() {
+    let source = r#"
+typedef int T8 __attribute__((aligned(8)));
+typedef double D32 __attribute__((aligned(32)));
+typedef double _Complex C32 __attribute__((aligned(32)));
+typedef short S8 __attribute__((aligned(8)));
+T8 x, y __attribute__((aligned(32)));
+D32 dx, dy;
+C32 cx, cy;
+S8 sx, sy;
+_Static_assert(_Alignof(__typeof__(x+y)) == 8, "same integer");
+_Static_assert(_Alignof(__typeof__(1?x:y)) == 8, "same conditional");
+_Static_assert(_Alignof(__typeof__(x+1)) == 4, "mixed integer");
+_Static_assert(_Alignof(__typeof__(1?x:1)) == 4, "mixed conditional");
+_Static_assert(_Alignof(__typeof__(dx+dy)) == 32, "same double");
+_Static_assert(_Alignof(__typeof__(dx+1.0)) == _Alignof(double), "mixed double");
+_Static_assert(_Alignof(__typeof__(cx+cy)) == 32, "same complex");
+_Static_assert(_Alignof(__typeof__(cx+1.0)) == 32, "complex plus real");
+_Static_assert(_Alignof(__typeof__(1.0+cx)) == _Alignof(double _Complex), "real plus complex");
+_Static_assert(_Alignof(__typeof__(dx+1.0f)) == 32, "dominant real");
+_Static_assert(_Alignof(__typeof__(sx+sy)) == 4, "integer promotion");
+"#;
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |context, _| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                )
+            },
+        );
+    }
+}
+
+/// GNU/MS alignment attributes belong to the object; alignment inherited
+/// solely through a typedef follows the most recent declaration's type.
+/// C99: §6.2.7p4, p. 40; PDF p. 52.
+#[test]
+fn object_redeclarations_distinguish_typedef_and_explicit_alignment() {
+    let source = r#"
+typedef int T8 __attribute__((aligned(8)));
+extern T8 plain; extern int plain;
+extern int gained; extern T8 gained;
+extern T8 explicit __attribute__((aligned(32))); extern int explicit;
+extern T8 modest __attribute__((aligned(4))); extern int modest;
+typedef long long L4 __attribute__((aligned(4)));
+extern L4 arrays[1]; extern long long arrays[1];
+extern T8 *pointer; extern int *pointer;
+_Static_assert(_Alignof(__typeof__(plain)) == 4 && __alignof__(plain) == 4, "latest plain");
+_Static_assert(_Alignof(__typeof__(gained)) == 8 && __alignof__(gained) == 8, "latest typedef");
+_Static_assert(_Alignof(__typeof__(explicit)) == 4 && __alignof__(explicit) == 32, "inherited request");
+_Static_assert(_Alignof(__typeof__(modest)) == 4 && __alignof__(modest) == 4, "request independent of typedef");
+_Static_assert(_Alignof(__typeof__(arrays)) == 8 && __alignof__(arrays) == 8, "array latest element");
+_Static_assert(_Alignof(__typeof__(*pointer)) == 4, "pointer latest target");
+int get_plain(void) { return plain; }
+"#;
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                );
+                for (name, expected) in [
+                    ("plain", 4),
+                    ("gained", 8),
+                    ("explicit", 32),
+                    ("modest", 4),
+                    ("arrays", 8),
+                ] {
+                    let binding = sema
+                        .bindings
+                        .iter()
+                        .rev()
+                        .find(|b| context.string_cache.at(b.name.name) == name)
+                        .unwrap();
+                    assert_eq!(
+                        sema.types.layout(binding.ty).unwrap().align,
+                        expected,
+                        "{target:?}: {name}"
+                    );
+                }
+            },
+        );
+    }
+}

@@ -334,6 +334,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         None,
                     );
                     if let Some(prototype) = parameter.binding {
+                        if let Some(&alignment) = self.binding_alignments.get(&prototype) {
+                            _ = self
+                                .binding_alignments
+                                .insert(self.bindings.len() - 1, alignment);
+                        }
                         parameter_aliases.push((prototype, self.bindings.len() - 1));
                         if let Some(&size) = self.extension_parameters.get(&prototype) {
                             _ = self

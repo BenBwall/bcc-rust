@@ -430,10 +430,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let bounds = self.bound_actions(ty, bound_start);
                 let binding = (self.bindings.len() > prior).then(|| self.bindings.len() - 1);
                 if let Some(binding) = binding {
-                    if self.bindings[binding].kind == BindingKind::Object
-                        && let Some(&alignment) = self
-                            .declarator_alignments
-                            .get(&d.kind.as_slice().as_ptr().addr())
+                    if matches!(
+                        self.bindings[binding].kind,
+                        BindingKind::Object | BindingKind::Parameter
+                    ) && let Some(&alignment) = self
+                        .declarator_alignments
+                        .get(&d.kind.as_slice().as_ptr().addr())
                     {
                         _ = self.binding_alignments.insert(binding, alignment);
                     }
@@ -1018,6 +1020,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         None,
                     );
                     let binding = self.bindings.len() - 1;
+                    if let Some(&alignment) = p.declarator.and_then(|d| {
+                        self.declarator_alignments
+                            .get(&d.kind.as_slice().as_ptr().addr())
+                    }) {
+                        _ = self.binding_alignments.insert(binding, alignment);
+                    }
                     if let Some(minimum) = array_minimum {
                         _ = self
                             .correspondence
@@ -1818,6 +1826,8 @@ struct Analyzer<'a, 'tu, 's> {
     /// alignment.
     declarator_alignments:   ArenaMap<'s, usize, u32>,
     binding_alignments:      ArenaMap<'s, usize, u32>,
+    /// Explicit linked-object alignment requests, independently of typedefs.
+    object_alignments:       ArenaMap<'s, usize, (u32, bool)>,
     member_alignments:       ArenaMap<'s, (usize, StringCacheId), u32>,
     register_bindings:       ArenaMap<'s, usize, bool>,
     ice_operands:            ArenaMap<'s, (usize, bool), bool>,

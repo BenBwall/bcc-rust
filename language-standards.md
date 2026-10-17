@@ -1233,7 +1233,16 @@ bridge, which compensated for the GCC 4.2.1 claim without Clang's, is gone.
 
 `__typeof__`, compatible-type tests, choose-expression selection, generic
 selection, type classification, and real/imaginary components now have
-semantic types and constant eligibility. The reachable old-GCC glibc
+semantic types and constant eligibility.
+
+`typeof(expression)` retains intrinsic typedef and record alignment while
+excluding alignment attached only to an object's, member's or parameter's
+storage; GNU `__alignof__(expression)` still observes that storage alignment.
+Equal arithmetic operands retain their aligned typedef type, subject to the
+usual promotions. A later object redeclaration supplies its typedef-derived
+alignment, while explicit object alignment requests remain inherited.
+
+The reachable old-GCC glibc
 `tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
 Clang rejects that builtin. No resource `tgmath.h` is supplied for MinGW.
 Clang's resource implementation needs promotion overloads, real/complex

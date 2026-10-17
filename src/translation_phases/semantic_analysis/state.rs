@@ -94,6 +94,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             declarator_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             binding_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            object_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             member_alignments: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

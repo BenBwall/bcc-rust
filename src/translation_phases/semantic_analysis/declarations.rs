@@ -650,7 +650,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if kind == BindingKind::Function {
             self.inherit_call_contract(self.bindings.len(), name.name);
         }
+        // Object alignment written on a declaration is inherited, while a
+        // later declaration's typedef-derived alignment replaces the earlier
+        // type's alignment. C99 §6.2.7p4, p. 40; PDF p. 52, extended by GNU/MS.
+        let storage_alignment = if kind == BindingKind::Object {
+            let requested = self.explicit_member_alignment(spec.extensions, None, Some(declarator));
+            let inherited = self
+                .lookup(Namespace::Ordinary, name.name)
+                .and_then(|entry| self.object_alignments.get(&entry.binding).copied())
+                .unwrap_or((0, false));
+            Some((
+                requested.max(inherited.0),
+                inherited.1 || self.microsoft_alignment(spec.extensions),
+            ))
+        } else {
+            None
+        };
+        let ty = if let Some((requested, microsoft)) =
+            storage_alignment.filter(|&(requested, _)| requested != 0)
+        {
+            if microsoft {
+                ty.with_alignment(requested)
+            } else {
+                let minimum = self
+                    .types
+                    .alignment(ty)
+                    .and_then(|a| u32::try_from(a).ok())
+                    .unwrap_or(0);
+                ty.with_alignment(ty.alignment.max(requested).max(minimum))
+            }
+        } else {
+            ty
+        };
         self.bind(name, ty, kind, linkage, duration, None);
+        if let Some(request) = storage_alignment.filter(|&(requested, _)| requested != 0) {
+            _ = self
+                .object_alignments
+                .insert(self.bindings.len() - 1, request);
+        }
         self.record_declaration(self.bindings.len() - 1, spec, declarator, initialized);
         if spec.storage_class == Some(StorageClass::Register) {
             _ = self.register_bindings.insert(self.bindings.len() - 1, true);
@@ -773,7 +810,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 compatible = false;
                 break;
-            } else if let Some(composite) = self.types.composite(old.ty, ty) {
+            } else if let Some(composite) = if kind == BindingKind::Object {
+                self.types.object_composite(old.ty, ty)
+            } else {
+                self.types.composite(old.ty, ty)
+            } {
                 if Some(index) == composite_prior {
                     ty = composite;
                 }

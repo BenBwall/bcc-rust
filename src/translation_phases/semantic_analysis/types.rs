@@ -86,11 +86,27 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     /// stack. C99: §6.2.7p1-4, p. 40; PDF p. 52; §6.7.5.1p2, p.
     /// 115; PDF p. 127; §6.7.5.2p6, p. 117; PDF p. 129; §6.7.5.3p15, pp.
     /// 119-120; PDF pp. 131-132.
+    pub(crate) fn composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
+        self.composite_with_alignment(left, right, false)
+    }
+
+    /// A later object declaration supplies its typedef-derived alignment;
+    /// explicit object alignment is inherited separately by declaration typing.
+    /// C99: §6.2.7p4, p. 40; PDF p. 52 (visible composite declarations).
+    pub(crate) fn object_composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
+        self.composite_with_alignment(left, right, true)
+    }
+
     #[expect(
         clippy::many_single_char_names,
         reason = "Paired type derivations use conventional left/right algebra names."
     )]
-    pub(crate) fn composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
+    fn composite_with_alignment(
+        &mut self,
+        left: TypeId,
+        right: TypeId,
+        latest: bool,
+    ) -> Option<TypeId> {
         enum Work<'a> {
             Pair(TypeId, TypeId),
             Alignment(u32),
@@ -106,7 +122,11 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             match item {
                 | Work::Pair(a, b) => {
                     // GCC aligned changes layout, not C type compatibility.
-                    work.push(Work::Alignment(a.alignment.max(b.alignment)));
+                    work.push(Work::Alignment(if latest {
+                        b.alignment
+                    } else {
+                        a.alignment.max(b.alignment)
+                    }));
                     let (a, b) = (a.with_alignment(0), b.with_alignment(0));
                     if a == b {
                         values.push(a);
