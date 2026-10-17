@@ -900,33 +900,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .map_or(1, |layout| layout.align)
             .min(base_alignment)
             .min(offset_alignment);
+        // C23 §6.7.3.6p4 (p. 118; PDF p. 131): storage alignment of
+        // the member place does not change its intrinsic type. Follow the
+        // resolved anonymous-member path to recover the declaring member.
+        let mut declaring_tag = id;
+        let mut path = field.path;
+        while let Some(next) = path.next {
+            let member = self.types.tags[declaring_tag].members.get()[path.index];
+            if let TypeKind::Tag(tag) = self.types.nodes[member.ty.index] {
+                declaring_tag = tag;
+            }
+            path = next;
+        }
+        if let Some(&alignment) = self.member_alignments.get(&(declaring_tag, member.name)) {
+            field_ty = field_ty.with_alignment(alignment);
+        }
+        // Qualifiers still reach array elements (§6.5.2.3p3, §6.7.3p8).
         let mut arrays = ArenaVec::new_in(self.scratch);
         while let TypeKind::Array(element, bound) = self.types.nodes[field_ty.index] {
             arrays.push((bound, field_ty.alignment));
             field_ty = element;
         }
-        // Qualifiers of the record and of any anonymous members on the path
-        // reach the member, and an array's element (§6.5.2.3p3, §6.7.3p8).
         field_ty = field_ty.qualified(ty.qualifiers | field.qualifiers);
-        if self
-            .types
-            .layout(field_ty)
-            .is_some_and(|layout| alignment < layout.align)
-        {
-            field_ty = field_ty.with_alignment(u32::try_from(alignment).unwrap_or(0));
-        }
         while let Some((bound, array_alignment)) = arrays.pop() {
             field_ty = self
                 .types
                 .intern(TypeKind::Array(field_ty, bound))
                 .with_alignment(array_alignment);
-        }
-        if self
-            .types
-            .layout(field_ty)
-            .is_some_and(|layout| alignment < layout.align)
-        {
-            field_ty = field_ty.with_alignment(u32::try_from(alignment).unwrap_or(0));
         }
         let mut info = Self::expression_result(e, field_ty);
         if indirect

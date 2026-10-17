@@ -840,3 +840,77 @@ fn standard_alignment_checks_the_original_type_even_with_zero_requests() {
         }
     }
 }
+
+/// C23 §6.7.3.6p4 (p. 118; PDF p. 131): typeof preserves intrinsic
+/// typedef and record alignment, independently of an object's storage request.
+#[test]
+fn typeof_discards_storage_alignment_but_preserves_inherited_types() {
+    let source = r#"
+typedef int T8 __attribute__((aligned(8)));
+struct R { char c; int n; };
+struct __attribute__((aligned(16))) A { char c; int n; };
+int scalar __attribute__((aligned(32)));
+T8 inherited __attribute__((aligned(32)));
+__declspec(align(1)) T8 lowered;
+_Alignas(32) struct R record;
+struct A aggregate __attribute__((aligned(32)));
+int array[3] __attribute__((aligned(32)));
+typedef int AlignedArray[2] __attribute__((aligned(8)));
+AlignedArray elements __attribute__((aligned(32)));
+struct M { int scalar __attribute__((aligned(32))); T8 inherited __attribute__((aligned(32))); } member;
+struct __attribute__((packed)) P { char c; T8 inherited; } packed;
+_Static_assert(_Alignof(__typeof__(scalar)) == 4 && __alignof__(scalar) == 32, "scalar");
+_Static_assert(_Alignof(__typeof__((inherited))) == 8 && __alignof__(inherited) == 32, "typedef");
+_Static_assert(_Alignof(__typeof__(lowered)) == 8 && __alignof__(lowered) == 1, "lowered typedef");
+_Static_assert(_Alignof(__typeof__(record)) == 4 && __alignof__(record) == 32, "record object");
+_Static_assert(_Alignof(__typeof__(aggregate)) == 16 && __alignof__(aggregate) == 32, "record type");
+_Static_assert(_Alignof(__typeof__(array)) == 4 && __alignof__(array) == 32, "array");
+_Static_assert(_Alignof(__typeof__(elements)) == 8 && __alignof__(elements) == 32, "array typedef");
+_Static_assert(_Alignof(__typeof__(*(&inherited))) == 8, "pointer derivation");
+_Static_assert(_Alignof(__typeof__(member.scalar)) == 4 && __alignof__(member.scalar) == 32, "member");
+_Static_assert(_Alignof(__typeof__(member.inherited)) == 8 && __alignof__(member.inherited) == 32, "typedef member");
+_Static_assert(_Alignof(__typeof__(packed.inherited)) == 8 && __alignof__(packed.inherited) == 1, "packed member");
+"#;
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true)
+                .with_msvc_extensions(true),
+            |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                );
+                for (name, expected) in [
+                    ("scalar", 32),
+                    ("inherited", 32),
+                    ("lowered", 1),
+                    ("record", 32),
+                    ("aggregate", 32),
+                    ("array", 32),
+                    ("elements", 32),
+                ] {
+                    let binding = sema
+                        .bindings
+                        .iter()
+                        .find(|b| context.string_cache.at(b.name.name) == name)
+                        .unwrap();
+                    assert_eq!(
+                        sema.types.layout(binding.ty).unwrap().align,
+                        expected,
+                        "{target:?}: {name}"
+                    );
+                }
+            },
+        );
+    }
+}

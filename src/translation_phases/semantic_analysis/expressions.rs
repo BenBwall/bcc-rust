@@ -93,6 +93,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(index) = found {
                     let binding = self.bindings[index];
                     info.ty = binding.ty;
+                    if let Some(&alignment) = self.binding_alignments.get(&index) {
+                        info.ty = info.ty.with_alignment(alignment);
+                        info.place_alignment = self
+                            .types
+                            .alignment(binding.ty)
+                            .and_then(|a| u8::try_from(a.trailing_zeros() + 1).ok())
+                            .and_then(NonZeroU8::new);
+                    }
                     info.binding = Some(index);
                     if self.function_extensions.function(index).is_none()
                         && !self.overload_previous.contains_key(&index)
@@ -336,7 +344,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let operand = self.expression_info(operand);
                 info = self.type_sizeof(
                     e,
-                    operand.ty,
+                    if matches!(e.kind, E::AlignofExpr(_)) {
+                        operand
+                            .place_alignment()
+                            .map_or(operand.ty, |alignment| operand.ty.with_alignment(alignment))
+                    } else {
+                        operand.ty
+                    },
                     operand.bit_field,
                     matches!(e.kind, E::AlignofExpr(_)),
                 );

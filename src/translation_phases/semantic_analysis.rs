@@ -430,6 +430,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let bounds = self.bound_actions(ty, bound_start);
                 let binding = (self.bindings.len() > prior).then(|| self.bindings.len() - 1);
                 if let Some(binding) = binding {
+                    if self.bindings[binding].kind == BindingKind::Object
+                        && let Some(&alignment) = self
+                            .declarator_alignments
+                            .get(&d.kind.as_slice().as_ptr().addr())
+                    {
+                        _ = self.binding_alignments.insert(binding, alignment);
+                    }
                     _ = self.binding_bounds.insert(binding, bounds);
                 }
                 let accepted = binding.filter(|&binding| {
@@ -1234,6 +1241,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     None
                 };
                 let name = d.declarator.and_then(Declarator::identifier);
+                if let Some(name) = name
+                    && let Some(declarator) = d.declarator
+                    && let Some(&alignment) = self
+                        .declarator_alignments
+                        .get(&declarator.kind.as_slice().as_ptr().addr())
+                {
+                    _ = self.member_alignments.insert((tag, name.name), alignment);
+                }
                 if self.variably_modified(ty) {
                     invalid = true;
                     self.error(
@@ -1799,6 +1814,11 @@ struct Analyzer<'a, 'tu, 's> {
     /// expression when analysis ends.
     conversions:             ArenaVec<'s, Conversion<'tu>>,
     const_members:           ArenaMap<'s, usize, bool>,
+    /// Intrinsic alignment before an object/member declaration adds storage
+    /// alignment.
+    declarator_alignments:   ArenaMap<'s, usize, u32>,
+    binding_alignments:      ArenaMap<'s, usize, u32>,
+    member_alignments:       ArenaMap<'s, (usize, StringCacheId), u32>,
     register_bindings:       ArenaMap<'s, usize, bool>,
     ice_operands:            ArenaMap<'s, (usize, bool), bool>,
     functions:               functions::State<'tu, 's>,

@@ -417,6 +417,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             0
         });
+        // C23 §6.7.3.6p4: typeof yields the operand's type, while an
+        // object's own alignment request is a property of its storage.
+        // Preserve inherited typedef alignment before applying that request.
+        if let Some(declarator) = declaration.declarator {
+            _ = self.declarator_alignments.insert(
+                declarator.kind.as_slice().as_ptr().addr(),
+                original.alignment,
+            );
+        }
         let minimum = self.types.alignment(original);
         let microsoft =
             declaration.microsoft_object && self.microsoft_alignment(declaration.extensions);
