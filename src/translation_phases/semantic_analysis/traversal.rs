@@ -174,6 +174,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
         use super::statements::StatementWork as W;
         self.taint(s.recovered);
+        // Unlike a compound or label, a structured statement with a label
+        // creates an insertion block even after a jump. Clang EmitStmt
+        // needs its condition/header as well as the labeled descendant.
+        if self.functions.dead
+            && matches!(
+                s.kind,
+                S::If { .. } | S::Switch { .. } | S::While { .. } | S::DoWhile { .. } | S::For(_)
+            )
+            && self.statement_contains_label(s)
+        {
+            self.functions.dead = false;
+        }
         let outside = self.control.current;
         _ = self.control.statement(s);
         self.work.push(Work::StatementWork(W::RetainTail(s)));
@@ -246,13 +258,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::StatementWork(W::Substatement(child)));
                 }
                 if let Some(condition) = condition {
-                    self.dead_arm(condition, false);
+                    self.dead_statement_arm(condition, false, else_statement);
                 }
                 self.work.push(Work::FunctionWork(FunctionWork::ThenEnd));
                 self.work
                     .push(Work::StatementWork(W::Substatement(then_statement)));
                 if let Some(condition) = condition {
-                    self.dead_arm(condition, true);
+                    self.dead_statement_arm(condition, true, Some(then_statement));
                 }
                 self.work.push(Work::Condition(condition_expression, false));
                 self.expression_slot(condition_expression);
@@ -301,7 +313,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                self.work.push(Work::FunctionWork(FunctionWork::LoopEnd(
+                    s,
                     self.functions.dead,
                 )));
                 if matches!(s.kind, S::DoWhile { .. }) {
@@ -323,7 +336,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                self.work.push(Work::FunctionWork(FunctionWork::LoopEnd(
+                    s,
                     self.functions.dead,
                 )));
                 self.work
@@ -382,6 +396,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             ),
             | S::Break => {
+                self.generated_break();
                 self.control_jump(s, false);
                 self.functions.dead = true;
             },
@@ -401,6 +416,80 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
             | _ => {},
         }
+    }
+
+    /// A label in the skipped arm prevents Clang from eliding that whole
+    /// arm, including statements before the label. An enclosing switch's
+    /// case labels count, but a nested switch owns and hides its cases.
+    /// C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146.
+    fn dead_statement_arm(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+        live: bool,
+        statement: Option<&'tu Statement<'tu>>,
+    ) {
+        if statement.is_some_and(|statement| self.statement_contains_label(statement)) {
+            self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                self.functions.dead,
+            )));
+        } else {
+            self.dead_arm(condition, live);
+        }
+    }
+
+    /// Finds labels by an explicit syntax stack. A nested function has its
+    /// own label namespace, and a nested switch owns its case labels.
+    /// C99: §6.8.1p2-4, pp. 131-132; PDF pp. 143-144.
+    fn statement_contains_label(&self, statement: &'tu Statement<'tu>) -> bool {
+        use crate::{
+            translation_phases::parsing::syntax::BlockItem,
+            util::bump::ArenaVec,
+        };
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push((statement, false));
+        while let Some((statement, ignore_cases)) = work.pop() {
+            match statement.kind {
+                | StatementType::Label(..) => return true,
+                | StatementType::Case(_, child) | StatementType::Default(child) => {
+                    if !ignore_cases {
+                        return true;
+                    }
+                    work.push((child, ignore_cases));
+                },
+                | StatementType::CaseRange(case) => {
+                    if !ignore_cases {
+                        return true;
+                    }
+                    work.push((case.statement, ignore_cases));
+                },
+                | StatementType::Compound { items } =>
+                    for item in items {
+                        if let BlockItem::Statement(child) = item {
+                            work.push((child, ignore_cases));
+                        }
+                    },
+                | StatementType::Attributed(attributed) =>
+                    work.push((attributed.statement, ignore_cases)),
+                | StatementType::If {
+                    then_statement,
+                    else_statement,
+                    ..
+                } => {
+                    work.push((then_statement, ignore_cases));
+                    if let Some(child) = else_statement {
+                        work.push((child, ignore_cases));
+                    }
+                },
+                | StatementType::Switch { body_statement, .. } => work.push((body_statement, true)),
+                | StatementType::While { body_statement, .. }
+                | StatementType::DoWhile { body_statement, .. } =>
+                    work.push((body_statement, ignore_cases)),
+                | StatementType::For(for_loop) =>
+                    work.push((for_loop.body_statement, ignore_cases)),
+                | _ => {},
+            }
+        }
+        false
     }
 
     pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {

@@ -11,6 +11,7 @@ use super::{
     Linkage,
     ScopeKind,
     SemanticErrorKind,
+    StatementId,
     Work,
     results::{
         Definition,
@@ -42,6 +43,8 @@ use crate::{
                 Expression,
                 FunctionDefinition,
                 Identifier,
+                Statement,
+                StatementType,
                 StorageClass,
             },
         },
@@ -450,12 +453,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.dead &= then_end;
             },
             | FunctionWork::DeadArm(condition, live, outer) => {
+                // ConstantFoldsToSimpleInteger does not elide bare floating
+                // conditions at -O0, even though loop code generation can
+                // fold their truth value when creating an exit block.
                 let info = self.expression_info(condition);
                 let value = (info.constant == super::ConstantClass::Arithmetic)
                     .then_some(info.integer)
                     .flatten()
                     .map(|integer| integer.value != 0);
                 self.functions.dead = outer || value == Some(!live);
+            },
+            | FunctionWork::LoopEnd(statement, outer) => {
+                let infinite = match statement.kind {
+                    | StatementType::While {
+                        condition_expression,
+                        ..
+                    } =>
+                        super::statements::slot_expression(condition_expression)
+                            .and_then(|condition| self.generated_condition(condition))
+                            == Some(true),
+                    // Clang emits a condition exit for `for (;1;)`, but
+                    // creates none when the condition is absent.
+                    | StatementType::For(for_loop) => for_loop.condition_expression.is_none(),
+                    | _ => false,
+                };
+                let exits = self
+                    .control
+                    .statement_id(statement)
+                    .is_some_and(|id| self.has_generated_break(id));
+                self.functions.dead = outer || (infinite && !exits);
             },
         }
     }
@@ -1486,6 +1512,54 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         )));
     }
 
+    /// Loop code generation folds arithmetic truth, including floating
+    /// constants, before deciding whether to create a condition exit.
+    /// C99: §6.8.5p4, p. 135; PDF p. 147.
+    fn generated_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
+        let info = self.expression_info(condition);
+        (info.constant == super::ConstantClass::Arithmetic)
+            .then(|| Self::constant_truth(info))
+            .flatten()
+    }
+
+    /// A generated `break` gives its innermost switch or loop an exit edge.
+    /// A nested target's break cannot make an enclosing infinite loop exit.
+    /// C99: §6.8.6.3p2, p. 138; PDF p. 150.
+    pub(super) fn generated_break(&mut self) {
+        if !self.functions.dead
+            && let Some(&(target, _)) = self.control.targets.last()
+        {
+            self.functions.generated_breaks.push(GeneratedBreak {
+                target,
+                sizeof: self.functions.sizeof,
+                reference_context: self.functions.reference_context,
+            });
+        }
+    }
+
+    fn has_generated_break(&self, target: StatementId) -> bool {
+        self.functions.generated_breaks.iter().any(|jump| {
+            if jump.target != target {
+                return false;
+            }
+            let mut sizeof = jump.sizeof;
+            while let Some(index) = sizeof {
+                if self.sizeof_unevaluated(index) {
+                    return false;
+                }
+                sizeof = self.functions.sizeof_contexts[index].parent;
+            }
+            let mut context = jump.reference_context;
+            while let Some(index) = context {
+                if self.reference_context_unevaluated(index) {
+                    return false;
+                }
+                context = self.functions.reference_contexts[index].parent;
+            }
+            true
+        })
+    }
+
     /// Whether sizeof context `index` leaves its operand unevaluated: its
     /// result is constant, unless the operand has a VM type.
     /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
@@ -1736,6 +1810,9 @@ pub(super) enum FunctionWork<'tu> {
     /// Enters the arm of a condition taken when it is `live`, given whether
     /// the code around the condition is skipped.
     DeadArm(&'tu Expression<'tu>, bool, bool),
+    /// Clang omits an infinite loop's exit block unless a generated break
+    /// targets it. The loop's body is emitted even for a false condition.
+    LoopEnd(&'tu Statement<'tu>, bool),
 }
 
 /// Definition and tentative-definition state for an identifier with linkage.
@@ -1815,6 +1892,16 @@ struct Use {
     dead:              bool,
 }
 
+/// A break's evaluation context settles after an enclosing sizeof/typeof
+/// operand is typed, just as a generated reference's context does.
+/// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+#[derive(Clone, Copy)]
+struct GeneratedBreak {
+    target:            StatementId,
+    sizeof:            Option<usize>,
+    reference_context: Option<usize>,
+}
+
 #[derive(Clone, Copy)]
 struct SizeofContext<'tu> {
     expression: &'tu Expression<'tu>,
@@ -1868,7 +1955,8 @@ pub(super) struct State<'tu, 's> {
     pub(super) sizeof: Option<usize>,
     /// Code generation skips the code being analyzed, as Clang's does at
     /// `-O0`: the arm a constant condition does not take, and statements
-    /// after a jump until a label (`CodeGenFunction::EmitStmt`).
+    /// after a jump or a loop without an exit until a label
+    /// (`CodeGenFunction::EmitStmt`).
     pub(super) dead: bool,
     /// The skipped state around the innermost switch, which its case
     /// labels resume.
@@ -1876,6 +1964,9 @@ pub(super) struct State<'tu, 's> {
     /// The skipped state at the end of each enclosing `if` statement's
     /// first arm.
     arm_ends: ArenaVec<'s, bool>,
+    /// Target and evaluation contexts of emitted breaks. Semantic jumps
+    /// and references remain independent of this code-generation fact.
+    generated_breaks: ArenaVec<'s, GeneratedBreak>,
     inline_objects: ArenaVec<'s, InlineObject>,
     /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
     pub(super) outside: [Option<usize>; 2],
@@ -1901,6 +1992,7 @@ impl<'s> State<'_, 's> {
             dead:               false,
             switch_dead:        false,
             arm_ends:           ArenaVec::new_in(scratch),
+            generated_breaks:   ArenaVec::new_in(scratch),
             inline_objects:     ArenaVec::new_in(scratch),
             outside:            [None; 2],
         }

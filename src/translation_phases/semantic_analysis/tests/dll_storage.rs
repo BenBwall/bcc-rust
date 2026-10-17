@@ -516,6 +516,107 @@ fn skipped_code_and_unemitted_bodies_keep_the_import() {
     }
 }
 
+/// Clang's generated-reference state depends on emitted control edges,
+/// including labels and breaks, rather than semantic reachability. These
+/// expectations are pinned against Clang 23 on both Windows ABIs at -O0.
+#[test]
+fn labels_loop_exits_and_floating_conditions_fix_generated_import_state() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    for (suffix, imported) in [
+        // A label prevents elision of the whole constant-dead arm.
+        ("int h(void) { if (0) { x; L: return 0; } goto L; }", false),
+        (
+            "int h(void) { if (0) { x; if (1) { L: return 0; } } goto L; }",
+            false,
+        ),
+        (
+            "int h(int n) { switch (n) { if (0) { x; case 1: return 0; } } return 0; }",
+            false,
+        ),
+        // A nested switch's own case labels do not keep an outer dead arm.
+        (
+            "int h(int n) { if (0) { x; switch (n) { case 1: return 0; } } return 0; }",
+            true,
+        ),
+        ("int h(void) { for (;;) {} return x; }", true),
+        ("int h(void) { while (1) {} return x; }", true),
+        ("int h(void) { while (1.0) {} return x; }", true),
+        (
+            "int h(void) { for (;;) { sizeof(({ break; 0; })); } return x; }",
+            true,
+        ),
+        ("int h(void) { for (;;) { if (0) break; } return x; }", true),
+        (
+            "int h(int n) { for (;;) { if (n) break; } return x; }",
+            false,
+        ),
+        (
+            "int h(void) { while (1) { while (0) { break; } } return x; }",
+            true,
+        ),
+        (
+            "int h(int n) { while (1) { switch (n) { case 1: break; } } return x; }",
+            true,
+        ),
+        (
+            "int h(void) { for (;;) { return 0; L: break; } return x; }",
+            false,
+        ),
+        (
+            "int h(void) { while (1) { goto L; } x; L: return 0; }",
+            true,
+        ),
+        ("int h(void) { for (;;) {} L: return x; }", false),
+        // Clang generates condition exits for these forms at -O0, even
+        // when the condition is constant and an optimizer removes them.
+        ("int h(void) { for (;1;) {} return x; }", false),
+        ("int h(void) { do {} while (1); return x; }", false),
+        ("int h(void) { while (0) return x; return 0; }", false),
+        // Bare floating conditions generate both arms. Integer results
+        // computed from floating constants can elide their skipped arms.
+        ("int h(void) { if (0.0) return x; return 0; }", false),
+        ("int h(void) { if (0.5) return 0; return x; }", false),
+        ("int h(void) { return 0.0 && x; }", false),
+        ("int h(void) { return -0.0 ? x : 0; }", false),
+        ("int h(void) { if ((int)0.0) return x; return 0; }", true),
+        ("int h(void) { if (0.0 == 0.0) return 0; return x; }", true),
+    ] {
+        let source = format!("{IMPORTED}{suffix}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {suffix}"
+            );
+        }
+    }
+}
+
+/// Generated-reference filtering does not change semantic uses: an internal
+/// function still needs a definition even after an infinite loop.
+/// C99: §6.9p3, p. 140; PDF p. 152.
+#[test]
+fn generated_loop_exits_leave_semantic_reference_constraints_unchanged() {
+    for target in WINDOWS {
+        let source = "static int absent(void); int h(void) { for (;;) {} return absent(); }";
+        with_configuration(source, microsoft(target), |context, sema| {
+            let absent = sema
+                .bindings
+                .iter()
+                .position(|binding| context.string_cache.at(binding.name.name) == "absent")
+                .unwrap();
+            assert!(
+                sema.references.iter().any(|usage| usage.binding == absent),
+                "{target:?}: semantic reference was filtered"
+            );
+            assert!(context.take_pending_errors().iter().any(|error| {
+                matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::UndefinedInternal)
+            }), "{target:?}: semantic definition constraint was filtered");
+        });
+    }
+}
+
 /// Clang's `basicGVALinkageForFunction`: a Microsoft inline definition is
 /// `linkonce_odr`, or `weak_odr` once an explicit `extern` declaration (at
 /// any scope, before or after the body) or `dllexport` requests it; on
