@@ -408,6 +408,114 @@ fn retained_storage_follows_the_last_reference_and_final_declarations() {
     }
 }
 
+/// A reference fixes an entity's import only where Clang's code generation
+/// emits it at `-O0`: not in the arm a constant condition skips, after a
+/// jump before the next label, in a switch body before its first case, nor
+/// in a body the unit does not emit. A constant-false loop still emits its
+/// body, and a label resumes emission.
+#[test]
+fn skipped_code_and_unemitted_bodies_keep_the_import() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    for (suffix, msvc, mingw) in [
+        ("int h(void) { if (0) return x; return 0; }", true, true),
+        (
+            "int h(void) { if (1) return 0; else return x; }",
+            true,
+            true,
+        ),
+        ("int h(void) { if (1) return 0; return x; }", true, true),
+        ("int h(void) { return 0 ? x : 0; }", true, true),
+        ("int h(void) { return 1 ? 0 : x; }", true, true),
+        ("int h(void) { return 0 && x; }", true, true),
+        ("int h(void) { return 1 || x; }", true, true),
+        ("int h(void) { return 0; return x; }", true, true),
+        (
+            "int h(int a) { if (a) return 0; else return 1; return x; }",
+            true,
+            true,
+        ),
+        (
+            "int h(void) { for (;;) { break; return x; } return 0; }",
+            true,
+            true,
+        ),
+        (
+            "int h(int a) { switch (a) { return x; case 1: return 0; } return 0; }",
+            true,
+            true,
+        ),
+        (
+            "int h(int a) { return 0; switch (a) { case 1: return x; } }",
+            true,
+            true,
+        ),
+        ("inline int h(void) { return x; }", true, true),
+        ("static inline int h(void) { return x; }", true, true),
+        (
+            "inline int h(void) { return x; } static int k(void) { return h(); }",
+            true,
+            true,
+        ),
+        (
+            "static int h(void) { return x; } int k(void) { if (0) return h(); return 0; }",
+            true,
+            true,
+        ),
+        // Emitted references drop it.
+        (
+            "int h(void) { while (0) return x; return 0; }",
+            false,
+            false,
+        ),
+        ("int h(void) { do return x; while (0); }", false, false),
+        ("int h(void) { return 1 && x; }", false, false),
+        ("int h(void) { return 0; L: return x; }", false, false),
+        ("int h(int a) { if (a) return 0; return x; }", false, false),
+        (
+            "int h(int a) { switch (a) { case 1: return x; } return 0; }",
+            false,
+            false,
+        ),
+        (
+            "int h(void) { if (0) { L: return x; } goto L; }",
+            false,
+            false,
+        ),
+        (
+            "int k(void) { return ({ return 0; 1; }) + x; }",
+            false,
+            false,
+        ),
+        (
+            "static int h(void) { return x; } int k(void) { return h(); }",
+            false,
+            false,
+        ),
+        (
+            "inline int h(void) { return x; } extern int h(void);",
+            false,
+            false,
+        ),
+        // A referenced inline body is emitted on Microsoft only, where it is
+        // a discardable external definition; MinGW calls the external one.
+        (
+            "inline int h(void) { return x; } int k(void) { return h(); }",
+            false,
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{suffix}");
+        for (target, imported) in [(Target::WindowsMsvc, msvc), (Target::WindowsGnu, mingw)] {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {suffix}"
+            );
+        }
+    }
+}
+
 /// Clang's `basicGVALinkageForFunction`: a Microsoft inline definition is
 /// `linkonce_odr`, or `weak_odr` once an explicit `extern` declaration (at
 /// any scope, before or after the body) or `dllexport` requests it; on

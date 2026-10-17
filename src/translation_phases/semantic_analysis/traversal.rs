@@ -7,8 +7,10 @@ use super::{
     Analyzer,
     ScopeKind,
     Work,
+    functions::FunctionWork,
 };
 use crate::translation_phases::parsing::syntax::{
+    BinaryOperator,
     Expression,
     ExpressionSlot,
     ExpressionType,
@@ -68,14 +70,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::Binary {
                 left_expression,
                 right_expression,
-                ..
+                operator,
             } => {
+                let live = match operator {
+                    | BinaryOperator::LogicalAnd => Some(true),
+                    | BinaryOperator::LogicalOr => Some(false),
+                    | _ => None,
+                };
+                if live.is_some() {
+                    self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                        self.functions.dead,
+                    )));
+                }
                 self.work.push(Work::Expression(right_expression));
+                if let Some(live) = live {
+                    self.dead_arm(left_expression, live);
+                }
                 self.work.push(Work::Expression(left_expression));
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
+                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                    self.functions.dead,
+                )));
                 self.work.push(Work::Expression(c.else_expression));
+                self.dead_arm(c.condition_expression, false);
                 self.work.push(Work::Expression(c.then_expression));
+                self.dead_arm(c.condition_expression, true);
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {
@@ -116,6 +136,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 base_expression, ..
             } => self.work.push(Work::Expression(base_expression)),
             | E::StatementExpression(s) => {
+                // Code generation resumes after the statement expression
+                // even when its body jumps away.
+                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                    self.functions.dead,
+                )));
                 self.enter_statement_expression(e.source_vectors);
                 self.work.push(Work::Statement(s, true));
             },
@@ -176,21 +201,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Label(name, child) => {
                 self.label(s, name, true);
+                // A label is a jump target: code generation emits from it.
+                self.functions.dead = false;
                 self.work.push(Work::Statement(child, new_scope));
             },
-            | S::Goto(name) => self.label(s, name, false),
+            | S::Goto(name) => {
+                self.label(s, name, false);
+                self.functions.dead = true;
+            },
             | S::LocalLabels(names) => self.local_labels(names),
             | S::Default(child) => {
+                self.functions.dead = self.functions.switch_dead;
                 // The parser already diagnoses duplicate defaults, preserving
                 // its established diagnostic and recovery contract.
                 self.switch_label(s, s.source_vectors);
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Case(expression, child) => {
+                self.functions.dead = self.functions.switch_dead;
                 self.work.push(Work::Statement(child, new_scope));
                 self.case_label(s, expression, None, s.source_vectors);
             },
             | S::CaseRange(c) => {
+                self.functions.dead = self.functions.switch_dead;
                 self.work.push(Work::Statement(c.statement, new_scope));
                 self.case_label(s, c.lower, Some(c.upper), s.source_vectors);
             },
@@ -205,11 +238,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
+                // Code after the statement is skipped when both arms end
+                // skipped, a missing `else` being an empty arm.
+                self.work.push(Work::FunctionWork(FunctionWork::JoinArms));
+                let condition = super::statements::slot_expression(condition_expression);
                 if let Some(child) = else_statement {
                     self.work.push(Work::StatementWork(W::Substatement(child)));
                 }
+                if let Some(condition) = condition {
+                    self.dead_arm(condition, false);
+                }
+                self.work.push(Work::FunctionWork(FunctionWork::ThenEnd));
                 self.work
                     .push(Work::StatementWork(W::Substatement(then_statement)));
+                if let Some(condition) = condition {
+                    self.dead_arm(condition, true);
+                }
                 self.work.push(Work::Condition(condition_expression, false));
                 self.expression_slot(condition_expression);
             },
@@ -223,11 +267,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
+                // The body is skipped up to its first case label, which
+                // resumes the code around the switch.
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreSwitchDead(
+                        self.functions.switch_dead,
+                    )));
+                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                    self.functions.dead,
+                )));
+                self.functions.switch_dead = self.functions.dead;
                 self.work.push(Work::StatementWork(W::SwitchReady(
                     s,
                     condition_expression,
                     body_statement,
                 )));
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
                 self.work.push(Work::Condition(condition_expression, true));
                 self.expression_slot(condition_expression);
             },
@@ -245,6 +301,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
+                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                    self.functions.dead,
+                )));
                 if matches!(s.kind, S::DoWhile { .. }) {
                     self.work.push(Work::Condition(condition_expression, false));
                     self.expression_slot(condition_expression);
@@ -264,6 +323,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
+                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                    self.functions.dead,
+                )));
                 self.work
                     .push(Work::StatementWork(W::LoopBody(s, f.body_statement)));
                 if let Some(e) = f.iteration_expression {
@@ -296,6 +358,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
                 self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
+                self.work
                     .push(Work::StatementWork(W::ReturnDone(slot, s.source_vectors)));
                 if let Some(ExpressionSlot::Parsed(e)) = slot {
                     // Assignment compatibility performs the value conversion.
@@ -317,10 +381,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             ),
-            | S::Break => self.control_jump(s, false),
-            | S::Continue => self.control_jump(s, true),
+            | S::Break => {
+                self.control_jump(s, false);
+                self.functions.dead = true;
+            },
+            | S::Continue => {
+                self.control_jump(s, true);
+                self.functions.dead = true;
+            },
             | S::Expression(e) => self.expression_slot(e),
-            | S::ComputedGoto(e) => self.computed_goto(s, e),
+            | S::ComputedGoto(e) => {
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
+                self.computed_goto(s, e);
+            },
             | S::Asm(_) | S::MsAsm(_) =>
                 if let Some(function) = self.functions.current {
                     self.function_records[function.id].assembly = true;

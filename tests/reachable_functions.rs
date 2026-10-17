@@ -469,6 +469,37 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                     "gnu17",
                 ),
                 (
+                    "constant-dead-if",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     int h(void) { if (0) return x; return (0 ? x : 0) + (0 && x); }",
+                    "c17",
+                ),
+                (
+                    "constant-false-loop",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     int h(void) { while (0) return x; return 0; }",
+                    "c17",
+                ),
+                (
+                    "after-jumps",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     int h(int a) { switch (a) { return x; case 1: break; } if (a) return 0; else \
+                     return 1; return x; }",
+                    "c17",
+                ),
+                (
+                    "unused-inline",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     inline int h(void) { return x; }",
+                    "c17",
+                ),
+                (
+                    "referenced-inline",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     inline int h(void) { return x; } int k(void) { return h(); }",
+                    "c17",
+                ),
+                (
                     "declared-export-inline-static-local",
                     "__declspec(dllexport) inline int f(void); static int helper(void) { return \
                      7; } inline int f(void) { static int n; return helper() + ++n; }",

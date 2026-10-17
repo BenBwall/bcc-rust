@@ -210,6 +210,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some(index) = binding {
             self.record_function_definition(index, f);
         }
+        self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+            self.functions.dead,
+        )));
+        self.functions.dead = false;
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
             self.functions.current,
             self.statements.loops,
@@ -438,6 +442,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
+            | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
+            | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
+            | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
+            | FunctionWork::JoinArms => {
+                let then_end = self.functions.arm_ends.pop().expect("then arm ended");
+                self.functions.dead &= then_end;
+            },
+            | FunctionWork::DeadArm(condition, live, outer) => {
+                let info = self.expression_info(condition);
+                let value = (info.constant == super::ConstantClass::Arithmetic)
+                    .then_some(info.integer)
+                    .flatten()
+                    .map(|integer| integer.value != 0);
+                self.functions.dead = outer || value == Some(!live);
+            },
         }
     }
 
@@ -556,7 +575,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     });
                 }
                 if let Some(import) = usage.dll_import {
-                    evaluated.push((owner, usage.binding, import));
+                    evaluated.push((owner, usage.binding, import, usage.dead));
                 }
             }
             if let Some(function) = usage.inline_function
@@ -581,7 +600,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .or_insert(usage.name);
             }
         }
-        self.finish_dll_references(&evaluated);
         for i in 0..self.functions.inline_objects.len() {
             let object = self.functions.inline_objects[i];
             if self.is_inline_definition(object.function) {
@@ -631,6 +649,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.definitions[i].kind = self.external_function_kind(definition);
             }
         }
+        self.finish_dll_references(&evaluated);
         self.definitions.sort_unstable_by_key(|d| d.binding);
     }
 
@@ -1452,7 +1471,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             sizeof: self.functions.sizeof,
             inline_function,
             dll_import,
+            dead: self.functions.dead,
         });
+    }
+
+    /// Pushes the work that enters the arm of `condition` taken when it is
+    /// `live`: code generation skips it when the condition folds to the
+    /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
+    pub(super) fn dead_arm(&mut self, condition: &'tu Expression<'tu>, live: bool) {
+        self.work.push(Work::FunctionWork(FunctionWork::DeadArm(
+            condition,
+            live,
+            self.functions.dead,
+        )));
     }
 
     /// Whether sizeof context `index` leaves its operand unevaluated: its
@@ -1503,28 +1534,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Records, for each entity, whether the unit's last evaluated
-    /// reference in emitted code named an imported declaration. A body is
-    /// emitted when it has external linkage, is GNU `used`, or an emitted
-    /// body references it, as Clang defers internal definitions until
-    /// their first use.
-    fn finish_dll_references(&mut self, evaluated: &[(Option<usize>, usize, bool)]) {
+    /// reference in emitted code named an imported declaration. Code
+    /// generation skips dead code ([`State::dead`]) and bodies it does not
+    /// emit: a C99 inline-only or imported body, and an internal or
+    /// Microsoft discardable inline body that neither GNU `used` nor a
+    /// reference from emitted code keeps, as Clang defers such definitions
+    /// until their first use.
+    fn finish_dll_references(&mut self, evaluated: &[(Option<usize>, usize, bool, bool)]) {
+        let mut kinds = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for i in 0..self.definitions.len() {
+            let definition = self.definitions[i];
+            let entity = self.entity_of(definition.binding);
+            _ = kinds.insert(entity, definition.kind);
+        }
         let mut emitted = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut changed = true;
         while changed {
             changed = false;
-            for i in 0..self.references.len() {
-                let super::EntityReference { owner, binding } = self.references[i];
-                if self.bindings[binding].linkage != Linkage::Internal
-                    || !self.owner_emitted(Some(owner), &emitted)
-                {
-                    continue;
+            for &(owner, binding, _, dead) in evaluated {
+                if !dead && self.owner_emitted(owner, &kinds, &emitted) {
+                    let entity = self.entity_of(binding);
+                    changed |= emitted.insert(entity, ()).is_none();
                 }
-                let entity = self.entity_of(binding);
-                changed |= emitted.insert(entity, ()).is_none();
             }
         }
-        for &(owner, binding, import) in evaluated {
-            if self.owner_emitted(owner, &emitted) {
+        for &(owner, binding, import, dead) in evaluated {
+            if !dead && self.owner_emitted(owner, &kinds, &emitted) {
                 self.dll_referenced(binding, import);
             }
         }
@@ -1535,14 +1570,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn owner_emitted(
         &mut self,
         owner: Option<usize>,
+        kinds: &ArenaMap<'_, super::facts::EntityId, DefinitionKind>,
         emitted: &ArenaMap<'_, super::facts::EntityId, ()>,
     ) -> bool {
         let Some(owner) = owner else { return true };
-        if self.bindings[owner].linkage != Linkage::Internal {
-            return true;
-        }
         let entity = self.entity_of(owner);
-        emitted.contains_key(&entity) || self.retained_by_used(entity)
+        let deferred = match kinds.get(&entity) {
+            | Some(DefinitionKind::Inline) => return false,
+            | Some(DefinitionKind::DiscardableFunction) => true,
+            | _ => self.bindings[owner].linkage == Linkage::Internal,
+        };
+        !deferred || emitted.contains_key(&entity) || self.retained_by_used(entity)
     }
 
     /// Constant sizeof operands do not require an internal definition.
@@ -1677,6 +1715,17 @@ pub(super) enum FunctionWork<'tu> {
     ),
     RestoreSizeof(Option<usize>),
     RestoreReferenceContext(Option<usize>),
+    /// Sets whether code generation skips the code that follows.
+    RestoreDead(bool),
+    /// Restores the skipped state around the innermost switch.
+    RestoreSwitchDead(bool),
+    /// Saves the skipped state at the end of an `if` statement's first arm.
+    ThenEnd,
+    /// Skips the code after an `if` statement when both arms end skipped.
+    JoinArms,
+    /// Enters the arm of a condition taken when it is `live`, given whether
+    /// the code around the condition is skipped.
+    DeadArm(&'tu Expression<'tu>, bool, bool),
 }
 
 /// Definition and tentative-definition state for an identifier with linkage.
@@ -1752,6 +1801,8 @@ struct Use {
     /// Whether the reference named an imported declaration, for an entity
     /// with linkage.
     dll_import:        Option<bool>,
+    /// Code generation skips the reference ([`State::dead`]).
+    dead:              bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1803,6 +1854,16 @@ pub(super) struct State<'tu, 's> {
     uses: ArenaVec<'s, Use>,
     sizeof_contexts: ArenaVec<'s, SizeofContext<'tu>>,
     pub(super) sizeof: Option<usize>,
+    /// Code generation skips the code being analyzed, as Clang's does at
+    /// `-O0`: the arm a constant condition does not take, and statements
+    /// after a jump until a label (`CodeGenFunction::EmitStmt`).
+    pub(super) dead: bool,
+    /// The skipped state around the innermost switch, which its case
+    /// labels resume.
+    pub(super) switch_dead: bool,
+    /// The skipped state at the end of each enclosing `if` statement's
+    /// first arm.
+    arm_ends: ArenaVec<'s, bool>,
     inline_objects: ArenaVec<'s, InlineObject>,
     /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
     pub(super) outside: [Option<usize>; 2],
@@ -1824,6 +1885,9 @@ impl<'s> State<'_, 's> {
             uses:               ArenaVec::new_in(scratch),
             sizeof_contexts:    ArenaVec::new_in(scratch),
             sizeof:             None,
+            dead:               false,
+            switch_dead:        false,
+            arm_ends:           ArenaVec::new_in(scratch),
             inline_objects:     ArenaVec::new_in(scratch),
             outside:            [None; 2],
         }
