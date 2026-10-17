@@ -12,6 +12,7 @@ mod nonlocal;
 mod noundef_boundary;
 mod poison;
 mod startup;
+mod thread_local;
 
 use std::fmt::Write as _;
 

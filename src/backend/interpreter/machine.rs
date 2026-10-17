@@ -559,8 +559,10 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
     /// Loads `module` into fresh memory in `arena`: an object for each
     /// function and global, with definitions' initializers and relocations
     /// written. Declarations retain only an unresolved address, never storage.
-    /// An alias shares its target's address. A weak declaration that neither
-    /// the module nor `host` defines has the null address.
+    /// An alias shares its target's address. An undefined weak function or
+    /// ordinary object has the null address. Undefined weak thread-locals
+    /// resolve to offset zero in the thread's TLS block instead: they share
+    /// one nonnull address, without acquiring storage for a definition.
     /// C99: §6.9 paragraph 5, p. 140; PDF p. 152 (external definitions);
     /// §6.9.2 paragraph 2, p. 143; PDF p. 155 (zero-initialized tentative
     /// definitions). GNU extension: GCC manual, "Common Function Attributes",
@@ -602,12 +604,48 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
                 )
             });
         }
+        // GNU TLS extension: Drepper, "ELF Handling For Thread-Local
+        // Storage", TLS relocations. An unresolved weak TLS symbol has
+        // offset zero, not an absolute address of zero. Keep its thread
+        // base distinct from defined objects and ordinary weak symbols.
+        // Retain declared bounds for address arithmetic, but no backing
+        // cells: reading an object with no definition still diagnoses it.
+        let mut weak_tls_layout = (0, Align::BYTE);
+        for (_, global) in module.globals() {
+            if global.thread_local && global.linkage == Linkage::Weak && global.init.is_none() {
+                weak_tls_layout.0 = weak_tls_layout.0.max(global.size);
+                if global.align.bytes() > weak_tls_layout.1.bytes() {
+                    weak_tls_layout.1 = global.align;
+                }
+            }
+        }
+        let mut weak_tls_base = None;
         let mut globals = ArenaVec::new_in(arena);
         for (id, global) in module.globals() {
-            if global.attributes.alias.is_some()
-                || (global.linkage == Linkage::Weak && global.init.is_none())
-            {
+            if global.attributes.alias.is_some() {
                 globals.push(Pointer::NULL);
+                continue;
+            }
+            if global.linkage == Linkage::Weak && global.init.is_none() {
+                let pointer = if global.thread_local {
+                    match weak_tls_base {
+                        | Some(pointer) => pointer,
+                        | None => {
+                            let pointer = memory
+                                .allocate(
+                                    ObjectKind::UnresolvedGlobal(id),
+                                    weak_tls_layout.0,
+                                    weak_tls_layout.1,
+                                )
+                                .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?;
+                            weak_tls_base = Some(pointer);
+                            pointer
+                        },
+                    }
+                } else {
+                    Pointer::NULL
+                };
+                globals.push(pointer);
                 continue;
             }
             let kind = if global.init.is_none() {

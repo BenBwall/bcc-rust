@@ -197,6 +197,97 @@ int main(void) {
 
 const ALIASES_OUTPUT: (i32, &str) = (0, "14 12 21 1\n");
 
+/// ELF TLS relocations resolve an undefined weak symbol to offset zero
+/// from the thread base. Two such symbols therefore have the same nonnull
+/// address, unlike an ordinary undefined weak datum. Keep the address
+/// queries in separate non-inlined functions so optimized comparisons
+/// exercise the runtime addresses, as well as constant propagation.
+/// GNU extension: Drepper, "ELF Handling For Thread-Local Storage".
+const UNDEFINED_WEAK_TLS: &str = r#"
+int printf(const char *, ...);
+extern __thread int first __attribute__((weak));
+extern __thread long second __attribute__((weak));
+extern int ordinary __attribute__((weak));
+__attribute__((noinline)) int *first_address(void) { return &first; }
+__attribute__((noinline)) long *second_address(void) { return &second; }
+int main(void) {
+    printf("%d %d %d %d %d %d %d\n", first_address() != 0, second_address() != 0,
+           (void *)first_address() == (void *)second_address(), &ordinary == 0,
+           &first != 0, &second != 0, (void *)&first == (void *)&second);
+    return 0;
+}
+"#;
+
+#[test]
+fn undefined_weak_thread_local_addresses_match_native_elf() {
+    let expected = (0, "1 1 1 1 1 1 1\n");
+    for target in [Target::LinuxGnu, Target::LinuxMusl] {
+        for (optimize, profile) in STAGES {
+            let actual = with_module(UNDEFINED_WEAK_TLS, target, optimize, profile, interpret);
+            assert_eq!(
+                (actual.0, actual.1.as_str()),
+                expected,
+                "{target:?} {optimize} {profile:?}"
+            );
+        }
+    }
+    let Some(target @ (Target::LinuxGnu | Target::LinuxMusl)) = host() else {
+        return;
+    };
+    let toolchain = Toolchain::bundled(target).expect("bundled Clang for ELF weak TLS oracle");
+    let directory = TempDir::new("undefined-weak-tls");
+    for optimize in [false, true] {
+        let executable = directory.join(format!("weak-tls-native-{optimize}.exe"));
+        with_module(
+            UNDEFINED_WEAK_TLS,
+            target,
+            optimize,
+            Profile::PostAbi,
+            |module, _| {
+                let mut assembly = String::new();
+                crate::backend::native::emit_assembly(module, target, &mut assembly).unwrap();
+                crate::backend::native::assemble(
+                    &assembly,
+                    &executable,
+                    target,
+                    OutputKind::Executable,
+                )
+                .unwrap();
+            },
+        );
+        let actual = run_native(&executable);
+        assert_eq!((actual.0, actual.1.as_str()), expected, "native {optimize}");
+    }
+    for arm in &ARMS {
+        let executable = directory.join(format!("weak-tls-{}.exe", arm.name));
+        with_module(
+            UNDEFINED_WEAK_TLS,
+            target,
+            arm.bcc,
+            Profile::PostAbi,
+            |module, _| {
+                compile_module(
+                    module,
+                    &executable,
+                    options(arm, target, OutputKind::Executable),
+                )
+                .unwrap();
+            },
+        );
+        let actual = run_native(&executable);
+        assert_eq!((actual.0, actual.1.as_str()), expected, "{}", arm.name);
+    }
+    for (name, output) in clang_runs(
+        &toolchain,
+        &directory,
+        "weak-tls",
+        UNDEFINED_WEAK_TLS,
+        target,
+    ) {
+        assert_eq!((output.0, output.1.as_str()), expected, "{name}");
+    }
+}
+
 #[test]
 fn thread_local_aliases_and_weak_objects_match_clang() {
     for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {

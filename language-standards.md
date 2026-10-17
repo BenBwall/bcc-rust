@@ -1395,16 +1395,21 @@ Implemented meanings, with Clang's applicability diagnostics:
   target's, which Clang accepts and emits as an alias of the wrong storage,
   is refused.
 - `weak` gives definitions weak linkage and declarations `extern_weak`
-  linkage, so an undefined weak function or object has a null address, on
-  every target: bundled Clang emits the same LLVM linkage for COFF, where LLD
+  linkage, so an undefined weak function or non-thread-local object has a
+  null address on every target: bundled Clang emits the same LLVM linkage for COFF, where LLD
   resolves it as a weak external (checked by linking with Clang-compiled
   units on x86_64-w64-windows-gnu and, under WSL, x86_64-unknown-linux-gnu).
   Internal or no linkage is an error. Thread-local objects keep their thread
   storage: a weak definition is a weak `thread_local` global and a weak
   declaration an `extern_weak` one, as in Clang. Natively the address of an
-  undefined weak thread-local object is computed from the thread's TLS
-  block and is not reliably null, with Clang as with bcc; the interpreter
-  gives it the null address of any undefined weak object. The bcc inliner never inlines a weak
+  undefined weak thread-local object on ELF is computed from the thread's TLS
+  block with offset zero, with Clang as with bcc. The interpreter models
+  that shared nonnull thread base, so different unresolved weak TLS names
+  have equal addresses, while ordinary undefined weak symbols remain null.
+  The unresolved TLS address has no initialized object storage; a data
+  access reports the missing definition. COFF cannot link an unresolved
+  weak TLS address: LLD rejects its section-relative relocation to an
+  absolute symbol. The bcc inliner never inlines a weak
   definition; the interpreter resolves a weak declaration to its default
   host function when the host provides one, else to null.
 - `section("name")`, `used`, `visibility("default"|"hidden"|"internal"|
