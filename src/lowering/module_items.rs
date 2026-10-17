@@ -982,7 +982,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
     }
 
-    pub(super) fn into_module(self) -> Module<'ir> {
+    pub(super) fn into_module(mut self) -> Module<'ir> {
+        self.settle_dll_storage();
         self.module
     }
 }

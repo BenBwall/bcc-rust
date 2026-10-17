@@ -59,6 +59,7 @@ use self::{
 };
 use crate::{
     ir::{
+        DllStorage,
         Linkage,
         Module,
         Symbol,
@@ -103,26 +104,36 @@ pub(crate) fn defines(module: &Module<'_>, symbol: Symbol) -> bool {
     }
 }
 
-/// Whether code on `target` reaches data `symbol` through a `.refptr` stub,
-/// a pointer-sized constant holding its address, as Clang does on COFF: a
-/// weak declaration, whose address may be null, and on MinGW a global the
-/// module does not define, which may be a DLL's data. LLD's MinGW
-/// auto-import then relocates the stub's 64-bit address when the DLL loads,
-/// wherever it lies; a 32-bit RIP-relative reference to the data itself
-/// could not reach a DLL loaded more than 2 GiB from the executable.
-/// Microsoft's linker does not auto-import, so on MSVC such data needs
-/// `__declspec(dllimport)`, and an undefined global is addressed directly,
-/// as Clang addresses it.
-/// LLD: "MinGW auto-import"; Microsoft Learn, "PE Format", base relocations.
+/// Whether code on `target` reaches `symbol` through a pointer-sized
+/// constant holding its address, as Clang does on COFF: the import address
+/// table entry `__imp_name` of a `dllimport` declaration, which the loader
+/// fills in, or else a `.refptr` stub for a weak declaration, whose address
+/// may be null, and on MinGW for a global the module does not define, which
+/// may be a DLL's data. LLD's MinGW auto-import then relocates the stub's
+/// 64-bit address when the DLL loads, wherever it lies; a 32-bit
+/// RIP-relative reference to the data itself could not reach a DLL loaded
+/// more than 2 GiB from the executable. Microsoft's linker does not
+/// auto-import, so on MSVC such data needs `__declspec(dllimport)`, and an
+/// undefined global is otherwise addressed directly, as Clang addresses it.
+/// LLD: "MinGW auto-import"; Microsoft Learn, "PE Format", base relocations,
+/// and "dllexport, dllimport".
 pub(crate) fn through_stub(module: &Module<'_>, target: Target, symbol: Symbol) -> bool {
     match target {
         | Target::LinuxGnu | Target::LinuxMusl => false,
-        | Target::WindowsMsvc => weak_declaration(module, symbol),
+        | Target::WindowsMsvc => imported(module, symbol) || weak_declaration(module, symbol),
         | Target::WindowsGnu =>
-            weak_declaration(module, symbol)
+            imported(module, symbol)
+                || weak_declaration(module, symbol)
                 || matches!(symbol, Symbol::Global(global)
                     if !defines(module, symbol) && !module.global(global).thread_local),
     }
+}
+
+/// Whether `symbol` is a `dllimport` declaration, which code reaches only
+/// through its import address table entry `__imp_name`.
+/// MSVC extension: Microsoft Learn, "dllexport, dllimport".
+pub(crate) fn imported(module: &Module<'_>, symbol: Symbol) -> bool {
+    module.symbol_attributes(symbol).dll == DllStorage::Import && !defines(module, symbol)
 }
 
 /// Whether `symbol` is a weak declaration, which may stay undefined. An

@@ -50,6 +50,7 @@ use super::{
         AggregateLayout,
         AggregateParam,
         AggregateScalar,
+        DllStorage,
         ExtendedParam,
         Extension,
         FirstMember,
@@ -279,12 +280,12 @@ fn parse_global_header<'t>(
     ))
 }
 
-/// `[hidden|protected] [section "name"] [used] [alias @target]`, with the
-/// target resolved once
-/// every symbol is declared.
+/// `[hidden|protected] [dllimport|dllexport] [section "name"] [used]
+/// [alias @target]`, with the target resolved once every symbol is declared.
 #[derive(Clone, Copy)]
 struct WrittenAttributes<'t> {
     visibility: Visibility,
+    dll:        DllStorage,
     section:    Option<&'t str>,
     used:       bool,
     alias:      Option<Token<'t>>,
@@ -299,6 +300,13 @@ impl<'t> WrittenAttributes<'t> {
         } else {
             Visibility::Default
         };
+        let dll = if cursor.eat(TokenKind::Ident("dllimport")) {
+            DllStorage::Import
+        } else if cursor.eat(TokenKind::Ident("dllexport")) {
+            DllStorage::Export
+        } else {
+            DllStorage::Default
+        };
         let section = if cursor.eat(TokenKind::Ident("section")) {
             Some(cursor.string()?.1)
         } else {
@@ -312,6 +320,7 @@ impl<'t> WrittenAttributes<'t> {
         };
         Ok(Self {
             visibility,
+            dll,
             section,
             used,
             alias,
@@ -336,6 +345,7 @@ impl<'t> WrittenAttributes<'t> {
             section: self.section,
             used: self.used,
             visibility: self.visibility,
+            dll: self.dll,
         })
     }
 }
@@ -1281,7 +1291,7 @@ impl<'t> Cursor<'_, 't> {
             | TokenKind::Ident(name) => Linkage::from_name(name),
             | _ => None,
         }
-        .ok_or_else(|| token.expected("`external`, `internal` or `weak`"))
+        .ok_or_else(|| token.expected("`external`, `internal`, `weak`, `selectany` or `linkonce`"))
     }
 
     /// Any flag names that follow.

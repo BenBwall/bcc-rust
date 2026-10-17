@@ -351,8 +351,8 @@ impl<'ir> Module<'ir> {
         })
     }
 
-    /// ` hidden`/` protected`, ` section "name"`, ` used` and
-    /// ` alias @target`, each when present.
+    /// ` hidden`/` protected`, ` dllimport`/` dllexport`, ` section
+    /// "name"`, ` used` and ` alias @target`, each when present.
     fn display_symbol_attributes<'a>(
         &'a self,
         attributes: SymbolAttributes<'a>,
@@ -360,6 +360,9 @@ impl<'ir> Module<'ir> {
         fmt::from_fn(move |f| {
             if let Some(visibility) = attributes.visibility.keyword() {
                 write!(f, " {visibility}")?;
+            }
+            if let Some(dll) = attributes.dll.keyword() {
+                write!(f, " {dll}")?;
             }
             if let Some(section) = attributes.section {
                 write!(f, " section \"{section}\"")?;

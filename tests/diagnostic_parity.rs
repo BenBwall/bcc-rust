@@ -78,17 +78,16 @@ mod tests {
                         "ignored-attributes",
                     ),
                 ] {
-                    // Clang ignores wrapped declspec names on Windows;
-                    // bcc's existing normalization there is separate policy.
-                    if windows && name.starts_with("__") && group == "ignored-attributes" {
-                        continue;
-                    }
+                    // `__declspec` matches names exactly, so the wrapped
+                    // GNU spellings are unsupported there even on Windows.
+                    let declspec = group == "ignored-attributes";
+                    let applies = windows && !(declspec && name.starts_with("__"));
                     let tag = format!("-W{group}]");
                     for (option, warning, error) in [
-                        (String::new(), !windows, false),
+                        (String::new(), !applies, false),
                         (format!("-Wno-{group}"), false, false),
-                        (format!("-Wno-{other}"), !windows, false),
-                        (format!("-Werror={group}"), false, !windows),
+                        (format!("-Wno-{other}"), !applies, false),
+                        (format!("-Werror={group}"), false, !applies),
                     ] {
                         let mut flags = vec!["-std=c17", "-fms-extensions", target];
                         if !option.is_empty() {

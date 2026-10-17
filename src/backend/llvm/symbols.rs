@@ -1,10 +1,10 @@
 //! Module symbols as LLVM sees them: functions and globals with their
-//! linkage, alignment and section, aliases created once their targets
-//! exist, and the special `llvm.global_ctors`, `llvm.global_dtors` and
-//! `llvm.compiler.used` (ELF) or `llvm.used` (COFF) arrays, which match
-//! bundled Clang's output for the GNU attributes.
-//! GNU extension: GCC manual, "Common Function Attributes" and "Common
-//! Variable Attributes" (alias, constructor, destructor, section, used,
+//! linkage, COMDAT, alignment, section, visibility and DLL storage,
+//! aliases created once their targets exist, and the special
+//! `llvm.global_ctors`, `llvm.global_dtors` and `llvm.compiler.used` (ELF) or
+//! `llvm.used` (COFF) arrays, which match bundled Clang's output for the GNU
+//! attributes. GNU extension: GCC manual, "Common Function Attributes" and
+//! "Common Variable Attributes" (alias, constructor, destructor, section, used,
 //! weak). <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 
 use super::{
@@ -20,6 +20,7 @@ use super::{
 };
 use crate::{
     ir::{
+        DllStorage,
         Entity,
         InitKind,
         Linkage as IrLinkage,
@@ -68,6 +69,9 @@ pub(super) fn declare<'id, 'a, 'm>(
         if let Some(linkage) = linkage(function.linkage, function.body.is_some()) {
             api.linkage(value, linkage);
         }
+        if function.linkage.comdat() && function.body.is_some() {
+            api.own_comdat(value, api.name(function.name));
+        }
         if let Some(align) = function.align {
             api.alignment(value, align.bytes());
         }
@@ -87,9 +91,9 @@ pub(super) fn declare<'id, 'a, 'm>(
         api.constant_global(value, global.constant);
         if let Some(linkage) = linkage(global.linkage, global.init.is_some()) {
             api.linkage(value, linkage);
-            if linkage == Linkage::WeakOdr {
-                api.own_comdat(value, api.name(global.name));
-            }
+        }
+        if global.linkage.comdat() && global.init.is_some() {
+            api.own_comdat(value, api.name(global.name));
         }
         if global.thread_local {
             // In an ELF executable Clang marks a definition `dso_local`, so
@@ -164,11 +168,13 @@ pub(super) fn declare<'id, 'a, 'm>(
 /// default. An undefined internal function stays an external declaration.
 fn linkage(linkage: IrLinkage, defined: bool) -> Option<Linkage> {
     match (linkage, defined) {
-        | (IrLinkage::External, _) | (IrLinkage::Internal | IrLinkage::SelectAny, false) => None,
+        | (IrLinkage::External, _)
+        | (IrLinkage::Internal | IrLinkage::SelectAny | IrLinkage::LinkOnce, false) => None,
         | (IrLinkage::Internal, true) => Some(Linkage::Internal),
         | (IrLinkage::Weak, true) => Some(Linkage::Weak),
         | (IrLinkage::Weak, false) => Some(Linkage::ExternWeak),
         | (IrLinkage::SelectAny, true) => Some(Linkage::WeakOdr),
+        | (IrLinkage::LinkOnce, true) => Some(Linkage::LinkOnceOdr),
     }
 }
 
@@ -179,11 +185,18 @@ fn sections<'id>(api: &Session<'id>, value: Val<'id>, attributes: SymbolAttribut
     visibility(api, value, attributes);
 }
 
+/// ELF visibility and Windows DLL storage, which aliases share with the
+/// definitions they name.
 fn visibility<'id>(api: &Session<'id>, value: Val<'id>, attributes: SymbolAttributes<'_>) {
     match attributes.visibility {
         | Visibility::Default => {},
         | Visibility::Hidden => api.hidden(value, false),
         | Visibility::Protected => api.hidden(value, true),
+    }
+    match attributes.dll {
+        | DllStorage::Default => {},
+        | DllStorage::Import => api.dll_storage(value, false),
+        | DllStorage::Export => api.dll_storage(value, true),
     }
 }
 
@@ -212,6 +225,7 @@ fn alias_linkage<'id>(api: &Session<'id>, value: Val<'id>, linkage: IrLinkage) {
         | IrLinkage::Internal => api.linkage(value, Linkage::Internal),
         | IrLinkage::Weak => api.linkage(value, Linkage::Weak),
         | IrLinkage::SelectAny => api.linkage(value, Linkage::WeakOdr),
+        | IrLinkage::LinkOnce => api.linkage(value, Linkage::LinkOnceOdr),
     }
 }
 

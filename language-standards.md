@@ -317,9 +317,14 @@ require emission if all preceding file-scope declarations specified `inline`
 without `extern`. Calls, address references, `used`, constructors and destructors
 keep the body and its dependencies. An applicable `dllexport` at or before the
 body keeps an ordinary MSVC inline definition; an attribute introduced only
-after the body remains ignored. This retention support does not emit DLL
-export directives. Reached MSVC bodies still use strong linkage rather than
-Clang's COMDAT linkage. Explicit `gnu_inline` retains its separate GNU rules.
+after the body remains ignored. Reached MSVC inline bodies use Clang's COMDAT
+linkage: `linkonce_odr`, or `weak_odr` once an explicit `extern` or
+`dllexport` requests the body, so units that each emit one link to a single
+copy. On MinGW only `dllexport` makes an inline body an external `weak_odr`
+definition, which may then reference internal functions and define
+modifiable static objects. An imported inline body defines nothing, so an
+alias may not target it. Explicit `gnu_inline` retains its separate GNU
+rules.
 
 BCC's target selection leaves Microsoft compatibility opt-in; Clang enables
 it by default for the MSVC target. Compare inline emission with matching
@@ -1468,8 +1473,8 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
-| Partial retention support | `dllexport` at or before an ordinary MSVC inline body retains that definition and its dependencies; DLL export directives remain unsupported |
-| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, and the C23 standard attributes; see the catalog for the full list |
+| Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and target-specific names on other targets |
 
 GNU `error` and `warning` require one unevaluated string argument and apply
@@ -1498,16 +1503,21 @@ and not the record), `allocate` is `section` (also on function-local statics),
 `selectany` makes an external data definition `weak_odr` in a comdat of its
 own name, as Clang emits it, so units that each define it link to one object
 (on a function or data without external linkage it is Clang's error; the
-native back end refuses it; a `selectany` declaration without an initializer,
+native back end emits it in a COMDAT section; a `selectany` declaration without an initializer,
 `extern` included, defines its object zero-initialized, as Clang does, so a
 later initialized declaration is a redefinition and the type must be
 complete), `thread` is thread storage
 duration (also in the GNU spelling MinGW's `__declspec` macro produces; see
 the thread-local storage notes), `naked` is refused, `noinline` is the GNU
 attribute, and `dllimport` and `dllexport` are accepted on Windows and
-warn as ignored on other targets. `dllexport` has the limited MSVC inline
-retention support described above; DLL import/export code generation remains
-unsupported. `noreturn`, `nothrow`, `deprecated`,
+warn as ignored on other targets. Their applicability and redeclaration
+rules follow Clang's: a redeclaration adding one warns, or is an error after
+an evaluated use (a constant `sizeof` operand is no use), and one dropping
+`dllimport` drops it. Code generation exports what the declarations end
+exporting (an `/EXPORT` or `-export` linker directive) and imports, through
+`__imp_name`, what the unit's last evaluated reference in emitted code named
+imported; `dllexport` also retains MSVC inline bodies as described above.
+`noreturn`, `nothrow`, `deprecated`,
 `restrict`, `noalias`, `novtable`, `uuid` and similar
 declaration annotations are accepted. Space-separated modifiers, as in
 `__declspec(selectany allocate("s"))`, are one list. Other names, such as the

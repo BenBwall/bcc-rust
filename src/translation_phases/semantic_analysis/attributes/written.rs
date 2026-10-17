@@ -22,6 +22,7 @@ pub(super) struct WrittenAttribute<'a> {
     /// `gnu` in `[[gnu::weak]]`, without surrounding underscores.
     pub(super) namespace: Option<&'a str>,
     /// The name without surrounding underscores: `weak` for `__weak__`.
+    /// A `__declspec` name keeps its spelling, as Clang matches it.
     pub(super) name:      &'a str,
     /// The name's position in the specifier's tokens, which keys parsed
     /// argument expressions.
@@ -151,7 +152,11 @@ pub(super) fn written<'a>(
                     }
                     return Some(WrittenAttribute {
                         namespace,
-                        name: name.trim_matches('_'),
+                        name: if specifier.syntax == AttributeSyntax::Msvc {
+                            name
+                        } else {
+                            name.trim_matches('_')
+                        },
                         index: name_index,
                         arguments,
                         source: tokens[name_index].source_vectors,

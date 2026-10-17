@@ -30,6 +30,7 @@ use super::{
             AttributeRefusal,
             BindingId,
             CleanupKind,
+            DllStorage,
             EntityAttributes,
             EntityId,
             InitFunctionFacts,
@@ -49,6 +50,7 @@ use super::{
         Rule,
         rule,
     },
+    dll::DllState,
     written::WrittenAttribute,
 };
 use crate::{
@@ -170,6 +172,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                 ),
                 | Rule::SelectAny => self.select_any_attribute(subject, attribute),
+                | Rule::DllImport => self.dll_attribute(subject, attribute, DllStorage::Import),
+                | Rule::DllExport => self.dll_attribute(subject, attribute, DllStorage::Export),
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | _ => {},
@@ -881,7 +885,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    fn ignored(&mut self, attribute: WrittenAttribute<'_>) {
+    pub(super) fn ignored(&mut self, attribute: WrittenAttribute<'_>) {
         let name = self.context.string_cache.intern(attribute.name);
         self.error(
             SemanticErrorKind::IgnoredAttribute,
@@ -891,7 +895,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
     }
 
-    fn no_arguments(&mut self, attribute: WrittenAttribute<'_>) -> bool {
+    pub(super) fn no_arguments(&mut self, attribute: WrittenAttribute<'_>) -> bool {
         if attribute.arguments.is_none() {
             return true;
         }
@@ -1128,6 +1132,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        self.finish_dll();
         let mut entities = ArenaMap::with_hasher_in(FxBuildHasher, tu);
         entities.extend(self.attributes.entities.iter().map(|(&k, &v)| (k, v)));
         SymbolFacts {
@@ -1179,6 +1184,10 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// The attribute names written on an entity's declarations up to and
     /// including its definition.
     before_definition: ArenaMap<'s, (EntityId, StringCacheId), ()>,
+    /// The DLL attributes of the declaration being processed (`dll.rs`).
+    pub(super) pending_dll: ArenaVec<'s, (DllStorage, SourceVectors)>,
+    /// Each entity's DLL storage so far.
+    pub(super) dll: ArenaMap<'s, EntityId, DllState>,
 }
 
 impl<'tu, 's> AttributeState<'tu, 's> {
@@ -1195,6 +1204,8 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             pending_cleanups:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             before_definition:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             initializing_jumps: ArenaVec::new_in(scratch),
+            pending_dll:        ArenaVec::new_in(scratch),
+            dll:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 

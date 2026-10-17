@@ -44,6 +44,7 @@ use std::fmt::{
 use super::{
     defines,
     frame::Frame,
+    imported,
     mir::{
         Base,
         Callee,
@@ -63,6 +64,7 @@ use super::{
 };
 use crate::{
     ir::{
+        DllStorage,
         Entity,
         FuncId,
         GlobalInit,
@@ -125,6 +127,13 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         let name = Name(function.name);
         let align = function.align.map_or(4, |align| align.log2().max(4));
         match function.attributes.section {
+            | _ if function.linkage.comdat() => self.comdat_section(
+                function.attributes.section,
+                ".text",
+                if self.elf { "ax" } else { "xr" },
+                false,
+                name,
+            )?,
             | Some(section) if self.elf =>
                 writeln!(self.out, "\t.section\t{},\"ax\",@progbits", Name(section))?,
             | Some(section) => writeln!(self.out, "\t.section\t{},\"xr\"", Name(section))?,
@@ -187,13 +196,51 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         Ok(())
     }
 
+    /// The COMDAT section of a `selectany` or `linkonce` definition `name`:
+    /// the requested section or `base`, keyed by the symbol, as Clang writes
+    /// it. ELF names a group (`.text.f`, `"axG"`, `comdat`); COFF selects any
+    /// one definition (`discard`), in a section MinGW suffixes with `$f`.
+    /// ELF: System V gABI, "COMDAT Group"; COFF: Microsoft Learn, "PE
+    /// Format", COMDAT sections.
+    fn comdat_section(
+        &mut self,
+        section: Option<&str>,
+        base: &str,
+        flags: &str,
+        nobits: bool,
+        name: Name<'_>,
+    ) -> fmt::Result {
+        let suffix = match self.target {
+            | Target::LinuxGnu | Target::LinuxMusl => ".",
+            | Target::WindowsGnu => "$",
+            | Target::WindowsMsvc => "",
+        };
+        write!(self.out, "\t.section\t")?;
+        match section {
+            | Some(section) => write!(self.out, "{}", Name(section))?,
+            | None if suffix.is_empty() => write!(self.out, "{base}")?,
+            | None if name.plain() => write!(self.out, "{base}{suffix}{}", name.0)?,
+            | None => write!(self.out, "\"{base}{suffix}{}\"", name.0)?,
+        }
+        if self.elf {
+            let kind = if nobits { "nobits" } else { "progbits" };
+            writeln!(self.out, ",\"{flags}G\",@{kind},{name},comdat")
+        } else {
+            writeln!(self.out, ",\"{flags}\",discard,{name}")
+        }
+    }
+
     /// A symbol's binding and, on ELF, its visibility: `.globl` for an
     /// external one, `.weak` for a weak one, nothing for an internal one.
+    /// A COMDAT definition is global on COFF, where its section selects one
+    /// copy, and weak on ELF, as Clang writes it.
     fn binding(&mut self, name: Name<'_>, linkage: Linkage, visibility: Visibility) -> fmt::Result {
         match linkage {
-            | Linkage::External => writeln!(self.out, "\t.globl\t{name}")?,
             | Linkage::Weak => writeln!(self.out, "\t.weak\t{name}")?,
-            | Linkage::SelectAny => unreachable!("support refuses selectany definitions"),
+            | Linkage::SelectAny | Linkage::LinkOnce if self.elf =>
+                writeln!(self.out, "\t.weak\t{name}")?,
+            | Linkage::External | Linkage::SelectAny | Linkage::LinkOnce =>
+                writeln!(self.out, "\t.globl\t{name}")?,
             | Linkage::Internal => {},
         }
         match visibility {
@@ -491,12 +538,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             ),
             | MInst::Call { callee, .. } => match callee {
                 | Callee::Symbol(SymbolRef::Ir(symbol))
-                    if !self.elf && weak_declaration(self.module, symbol) =>
-                    writeln!(
-                        out,
-                        "\tcallq\t*{}(%rip)",
-                        RefPtr(self.module.symbol_name(symbol))
-                    ),
+                    if !self.elf
+                        && (imported(self.module, symbol)
+                            || weak_declaration(self.module, symbol)) =>
+                    writeln!(out, "\tcallq\t*{}(%rip)", Stub::of(self.module, symbol)),
                 | Callee::Symbol(symbol) => {
                     let name = symbol_name(self.module, symbol);
                     let plt = self.elf && !defined(self.module, symbol);
@@ -724,7 +769,31 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             let name = Name(global.name);
             let relocated =
                 matches!(init, GlobalInit::Bytes { relocations, .. } if !relocations.is_empty());
-            if let Some(section) = global.attributes.section {
+            if global.linkage.comdat() {
+                let zero = init == GlobalInit::Zero;
+                let read_only = global.constant && !relocated;
+                let (base, flags) = match (self.elf, global.thread_local) {
+                    | (false, true) => (".tls$", "dw"),
+                    | (true, true) if zero => (".tbss", "awT"),
+                    | (true, true) => (".tdata", "awT"),
+                    | (true, false) if global.constant && relocated => (".data.rel.ro", "aw"),
+                    | (true, false) if read_only => (".rodata", "a"),
+                    | (true, false) if zero => (".bss", "aw"),
+                    | (true, false) => (".data", "aw"),
+                    | (false, false) if global.constant => (".rdata", "dr"),
+                    | (false, false) if zero => (".bss", "bw"),
+                    | (false, false) => (".data", "dw"),
+                };
+                let flags = match (global.attributes.section, self.elf) {
+                    | (Some(_), true) if read_only => "a",
+                    | (Some(_), true) => "aw",
+                    | (Some(_), false) if read_only => "dr",
+                    | (Some(_), false) => "dw",
+                    | (None, _) => flags,
+                };
+                let nobits = self.elf && zero && global.attributes.section.is_none();
+                self.comdat_section(global.attributes.section, base, flags, nobits, name)?;
+            } else if let Some(section) = global.attributes.section {
                 let section = Name(section);
                 // A position-independent executable relocates addresses at
                 // load time, so a relocated constant needs a writable section.
@@ -737,7 +806,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 }
             }
             let section = match (global.constant, init) {
-                | _ if global.attributes.section.is_some() => "",
+                | _ if global.attributes.section.is_some() || global.linkage.comdat() => "",
                 | _ if global.thread_local && !self.elf => "\t.section\t.tls$,\"dw\"",
                 | (_, GlobalInit::Zero) if global.thread_local =>
                     "\t.section\t.tbss,\"awT\",@nobits",
@@ -801,6 +870,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         self.aliases()?;
         self.weak_declarations()?;
         self.init_functions()?;
+        if !self.elf {
+            self.exports()?;
+        }
         if self.elf {
             writeln!(self.out, "\t.section\t.note.GNU-stack,\"\",@progbits")?;
         }
@@ -849,28 +921,85 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     /// through which code reaches it or MinGW data the module does not
     /// define, as Clang writes them. A weak declaration's stub is written
     /// whether or not code uses it; other data gets one only where code
-    /// uses it, since the stub refers to the data.
+    /// uses it, since the stub refers to the data. A `dllimport`
+    /// declaration's `__imp_` pointer comes from the import library instead.
     fn weak_declarations(&mut self) -> fmt::Result {
         let module = self.module;
         let functions = module.functions().map(|(id, _)| Symbol::Function(id));
         let globals = module.globals().map(|(id, _)| Symbol::Global(id));
         for symbol in functions.chain(globals) {
             let weak = weak_declaration(module, symbol);
-            let imported =
+            let auto_imported =
                 !weak && self.stubs.contains(&symbol) && through_stub(module, self.target, symbol);
-            if !weak && !imported {
+            if !weak && !auto_imported {
                 continue;
             }
             let name = module.symbol_name(symbol);
             if weak {
                 writeln!(self.out, "\t.weak\t{}", Name(name))?;
             }
-            if !self.elf {
-                let stub = RefPtr(name);
+            if !self.elf && !imported(module, symbol) {
+                let stub = Stub::of(module, symbol);
                 writeln!(self.out, "\t.section\t.rdata${stub},\"dr\",discard,{stub}")?;
                 writeln!(self.out, "\t.p2align\t3\n\t.globl\t{stub}\n{stub}:")?;
                 writeln!(self.out, "\t.quad\t{}", Name(name))?;
             }
+        }
+        Ok(())
+    }
+
+    /// The `/EXPORT` (MSVC) or `-export` (MinGW) linker directive of each
+    /// `dllexport` definition in `.drectve`, marking data `DATA`, in
+    /// LLVM's order: functions, globals, then aliases.
+    /// MSVC extension: Microsoft Learn, "dllexport, dllimport" and
+    /// "/EXPORT (Exports a Function)".
+    fn exports(&mut self) -> fmt::Result {
+        let module = self.module;
+        let exported = || {
+            let functions = module
+                .functions()
+                .map(|(_, function)| (function.name, function.attributes, false));
+            let globals = module
+                .globals()
+                .map(|(_, global)| (global.name, global.attributes, true));
+            functions
+                .chain(globals)
+                .filter(|&(_, attributes, _)| attributes.dll == DllStorage::Export)
+        };
+        let definitions = exported().filter(|&(_, attributes, _)| attributes.alias.is_none());
+        let aliases = exported().filter_map(|(name, attributes, _)| {
+            Some((
+                name,
+                attributes,
+                matches!(attributes.alias?, Symbol::Global(_)),
+            ))
+        });
+        let mut first = true;
+        for (name, _, data) in definitions.chain(aliases) {
+            if first {
+                writeln!(self.out, "\t.section\t.drectve,\"yni\"")?;
+                first = false;
+            }
+            let (option, data_flag) = if self.target == Target::WindowsMsvc {
+                ("/EXPORT", ",DATA")
+            } else {
+                ("-export", ",data")
+            };
+            // LLVM quotes a name with characters other than letters,
+            // digits, `_` and `@`.
+            let quote = if name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'@')
+            {
+                ""
+            } else {
+                "\\\""
+            };
+            writeln!(
+                self.out,
+                "\t.ascii\t\" {option}:{quote}{name}{quote}{}\"",
+                if data { data_flag } else { "" }
+            )?;
         }
         Ok(())
     }
@@ -932,16 +1061,31 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
 /// The priority of a constructor or destructor that names none.
 const DEFAULT_PRIORITY: u16 = 65535;
 
-/// The `.refptr` stub of a COFF weak declaration or imported datum: a
-/// pointer-sized constant holding its address.
-struct RefPtr<'a>(&'a str);
+/// The pointer-sized constant holding a COFF symbol's address that code
+/// loads ([`through_stub`]): the import address table entry `__imp_name` of
+/// a `dllimport` declaration, else the `.refptr` stub of a weak declaration
+/// or MinGW auto-imported datum.
+struct Stub<'a> {
+    name:   &'a str,
+    import: bool,
+}
 
-impl fmt::Display for RefPtr<'_> {
+impl<'a> Stub<'a> {
+    fn of(module: &Module<'a>, symbol: Symbol) -> Self {
+        Self {
+            name:   module.symbol_name(symbol),
+            import: imported(module, symbol),
+        }
+    }
+}
+
+impl fmt::Display for Stub<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if Name(self.0).plain() {
-            write!(f, ".refptr.{}", self.0)
+        let prefix = if self.import { "__imp_" } else { ".refptr." };
+        if Name(self.name).plain() {
+            write!(f, "{prefix}{}", self.name)
         } else {
-            write!(f, "\".refptr.{}\"", self.0)
+            write!(f, "\"{prefix}{}\"", self.name)
         }
     }
 }
@@ -1089,7 +1233,7 @@ impl fmt::Display for Op<'_, '_, '_> {
                         let SymbolRef::Ir(symbol) = symbol else {
                             unreachable!("COFF reaches only IR symbols through a stub")
                         };
-                        write!(f, "{}(%rip)", RefPtr(module.symbol_name(symbol)))
+                        write!(f, "{}(%rip)", Stub::of(module, symbol))
                     },
                     | Base::GotTpoff(symbol) =>
                         write!(f, "{}@GOTTPOFF(%rip)", symbol_name(module, symbol)),

@@ -108,7 +108,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.record_binding_use(index, name);
                     }
                     info.register = self.register_bindings.contains_key(&index);
-                    info.static_address = binding.duration == Duration::Static
+                    // The loader writes an imported object's address at
+                    // run time, so it is not an address constant; an
+                    // imported function's import thunk is (Clang).
+                    // C99: §6.6p9, p. 96; PDF p. 108.
+                    info.static_address = (binding.duration == Duration::Static
+                        && self.dll_storage(index) != Some(super::DllStorage::Import))
                         || binding.kind == BindingKind::Function;
                     info.category = match binding.kind {
                         | BindingKind::Function => ValueCategory::FunctionDesignator,

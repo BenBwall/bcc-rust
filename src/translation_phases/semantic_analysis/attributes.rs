@@ -42,6 +42,7 @@ mod abi_names;
 mod abi_types;
 mod call_diagnostics;
 mod catalog;
+mod dll;
 mod entities;
 mod functions;
 mod jumps;
@@ -78,6 +79,7 @@ use crate::{
     target::Target,
     translation_phases::{
         SourceVectors,
+        parsing::AttributeSyntax,
         preprocessing::KeywordTokenType,
     },
     util::bump::ArenaVec,
@@ -117,12 +119,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | None => attribute.name,
                 };
                 let name = self.context.string_cache.intern(spelling);
-                self.error(
-                    SemanticErrorKind::UnknownAttribute,
-                    attribute.source,
-                    Some(name),
-                    None,
-                );
+                // Clang reports every unknown `__declspec` name, wrapped
+                // GNU spellings included, as unsupported in that spelling.
+                let kind = if specifier.syntax == AttributeSyntax::Msvc {
+                    SemanticErrorKind::UnsupportedDeclspec
+                } else {
+                    SemanticErrorKind::UnknownAttribute
+                };
+                self.error(kind, attribute.source, Some(name), None);
                 continue;
             };
             let refusal = match rule {

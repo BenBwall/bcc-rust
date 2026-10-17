@@ -118,6 +118,7 @@ pub(crate) use module::{
     AggregateLayout,
     AggregateParam,
     AggregateScalar,
+    DllStorage,
     ExtendedParam,
     Extension,
     FirstMember,

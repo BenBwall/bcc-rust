@@ -242,6 +242,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         lowerer.finish_body()?;
         let FunctionLowerer { unit, draft, .. } = lowerer;
         emit::emit(draft, &mut unit.module, func, &mut unit.call_diagnostics)?;
+        unit.defines_symbol(crate::ir::Symbol::Function(func));
         if cfg!(debug_assertions) {
             let errors = verify_function(&unit.module, func, Profile::PreAbi, scratch);
             assert!(

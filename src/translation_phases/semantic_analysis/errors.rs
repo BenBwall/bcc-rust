@@ -513,6 +513,40 @@ pub(crate) enum SemanticErrorKind {
     /// text, so an encoding prefix has no effect.
     /// C23: §6.4.5p1, p. 67; PDF p. 80 (encoding prefixes).
     UnevaluatedStringPrefix,
+    /// Clang `-Wignored-attributes`: `__declspec` takes only the names
+    /// Clang lists in that spelling, without GNU underscore wrapping.
+    /// MSVC extension: Microsoft Learn, "`__declspec`".
+    UnsupportedDeclspec,
+    /// Clang `-Wignored-attributes`: MinGW does not import an inline
+    /// function. MSVC extension: Microsoft Learn, "dllexport, dllimport".
+    DllImportOnInline,
+    /// Clang `-Wignored-attributes`: on MinGW, an inline redeclaration
+    /// drops an earlier `dllimport`.
+    DllImportRedeclaredInline,
+    /// Clang `-Wdll-attribute-on-redeclaration`: a redeclaration adds
+    /// `dllimport` or `dllexport` to an entity declared without it.
+    DllAttributeOnRedeclaration,
+    /// Clang: once a variable is used, or a function is used and the new
+    /// attribute is `dllexport`, a redeclaration cannot add DLL storage.
+    DllAttributeAfterUse,
+    /// Clang `-Winconsistent-dllimport`: a redeclaration without
+    /// `dllimport` drops the earlier one.
+    DllImportDropped,
+    /// Clang `-Winconsistent-dllimport`: on the Microsoft ABI, a definition
+    /// without `dllimport` after an imported declaration is exported.
+    DllExportAdded,
+    /// Clang: DLL storage needs external linkage.
+    DllInternal,
+    /// Clang: thread-local data crosses no DLL boundary.
+    DllThreadLocal,
+    /// Clang: an imported function has only inline definitions here.
+    DllImportFunctionDefinition,
+    /// Clang: imported data is defined in another image.
+    DllImportDataDefinition,
+    /// Clang: an exported symbol cannot be hidden.
+    DllExportHidden,
+    /// Clang: an imported symbol has default visibility.
+    DllImportVisibility,
 }
 
 impl SemanticErrorKind {
@@ -522,7 +556,15 @@ impl SemanticErrorKind {
         use crate::configuration::DiagnosticGroup;
         match self {
             | Self::UnknownAttribute => Some(DiagnosticGroup::UnknownAttributes),
-            | Self::IgnoredAttribute => Some(DiagnosticGroup::IgnoredAttributes),
+            | Self::IgnoredAttribute
+            | Self::AttributeAfterDefinition
+            | Self::UnsupportedDeclspec
+            | Self::DllImportOnInline
+            | Self::DllImportRedeclaredInline => Some(DiagnosticGroup::IgnoredAttributes),
+            | Self::DllAttributeOnRedeclaration =>
+                Some(DiagnosticGroup::DllAttributeOnRedeclaration),
+            | Self::DllImportDropped | Self::DllExportAdded =>
+                Some(DiagnosticGroup::InconsistentDllimport),
             | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
             | _ => None,
         }
@@ -577,6 +619,18 @@ impl SemanticErrorKind {
             | Self::IndirectJumpCleanupScope => "indirect jump crosses a cleanup scope",
             | Self::AttributeAfterDefinition => "ignored after the definition",
             | Self::UnevaluatedStringPrefix => "prefix ignored",
+            | Self::UnsupportedDeclspec => "not a __declspec attribute",
+            | Self::DllImportOnInline | Self::DllImportRedeclaredInline =>
+                "inline function not imported",
+            | Self::DllAttributeOnRedeclaration | Self::DllAttributeAfterUse =>
+                "DLL storage added on a redeclaration",
+            | Self::DllImportDropped => "dllimport dropped",
+            | Self::DllExportAdded => "dllexport added",
+            | Self::DllInternal => "no external linkage",
+            | Self::DllThreadLocal => "thread-local",
+            | Self::DllImportFunctionDefinition => "imported function defined here",
+            | Self::DllImportDataDefinition => "imported data defined here",
+            | Self::DllExportHidden | Self::DllImportVisibility => "visibility conflicts",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
             | Self::PredefinedOutsideFunction => "used outside a function",
@@ -739,8 +793,20 @@ impl SemanticErrorKind {
             | Self::SwitchIntoCleanupScope
             | Self::IndirectJumpCleanupScope
             | Self::AttributeAfterDefinition
-            | Self::UnevaluatedStringPrefix =>
-                self.attribute_explanation(),
+            | Self::UnevaluatedStringPrefix
+            | Self::UnsupportedDeclspec
+            | Self::DllImportOnInline
+            | Self::DllImportRedeclaredInline
+            | Self::DllAttributeOnRedeclaration
+            | Self::DllAttributeAfterUse
+            | Self::DllImportDropped
+            | Self::DllExportAdded
+            | Self::DllInternal
+            | Self::DllThreadLocal
+            | Self::DllImportFunctionDefinition
+            | Self::DllImportDataDefinition
+            | Self::DllExportHidden
+            | Self::DllImportVisibility => self.attribute_explanation(),
             | Self::PointerConstraint(group) => (
                 match group {
                     | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
@@ -768,6 +834,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnknownAttributes
                     | crate::configuration::DiagnosticGroup::IgnoredAttributes
                     | crate::configuration::DiagnosticGroup::AttributeWarning
+                    | crate::configuration::DiagnosticGroup::DllAttributeOnRedeclaration
+                    | crate::configuration::DiagnosticGroup::InconsistentDllimport
                     | crate::configuration::DiagnosticGroup::UnknownStdcPragma
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
@@ -1570,6 +1638,66 @@ impl SemanticErrorKind {
                 "encoding prefix on an unevaluated string literal has no effect",
                 "Clang -Winvalid-unevaluated-string: the attribute reads the string's characters",
             ),
+            | Self::UnsupportedDeclspec => (
+                "__declspec attribute is not supported",
+                "Clang -Wignored-attributes: __declspec takes the names Clang lists for it, \
+                 spelled exactly",
+            ),
+            | Self::DllImportOnInline => (
+                "'dllimport' attribute ignored on inline function",
+                "Clang -Wignored-attributes: MinGW defines inline functions in each image that \
+                 uses them",
+            ),
+            | Self::DllImportRedeclaredInline => (
+                "redeclared inline; 'dllimport' attribute ignored",
+                "Clang -Wignored-attributes: MinGW defines inline functions in each image that \
+                 uses them",
+            ),
+            | Self::DllAttributeOnRedeclaration => (
+                "redeclaration should not add a DLL attribute",
+                "Clang -Wdll-attribute-on-redeclaration: declare dllimport or dllexport on the \
+                 first declaration",
+            ),
+            | Self::DllAttributeAfterUse => (
+                "redeclaration cannot add a DLL attribute",
+                "Clang: code before this redeclaration already reached the entity without it",
+            ),
+            | Self::DllImportDropped => (
+                "redeclared without 'dllimport' attribute: previous 'dllimport' ignored",
+                "Clang -Winconsistent-dllimport: every declaration of an imported entity must say \
+                 dllimport",
+            ),
+            | Self::DllExportAdded => (
+                "redeclared without 'dllimport' attribute: 'dllexport' attribute added",
+                "Clang -Winconsistent-dllimport: on the Microsoft ABI a definition of an imported \
+                 entity exports it",
+            ),
+            | Self::DllInternal => (
+                "must have external linkage when declared dllimport or dllexport",
+                "Microsoft Learn, dllexport, dllimport: only external symbols cross a DLL boundary",
+            ),
+            | Self::DllThreadLocal => (
+                "cannot be thread local when declared dllimport or dllexport",
+                "Microsoft Learn, dllexport, dllimport: each image has its own thread-local \
+                 storage",
+            ),
+            | Self::DllImportFunctionDefinition => (
+                "dllimport cannot be applied to non-inline function definition",
+                "Microsoft Learn, dllexport, dllimport: an imported function is defined in \
+                 another image",
+            ),
+            | Self::DllImportDataDefinition => (
+                "definition of dllimport data",
+                "Microsoft Learn, dllexport, dllimport: imported data is defined in another image",
+            ),
+            | Self::DllExportHidden => (
+                "hidden visibility cannot be applied to 'dllexport' declaration",
+                "Clang: an exported symbol is visible to other images",
+            ),
+            | Self::DllImportVisibility => (
+                "non-default visibility cannot be applied to 'dllimport' declaration",
+                "Clang: an imported symbol comes from another image",
+            ),
             | _ => ("invalid attribute", "GCC Attribute Syntax"),
         }
     }
@@ -1725,6 +1853,12 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PartialInitializerOverride
                 | SemanticErrorKind::AttributeAfterDefinition
                 | SemanticErrorKind::UnevaluatedStringPrefix
+                | SemanticErrorKind::UnsupportedDeclspec
+                | SemanticErrorKind::DllImportOnInline
+                | SemanticErrorKind::DllImportRedeclaredInline
+                | SemanticErrorKind::DllAttributeOnRedeclaration
+                | SemanticErrorKind::DllImportDropped
+                | SemanticErrorKind::DllExportAdded
         ) {
             ErrorSeverity::Warning
         } else {

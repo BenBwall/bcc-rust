@@ -190,6 +190,7 @@ impl<'ir> Module<'ir> {
             section:    attributes.section.map(|name| &*self.arena.alloc_str(name)),
             used:       attributes.used,
             visibility: attributes.visibility,
+            dll:        attributes.dll,
         };
         match symbol {
             | Symbol::Function(func) => self.functions[func].attributes = attributes,
@@ -825,10 +826,18 @@ pub(crate) enum Linkage {
     External,
     Internal,
     Weak,
-    /// A data definition that other units may repeat, of which the linker
-    /// keeps one (Microsoft `selectany`; LLVM `weak_odr` in a comdat of its
-    /// own name, as Clang emits it). Only a defined global has it.
+    /// A definition that other units may repeat with the same meaning, of
+    /// which the linker keeps one: Microsoft `selectany` data, and inline
+    /// functions that a Microsoft `extern` declaration or `dllexport` keeps.
+    /// LLVM `weak_odr` in a COMDAT of the symbol's own name, as Clang emits
+    /// them. Only a definition has it.
     SelectAny,
+    /// Like [`Self::SelectAny`], but a unit that does not reference the
+    /// definition may also drop it: the Microsoft external inline functions
+    /// that a unit emits only because it reaches them. LLVM `linkonce_odr`
+    /// in a COMDAT of the symbol's own name, as Clang emits them. Only a
+    /// definition has it.
+    LinkOnce,
 }
 
 impl Linkage {
@@ -838,13 +847,26 @@ impl Linkage {
             | Self::Internal => "internal",
             | Self::Weak => "weak",
             | Self::SelectAny => "selectany",
+            | Self::LinkOnce => "linkonce",
         }
     }
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
-        [Self::External, Self::Internal, Self::Weak, Self::SelectAny]
-            .into_iter()
-            .find(|linkage| linkage.name() == name)
+        [
+            Self::External,
+            Self::Internal,
+            Self::Weak,
+            Self::SelectAny,
+            Self::LinkOnce,
+        ]
+        .into_iter()
+        .find(|linkage| linkage.name() == name)
+    }
+
+    /// Whether the definition sits in a COMDAT of its own name, so that the
+    /// linker keeps one of the identical definitions other units repeat.
+    pub(crate) const fn comdat(self) -> bool {
+        matches!(self, Self::SelectAny | Self::LinkOnce)
     }
 }
 
@@ -864,6 +886,34 @@ pub(crate) struct SymbolAttributes<'ir> {
     pub(crate) used:       bool,
     /// ELF symbol visibility; `Default` unless requested.
     pub(crate) visibility: Visibility,
+    /// Windows DLL storage: a definition another image may import, or a
+    /// declaration whose address this image loads from its import table.
+    pub(crate) dll:        DllStorage,
+}
+
+/// How a COFF symbol crosses a DLL boundary. An `Export` definition is
+/// listed in the image's export table (a `/EXPORT` linker directive); an
+/// `Import` declaration is reached through the pointer `__imp_name` that the
+/// loader fills in, as Clang emits `dllexport` and `dllimport`.
+/// MSVC extension: Microsoft Learn, "dllexport, dllimport".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/dllexport-dllimport>
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub(crate) enum DllStorage {
+    #[default]
+    Default,
+    Import,
+    Export,
+}
+
+impl DllStorage {
+    /// The textual form's keyword, absent for the default.
+    pub(crate) const fn keyword(self) -> Option<&'static str> {
+        match self {
+            | Self::Default => None,
+            | Self::Import => Some("dllimport"),
+            | Self::Export => Some("dllexport"),
+        }
+    }
 }
 
 /// What a function's inline-control attributes request of the inliner.

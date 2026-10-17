@@ -34,6 +34,7 @@ use super::{
         Opcode,
     },
     module::{
+        DllStorage,
         Extension,
         GlobalInit,
         Linkage,
@@ -93,12 +94,36 @@ fn verify_symbol_attributes(
             "an internal symbol has default visibility",
         ));
     }
-    if linkage == Linkage::SelectAny
-        && !matches!(symbol, Symbol::Global(global) if module.global(global).init.is_some())
-    {
+    let (defined, thread_local) = match symbol {
+        | Symbol::Function(func) => (module.function(func).body.is_some(), false),
+        | Symbol::Global(global) => {
+            let global = module.global(global);
+            (global.init.is_some(), global.thread_local)
+        },
+    };
+    if linkage.comdat() && !defined {
         error(VerifierErrorKind::SymbolAttribute(
-            "a selectany symbol is a defined global",
+            "a selectany or linkonce symbol is a function or global definition",
         ));
+    }
+    // Microsoft Learn, "dllexport, dllimport": an image exports what it
+    // defines and imports what another image defines; neither crosses the
+    // boundary for thread-local data.
+    match attributes.dll {
+        | DllStorage::Import
+            if defined || attributes.alias.is_some() || linkage == Linkage::Internal =>
+            error(VerifierErrorKind::SymbolAttribute(
+                "a dllimport symbol is an external declaration",
+            )),
+        | DllStorage::Export
+            if !(defined || attributes.alias.is_some()) || linkage == Linkage::Internal =>
+            error(VerifierErrorKind::SymbolAttribute(
+                "a dllexport symbol is an external definition",
+            )),
+        | DllStorage::Import | DllStorage::Export if thread_local => error(
+            VerifierErrorKind::SymbolAttribute("a thread-local symbol has no DLL storage"),
+        ),
+        | DllStorage::Default | DllStorage::Import | DllStorage::Export => {},
     }
     if let Some(section) = attributes.section
         && !super::valid_section_name(section)

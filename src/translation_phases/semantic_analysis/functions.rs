@@ -134,14 +134,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             &[],
         );
         if let Some(binding) = binding.filter(|&i| i >= prior) {
+            let subject = super::attributes::Subject::Function {
+                binding,
+                definition: true,
+            };
             self.declaration_attributes(
-                super::attributes::Subject::Function {
-                    binding,
-                    definition: true,
-                },
+                subject,
                 f.declaration_specifiers.extensions,
                 Some(f.declarator),
             );
+            self.declaration_dll(subject, f.declaration_specifiers, false);
         }
         let ty = binding.map_or_else(|| self.types.unknown(), |i| self.bindings[i].ty);
         let derivation = function_derivation(f.declarator, self.scratch);
@@ -507,23 +509,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let mut ignored = ArenaVec::new_in(self.scratch);
-        for context in &self.functions.sizeof_contexts {
-            let info = self.expression_info(context.expression);
-            let constant = info.ice || self.types.unanalyzed(info.ty);
-            ignored.push(constant || context.parent.is_some_and(|p| ignored[p]));
+        for (index, context) in self.functions.sizeof_contexts.iter().enumerate() {
+            ignored
+                .push(self.sizeof_unevaluated(index) || context.parent.is_some_and(|p| ignored[p]));
         }
         let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut ignored_references = ArenaVec::new_in(self.scratch);
-        for context in &self.functions.reference_contexts {
-            let unevaluated = match context.kind {
-                | ReferenceContextKind::Unevaluated => true,
-                | ReferenceContextKind::Typeof(syntax) => self
-                    .typeof_sites
-                    .get(&std::ptr::from_ref(syntax).addr())
-                    .is_none_or(|site| !self.types.variably_modified(site.ty)),
-            };
-            ignored_references
-                .push(unevaluated || context.parent.is_some_and(|p| ignored_references[p]));
+        for (index, context) in self.functions.reference_contexts.iter().enumerate() {
+            ignored_references.push(
+                self.reference_context_unevaluated(index)
+                    || context.parent.is_some_and(|p| ignored_references[p]),
+            );
         }
         let mut owners = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for function in &self.function_records {
@@ -539,6 +535,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ) {
             *owner = owner.and_then(|syntax| owners.get(&syntax).copied());
         }
+        let mut evaluated = ArenaVec::new_in(self.scratch);
         for i in 0..self.functions.uses.len() {
             let usage = self.functions.uses[i];
             let b = self.bindings[usage.binding];
@@ -547,16 +544,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Some(ReferenceOwner::Object(binding)) => Some(binding),
                 | None => None,
             };
-            if let Some(owner) = owner
-                && !usage.sizeof.is_some_and(|s| ignored[s])
+            if !usage.sizeof.is_some_and(|s| ignored[s])
                 && !usage
                     .reference_context
                     .is_some_and(|s| ignored_references[s])
             {
-                self.references.push(super::EntityReference {
-                    owner,
-                    binding: usage.binding,
-                });
+                if let Some(owner) = owner {
+                    self.references.push(super::EntityReference {
+                        owner,
+                        binding: usage.binding,
+                    });
+                }
+                if let Some(import) = usage.dll_import {
+                    evaluated.push((owner, usage.binding, import));
+                }
             }
             if let Some(function) = usage.inline_function
                 && b.linkage == Linkage::Internal
@@ -580,6 +581,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .or_insert(usage.name);
             }
         }
+        self.finish_dll_references(&evaluated);
         for i in 0..self.functions.inline_objects.len() {
             let object = self.functions.inline_objects[i];
             if self.is_inline_definition(object.function) {
@@ -621,31 +623,81 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         for i in 0..self.definitions.len() {
             let definition = self.definitions[i];
-            if definition.kind == DefinitionKind::Function
-                && self.bindings[definition.binding].linkage == Linkage::External
+            if matches!(
+                definition.kind,
+                DefinitionKind::Function | DefinitionKind::Inline
+            ) && self.bindings[definition.binding].linkage == Linkage::External
             {
-                // Microsoft inline bodies remain callable external
-                // definitions. Their retention follows source-order
-                // emission, independently of C99 inline-only declarations.
-                // C99 §6.7.4p6, pp. 112-113; PDF pp. 124-125;
-                // Microsoft ABI extension under §4p6, p. 7; PDF p. 19.
-                if self.context.configuration.target().c99_inline_definitions() {
-                    if self.inline_only_declarations(definition.binding) {
-                        self.definitions[i].kind = DefinitionKind::Inline;
-                    }
-                } else if self
-                    .functions
-                    .entities
-                    .get(&self.function_identity(definition.binding))
-                    .is_some_and(|entity| {
-                        entity.msvc_inline.emission == InlineEmission::Discardable
-                    })
-                {
-                    self.definitions[i].kind = DefinitionKind::DiscardableFunction;
-                }
+                self.definitions[i].kind = self.external_function_kind(definition);
             }
         }
         self.definitions.sort_unstable_by_key(|d| d.binding);
+    }
+
+    /// The final kind of an external function definition, after every
+    /// declaration. Microsoft inline bodies remain callable external
+    /// definitions; their retention follows source-order emission,
+    /// independently of C99 inline-only declarations, and they repeat in
+    /// each unit with COMDAT linkage, as in Clang's
+    /// `basicGVALinkageForFunction`. A GNU extern inline body that a
+    /// plain `inline` declaration makes visible is external. An imported
+    /// inline body supplies no definition, nor a C99 inline-only one except
+    /// a MinGW export. The resulting definitions are the alias targets.
+    /// C99 §6.7.4p6, pp. 112-113; PDF pp. 124-125; Microsoft ABI and GNU
+    /// extensions under §4p6, p. 7; PDF p. 19.
+    fn external_function_kind(&mut self, definition: Definition) -> DefinitionKind {
+        let binding = definition.binding;
+        let identity = self.function_identity(binding);
+        let Some(entity) = self.functions.entities.get(&identity).copied() else {
+            return definition.kind;
+        };
+        let source = self.bindings[binding].name.source_vectors;
+        let final_body = matches!(
+            entity.function_body,
+            Some(FunctionBody::Replaceable(body) | FunctionBody::Unique(body)) if body == source
+        );
+        let exported = self.dll_storage(binding) == Some(super::DllStorage::Export);
+        let microsoft = !self.context.configuration.target().c99_inline_definitions();
+        let mut kind = definition.kind;
+        if kind == DefinitionKind::Inline && final_body && entity.gnu_plain_inline {
+            kind = DefinitionKind::Function;
+        } else if kind == DefinitionKind::Function {
+            if !microsoft {
+                if self.inline_only_declarations(binding) && !exported {
+                    kind = DefinitionKind::Inline;
+                }
+            } else if entity.msvc_inline.emission == InlineEmission::Discardable {
+                kind = DefinitionKind::DiscardableFunction;
+            }
+        }
+        let entity_id = self.entity_of(binding);
+        if self.ends_imported(entity_id) {
+            // An imported body is no definition, nor an alias target, even
+            // where the body recorded one.
+            kind = DefinitionKind::Inline;
+            if let Some(entity) = self.functions.entities.get_mut(&identity) {
+                entity.definition = None;
+            }
+        }
+        if matches!(
+            kind,
+            DefinitionKind::Function | DefinitionKind::DiscardableFunction
+        ) {
+            if let Some(entity) = self.functions.entities.get_mut(&identity) {
+                entity.definition = Some(source);
+            }
+            if entity.msvc_inline.inline_body && !entity.gnu_inline && (microsoft || exported) {
+                self.set_inline_odr(
+                    binding,
+                    if entity.msvc_inline.explicit_extern || exported {
+                        super::InlineOdr::Strong
+                    } else {
+                        super::InlineOdr::Discardable
+                    },
+                );
+            }
+        }
+        kind
     }
 
     /// The latest binding of the linked entity `name` and whether the
@@ -656,6 +708,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .entities
             .get(&name)
             .map(|entity| (entity.latest, entity.definition.is_some()))
+    }
+
+    /// Whether a declaration of `binding`'s function, up to this one, says
+    /// `inline`, as Clang's `FunctionDecl::isInlined` inherits it.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    pub(super) fn inline_declared(&self, binding: usize) -> bool {
+        self.functions
+            .entities
+            .get(&self.function_identity(binding))
+            .is_some_and(|entity| entity.msvc_inline.inline_declared)
+    }
+
+    /// An applicable `dllexport` before the body keeps a Microsoft inline
+    /// definition; one first written after the body is ignored.
+    /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+    pub(super) fn note_dll_export(&mut self, binding: usize) {
+        let identity = self.function_identity(binding);
+        if let Some(entity) = self.functions.entities.get_mut(&identity)
+            && entity.function_body.is_none()
+        {
+            entity.msvc_inline.dllexport = true;
+        }
     }
 
     /// Where an earlier declaration defines the linked entity that `binding`
@@ -1134,11 +1208,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // but does not itself materialize an earlier deferred body.
             entity.msvc_inline.inline_declared |= spec.function_specifiers.is_inline;
             entity.msvc_inline.explicit_extern |= explicit_extern;
-            // Clang ignores an export annotation first added after the
-            // body. Only applicable annotations retain this definition;
-            // export directives and DLL linkage remain separate support.
-            entity.msvc_inline.dllexport |= entity.function_body.is_none()
-                && self.has_function_attribute(spec, declarator, "dllexport");
         }
         if self.scopes[binding.scope].kind == ScopeKind::File {
             if binding.kind == BindingKind::Function {
@@ -1152,6 +1221,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && (entity.gnu_inline || self.context.configuration.gnu89_inline());
                 entity.non_inline |= !spec.function_specifiers.is_inline
                     || spec.storage_class == Some(StorageClass::Extern);
+                // Clang's isInlineDefinitionExternallyVisible: under GNU
+                // inline semantics, any file-scope declaration that says
+                // `inline` without `extern` makes the body external.
+                entity.gnu_plain_inline |= spec.function_specifiers.is_inline
+                    && spec.storage_class != Some(StorageClass::Extern);
             } else if binding.kind == BindingKind::Object {
                 if initialized {
                     self.define_entity(index, &mut entity);
@@ -1290,6 +1364,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 FunctionBody::Unique(b.name.source_vectors)
             });
         }
+        // Clang's FunctionDecl::isInlined for the definition: inline
+        // written on it or on an earlier declaration.
+        entity.msvc_inline.inline_body = entity.msvc_inline.inline_declared;
         entity.msvc_inline.emission =
             if !self.context.configuration.target().c99_inline_definitions()
                 && !entity.gnu_inline
@@ -1346,6 +1423,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.tainted {
             return;
         }
+        let dll_import = self.dll_reference(binding);
         let inline_function = self
             .functions
             .current
@@ -1373,7 +1451,98 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             name,
             sizeof: self.functions.sizeof,
             inline_function,
+            dll_import,
         });
+    }
+
+    /// Whether sizeof context `index` leaves its operand unevaluated: its
+    /// result is constant, unless the operand has a VM type.
+    /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    fn sizeof_unevaluated(&self, index: usize) -> bool {
+        let info = self.expression_info(self.functions.sizeof_contexts[index].expression);
+        info.ice || self.types.unanalyzed(info.ty)
+    }
+
+    /// Whether reference context `index` leaves its operand unevaluated:
+    /// alignof always does, GNU typeof unless its type is VM.
+    fn reference_context_unevaluated(&self, index: usize) -> bool {
+        match self.functions.reference_contexts[index].kind {
+            | ReferenceContextKind::Unevaluated => true,
+            | ReferenceContextKind::Typeof(syntax) => self
+                .typeof_sites
+                .get(&std::ptr::from_ref(syntax).addr())
+                .is_none_or(|site| !self.types.variably_modified(site.ty)),
+        }
+    }
+
+    /// Whether a reference made so far to `entity` is evaluated, as
+    /// Clang's `isUsed` records it; an operand still being analyzed counts
+    /// as unevaluated. C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    pub(super) fn evaluated_reference(&mut self, entity: super::facts::EntityId) -> bool {
+        for i in 0..self.functions.uses.len() {
+            let usage = self.functions.uses[i];
+            if usage.dll_import.is_none() || self.entity_of(usage.binding) != entity {
+                continue;
+            }
+            let mut sizeof = usage.sizeof;
+            let mut evaluated = true;
+            while let Some(index) = sizeof {
+                evaluated &= !self.sizeof_unevaluated(index);
+                sizeof = self.functions.sizeof_contexts[index].parent;
+            }
+            let mut context = usage.reference_context;
+            while let Some(index) = context {
+                evaluated &= !self.reference_context_unevaluated(index);
+                context = self.functions.reference_contexts[index].parent;
+            }
+            if evaluated {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Records, for each entity, whether the unit's last evaluated
+    /// reference in emitted code named an imported declaration. A body is
+    /// emitted when it has external linkage, is GNU `used`, or an emitted
+    /// body references it, as Clang defers internal definitions until
+    /// their first use.
+    fn finish_dll_references(&mut self, evaluated: &[(Option<usize>, usize, bool)]) {
+        let mut emitted = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..self.references.len() {
+                let super::EntityReference { owner, binding } = self.references[i];
+                if self.bindings[binding].linkage != Linkage::Internal
+                    || !self.owner_emitted(Some(owner), &emitted)
+                {
+                    continue;
+                }
+                let entity = self.entity_of(binding);
+                changed |= emitted.insert(entity, ()).is_none();
+            }
+        }
+        for &(owner, binding, import) in evaluated {
+            if self.owner_emitted(owner, &emitted) {
+                self.dll_referenced(binding, import);
+            }
+        }
+    }
+
+    /// Whether the body or initializer `owner` is emitted: see
+    /// [`Self::finish_dll_references`].
+    fn owner_emitted(
+        &mut self,
+        owner: Option<usize>,
+        emitted: &ArenaMap<'_, super::facts::EntityId, ()>,
+    ) -> bool {
+        let Some(owner) = owner else { return true };
+        if self.bindings[owner].linkage != Linkage::Internal {
+            return true;
+        }
+        let entity = self.entity_of(owner);
+        emitted.contains_key(&entity) || self.retained_by_used(entity)
     }
 
     /// Constant sizeof operands do not require an internal definition.
@@ -1415,10 +1584,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125, unless the target's ABI
-    /// emits inline functions as external definitions.
-    fn is_inline_definition(&self, binding: usize) -> bool {
+    /// emits inline functions as external definitions or the function is
+    /// exported, which makes a MinGW inline body an external `weak_odr`
+    /// one, as `external_function_kind` keeps it.
+    fn is_inline_definition(&mut self, binding: usize) -> bool {
         self.context.configuration.target().c99_inline_definitions()
             && self.inline_only_declarations(binding)
+            && self.dll_storage(binding) != Some(super::DllStorage::Export)
     }
 
     /// Whether every file-scope declaration selects a C99 inline-only
@@ -1513,26 +1685,39 @@ pub(super) enum FunctionWork<'tu> {
 /// C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
 /// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
 #[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent declaration fact of the entity."
+)]
 pub(super) struct Entity {
-    latest:        usize,
-    definition:    Option<SourceVectors>,
-    tentative:     Option<usize>,
-    non_inline:    bool,
-    function_body: Option<FunctionBody>,
-    msvc_inline:   MsvcInlineState,
+    latest:           usize,
+    definition:       Option<SourceVectors>,
+    tentative:        Option<usize>,
+    non_inline:       bool,
+    function_body:    Option<FunctionBody>,
+    msvc_inline:      MsvcInlineState,
     /// Clang's canRedefineFunction: GNU extern inline declarations permit
     /// a later static declaration and a replacement function body.
-    can_redefine:  bool,
-    gnu_inline:    bool,
+    can_redefine:     bool,
+    gnu_inline:       bool,
+    /// A file-scope declaration says `inline` without `extern`, which
+    /// makes a GNU extern inline body an external definition.
+    gnu_plain_inline: bool,
 }
 
 /// Source facts and the current emission decision for Microsoft inline
 /// definitions. Inline inherits forward; explicit extern includes linked
-/// block-scope declarations; `dllexport` applies only at or before the body.
+/// block-scope declarations; `dllexport` applies only at or before the body
+/// (`attributes/dll.rs`). `inline_body` says the body itself is inline.
 /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
 #[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent source fact of the inline function."
+)]
 struct MsvcInlineState {
     inline_declared: bool,
+    inline_body:     bool,
     explicit_extern: bool,
     dllexport:       bool,
     emission:        InlineEmission,
@@ -1564,6 +1749,9 @@ struct Use {
     name:              Identifier,
     sizeof:            Option<usize>,
     inline_function:   Option<usize>,
+    /// Whether the reference named an imported declaration, for an entity
+    /// with linkage.
+    dll_import:        Option<bool>,
 }
 
 #[derive(Clone, Copy)]

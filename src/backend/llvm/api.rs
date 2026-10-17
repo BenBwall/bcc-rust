@@ -19,6 +19,7 @@ use std::{
 };
 
 use llvm_sys::{
+    LLVMDLLStorageClass,
     LLVMIntPredicate,
     LLVMLinkage,
     LLVMOpcode,
@@ -121,6 +122,7 @@ use llvm_sys::{
         LLVMPositionBuilderAtEnd,
         LLVMPrintModuleToString,
         LLVMSetAlignment,
+        LLVMSetDLLStorageClass,
         LLVMSetDataLayout,
         LLVMSetExact,
         LLVMSetGlobalConstant,
@@ -226,6 +228,8 @@ pub(super) enum Linkage {
     /// A definition equal to every other of its name, of which the linker
     /// keeps any one.
     WeakOdr,
+    /// A `WeakOdr` definition that a unit not referencing it may drop.
+    LinkOnceOdr,
     /// The special `llvm.global_ctors`, `llvm.global_dtors` and `llvm.used`
     /// arrays.
     Appending,
@@ -509,6 +513,7 @@ impl<'id> Session<'id> {
             | Linkage::Weak => LLVMLinkage::LLVMWeakAnyLinkage,
             | Linkage::ExternWeak => LLVMLinkage::LLVMExternalWeakLinkage,
             | Linkage::WeakOdr => LLVMLinkage::LLVMWeakODRLinkage,
+            | Linkage::LinkOnceOdr => LLVMLinkage::LLVMLinkOnceODRLinkage,
             | Linkage::Appending => LLVMLinkage::LLVMAppendingLinkage,
         };
         // SAFETY: The type system ties handles to this live session; every
@@ -518,8 +523,23 @@ impl<'id> Session<'id> {
         }
     }
 
-    /// Places the global `value` in an `any` comdat of its own name, as
-    /// Clang places a Microsoft `selectany` definition.
+    /// Marks a function, global or alias `dllimport` or `dllexport`, as
+    /// Clang marks Windows DLL storage.
+    pub(super) fn dll_storage(&self, value: Val<'id>, export: bool) {
+        let class = if export {
+            LLVMDLLStorageClass::LLVMDLLExportStorageClass
+        } else {
+            LLVMDLLStorageClass::LLVMDLLImportStorageClass
+        };
+        // SAFETY: The value is a function, global or alias of this session.
+        unsafe {
+            LLVMSetDLLStorageClass(value.0, class);
+        }
+    }
+
+    /// Places the function or global `value` in an `any` comdat of its own
+    /// name, as Clang places Microsoft `selectany` data and inline
+    /// functions.
     pub(super) fn own_comdat(&self, value: Val<'id>, name: &CStr) {
         // SAFETY: The module belongs to this live session; the name is
         // NUL-terminated and LLVM copies it.

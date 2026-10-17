@@ -82,6 +82,37 @@ pub(crate) struct EntityAttributes<'tu> {
     /// Microsoft `selectany` on an external object: its definitions in
     /// different translation units are one, and the linker keeps any.
     pub(crate) select_any:         bool,
+    /// Windows DLL storage after every declaration: `Export` when the
+    /// entity's declarations export it, which applies to a definition this
+    /// unit emits; `Import` when this unit's last reference named an
+    /// imported declaration, which applies to an undefined symbol, as
+    /// Clang's code generation fixes it.
+    /// MSVC extension: Microsoft Learn, "dllexport, dllimport".
+    pub(crate) dll:                Option<DllStorage>,
+    /// The COMDAT linkage of an external inline definition that the
+    /// Microsoft ABI, or a MinGW `dllexport`, lets every unit repeat, as
+    /// Clang's `basicGVALinkageForFunction` assigns it.
+    /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+    pub(crate) inline_odr:         Option<InlineOdr>,
+}
+
+/// How an entity crosses a Windows DLL boundary.
+/// MSVC extension: Microsoft Learn, "dllexport, dllimport".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DllStorage {
+    Import,
+    Export,
+}
+
+/// The linkage of a repeatable inline definition: a `Discardable` one is
+/// emitted only by units that reach it (LLVM `linkonce_odr`); a `Strong`
+/// one, which an explicit Microsoft `extern` or `dllexport` requests, by
+/// every unit that defines it (LLVM `weak_odr`).
+/// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineOdr {
+    Discardable,
+    Strong,
 }
 
 /// Diagnostic attached to an emitted direct call of a function.

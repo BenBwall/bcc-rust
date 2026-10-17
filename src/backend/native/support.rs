@@ -84,9 +84,6 @@ pub(crate) fn check_module<'m>(
         if global.thread_local && global.attributes.section.is_some() {
             return Err(refuse(Some(global.name), Construct::ThreadLocalSection));
         }
-        if global.linkage == Linkage::SelectAny {
-            return Err(refuse(Some(global.name), Construct::SelectAny));
-        }
     }
     let checker = Checker {
         module,
@@ -327,8 +324,6 @@ pub(crate) enum Construct {
     /// values where a second return finds them.
     /// C99: §7.13.2.1 paragraph 3, p. 244; PDF p. 256.
     ReturnsTwice,
-    /// A Microsoft `selectany` definition, which needs a COMDAT section.
-    SelectAny,
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -359,7 +354,6 @@ impl fmt::Display for Unsupported<'_> {
                 f,
                 "a call to, or the address of, a function that may return twice, such as `setjmp`"
             )?,
-            | Construct::SelectAny => write!(f, "a `selectany` definition")?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;

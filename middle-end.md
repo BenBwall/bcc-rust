@@ -1429,7 +1429,11 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
   constructors/destructors (defined, no parameters).
 - **Lowering.** An external entity with `weak` gets `weak` linkage, and a
   Microsoft `selectany` object this unit defines `selectany` linkage (LLVM
-  `weak_odr` in its own comdat; the native back end refuses it); every
+  `weak_odr` in its own comdat), a Microsoft inline body `selectany` or
+  `linkonce` linkage (`weak_odr` or `linkonce_odr` in its own COMDAT), and
+  a `dllimport` declaration or `dllexport` definition its DLL storage (the
+  native back end reaches an import through `__imp_name` and lists exports
+  in `.drectve`); every
   retained alias is declared, even if unused, and points at its target's
   symbol; section, used, visibility and function alignment go on the symbol
   when it is declared; constructors and destructors are registered in

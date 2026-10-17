@@ -420,6 +420,141 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
         );
     }
 
+    /// Windows DLL storage and inline linkage match the pinned Clang's
+    /// emitted symbols: only evaluated references in emitted code fix an
+    /// import, a constant `sizeof` does not use the entity, and a MinGW
+    /// exported inline body is an external `weak_odr` definition that may
+    /// call internal functions.
+    #[test]
+    fn dll_storage_and_inline_linkage_match_clang() {
+        let clang = clang();
+        let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/dll-linkage.c");
+        for target in ["x86_64-w64-windows-gnu", "x86_64-pc-windows-msvc"] {
+            let target_flag = format!("--target={target}");
+            for (name, source, mode) in [
+                (
+                    "unused-static-reference",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     static int unused(void) { return x; }",
+                    "c17",
+                ),
+                (
+                    "sizeof-reference",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     int n = sizeof(x);",
+                    "c17",
+                ),
+                (
+                    "emitted-static-reference",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     static int called(void) { return x; } int h(void) { return called(); }",
+                    "c17",
+                ),
+                (
+                    "import-after-sizeof",
+                    "extern int x; int n = sizeof(x); __declspec(dllimport) extern int x; int \
+                     g(void) { return x; }",
+                    "c17",
+                ),
+                (
+                    "export-after-sizeof",
+                    "int f(void); int n = sizeof(&f); __declspec(dllexport) int f(void) { return \
+                     1; }",
+                    "c17",
+                ),
+                (
+                    "exported-inline-helper",
+                    "static int helper(void) { return 7; } __declspec(dllexport) inline int \
+                     f(void) { return helper(); }",
+                    "gnu17",
+                ),
+                (
+                    "declared-export-inline-static-local",
+                    "__declspec(dllexport) inline int f(void); static int helper(void) { return \
+                     7; } inline int f(void) { static int n; return helper() + ++n; }",
+                    "c17",
+                ),
+            ] {
+                std::fs::write(&source_path, source).unwrap();
+                let reference = Command::new(&clang)
+                    .arg(&target_flag)
+                    .args([
+                        "-S",
+                        "-emit-llvm",
+                        "-O0",
+                        "-fms-extensions",
+                        &format!("-std={mode}"),
+                        "-o",
+                        "-",
+                    ])
+                    .arg(&source_path)
+                    .output()
+                    .unwrap();
+                assert!(
+                    reference.status.success(),
+                    "{target} {name}: {}",
+                    String::from_utf8_lossy(&reference.stderr)
+                );
+                let output = bcc(
+                    source,
+                    &[
+                        "--emit=llvm",
+                        "-fms-extensions",
+                        &target_flag,
+                        &format!("-std={mode}"),
+                    ],
+                );
+                assert!(
+                    output.status.success(),
+                    "{target} {name}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    linkage(&output.stdout),
+                    linkage(&reference.stdout),
+                    "{target} {name}"
+                );
+            }
+        }
+        std::fs::remove_file(source_path).unwrap();
+    }
+
+    /// Each emitted or declared global with its linkage and DLL storage.
+    fn linkage(bytes: &[u8]) -> BTreeSet<String> {
+        const WORDS: [&str; 7] = [
+            "declare",
+            "external",
+            "internal",
+            "weak_odr",
+            "linkonce_odr",
+            "dllimport",
+            "dllexport",
+        ];
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .filter(|line| {
+                line.starts_with("define ")
+                    || line.starts_with("declare ")
+                    || (line.starts_with('@') && line.contains(" = "))
+            })
+            .map(|line| {
+                let name = line
+                    .split_once('@')
+                    .unwrap()
+                    .1
+                    .split(['(', ' ', '='])
+                    .next()
+                    .unwrap()
+                    .trim_matches('"');
+                let words: Vec<_> = line
+                    .split([' ', '('])
+                    .filter(|word| WORDS.contains(word))
+                    .collect();
+                format!("{name}: {}", words.join(" "))
+            })
+            .collect()
+    }
+
     fn symbols(bytes: &[u8]) -> BTreeSet<String> {
         String::from_utf8_lossy(bytes)
             .lines()

@@ -427,6 +427,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.prepare_function_attributes(d, s.extensions);
             },
             | Work::BindReady(d, s, initialized, bound_start, ty) => {
+                let s = self.dll_import_storage(s, d, ty);
                 let prior = self.bindings.len();
                 let errors_before = self.semantic_errors;
                 self.bind_declaration(d, s, ty, initialized);
@@ -469,6 +470,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if let Some(binding) = binding {
                     let subject = self.declaration_subject(binding, d, s, initialized);
                     self.declaration_attributes(subject, s.extensions, Some(d));
+                    self.declaration_dll(subject, s, initialized);
                 }
             },
             | Work::DeclarationEnd(declarator) => self.open_cleanup(declarator),
