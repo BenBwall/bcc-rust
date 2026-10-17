@@ -26,27 +26,33 @@ __declspec(dllexport) struct Data state={3,{5,11}};
 __declspec(dllexport) int answer(int value){return exported+state.values[1]+value;}
 __declspec(dllexport) int selected(int value) __attribute__((overloadable)){return value+40;}
 __declspec(dllexport) int selected(long long value) __attribute__((overloadable)){return (int)value+50;}
+int wide_implementation(long long value){return (int)value+60;}
+__declspec(dllexport) int forwarded(int) __attribute__((overloadable,alias("@SELECTED_ABI@")));
+__declspec(dllexport) int forwarded(long long) __attribute__((overloadable,alias("wide_implementation")));
 int implementation(int value){return value+9;}
 __declspec(dllexport) int exported_alias(int) __attribute__((alias("implementation")));
 "#;
-    const IMPORTER: &str = r#"
+    const IMPORTER: &str = r"
 struct Data { int first, values[2]; };
 __declspec(dllimport) extern int exported;
 __declspec(dllimport) extern struct Data state;
 __declspec(dllimport) int answer(int);
 __declspec(dllimport) int selected(int) __attribute__((overloadable));
 __declspec(dllimport) int selected(long long) __attribute__((overloadable));
+__declspec(dllimport) int forwarded(int) __attribute__((overloadable));
+__declspec(dllimport) int forwarded(long long) __attribute__((overloadable));
 __declspec(dllimport) int exported_alias(int);
 int entry(void) {
     int (*function)(int)=answer;
     int *object=&exported, *member=&state.values[1];
     if (*object!=7 || *member!=11 || function(2)!=20 || exported_alias(1)!=10) return 1;
     if (selected(2)!=42 || selected(3LL)!=53) return 3;
+    if (forwarded(2)!=42 || forwarded(3LL)!=63) return 4;
     *object=9;
     *member=13;
     return answer(1)==23 ? 0 : 2;
 }
-"#;
+";
 
     #[test]
     fn dll_functions_data_addresses_and_aliases_interoperate_with_clang() {
@@ -54,7 +60,16 @@ int entry(void) {
             for backend in ["llvm", "native"] {
                 for bcc_exports in [true, false] {
                     let root = fixture_root(&format!("dll-{target}-{backend}-{bcc_exports}"));
-                    fs::write(root.join("exporter.c"), EXPORTER).unwrap();
+                    let selected_abi = if target.ends_with("windows-msvc") {
+                        "?selected@@$$J0YAHH@Z"
+                    } else {
+                        "_Z8selectedi"
+                    };
+                    fs::write(
+                        root.join("exporter.c"),
+                        EXPORTER.replace("@SELECTED_ABI@", selected_abi),
+                    )
+                    .unwrap();
                     fs::write(root.join("importer.c"), IMPORTER).unwrap();
                     compile(&root, "exporter", target, backend, bcc_exports);
                     compile(&root, "importer", target, backend, !bcc_exports);
