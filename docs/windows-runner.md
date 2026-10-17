@@ -18,11 +18,18 @@ CI, and does not automatically execute pull requests. GitHub already knows
 to wait for the result and receive a nonzero exit status on failure. It uses
 the sandbox's existing authenticated `gh`, without copying credentials to
 Windows. Select a trusted commit already pushed to the repository. Without
-`--sha`, it uses the current clean checkout's HEAD. Uncommitted edits and
-untracked files are not transferred.
+`--sha`, it uses the current clean checkout's HEAD. From outside a Git
+repository (including `~`), it uses
+`/home/agent/workspace/bcc-rust/checkout`. It prints the selected checkout and
+commit before submission. Use `--checkout PATH` to choose another clean
+worktree from any directory, or `--sha FULL_SHA` to select a pushed commit
+without a local checkout. Uncommitted edits and untracked files are not
+transferred; a dirty checkout or an unpushed commit stops submission.
 
 ```sh
 bcc-windows status
+bcc-windows ci --wait  # also works from ~ using the sandbox checkout
+bcc-windows ci --checkout /path/to/agent-worktree --wait
 bcc-windows test --sha FULL_SHA --wait -- --all-targets --no-fail-fast
 bcc-windows test --sha FULL_SHA --wait -- --test code_generation_cli mingw_crt_inline_helpers_link_from_two_translation_units -- --nocapture
 bcc-windows bench --sha FULL_SHA --wait -- --bench bench -- 'Lexer/batch' --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot
@@ -106,7 +113,8 @@ as success, success, and failure respectively. The earlier benchmark run
 [38975422542](https://github.com/BenBwall/bcc-rust/actions/runs/38975422542)
 also produced three measured lexer cases.
 
-The five submission-client regressions passed on both Linux and Windows;
+The eleven submission-client regressions passed on both Linux and Windows,
+including submission from home and selection of a linked worktree;
 PowerShell parsing and actionlint passed. Existing compiler checkouts and
 the default branch were preserved. The source compiler was not changed to
 make these checks pass.

@@ -14,6 +14,33 @@ import uuid
 REPOSITORY = "BenBwall/bcc-rust"
 BRANCH = "ci/windows-runner"
 WORKFLOW = "ci.yml"
+DEFAULT_CHECKOUT = Path("/home/agent/workspace/bcc-rust/checkout")
+
+
+def checkout_commit(requested=None):
+    """Use the current worktree, or the sandbox checkout outside a repository."""
+    if requested is None:
+        current = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                                 text=True, capture_output=True)
+        checkout = Path(current.stdout.strip()) if current.returncode == 0 else DEFAULT_CHECKOUT
+    else:
+        checkout = Path(requested).expanduser()
+    root = subprocess.run(["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+                          text=True, capture_output=True)
+    if root.returncode:
+        raise ValueError(f"No Git checkout found at {checkout}. Pass --checkout PATH or --sha FULL_SHA.")
+    checkout = Path(root.stdout.strip())
+    try:
+        sha = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                                      text=True, stderr=subprocess.PIPE).strip()
+        status = subprocess.check_output(["git", "-C", str(checkout), "status", "--porcelain"],
+                                         text=True, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(f"Cannot read checkout {checkout}: {error.stderr.strip()}") from error
+    if status.strip():
+        raise ValueError(f"Checkout {checkout} is dirty; commit/push first, "
+                         "or explicitly select a pushed --sha.")
+    return checkout, sha
 
 
 def main():
@@ -21,7 +48,11 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     for suite in ("test", "bench", "ci"):
         command = commands.add_parser(suite)
-        command.add_argument("--sha", help="full pushed commit; defaults to clean checkout HEAD")
+        source = command.add_mutually_exclusive_group()
+        source.add_argument("--sha", help="full pushed commit; works from any directory")
+        source.add_argument("--checkout", metavar="PATH",
+                            help="clean source checkout; defaults to the current worktree, "
+                                 "or the sandbox checkout outside a repository")
         command.add_argument("--wait", action="store_true", help="wait and return the job's exit status")
     commands.add_parser("status")
     commands.add_parser("list")
@@ -50,14 +81,17 @@ def main():
         return gh("run", "download", str(args.run_id), "--dir", args.dir).returncode
     sha = args.sha
     if not sha:
-        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
-            parser.error("checkout is dirty; commit/push first, or explicitly select a pushed --sha")
+        try:
+            checkout, sha = checkout_commit(args.checkout)
+        except ValueError as error:
+            parser.error(str(error))
+        print(f"Source checkout: {checkout}\nSource commit: {sha}", file=sys.stderr)
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         parser.error("--sha must be a full lowercase 40-character commit SHA")
     visible = gh("api", f"repos/{REPOSITORY}/commits/{sha}", capture_output=True)
     if visible.returncode:
-        sys.exit("Commit is not accessible on GitHub. Push its branch before submitting Windows jobs.")
+        sys.exit(f"Commit {sha} is not accessible on GitHub. "
+                 "Push its branch before submitting Windows jobs, or select a pushed --sha.")
     request = uuid.uuid4().hex
     result = gh("workflow", "run", WORKFLOW, "--ref", BRANCH,
                 "-f", f"commit_sha={sha}", "-f", f"suite={args.command}",
