@@ -18,8 +18,18 @@ fn diagnostics_with_passes(
     optimized: bool,
     passes: Option<&str>,
 ) -> (Vec<String>, Vec<(bool, String)>) {
+    diagnostics_for_target(source, optimized, passes, Target::LinuxGnu)
+}
+
+fn diagnostics_for_target(
+    source: &str,
+    optimized: bool,
+    passes: Option<&str>,
+    target: Target,
+) -> (Vec<String>, Vec<(bool, String)>) {
     let tu = Bump::new();
-    let mut context = Context::new(&tu);
+    let configuration = crate::configuration::CompilerConfiguration::default().with_target(target);
+    let mut context = Context::with_configuration(&tu, configuration);
     let unit = parse_translation_unit(
         &mut context,
         Path::new("<test>"),
@@ -40,9 +50,8 @@ fn diagnostics_with_passes(
     }
     let ir = Bump::new();
     let mut scratch = Bump::new();
-    let mut result =
-        lower_with_sources(&context, &unit, &sema, Target::LinuxGnu, &ir, &mut scratch)
-            .expect("source lowers");
+    let mut result = lower_with_sources(&context, &unit, &sema, target, &ir, &mut scratch)
+        .expect("source lowers");
     if optimized {
         scratch.reset();
         let mut options = crate::optimizer::OptimizerOptions::default();
@@ -55,6 +64,42 @@ fn diagnostics_with_passes(
         .map(|d| (d.warning, context.string_cache.at(d.message).to_owned()))
         .collect();
     (errors, calls)
+}
+
+#[test]
+fn diagnostic_attributes_follow_selected_overloads_and_target_abi_names() {
+    let source = r#"
+int selected(int) __attribute__((overloadable,error("integer path")));
+int selected(double) __attribute__((overloadable,warning("floating path")));
+int plain(int n) __attribute__((enable_if(n>0,"positive"),error("plain path")));
+int f(void) { return selected(1)+selected(2.0)+plain(1); }
+"#;
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for optimized in [false, true] {
+            let (errors, calls) = diagnostics_for_target(source, optimized, None, target);
+            assert!(errors.is_empty(), "{target:?}: {errors:?}");
+            assert_eq!(calls.len(), 3, "{target:?}: {calls:?}");
+            for (warning, suffix) in [
+                (false, "integer path"),
+                (true, "floating path"),
+                (false, "plain path"),
+            ] {
+                assert_eq!(
+                    calls
+                        .iter()
+                        .filter(|(actual, message)| *actual == warning && message.ends_with(suffix))
+                        .count(),
+                    1,
+                    "{target:?}: {calls:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
