@@ -125,9 +125,10 @@ pub(crate) fn through_stub(module: &Module<'_>, target: Target, symbol: Symbol) 
     }
 }
 
-/// Whether `symbol` is a weak declaration, which may stay undefined: its
-/// address is then null. GNU extension: GCC manual, "Common Function
-/// Attributes", weak.
+/// Whether `symbol` is a weak declaration, which may stay undefined. An
+/// ordinary symbol's address is then null; ELF thread-local declarations
+/// instead resolve to offset zero from the thread base.
+/// GNU extension: GCC manual, "Common Function Attributes", weak.
 pub(crate) fn weak_declaration(module: &Module<'_>, symbol: Symbol) -> bool {
     let linkage = match symbol {
         | Symbol::Function(func) => module.function(func).linkage,

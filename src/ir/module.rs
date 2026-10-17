@@ -815,7 +815,9 @@ impl ResultRegisters {
 /// Whether a symbol is visible outside its module. A `Weak` definition
 /// yields to a strong definition of the same name at link time, so its body
 /// may not be the one that runs; a `Weak` declaration (no body, initializer
-/// or alias target) may stay undefined, and its address is then null.
+/// or alias target) may stay undefined. Its address is then null for an
+/// ordinary object or function; unresolved ELF TLS uses offset zero from
+/// the thread base instead.
 /// GNU extension: GCC manual, "Common Function Attributes", weak.
 /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
