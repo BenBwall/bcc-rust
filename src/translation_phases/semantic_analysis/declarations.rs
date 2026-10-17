@@ -29,6 +29,7 @@ use super::{
         TagKind,
         TypeId,
         TypeKind,
+        UnmodeledType,
         align_up,
     },
 };
@@ -226,6 +227,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.types.tags[tag].tainted.set(true);
                 }
                 if let Some(name) = s.underlying_type {
+                    self.types.tags[tag]
+                        .unmodeled
+                        .set(Some(UnmodeledType::FixedEnum));
                     self.syntax_operand(super::SyntaxOperand::Type(name));
                 }
             },
@@ -235,7 +239,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::TypeName(name));
                     return;
                 }
-                self.values.push(self.types.unknown());
+                let reason = match *extended {
+                    | super::ExtendedType::BitInt { .. } => Some(UnmodeledType::BitInt),
+                    | super::ExtendedType::Decimal32 => Some(UnmodeledType::Decimal32),
+                    | super::ExtendedType::Decimal64 => Some(UnmodeledType::Decimal64),
+                    | super::ExtendedType::Decimal128 => Some(UnmodeledType::Decimal128),
+                    | super::ExtendedType::Inferred => Some(UnmodeledType::Inferred),
+                    | _ => None,
+                };
+                let ty = match reason {
+                    | Some(reason) => self.types.unmodeled(reason),
+                    | None => self.types.unknown(),
+                };
+                self.values.push(ty);
                 match *extended {
                     | super::ExtendedType::Atomic(name) =>
                         self.syntax_operand(super::SyntaxOperand::Type(name)),
@@ -253,9 +269,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// unanalyzed; a tag named here keeps its own completion and layout.
     /// C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
     pub(super) fn spec(&mut self, spec: DeclarationSpecifiers<'tu>, force_tag: bool) {
-        if spec.auto_with_storage_class || self.unmodeled_extension(spec.extensions) {
+        if let Some(reason) = self.unmodeled_extension_reason(spec.extensions).or(spec
+            .auto_with_storage_class
+            .then_some(UnmodeledType::Inferred))
+        {
             self.taint(true);
-            self.work.push(Work::UnknownType);
+            self.work.push(Work::UnknownType(reason));
         }
         self.work
             .push(Work::VectorAttributes(spec.extensions, false));
@@ -403,7 +422,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | DirectDeclarator::Attributes(attribute) => {
                 let ty = if self.layout_attribute(attribute) {
-                    self.types.unknown()
+                    self.types.unmodeled(UnmodeledType::ExtendedVector)
                 } else {
                     let base = self.mode_attribute(base, attribute);
                     self.vector_attribute(base, attribute, true)
@@ -414,7 +433,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.values.push(if calling_convention(keyword) {
                     base
                 } else {
-                    self.types.unknown()
+                    self.types.unmodeled(UnmodeledType::PointerModifier)
                 }),
             | _ => self.values.push(base),
         }
@@ -653,19 +672,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Object alignment written on a declaration is inherited, while a
         // later declaration's typedef-derived alignment replaces the earlier
         // type's alignment. C99 §6.2.7p4, p. 40; PDF p. 52, extended by GNU/MS.
-        let storage_alignment = if kind == BindingKind::Object {
+        let storage_alignment = (kind == BindingKind::Object).then(|| {
             let requested = self.explicit_member_alignment(spec.extensions, None, Some(declarator));
             let inherited = self
                 .lookup(Namespace::Ordinary, name.name)
                 .and_then(|entry| self.object_alignments.get(&entry.binding).copied())
                 .unwrap_or((0, false));
-            Some((
+            (
                 requested.max(inherited.0),
                 inherited.1 || self.microsoft_alignment(spec.extensions),
-            ))
-        } else {
-            None
-        };
+            )
+        });
         let ty = if let Some((requested, microsoft)) =
             storage_alignment.filter(|&(requested, _)| requested != 0)
         {
@@ -873,6 +890,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // diagnosed; completion preserves it without dependent errors.
             if member.invalid {
                 tag.tainted.set(true);
+                tag.unmodeled
+                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
                 output.push(member);
                 continue;
             }
@@ -930,6 +949,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
                 tag.tainted.set(true);
+                tag.unmodeled
+                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
                 output.push(member);
                 continue;
             };
@@ -1306,21 +1327,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §4 paragraph 6, p. 7; PDF p. 19.
     pub(super) fn unmodeled_extension(
         &self,
-        mut chain: Option<&'tu super::SpecifierExtension<'tu>>,
+        chain: Option<&'tu super::SpecifierExtension<'tu>>,
     ) -> bool {
+        self.unmodeled_extension_reason(chain).is_some()
+    }
+
+    pub(super) fn unmodeled_extension_reason(
+        &self,
+        mut chain: Option<&'tu super::SpecifierExtension<'tu>>,
+    ) -> Option<UnmodeledType> {
         use super::SpecifierExtensionKind as K;
         while let Some(item) = chain {
-            if match item.kind {
-                | K::ExtensionMarker | K::Alignment(_) | K::ThreadLocal(_) => false,
-                | K::Attributes(attribute) => self.layout_attribute(attribute),
-                | K::MsModifier(keyword) => !calling_convention(keyword),
-                | K::Constexpr => true,
-            } {
-                return true;
+            match item.kind {
+                | K::Constexpr => return Some(UnmodeledType::Constexpr),
+                | K::MsModifier(keyword) if !calling_convention(keyword) =>
+                    return Some(UnmodeledType::PointerModifier),
+                | K::Attributes(attribute)
+                    if !attribute.recovered && self.layout_attribute(attribute) =>
+                    return Some(UnmodeledType::ExtendedVector),
+                | _ => {},
             }
             chain = item.next;
         }
-        false
+        None
     }
 
     /// Whether the specifiers give thread storage duration: the thread
@@ -1450,6 +1479,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             layout: Cell::new(None),
             complete: Cell::new(false),
             tainted: Cell::new(false),
+            unmodeled: Cell::new(None),
             contains_flexible: Cell::new(false),
             compatible: Cell::new(Scalar::Int),
             packed: Cell::new(false),
@@ -1503,7 +1533,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let valid = match self.types.nodes[ty.index] {
-            | TypeKind::Unknown => true,
+            | TypeKind::Unknown | TypeKind::Unmodeled(_) => true,
             | TypeKind::Pointer(target) =>
                 !matches!(self.types.nodes[target.index], TypeKind::Function { .. }),
             | _ => false,

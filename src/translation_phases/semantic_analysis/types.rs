@@ -133,13 +133,13 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                         continue;
                     }
                     let (ak, bk) = (self.nodes[a.index], self.nodes[b.index]);
-                    if matches!(ak, TypeKind::Unknown)
+                    if matches!(ak, TypeKind::Unknown | TypeKind::Unmodeled(_))
                         || matches!(ak, TypeKind::Tag(id) if self.tags[id].tainted.get())
                     {
                         values.push(b);
                         continue;
                     }
-                    if matches!(bk, TypeKind::Unknown)
+                    if matches!(bk, TypeKind::Unknown | TypeKind::Unmodeled(_))
                         || matches!(bk, TypeKind::Tag(id) if self.tags[id].tainted.get())
                     {
                         values.push(a);
@@ -381,6 +381,23 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         self.intern(TypeKind::Scalar(scalar))
     }
 
+    pub(crate) fn unmodeled_type(&self, ty: TypeId) -> Option<UnmodeledType> {
+        unmodeled_type(&self.nodes, &self.tags, ty)
+    }
+
+    pub(crate) fn unmodeled(&mut self, reason: UnmodeledType) -> TypeId {
+        self.intern(TypeKind::Unmodeled(reason))
+    }
+
+    /// Carry the concrete unsupported construct through dependent expressions.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23 (diagnostic identification).
+    pub(crate) fn recovery_type(&mut self, operands: &[TypeId]) -> TypeId {
+        match operands.iter().find_map(|&ty| self.unmodeled_type(ty)) {
+            | Some(reason) => self.unmodeled(reason),
+            | None => self.unknown(),
+        }
+    }
+
     pub(crate) fn unknown(&self) -> TypeId {
         self.keys[&TypeKind::Unknown]
     }
@@ -400,7 +417,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         #[cfg(test)]
         self.classification_step();
         match self.nodes[self.array_tails[ty.index].index] {
-            | TypeKind::Unknown => true,
+            | TypeKind::Unknown | TypeKind::Unmodeled(_) => true,
             | TypeKind::Tag(id) => self.tags[id].tainted.get(),
             | _ => false,
         }
@@ -417,7 +434,8 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                 | TypeKind::Tag(id) => self.tags[id].complete.get(),
                 | TypeKind::Scalar(Scalar::Void)
                 | TypeKind::Function { .. }
-                | TypeKind::Unknown => false,
+                | TypeKind::Unknown
+                | TypeKind::Unmodeled(_) => false,
                 | _ => true,
             }
     }
@@ -462,6 +480,37 @@ pub(crate) struct TypeInterner<'tu, 's> {
     scratch: &'s Bump,
 }
 
+/// The particular type-forming construct semantic analysis cannot model.
+/// C99: §4p6, p. 7; PDF p. 19 (extensions must be identified accurately).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum UnmodeledType {
+    BitInt,
+    Constexpr,
+    Decimal32,
+    Decimal64,
+    Decimal128,
+    Inferred,
+    FixedEnum,
+    PointerModifier,
+    ExtendedVector,
+}
+
+impl UnmodeledType {
+    pub(crate) const fn description(self) -> &'static str {
+        match self {
+            | Self::BitInt => "_BitInt types",
+            | Self::Constexpr => "constexpr objects",
+            | Self::Decimal32 => "_Decimal32 types",
+            | Self::Decimal64 => "_Decimal64 types",
+            | Self::Decimal128 => "_Decimal128 types",
+            | Self::Inferred => "inferred declaration types",
+            | Self::FixedEnum => "fixed-underlying enum types",
+            | Self::PointerModifier => "MSVC pointer modifiers",
+            | Self::ExtendedVector => "ext_vector_type types",
+        }
+    }
+}
+
 /// Canonical unqualified type identity plus its compact qualifier set.
 /// C99: §6.2.5p26, p. 36; PDF p. 48; §6.7.3, pp. 108-109; PDF pp. 120-121.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -479,6 +528,8 @@ pub(crate) struct TypeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TypeKind<'tu> {
     Unknown,
+    /// Parsed extension with a retained, specific missing semantic capability.
+    Unmodeled(UnmodeledType),
     /// C23: §7.21.2p2, p. 316; PDF p. 329: the distinct null pointer type.
     Nullptr,
     Scalar(Scalar),
@@ -524,6 +575,8 @@ pub(crate) struct Tag<'tu> {
     pub(crate) layout:               Cell<Option<Layout>>,
     pub(crate) complete:             Cell<bool>,
     pub(crate) tainted:              Cell<bool>,
+    /// Specific unsupported type responsible for taint, when known.
+    pub(crate) unmodeled:            Cell<Option<UnmodeledType>>,
     pub(crate) contains_flexible:    Cell<bool>,
     /// The implementation-defined compatible integer type fixed at enum
     /// completion.
@@ -769,7 +822,31 @@ impl<'tu> FieldPath<'tu> {
     }
 }
 
+/// Follow type derivations to the specific missing semantic capability.
+/// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48 (derived types).
+fn unmodeled_type(
+    nodes: &[TypeKind<'_>],
+    tags: &[&Tag<'_>],
+    mut ty: TypeId,
+) -> Option<UnmodeledType> {
+    loop {
+        match nodes[ty.index] {
+            | TypeKind::Unmodeled(reason) => return Some(reason),
+            | TypeKind::Tag(id) => return tags[id].unmodeled.get(),
+            | TypeKind::Array(inner, _)
+            | TypeKind::Pointer(inner)
+            | TypeKind::Atomic(inner)
+            | TypeKind::Function { result: inner, .. } => ty = inner,
+            | _ => return None,
+        }
+    }
+}
+
 impl<'tu> Types<'tu> {
+    pub(crate) fn unmodeled_type(&self, ty: TypeId) -> Option<UnmodeledType> {
+        unmodeled_type(self.nodes, self.tags, ty)
+    }
+
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
         layout(self.nodes, self.tags, &self.target, ty, false)
@@ -857,7 +934,7 @@ impl<'tu> Types<'tu> {
             ty = element;
         }
         match self.kind(ty) {
-            | TypeKind::Unknown => true,
+            | TypeKind::Unknown | TypeKind::Unmodeled(_) => true,
             | TypeKind::Tag(id) => self.tags[id].tainted.get(),
             | _ => false,
         }

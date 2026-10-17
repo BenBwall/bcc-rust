@@ -753,7 +753,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let data = self.sema.bindings[binding];
         let types = &self.sema.types;
         if types.unanalyzed(data.ty) {
-            return Err(LoweringErrorKind::UnanalyzedType);
+            return Err(LoweringError::unanalyzed_kind(types, data.ty));
         }
         let align = super::alignment::variable_alignment(self.sema, self.target, binding, data.ty);
         let (size, align) = match types.layout(data.ty) {

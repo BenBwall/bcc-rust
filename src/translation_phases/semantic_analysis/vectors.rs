@@ -14,6 +14,7 @@ use super::{
         Scalar,
         TypeId,
         TypeKind,
+        UnmodeledType,
     },
 };
 use crate::{
@@ -55,7 +56,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && constructs_vector(a, self.context) == construction
                 {
                     ty = if self.layout_attribute(a) {
-                        self.types.unknown()
+                        self.types.unmodeled(UnmodeledType::ExtendedVector)
                     } else {
                         self.vector_attribute(ty, a, storage_alignment)
                     };

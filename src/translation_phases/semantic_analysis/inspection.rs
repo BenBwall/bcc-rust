@@ -420,7 +420,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                                 ty = element;
                             },
                             | TypeKind::Nullptr => break "nullptr_t",
-                            | TypeKind::Unknown => break "<unanalyzed>",
+                            | TypeKind::Unknown | TypeKind::Unmodeled(_) => break "<unanalyzed>",
                             | TypeKind::Atomic(value) => {
                                 left.push(Part::Text("_Atomic("));
                                 right.push(Part::Text(")"));

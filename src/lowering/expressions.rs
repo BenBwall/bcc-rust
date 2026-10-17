@@ -85,7 +85,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let info = self.info(expression)?;
         if self.unit.sema.types.unanalyzed(info.ty) {
-            return Err(LoweringError::unanalyzed(source));
+            return Err(LoweringError::unanalyzed(
+                &self.unit.sema.types,
+                info.ty,
+                source,
+            ));
         }
         // An integer constant expression has an exact value (§6.6p6).
         if info.ice
@@ -541,7 +545,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut item = self.pop();
         for conversion in self.conversions(expression).iter().skip(skip) {
             if self.unit.sema.types.unanalyzed(conversion.ty) {
-                return Err(LoweringError::unanalyzed(source));
+                return Err(LoweringError::unanalyzed(
+                    &self.unit.sema.types,
+                    conversion.ty,
+                    source,
+                ));
             }
             item = match conversion.kind {
                 | ConversionKind::Lvalue => match item.operand {

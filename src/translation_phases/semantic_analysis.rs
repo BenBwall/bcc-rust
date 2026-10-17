@@ -154,6 +154,7 @@ pub(crate) use types::{
     TypeId,
     TypeKind,
     Types,
+    UnmodeledType,
 };
 
 use super::{
@@ -325,9 +326,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::DiscardType => {
                 _ = self.values.pop();
             },
-            | Work::UnknownType => {
+            | Work::UnknownType(reason) => {
                 _ = self.take_type();
-                self.values.push(self.types.unknown());
+                let ty = self.types.unmodeled(reason);
+                self.values.push(ty);
             },
             | Work::Declaration(d) => {
                 _ = self.declaration_sites.insert(
@@ -616,7 +618,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             && vectors::constructs_vector(a, self.context) == construction
                         {
                             ty = if self.layout_attribute(a) {
-                                self.types.unknown()
+                                self.types.unmodeled(UnmodeledType::ExtendedVector)
                             } else {
                                 self.vector_attribute(ty, a, true)
                             };
@@ -653,7 +655,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     - (TypeQualifiers::CONST | TypeQualifiers::VOLATILE | TypeQualifiers::RESTRICT))
                     .is_empty()
                 {
-                    self.values.push(self.types.unknown());
+                    let ty = self.types.unmodeled(UnmodeledType::PointerModifier);
+                    self.values.push(ty);
                     return;
                 }
                 let mut arrays = ArenaVec::new_in(self.scratch);
@@ -776,11 +779,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             | TypeQualifiers::ATOMIC))
                         .is_empty()
                     {
-                        base = self.types.unknown();
+                        base = self.types.unmodeled(UnmodeledType::PointerModifier);
                         continue;
                     }
-                    if self.unmodeled_extension(level.attributes) {
-                        base = self.types.unknown();
+                    if let Some(reason) = self.unmodeled_extension_reason(level.attributes) {
+                        base = self.types.unmodeled(reason);
                         continue;
                     }
                     base = self.types.intern(TypeKind::Pointer(base));
@@ -1657,7 +1660,7 @@ enum Work<'tu, 's> {
     VectorAttributes(Option<&'tu SpecifierExtension<'tu>>, bool),
     VectorAttributesDone(Option<&'tu SpecifierExtension<'tu>>, bool),
     VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
-    UnknownType,
+    UnknownType(UnmodeledType),
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     SpecDone(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),

@@ -83,12 +83,13 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
         ty = inner;
     }
     match types.kind(ty) {
-        | TypeKind::Unknown => Err(LoweringErrorKind::UnanalyzedType),
+        | TypeKind::Unknown => Err(super::LoweringError::unanalyzed_kind(types, ty)),
+        | TypeKind::Unmodeled(reason) => Err(LoweringErrorKind::UnmodeledType(reason)),
         | TypeKind::Scalar(scalar) => scalar_repr(types, scalar),
         | TypeKind::Pointer(_) | TypeKind::Nullptr => Ok(Repr::Pointer),
         | TypeKind::Array(element, _) =>
             if types.unanalyzed(element) {
-                Err(LoweringErrorKind::UnanalyzedType)
+                Err(super::LoweringError::unanalyzed_kind(types, ty))
             } else {
                 Ok(Repr::Aggregate)
             },
@@ -96,7 +97,7 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
         | TypeKind::Tag(_) => {
             let tag = types.tag(ty).expect("a tag type names its tag");
             if tag.tainted.get() {
-                return Err(LoweringErrorKind::UnanalyzedType);
+                return Err(super::LoweringError::unanalyzed_kind(types, ty));
             }
             match tag.kind {
                 | TagKind::Enum => scalar_repr(types, tag.compatible.get()),
@@ -349,7 +350,10 @@ fn flattened_layout<'s>(
                 flags |= AggregateFlags::UNALIGNED;
             }
             match types.kind(ty) {
-                | TypeKind::Unknown => return Err(LoweringErrorKind::UnanalyzedType),
+                | TypeKind::Unknown =>
+                    return Err(super::LoweringError::unanalyzed_kind(types, ty)),
+                | TypeKind::Unmodeled(reason) =>
+                    return Err(LoweringErrorKind::UnmodeledType(reason)),
                 | TypeKind::Scalar(scalar) => scalar_leaves(types, scalar, offset, &mut scalars)?,
                 | TypeKind::Pointer(_) | TypeKind::Nullptr =>
                     push_scalar(&mut scalars, offset, Type::Ptr)?,
@@ -370,7 +374,7 @@ fn flattened_layout<'s>(
                 | TypeKind::Tag(_) => {
                     let tag = types.tag(ty).expect("a tag type names its tag");
                     if tag.tainted.get() {
-                        return Err(LoweringErrorKind::UnanalyzedType);
+                        return Err(super::LoweringError::unanalyzed_kind(types, ty));
                     }
                     if tag.contains_flexible.get() {
                         flags |= AggregateFlags::FLEXIBLE;

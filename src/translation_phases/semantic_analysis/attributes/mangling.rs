@@ -194,7 +194,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             ));
                             parts.push(Part::Type(element));
                         },
-                        | TypeKind::Unknown => {
+                        | TypeKind::Unknown | TypeKind::Unmodeled(_) => {
                             valid = false;
                         },
                     }

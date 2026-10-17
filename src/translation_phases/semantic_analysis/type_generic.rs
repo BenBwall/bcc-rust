@@ -62,7 +62,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // C99 §5.1.1.3p1: suppress a dependent constraint after operand
             // failure.
             if self.types.unanalyzed(condition.ty) {
-                return Self::expression_result(e, self.types.unknown());
+                let ty = self.types.recovery_type(&[condition.ty]);
+                return Self::expression_result(e, ty);
             }
             if !condition.ice || condition.integer.is_none() {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidChooseCondition);
@@ -85,7 +86,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let right = self.operand_type(*right);
         let left = self.types.unqualified_array(left);
         let right = self.types.unqualified_array(right);
-        let mut result = Self::expression_result(e, self.types.scalar(Scalar::Int));
+        let ty = if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
+            self.types.recovery_type(&[left, right])
+        } else {
+            self.types.scalar(Scalar::Int)
+        };
+        let mut result = Self::expression_result(e, ty);
         if !self.types.unanalyzed(left) && !self.types.unanalyzed(right) {
             result.integer = Some(Integer::int(i128::from(
                 self.types.composite(left, right).is_some(),
@@ -233,7 +239,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | TypeKind::Scalar(s) => s,
             | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum =>
                 self.types.tags[id].compatible.get(),
-            | TypeKind::Unknown => return Self::expression_result(e, operand.ty),
+            | TypeKind::Unknown | TypeKind::Unmodeled(_) =>
+                return Self::expression_result(e, operand.ty),
             | _ => return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand),
         };
         if scalar == Scalar::Void {

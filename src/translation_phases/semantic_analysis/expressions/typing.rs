@@ -78,7 +78,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> ExpressionInfo<'tu> {
         use UnaryOperator as U;
         if self.types.unanalyzed(operand.ty) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[operand.ty]);
+            return Self::expression_result(e, ty);
         }
         if op == U::Extension {
             return ExpressionInfo {
@@ -235,7 +236,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> ExpressionInfo<'tu> {
         use BinaryOperator as B;
         if self.types.unanalyzed(left.ty) || self.types.unanalyzed(right.ty) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[left.ty, right.ty]);
+            return Self::expression_result(e, ty);
         }
         if let Some(result) = self.vector_binary(e, op, left, right) {
             return result;
@@ -595,7 +597,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let lt = self.converted(left);
         let rt = self.converted(right);
         if self.types.unanalyzed(ct) || self.types.unanalyzed(lt) || self.types.unanalyzed(rt) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[ct, lt, rt]);
+            return Self::expression_result(e, ty);
         }
         if !self.scalar_type(ct) {
             return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
@@ -693,7 +696,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.check_nonnull_arguments(function.binding, arguments);
         let ty = self.converted(function);
         if self.types.unanalyzed(ty) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[ty]);
+            return Self::expression_result(e, ty);
         }
         let Some(target) = self.pointer_target(ty) else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
@@ -701,7 +705,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // C99 §6.5.2.2p1: defer the function constraint for an unmodeled
         // target.
         if self.types.unanalyzed(target) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[target]);
+            return Self::expression_result(e, ty);
         }
         let TypeKind::Function {
             result,
@@ -726,8 +731,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut failed = prototype
             && (arguments.len() < parameters.len()
                 || (!variadic && arguments.len() != parameters.len()));
+        let mut unmodeled = self.types.unmodeled_type(result);
         for (index, &argument) in arguments.iter().enumerate() {
             let info = self.expression_info(argument);
+            unmodeled = unmodeled.or(self.types.unmodeled_type(info.ty));
             failed |= self.types.unanalyzed(info.ty);
             if prototype && let Some(&parameter) = parameters.get(index) {
                 if let Some(member) = self.transparent_union_member(parameter, info) {
@@ -777,7 +784,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         if failed {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = match unmodeled {
+                | Some(reason) => self.types.unmodeled(reason),
+                | None => self.types.unknown(),
+            };
+            return Self::expression_result(e, ty);
         }
         if !matches!(
             self.types.nodes[result.index],
@@ -851,7 +862,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         indirect: bool,
     ) -> ExpressionInfo<'tu> {
         if self.types.unanalyzed(base.ty) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[base.ty]);
+            return Self::expression_result(e, ty);
         }
         let mut ty = base.ty;
         if indirect {
@@ -861,13 +873,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             // An unanalyzed pointee may be a record; its members are unknown.
             if self.types.unanalyzed(target) {
-                return Self::expression_result(e, self.types.unknown());
+                let ty = self.types.recovery_type(&[target]);
+                return Self::expression_result(e, ty);
             }
             ty = target;
         }
         // C99 §6.5.2.3p2: defer the record constraint for an unmodeled target.
         if self.types.unanalyzed(ty) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[ty]);
+            return Self::expression_result(e, ty);
         }
         let TypeKind::Tag(id) = self.types.nodes[ty.index] else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
@@ -974,7 +988,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let operand = self.resolve_function_value(operand, Some(target));
         let from = self.converted(operand);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[target, from]);
+            return Self::expression_result(e, ty);
         }
         if let TypeKind::Tag(id) = self.types.nodes[target.index]
             && self.types.tags[id].kind == TagKind::Union
@@ -1183,7 +1198,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         align: bool,
     ) -> ExpressionInfo<'tu> {
         if self.types.unanalyzed(ty) {
-            return Self::expression_result(e, self.types.unknown());
+            let ty = self.types.recovery_type(&[ty]);
+            return Self::expression_result(e, ty);
         }
         let gnu = self.context.configuration.gnu_extensions()
             && matches!(

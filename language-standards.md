@@ -1242,6 +1242,11 @@ Equal arithmetic operands retain their aligned typedef type, subject to the
 usual promotions. A later object redeclaration supplies its typedef-derived
 alignment, while explicit object alignment requests remain inherited.
 
+Lowering diagnostics for unmodeled types retain the actual construct through
+typedefs, arrays and record members: `_BitInt`, `constexpr`, decimal types,
+inferred declarations, fixed-underlying enums, MSVC pointer modifiers or
+`ext_vector_type`. They no longer list unrelated possible causes.
+
 The reachable old-GCC glibc
 `tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
 Clang rejects that builtin. No resource `tgmath.h` is supplied for MinGW.

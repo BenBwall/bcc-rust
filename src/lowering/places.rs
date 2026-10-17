@@ -113,7 +113,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let ty = self.unit.sema.bindings[binding].ty;
         if self.unit.sema.types.unanalyzed(ty) {
-            return Err(LoweringError::unanalyzed(source));
+            return Err(LoweringError::unanalyzed(&self.unit.sema.types, ty, source));
         }
         let representation = self.repr(ty, source)?;
         let local = match representation.value_type() {

@@ -15,7 +15,12 @@ use crate::{
         Context,
         ErrorSeverity,
         SourceVectors,
-        semantic_analysis::UnsupportedAttribute,
+        semantic_analysis::{
+            TypeId,
+            Types,
+            UnmodeledType,
+            UnsupportedAttribute,
+        },
     },
     util::bump::Bump,
 };
@@ -45,6 +50,7 @@ pub(crate) enum LoweringErrorKind {
     /// Semantic analysis gave up on a type without a diagnostic, as it does
     /// for unmodeled extensions.
     UnanalyzedType,
+    UnmodeledType(UnmodeledType),
     /// A fact lowering relies on is missing from the semantic results: a
     /// compiler bug, reported rather than turned into wrong code.
     MissingFact(&'static str),
@@ -83,6 +89,13 @@ pub(crate) struct LoweringErrors<'ir> {
 }
 
 impl LoweringError {
+    pub(super) fn unanalyzed_kind(types: &Types<'_>, ty: TypeId) -> LoweringErrorKind {
+        types.unmodeled_type(ty).map_or(
+            LoweringErrorKind::UnanalyzedType,
+            LoweringErrorKind::UnmodeledType,
+        )
+    }
+
     pub(super) const fn unsupported(construct: Construct, source: SourceVectors) -> Self {
         Self {
             kind:   LoweringErrorKind::Unsupported(construct),
@@ -97,9 +110,9 @@ impl LoweringError {
         }
     }
 
-    pub(super) const fn unanalyzed(source: SourceVectors) -> Self {
+    pub(super) fn unanalyzed(types: &Types<'_>, ty: TypeId, source: SourceVectors) -> Self {
         Self {
-            kind:   LoweringErrorKind::UnanalyzedType,
+            kind:   Self::unanalyzed_kind(types, ty),
             source: Some(source),
         }
     }
@@ -137,7 +150,7 @@ impl LoweringErrorKind {
     fn message(self) -> &'static str {
         match self {
             | Self::UnitHasErrors => "code is not generated for a translation unit with errors",
-            | Self::Unsupported(_) => "not yet supported by lowering",
+            | Self::Unsupported(_) | Self::UnmodeledType(_) => "not yet supported by lowering",
             | Self::UnanalyzedType =>
                 "not yet supported by lowering: a type built from an extension semantic analysis \
                  does not model",
@@ -160,6 +173,8 @@ impl ToDiagnostic for LoweringError {
                 self.kind.message(),
                 construct.description()
             ),
+            | LoweringErrorKind::UnmodeledType(reason) =>
+                format_in!(arena, "{}: {}", self.kind.message(), reason.description()),
             | LoweringErrorKind::MissingFact(fact) =>
                 format_in!(arena, "{}: {fact}", self.kind.message()),
             | kind => kind.message(),
@@ -169,13 +184,11 @@ impl ToDiagnostic for LoweringError {
             | LoweringErrorKind::Unsupported(_) => explanation
                 .label("lowering stops here")
                 .note("the program is valid C; this compiler cannot translate it yet"),
-            | LoweringErrorKind::UnanalyzedType => explanation
-                .label("this expression or object has that type")
-                .note(
-                    "unmodeled are `constexpr` objects, `_BitInt`, decimal floating, inferred and \
-                     fixed-underlying enum types, MSVC pointer-size modifiers, and attributes \
-                     that change layout, such as `ext_vector_type`",
-                ),
+            | LoweringErrorKind::UnanalyzedType =>
+                explanation.label("the type could not be analyzed"),
+            | LoweringErrorKind::UnmodeledType(_) => explanation
+                .label("this expression or object uses the unsupported construct")
+                .note("semantic analysis does not yet model this construct"),
             | _ => explanation,
         };
         explanation.at(ErrorSeverity::Error, source)
@@ -188,6 +201,7 @@ impl fmt::Display for LoweringError {
         match self.kind {
             | LoweringErrorKind::Unsupported(construct) =>
                 write!(f, ": {}", construct.description()),
+            | LoweringErrorKind::UnmodeledType(reason) => write!(f, ": {}", reason.description()),
             | LoweringErrorKind::MissingFact(fact) => write!(f, ": {fact}"),
             | _ => Ok(()),
         }

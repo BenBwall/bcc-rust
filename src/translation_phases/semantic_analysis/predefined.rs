@@ -411,7 +411,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 );
                             },
                             | TypeKind::Nullptr => break (Base::Text("nullptr_t"), ty.qualifiers),
-                            | TypeKind::Unknown => break (Base::Text("int"), ty.qualifiers),
+                            | TypeKind::Unknown | TypeKind::Unmodeled(_) =>
+                                break (Base::Text("int"), ty.qualifiers),
                             | TypeKind::Scalar(scalar) =>
                                 break (Base::Text(scalar_spelling(scalar, c23)), ty.qualifiers),
                             | TypeKind::Tag(id) => {

@@ -309,6 +309,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 layout:               Cell::new(Some(self.types.target.va_list)),
                 complete:             Cell::new(true),
                 tainted:              Cell::new(false),
+                unmodeled:            Cell::new(None),
                 contains_flexible:    Cell::new(false),
                 compatible:           Cell::new(Scalar::Int),
                 packed:               Cell::new(false),
