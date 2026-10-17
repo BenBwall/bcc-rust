@@ -1366,7 +1366,11 @@ binary128 calls remain ambiguous in both compilers because the resource
 header does not declare a binary128 promotion overload.
 Overload semantic identities remain separate from emitted ABI names. A final
 source-order reachability pass assigns anonymous and repeated local tag ordinals
-at first emitted use, skipping unused declarations and discarded static bodies.
+at definition signatures and emitted references, skipping unused declarations
+and discarded static bodies. Eager external bodies interleave with signatures;
+reachable internal bodies and alias targets follow deferred traversal. Alias
+requests retain stable semantic identities, then resolve their strings against
+the finalized emitted names, including chains through overloaded aliases.
 ELF/MinGW use Itanium names, while MSVC uses Clang's Microsoft C linkage names,
 including shared name/argument backreferences and sparse written function-type
 metadata for nested parameter qualifiers and array adjustment. This metadata

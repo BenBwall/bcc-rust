@@ -232,8 +232,10 @@ pub(crate) fn analyze<'tu>(
     }
     analyzer.assert_balanced();
     analyzer.finish_translation_unit();
-    let symbols = analyzer.finish_attributes();
+    let mut symbols = analyzer.finish_attributes();
     analyzer.finish_function_abi(&symbols);
+    analyzer.finish_aliases(&mut symbols);
+    analyzer.finish_emitted_attributes(&mut symbols);
     analyzer.check_builtin_designators();
     let index = analyzer.retain_expression_index();
     let sizes = SizeFacts::retain(&analyzer.types, &scratch);

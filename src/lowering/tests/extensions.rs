@@ -37,6 +37,110 @@ fn header<'t>(text: &'t str, name: &str) -> &'t str {
 }
 
 #[test]
+fn overloaded_aliases_emit_both_bodies_and_windows_exports() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        let windows = matches!(target, Target::WindowsGnu | Target::WindowsMsvc);
+        for export in [false, true] {
+            let annotation = if export && windows {
+                "__declspec(dllexport)"
+            } else {
+                ""
+            };
+            let (integer, real) = if target == Target::WindowsMsvc {
+                ("?f@@$$J0YAHH@Z", "?f@@$$J0YANN@Z")
+            } else {
+                ("_Z1fi", "_Z1fd")
+            };
+            let source = format!(
+                "int ti(int n) {{return n+3;}} double td(double n) {{return n+5;}} {annotation} \
+                 int f(int) __attribute__((overloadable,alias(\"ti\"))); {annotation} double \
+                 f(double) __attribute__((overloadable,alias(\"td\"))); int main(void) {{return \
+                 f(1)+(int)f(2.0);}}"
+            );
+            let text = lower_with(
+                &source,
+                crate::configuration::CompilerConfiguration::default()
+                    .with_target(target)
+                    .with_msvc_extensions(true),
+            )
+            .unwrap_or_else(|errors| panic!("{target:?} export={export}: {errors:?}\n{source}"));
+            let arena = Bump::new();
+            let module = parse_module(&arena, &text).unwrap();
+            for (name, target_name) in [(integer, "ti"), (real, "td")] {
+                let Some(crate::ir::Symbol::Function(id)) = module.symbol(name) else {
+                    panic!("missing {name}: {text}");
+                };
+                let function = module.function(id);
+                assert_eq!(
+                    function.attributes.alias,
+                    module.symbol(target_name),
+                    "{text}"
+                );
+                assert_eq!(
+                    function.attributes.dll,
+                    if export && windows {
+                        crate::ir::DllStorage::Export
+                    } else {
+                        crate::ir::DllStorage::Default
+                    },
+                    "{text}"
+                );
+            }
+            assert_eq!(
+                run_text(&text, "main").result.unwrap().termination,
+                Termination::Returned(Some(RuntimeValue::Int(11))),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn aliases_to_overloads_use_emitted_symbols_and_keep_internal_bodies() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for internal in [false, true] {
+            let name = match (target == Target::WindowsMsvc, internal) {
+                | (true, true) => "?f@@YAHH@Z",
+                | (true, false) => "?f@@$$J0YAHH@Z",
+                | (false, true) => "_ZL1fi",
+                | (false, false) => "_Z1fi",
+            };
+            let source = format!(
+                "{} int f(int n) __attribute__((overloadable)) {{return n+4;}} int a(int) \
+                 __attribute__((alias(\"{name}\"))); int main(void) {{return a(7);}}",
+                if internal { "static" } else { "" }
+            );
+            let text = lower_for(&source, target).unwrap();
+            let arena = Bump::new();
+            let module = parse_module(&arena, &text).unwrap();
+            let Some(crate::ir::Symbol::Function(alias)) = module.symbol("a") else {
+                panic!("{text}");
+            };
+            assert_eq!(
+                module.function(alias).attributes.alias,
+                module.symbol(name),
+                "{text}"
+            );
+            assert_eq!(
+                run_text(&text, "main").result.unwrap().termination,
+                Termination::Returned(Some(RuntimeValue::Int(11))),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
 fn returns_twice_marks_declarations_from_the_retained_fact() {
     // MinGW's <setjmp.h> declares `_setjmp` and friends with the attribute;
     // glibc declares `_setjmp` without it, and the external catalog

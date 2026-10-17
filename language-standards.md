@@ -126,8 +126,9 @@ the exercised glibc level-2/3 fortify wrappers and Clang C arithmetic,
 real/complex, pointer-qualification and variadic-fallback overload selection.
 Overload symbols use Clang's Itanium ABI on ELF and MinGW and its Microsoft ABI
 on MSVC, including written nested-function qualifiers and shared argument/name
-backreferences. Anonymous and repeated local tags receive ABI ordinals at first
-emitted use, independently of semantic overload identity. Bidirectional BCC/Clang
+backreferences. Anonymous and repeated local tags receive ABI ordinals as
+definition signatures and emitted references are processed, independently of
+semantic overload identity. Bidirectional BCC/Clang
 multi-translation-unit tests compile and link all four targets, executing on the
 native host. A unique unmarked `enable_if` function keeps its C symbol; a marked
 one keeps the target's Clang symbol. Clang's Microsoft ABI omits `enable_if`
@@ -1418,11 +1419,16 @@ Implemented meanings, with Clang's applicability diagnostics:
   A constructor or destructor with parameters is refused.
 - `alias("target")` makes a declaration another name for a definition of the
   same translation unit, resolved through alias chains (an LLVM global alias).
-  Clang's errors apply: the target must be defined (by its C name), an alias
-  cannot be a definition (a non-`static` file-scope object without `extern`
+  Clang's errors apply: the target must be defined (by its emitted symbol name),
+  an alias cannot be a definition (a non-`static` file-scope object without `extern`
   is a tentative definition), functions alias functions and objects objects,
   and cycles are rejected; differing function types warn
-  (`-Wattribute-alias`). A target or alias with an assembler label is refused.
+  (`-Wattribute-alias`). Overload aliases remain distinct and can be exported
+  from Windows DLLs; target strings use the target's Itanium or Microsoft name.
+  Repeated alias definitions diagnose. Block-scope aliases validate their
+  arguments and participate in redefinition checks but neither emit an alias
+  nor resolve its target, as in Clang.
+  A target or alias with an assembler label is refused.
   A thread-local alias of a thread-local object is a `thread_local` LLVM
   alias, as Clang emits it; an alias whose storage duration differs from its
   target's, which Clang accepts and emits as an alias of the wrong storage,

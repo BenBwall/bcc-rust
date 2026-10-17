@@ -24,6 +24,7 @@ use super::{
         Namespace,
         ObjectSize,
         PredicateKind,
+        ScopeKind,
         SemanticErrorKind,
         facts::{
             AliasFacts,
@@ -90,7 +91,7 @@ pub(in crate::translation_phases::semantic_analysis) enum Subject {
     Member,
 }
 
-impl<'tu> Analyzer<'_, 'tu, '_> {
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Applies one attribute list to `subject`. A redeclaration of a
     /// defined entity cannot add attributes: as in Clang, each attribute
     /// not already written before the definition is ignored with a warning.
@@ -495,19 +496,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return;
         }
-        let target = self.context.string_cache.intern(target);
-        if self
-            .attributes
-            .alias_names
-            .insert(self.bindings[binding].name.name, ())
-            .is_none()
-        {
-            self.attributes.aliases.push(AliasRequest {
-                binding,
-                target,
-                source: attribute.source,
-            });
+        let identity = self.function_identity(binding);
+        if let Some(&previous) = self.attributes.alias_names.get(&identity) {
+            if previous != binding {
+                self.error(
+                    SemanticErrorKind::DuplicateDefinition,
+                    self.bindings[binding].name.source_vectors,
+                    Some(self.bindings[binding].name.name),
+                    Some(self.bindings[previous].name.source_vectors),
+                );
+            }
+            return;
         }
+        _ = self.attributes.alias_names.insert(identity, binding);
+        let target = self.context.string_cache.intern(target);
+        self.attributes.aliases.push(AliasRequest {
+            binding,
+            target,
+            source: attribute.source,
+            // Block aliases are semantic definitions for redeclaration
+            // diagnostics, but Clang never emits or resolves their targets.
+            emitted: self.scopes[self.scope].kind == ScopeKind::File,
+        });
     }
 
     /// GCC `section("name")` on functions and static-storage objects.
@@ -998,9 +1008,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.attributes.entity(entity).declared_alignment = true;
     }
 
-    /// Resolves aliases to final definitions and registers constructor and
-    /// destructor definitions in definition order, after every declaration
-    /// and definition of the translation unit is known.
+    /// Registers constructors and destructors in definition order and retains
+    /// entity attributes. Alias targets are resolved after emitted ABI names.
     /// GNU extension: GCC manual, "Common Function Attributes", alias.
     pub(in crate::translation_phases::semantic_analysis) fn finish_attributes(
         &mut self,
@@ -1008,16 +1017,73 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let tu = self.types.tu;
         self.finish_call_diagnostics();
         self.external_returns_twice();
-        let mut aliases = ArenaVec::new_in(tu);
-        let mut by_name = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
-        for request in &self.attributes.aliases {
-            _ = by_name.insert(self.bindings[request.binding].name.name, request.target);
+        let mut init_functions = ArenaVec::new_in(tu);
+        for index in 0..self.definitions.len() {
+            let definition = self.definitions[index];
+            if !matches!(
+                definition.kind,
+                super::super::DefinitionKind::Function
+                    | super::super::DefinitionKind::DiscardableFunction
+            ) {
+                continue;
+            }
+            let entity = self.entity_of(definition.binding);
+            let Some(&(constructor, destructor)) = self.attributes.initializers.get(&entity) else {
+                continue;
+            };
+            let binding = self.bindings[definition.binding];
+            if let TypeKind::Function {
+                parameters,
+                variadic,
+                ..
+            } = self.types.nodes[binding.ty.index]
+                && (!parameters.is_empty() || variadic)
+            {
+                self.refuse(
+                    UnsupportedAttribute::InitFunctionParameters,
+                    binding.name.source_vectors,
+                );
+            }
+            for (priority, kind) in [
+                (constructor, InitFunctionKind::Constructor),
+                (destructor, InitFunctionKind::Destructor),
+            ] {
+                if let Some(priority) = priority {
+                    init_functions.push(InitFunctionFacts {
+                        kind,
+                        priority,
+                        binding: definition.binding,
+                    });
+                }
+            }
         }
+        let mut entities = ArenaMap::with_hasher_in(FxBuildHasher, tu);
+        entities.extend(self.attributes.entities.iter().map(|(&k, &v)| (k, v)));
+        SymbolFacts {
+            entities,
+            init_functions: init_functions.leak(),
+            aliases: &[],
+            refusals: tu.alloc_slice_copy(&self.attributes.refusals),
+        }
+    }
+
+    /// Resolves target strings against emitted symbols after ABI finalization.
+    /// Semantic overload identities are deliberately not linker spellings.
+    pub(in crate::translation_phases::semantic_analysis) fn finish_aliases(
+        &mut self,
+        symbols: &mut SymbolFacts<'tu>,
+    ) {
+        if self.attributes.aliases.is_empty() {
+            return;
+        }
+        let tu = self.types.tu;
+        let mut aliases = ArenaVec::new_in(tu);
+        let names = self.alias_symbols();
         for index in 0..self.attributes.aliases.len() {
             let request = self.attributes.aliases[index];
             let alias = self.bindings[request.binding];
             if self
-                .linked_entity(alias.name.name)
+                .linked_entity(self.function_identity(request.binding))
                 .is_some_and(|(_, defined)| defined)
             {
                 self.error(
@@ -1028,25 +1094,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 continue;
             }
-            // Follow alias chains to the definition; a chain longer than
-            // the number of aliases revisits one of them.
-            let mut name = request.target;
-            let mut steps = 0;
-            let resolved = loop {
-                if let Some(&next) = by_name.get(&name) {
-                    steps += 1;
-                    if steps > self.attributes.aliases.len() {
-                        break Err(SemanticErrorKind::AliasCycle);
-                    }
-                    name = next;
-                    continue;
-                }
-                match self.linked_entity(name) {
-                    | Some((target, true)) => break Ok(target),
-                    | _ => break Err(SemanticErrorKind::AliasTarget),
-                }
-            };
-            let target = match resolved {
+            if !request.emitted {
+                continue;
+            }
+            let target = match names.resolve(request.target) {
                 | Ok(target) => target,
                 | Err(kind) => {
                     self.error(kind, request.source, None, None);
@@ -1092,55 +1143,100 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 source: request.source,
             });
         }
-        let mut init_functions = ArenaVec::new_in(tu);
-        for index in 0..self.definitions.len() {
-            let definition = self.definitions[index];
-            if !matches!(
-                definition.kind,
-                super::super::DefinitionKind::Function
-                    | super::super::DefinitionKind::DiscardableFunction
-            ) {
-                continue;
-            }
-            let entity = self.entity_of(definition.binding);
-            let Some(&(constructor, destructor)) = self.attributes.initializers.get(&entity) else {
-                continue;
-            };
-            let binding = self.bindings[definition.binding];
-            if let TypeKind::Function {
-                parameters,
-                variadic,
-                ..
-            } = self.types.nodes[binding.ty.index]
-                && (!parameters.is_empty() || variadic)
-            {
-                self.refuse(
-                    UnsupportedAttribute::InitFunctionParameters,
-                    binding.name.source_vectors,
-                );
-            }
-            for (priority, kind) in [
-                (constructor, InitFunctionKind::Constructor),
-                (destructor, InitFunctionKind::Destructor),
-            ] {
-                if let Some(priority) = priority {
-                    init_functions.push(InitFunctionFacts {
-                        kind,
-                        priority,
-                        binding: definition.binding,
-                    });
-                }
-            }
-        }
+        symbols.aliases = aliases.leak();
+        symbols.refusals = tu.alloc_slice_copy(&self.attributes.refusals);
+    }
+
+    /// DLL storage depends on generated references in alias and initialization
+    /// roots, which are known only after aliases resolve to emitted names.
+    pub(in crate::translation_phases::semantic_analysis) fn finish_emitted_attributes(
+        &mut self,
+        symbols: &mut SymbolFacts<'tu>,
+    ) {
+        self.finish_dll_references(symbols);
         self.finish_dll();
-        let mut entities = ArenaMap::with_hasher_in(FxBuildHasher, tu);
-        entities.extend(self.attributes.entities.iter().map(|(&k, &v)| (k, v)));
-        SymbolFacts {
-            entities,
-            init_functions: init_functions.leak(),
-            aliases: aliases.leak(),
-            refusals: tu.alloc_slice_copy(&self.attributes.refusals),
+        symbols
+            .entities
+            .extend(self.attributes.entities.iter().map(|(&k, &v)| (k, v)));
+    }
+
+    pub(super) fn alias_bindings(&self) -> impl Iterator<Item = usize> + '_ {
+        self.attributes
+            .aliases
+            .iter()
+            .filter(|request| request.emitted)
+            .map(|request| request.binding)
+    }
+
+    /// Provisional targets make alias-reachable bodies participate in ABI
+    /// numbering before unused declarations. Final validation follows naming.
+    pub(super) fn alias_targets(&self) -> ArenaVec<'s, (usize, usize)> {
+        let names = self.alias_symbols();
+        let mut targets = ArenaVec::new_in(self.scratch);
+        for request in &self.attributes.aliases {
+            if request.emitted
+                && let Ok(target) = names.resolve(request.target)
+            {
+                targets.push((request.binding, target));
+            }
         }
+        targets
+    }
+
+    fn alias_symbols(&self) -> AliasSymbols<'s> {
+        let mut names = AliasSymbols {
+            aliases:     ArenaMap::with_hasher_in(FxBuildHasher, self.scratch),
+            definitions: ArenaMap::with_hasher_in(FxBuildHasher, self.scratch),
+        };
+        for request in &self.attributes.aliases {
+            if request.emitted {
+                _ = names
+                    .aliases
+                    .insert(self.alias_symbol(request.binding), request.target);
+            }
+        }
+        for (binding, data) in self.bindings.iter().enumerate() {
+            if data.linkage != Linkage::None
+                && let Some((latest, defined)) = self.linked_entity(self.function_identity(binding))
+            {
+                _ = names
+                    .definitions
+                    .insert(self.alias_symbol(latest), (latest, defined));
+            }
+        }
+        names
+    }
+
+    fn alias_symbol(&self, binding: usize) -> StringCacheId {
+        let identity = self.function_identity(binding);
+        self.function_extensions
+            .abi_names
+            .get(&identity)
+            .copied()
+            .unwrap_or(self.bindings[binding].name.name)
+    }
+}
+
+/// Linker spellings, independent of the semantic identities that merge C
+/// declarations. Following at most one edge per alias detects every cycle.
+struct AliasSymbols<'s> {
+    aliases:     ArenaMap<'s, StringCacheId, StringCacheId>,
+    definitions: ArenaMap<'s, StringCacheId, (usize, bool)>,
+}
+
+impl AliasSymbols<'_> {
+    fn resolve(&self, mut name: StringCacheId) -> Result<usize, SemanticErrorKind> {
+        for _ in 0..=self.aliases.len() {
+            if let Some(&next) = self.aliases.get(&name) {
+                name = next;
+            } else {
+                return match self.definitions.get(&name) {
+                    | Some(&(target, true)) => Ok(target),
+                    | _ => Err(SemanticErrorKind::AliasTarget),
+                };
+            }
+        }
+        Err(SemanticErrorKind::AliasCycle)
     }
 }
 
@@ -1172,8 +1268,8 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Constructor and destructor priorities requested for an entity.
     initializers: ArenaMap<'s, EntityId, (Option<u16>, Option<u16>)>,
     aliases: ArenaVec<'s, AliasRequest>,
-    /// The linked names with an alias request, one request each.
-    alias_names: ArenaMap<'s, StringCacheId, ()>,
+    /// Stable linked semantic identities with an alias request, one each.
+    alias_names: ArenaMap<'s, StringCacheId, usize>,
     /// Validated cleanups by declarator identity, waiting for the end of
     /// their declarator's initializer.
     pending_cleanups: ArenaMap<'s, usize, (usize, usize, SourceVectors)>,
@@ -1230,4 +1326,5 @@ struct AliasRequest {
     binding: usize,
     target:  StringCacheId,
     source:  SourceVectors,
+    emitted: bool,
 }

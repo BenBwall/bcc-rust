@@ -88,6 +88,233 @@ void late(void) {}
 }
 
 #[test]
+fn overloaded_aliases_and_alias_chains_keep_each_emitted_entity() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        let (integer, real) = if target == Target::WindowsMsvc {
+            ("?f@@$$J0YAHH@Z", "?f@@$$J0YANN@Z")
+        } else {
+            ("_Z1fi", "_Z1fd")
+        };
+        let source = format!(
+            "int ti(int n) {{ return n; }} double td(double n) {{ return n; }} int f(int) \
+             __attribute__((overloadable,alias(\"ti\"))); double f(double) \
+             __attribute__((overloadable,alias(\"td\"))); int f(int) \
+             __attribute__((overloadable)); int through_i(int) \
+             __attribute__((alias(\"{integer}\"))); double through_d(double) \
+             __attribute__((alias(\"{real}\")));"
+        );
+        with_configuration(&source, gnu(target), |context, s| {
+            assert_eq!(s.errors, 0, "{:?}", context.take_pending_errors());
+            let aliases: Vec<_> = s
+                .symbols
+                .aliases
+                .iter()
+                .map(|alias| {
+                    let name = s
+                        .function_extensions
+                        .function(alias.binding)
+                        .map_or(s.bindings[alias.binding].name.name, |extension| {
+                            extension.abi_name
+                        });
+                    (
+                        context.string_cache.at(name),
+                        context.string_cache.at(s.bindings[alias.target].name.name),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                aliases,
+                [
+                    (integer, "ti"),
+                    (real, "td"),
+                    ("through_i", "ti"),
+                    ("through_d", "td")
+                ],
+                "{target:?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn aliases_require_the_targets_emitted_abi_name_and_a_definition() {
+    use SemanticErrorKind as K;
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        let microsoft = target == Target::WindowsMsvc;
+        for name in ["f", "_Z1fi", "?f@@$$J0YAHH@Z"] {
+            let valid = name == if microsoft { "?f@@$$J0YAHH@Z" } else { "_Z1fi" };
+            let source = format!(
+                "int f(int n) __attribute__((overloadable)) {{ return n; }} int a(int) \
+                 __attribute__((alias(\"{name}\")));"
+            );
+            assert_eq!(
+                kinds(&source, target),
+                if valid {
+                    &[][..]
+                } else {
+                    &[K::AliasTarget][..]
+                },
+                "{target:?} {source}"
+            );
+        }
+        let name = if microsoft { "?f@@$$J0YAHH@Z" } else { "_Z1fi" };
+        for (definition, parameter, expected) in [
+            (";", "int", K::AliasTarget),
+            ("{ return n; }", "double", K::AliasTypeMismatch),
+        ] {
+            let source = format!(
+                "int f(int n) __attribute__((overloadable)) {definition} int a({parameter}) \
+                 __attribute__((alias(\"{name}\")));"
+            );
+            assert_eq!(kinds(&source, target), [expected], "{target:?} {source}");
+        }
+        let source = "int f(int n) __attribute__((overloadable)) {return n;} int t(int n) {return \
+                      n;} int f(int) __attribute__((overloadable,alias(\"t\")));";
+        assert_eq!(kinds(source, target), [K::AliasDefinition], "{target:?}");
+    }
+}
+
+#[test]
+fn block_aliases_validate_arguments_but_remain_ordinary_declarations() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        let source = "int use(void) { int f(void) __attribute__((alias(\"missing\"))); extern int \
+                      object __attribute__((alias(\"absent\"))); return f()+object; }";
+        with_configuration(source, gnu(target), |context, s| {
+            assert_eq!(s.errors, 0, "{:?}", context.take_pending_errors());
+            assert!(s.symbols.aliases.is_empty());
+        });
+        for source in [
+            "int use(void) { int f(void) __attribute__((alias())); return 0; }",
+            "int use(void) { extern int object __attribute__((alias(2))); return 0; }",
+        ] {
+            assert_eq!(
+                kinds(source, target),
+                [SemanticErrorKind::AttributeArguments],
+                "{source}"
+            );
+        }
+        for (first, second) in [
+            (
+                "int a(void) __attribute__((alias(\"target\")));",
+                "int a(void) __attribute__((alias(\"target\")));",
+            ),
+            (
+                "int owner(void) {int a(void) __attribute__((alias(\"target\")));return 0;}",
+                "int a(void) __attribute__((alias(\"target\")));",
+            ),
+            (
+                "int a(void) __attribute__((alias(\"target\")));",
+                "int owner(void) {int a(void) __attribute__((alias(\"target\")));return 0;}",
+            ),
+        ] {
+            let source = format!("int target(void) {{return 1;}} {first} {second}");
+            assert_eq!(
+                kinds(&source, target),
+                [SemanticErrorKind::DuplicateDefinition],
+                "{source}"
+            );
+        }
+        let source = "int owner(void) {int a(void) __attribute__((alias(\"missing\")));return 0;} \
+                      int a(void){return 2;}";
+        assert_eq!(kinds(source, target), [SemanticErrorKind::AliasDefinition]);
+    }
+}
+
+#[test]
+fn alias_abi_names_preserve_definition_and_deferred_body_order() {
+    for target in [Target::LinuxGnu, Target::LinuxMusl, Target::WindowsGnu] {
+        for (prefix, name) in [
+            (
+                "void unused(struct {}*) __attribute__((overloadable));",
+                "_ZL1gP3$_0",
+            ),
+            (
+                "static int unused(struct {}*p) __attribute__((overloadable)){return 0;}",
+                "_ZL1gP3$_1",
+            ),
+        ] {
+            let source = format!(
+                "{prefix} static int g(struct {{}}*p) __attribute__((overloadable)){{return 7;}} \
+                 __typeof__(g) exposed __attribute__((alias(\"{name}\")));"
+            );
+            with_configuration(&source, gnu(target), |context, s| {
+                assert_eq!(s.errors, 0, "{:?}", context.take_pending_errors());
+                assert_eq!(s.symbols.aliases.len(), 1);
+                let extension = s
+                    .function_extensions
+                    .function(s.symbols.aliases[0].target)
+                    .unwrap();
+                assert_eq!(context.string_cache.at(extension.abi_name), name);
+            });
+        }
+        let declarations = "struct {int x;} a; struct {int x;} b; int takea(__typeof__(a)) \
+                            __attribute__((overloadable));";
+        let deferred =
+            "static int other(__typeof__(b) q) __attribute__((overloadable)){return q.x;}";
+        let eager = "int eager(void){return takea(a);}";
+        let aliased = "static int helper(void){return takea(a);} int exposed(void) \
+                       __attribute__((alias(\"helper\")));";
+        for (body, ordinal) in [
+            (format!("{deferred} {eager}"), 1),
+            (format!("{eager} {deferred}"), 0),
+            (format!("{aliased} {deferred}"), 1),
+            (format!("{aliased} {eager} {deferred}"), 0),
+            (format!("{aliased} {deferred} {eager}"), 1),
+        ] {
+            let source = format!("{declarations} {body}");
+            with_configuration(&source, gnu(target), |context, s| {
+                assert_eq!(s.errors, 0, "{:?}", context.take_pending_errors());
+                let extension = s
+                    .function_extensions
+                    .function(binding(context, s, "takea"))
+                    .unwrap();
+                assert_eq!(
+                    context.string_cache.at(extension.abi_name),
+                    format!("_Z5takea3$_{ordinal}"),
+                    "{source}"
+                );
+            });
+        }
+        let declarations = "struct {int x;} a; struct {int x;} b; int takea(__typeof__(a)) \
+                            __attribute__((overloadable)); int takeb(__typeof__(b)) \
+                            __attribute__((overloadable)); static int h(void){return takea(a);} \
+                            static int i(void){return takeb(b);}";
+        let alias = "int exposed(void) __attribute__((alias(\"h\")));";
+        let eager = "int eager(void){return i();}";
+        for (suffix, first) in [
+            (format!("{alias} {eager}"), "takea"),
+            (format!("{eager} {alias}"), "takeb"),
+        ] {
+            let source = format!("{declarations} {suffix}");
+            with_configuration(&source, gnu(target), |context, s| {
+                assert_eq!(s.errors, 0, "{:?}", context.take_pending_errors());
+                for name in ["takea", "takeb"] {
+                    let extension = s
+                        .function_extensions
+                        .function(binding(context, s, name))
+                        .unwrap();
+                    assert_eq!(
+                        context.string_cache.at(extension.abi_name),
+                        format!("_Z5{name}3$_{}", usize::from(name != first)),
+                        "{source}"
+                    );
+                }
+            });
+        }
+    }
+}
+
+#[test]
 fn returns_twice_is_one_retained_fact_for_attributes_and_cataloged_names() {
     let source = r"
 typedef long jmp_buf[25];

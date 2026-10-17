@@ -1573,7 +1573,7 @@ impl SemanticErrorKind {
             | Self::AliasTarget => (
                 "alias must point to a defined variable or function",
                 "GCC Common Function Attributes: the target names a definition in the same \
-                 translation unit, by its C name",
+                 translation unit, by its emitted symbol name",
             ),
             | Self::AliasKind => (
                 "alias and target must both be functions or both be variables",

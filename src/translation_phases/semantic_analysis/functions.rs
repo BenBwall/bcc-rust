@@ -649,7 +649,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.definitions[i].kind = self.external_function_kind(definition);
             }
         }
-        self.finish_dll_references(&evaluated);
+        self.functions.evaluated_imports = evaluated.leak();
         self.definitions.sort_unstable_by_key(|d| d.binding);
     }
 
@@ -1540,7 +1540,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Microsoft discardable inline body that neither GNU `used` nor a
     /// reference from emitted code keeps, as Clang defers such definitions
     /// until their first use.
-    fn finish_dll_references(&mut self, evaluated: &[(Option<usize>, usize, bool, bool)]) {
+    pub(super) fn finish_dll_references(&mut self, symbols: &super::facts::SymbolFacts<'tu>) {
+        let evaluated = self.functions.evaluated_imports;
         let mut kinds = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for i in 0..self.definitions.len() {
             let definition = self.definitions[i];
@@ -1548,6 +1549,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             _ = kinds.insert(entity, definition.kind);
         }
         let mut emitted = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for binding in symbols
+            .aliases
+            .iter()
+            .flat_map(|alias| [alias.binding, alias.target])
+            .chain(symbols.init_functions.iter().map(|init| init.binding))
+        {
+            let entity = self.entity_of(binding);
+            _ = emitted.insert(entity, ());
+        }
         let mut changed = true;
         while changed {
             changed = false;
@@ -1852,6 +1862,8 @@ pub(super) struct State<'tu, 's> {
     entities: ArenaMap<'s, StringCacheId, Entity>,
     previous: ArenaMap<'s, usize, SourceVectors>,
     uses: ArenaVec<'s, Use>,
+    /// Evaluated DLL references retained until aliases and init roots resolve.
+    evaluated_imports: &'s [(Option<usize>, usize, bool, bool)],
     sizeof_contexts: ArenaVec<'s, SizeofContext<'tu>>,
     pub(super) sizeof: Option<usize>,
     /// Code generation skips the code being analyzed, as Clang's does at
@@ -1883,6 +1895,7 @@ impl<'s> State<'_, 's> {
             entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             previous:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             uses:               ArenaVec::new_in(scratch),
+            evaluated_imports:  &[],
             sizeof_contexts:    ArenaVec::new_in(scratch),
             sizeof:             None,
             dead:               false,

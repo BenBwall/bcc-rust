@@ -667,3 +667,54 @@ fn aliases_may_not_target_imported_inline_bodies() {
         assert_eq!(kinds(&source, Target::WindowsGnu), mingw, "{source}");
     }
 }
+
+#[test]
+fn aliases_and_initializers_root_generated_dll_references() {
+    let prefix =
+        "__declspec(dllimport) extern int x; int before(void){return x;} extern int x; int sink;";
+    for target in WINDOWS {
+        for (body, imported) in [
+            ("static int h(void){return x;}", true),
+            (
+                "static int h(void){return x;} int a(void) __attribute__((alias(\"h\")));",
+                false,
+            ),
+            (
+                "static int h(void){return x;} int owner(void){int a(void) \
+                 __attribute__((alias(\"h\")));return 0;}",
+                true,
+            ),
+            (
+                "__attribute__((constructor)) static void h(void){sink=x;}",
+                false,
+            ),
+            (
+                "__attribute__((destructor)) static void h(void){sink=x;}",
+                false,
+            ),
+            (
+                "static int helper(void){return x;} static int h(void){return helper();} int \
+                 a(void) __attribute__((alias(\"h\")));",
+                false,
+            ),
+        ] {
+            let source = format!("{prefix} {body}");
+            assert!(
+                kinds(&source, target)
+                    .iter()
+                    .all(|&kind| kind == SemanticErrorKind::DllImportDropped),
+                "{target:?} {source}"
+            );
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?} {source}"
+            );
+        }
+    }
+    for attribute in ["constructor", "destructor"] {
+        let source =
+            format!("{prefix} __attribute__(({attribute})) inline void h(void){{sink=x;}}");
+        assert_eq!(facts(&source, Target::WindowsMsvc, "x").0, None, "{source}");
+    }
+}

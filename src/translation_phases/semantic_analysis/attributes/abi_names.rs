@@ -1,6 +1,7 @@
 //! Semantic overload identities are assigned at declaration time. ABI names
-//! instead number anonymous and repeated local tags on first emitted use, so
-//! unused declarations and discarded bodies do not change callable symbols.
+//! instead number anonymous and repeated local tags at definition signatures
+//! and emitted uses; unused declarations and discarded bodies do not consume
+//! names. Alias targets are rooted before declaration-only fallback naming.
 //! C99: §6.2.2p2, p. 30; PDF p. 42; §6.9p3-5, p. 140; PDF p. 152.
 //! <https://clang.llvm.org/docs/AttributeReference.html#overloadable>
 
@@ -64,23 +65,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     DefinitionKind::Inline | DefinitionKind::DiscardableFunction
                 ))
                 || attributes.is_some_and(|a| a.used);
-            if root && root_entities.insert(entity) {
-                roots.push(binding);
+            if root {
+                _ = root_entities.insert(entity);
             }
+            // Clang names a definition's signature in source order even if
+            // its internal body is deferred and never emitted.
+            roots.push(AbiWork::Binding(binding, root));
         }
         for init in symbols.init_functions {
             if root_entities.insert(self.abi_entity(init.binding)) {
-                roots.push(init.binding);
+                roots.push(AbiWork::Binding(init.binding, true));
             }
         }
-        for alias in symbols.aliases {
-            for binding in [alias.binding, alias.target] {
-                if root_entities.insert(self.abi_entity(binding)) {
-                    roots.push(binding);
-                }
+        for binding in self.alias_bindings() {
+            if root_entities.insert(self.abi_entity(binding)) {
+                roots.push(AbiWork::AliasDeclaration(binding));
             }
         }
-        roots.sort_unstable();
+        roots.sort_unstable_by_key(|work| work.binding());
         let mut heads = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut edges = ArenaVec::new_in(self.scratch);
         for reference in self.references.iter().rev() {
@@ -91,11 +93,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut work = roots;
         let mut queued = root_entities;
         let mut position = 0;
+        let eager_end = work.len();
+        let mut alias_targets = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         while position < work.len() {
-            let binding = work[position];
+            if position == eager_end && self.alias_bindings().next().is_some() {
+                // Every definition signature is known before deferred bodies.
+                // Alias events keep their source position in the same queue
+                // as ordinary references, without renumbering their targets.
+                alias_targets.extend(self.alias_targets());
+            }
+            let (binding, traverse) = match work[position] {
+                | AbiWork::Binding(binding, traverse) => (binding, traverse),
+                | AbiWork::AliasDeclaration(binding) => {
+                    self.assign_function_abi(binding);
+                    work.push(AbiWork::AliasTarget(binding));
+                    position += 1;
+                    continue;
+                },
+                | AbiWork::AliasTarget(alias) => {
+                    let Some(&target) = alias_targets.get(&alias) else {
+                        position += 1;
+                        continue;
+                    };
+                    (target, true)
+                },
+            };
+            let deferred = position >= eager_end;
             position += 1;
-            self.assign_function_abi(binding);
             let owner = self.abi_entity(binding);
+            // Deduplicate on consumption so an earlier alias event can win
+            // over a later ordinary reference to the same deferred body.
+            if deferred && !queued.insert(owner) {
+                continue;
+            }
+            self.assign_function_abi(binding);
+            if !traverse {
+                continue;
+            }
             if let Some(&(definition, DefinitionKind::Inline)) = definitions.get(&owner) {
                 let data = self.bindings[definition];
                 if !symbols
@@ -109,11 +143,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             while let Some(index) = edge {
                 let (referenced, next) = edges[index];
                 self.assign_function_abi(referenced);
-                let entity = self.abi_entity(referenced);
-                if let Some(&(definition, _)) = definitions.get(&entity)
-                    && queued.insert(entity)
-                {
-                    work.push(definition);
+                if let Some(&(definition, _)) = definitions.get(&self.abi_entity(referenced)) {
+                    work.push(AbiWork::Binding(definition, true));
                 }
                 edge = next;
             }
@@ -164,6 +195,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 abi_name,
                 ..**extension
             });
+        }
+        for (&identity, name) in &mut self.function_extensions.abi_names {
+            if collisions.contains(name) {
+                *name = identity;
+            }
         }
     }
 
@@ -218,4 +254,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 enum AbiEntity {
     Local(usize),
     Linked(StringCacheId),
+}
+
+#[derive(Clone, Copy)]
+enum AbiWork {
+    Binding(usize, bool),
+    AliasDeclaration(usize),
+    AliasTarget(usize),
+}
+
+impl AbiWork {
+    fn binding(self) -> usize {
+        match self {
+            | Self::Binding(binding, _)
+            | Self::AliasDeclaration(binding)
+            | Self::AliasTarget(binding) => binding,
+        }
+    }
 }
