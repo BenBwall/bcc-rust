@@ -10,6 +10,7 @@ use super::super::{
     Expression,
     ExpressionType,
     FunctionExtension,
+    Linkage,
     PredicateKind,
     Scalar,
     TypeId,
@@ -110,7 +111,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Part::Type(ty) => {
                     let ty = TypeId { alignment: 0, ..ty };
                     let substitute = !ty.qualifiers.is_empty()
-                        || !matches!(self.types.nodes[ty.index], TypeKind::Scalar(_));
+                        || match self.types.nodes[ty.index] {
+                            | TypeKind::Scalar(scalar) => matches!(
+                                scalar,
+                                Scalar::ComplexFloat
+                                    | Scalar::ComplexDouble
+                                    | Scalar::ComplexLongDouble
+                                    | Scalar::ComplexFloat128
+                            ),
+                            | TypeKind::Nullptr => false,
+                            | _ => true,
+                        };
                     if substitute {
                         if let Some(index) =
                             substitutions.iter().position(|&previous| previous == ty)
@@ -153,28 +164,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             parts.push(Part::Type(inner));
                         },
                         | TypeKind::Tag(tag) => {
-                            let name = self.types.tags[tag]
-                                .name
-                                .map_or("$_anonymous", |name| self.context.string_cache.at(name));
-                            output.push_str(crate::diagnostics::format_in!(
-                                self.scratch,
-                                "{}{}",
-                                name.len(),
-                                name
-                            ));
+                            self.mangle_tag(&mut output, tag);
                         },
                         | TypeKind::Function {
                             result,
                             parameters,
+                            prototype,
                             variadic,
-                            ..
                         } => {
                             output.push('F');
                             parts.push(Part::Text("E"));
                             if variadic {
                                 parts.push(Part::Text("z"));
                             }
-                            if parameters.is_empty() && !variadic {
+                            if parameters.is_empty() && !variadic && prototype {
                                 parts.push(Part::Text("v"));
                             }
                             for &p in parameters.iter().rev() {
@@ -375,6 +378,108 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
         self.context.string_cache.intern(output.as_str())
+    }
+
+    /// Itanium names use an anonymous record's first direct typedef, or an
+    /// ordinal assigned on first mangled use. Function-local tags also retain
+    /// their declaring function's encoding so equal spellings stay distinct.
+    /// C99: §6.2.2p2, p. 30; PDF p. 42 (extended linkage names).
+    fn mangle_tag(&mut self, output: &mut ArenaString<'_>, tag: usize) {
+        let scope = self
+            .tag_declarations
+            .iter()
+            .find_map(|&(id, scope)| (id == tag).then_some(scope))
+            .unwrap_or(0);
+        let mut ancestor = Some(scope);
+        let mut local = None;
+        while let Some(scope) = ancestor {
+            if let Some(function) = self.function_records.iter().find(|f| f.scope == scope) {
+                local = Some((scope, function.binding));
+                break;
+            }
+            ancestor = self.scopes[scope].parent;
+        }
+        if let Some((_, Some(binding))) = local {
+            output.push('Z');
+            let name = self
+                .context
+                .string_cache
+                .at(self.function_identity(binding));
+            if let Some(encoding) = name.strip_prefix("_Z") {
+                output.push_str(encoding);
+            } else {
+                if self.bindings[binding].linkage == Linkage::Internal {
+                    output.push('L');
+                }
+                output.push_str(crate::diagnostics::format_in!(
+                    self.scratch,
+                    "{}{}",
+                    name.len(),
+                    name
+                ));
+            }
+            output.push('E');
+        }
+        let name = self.types.tags[tag]
+            .name
+            .or_else(|| self.function_extensions.typedef_names.get(&tag).copied());
+        if let Some(name) = name {
+            let ordinal = local.map(|(scope, _)| self.local_tag_ordinal(tag, scope, name));
+            let name = self.context.string_cache.at(name);
+            output.push_str(crate::diagnostics::format_in!(
+                self.scratch,
+                "{}{}",
+                name.len(),
+                name
+            ));
+            if let Some(ordinal) = ordinal.filter(|&ordinal| ordinal != 0) {
+                let discriminator = ordinal - 1;
+                output.push_str(if discriminator < 10 {
+                    crate::diagnostics::format_in!(self.scratch, "_{discriminator}")
+                } else {
+                    crate::diagnostics::format_in!(self.scratch, "__{discriminator}_")
+                });
+            }
+        } else {
+            let scope = local.map_or(0, |(scope, _)| scope);
+            let next = self
+                .function_extensions
+                .anonymous_names
+                .values()
+                .filter(|&&(owner, _)| owner == scope)
+                .count();
+            let &mut (_, ordinal) = self
+                .function_extensions
+                .anonymous_names
+                .entry(tag)
+                .or_insert((scope, next));
+            let name = crate::diagnostics::format_in!(self.scratch, "$_{ordinal}");
+            output.push_str(crate::diagnostics::format_in!(
+                self.scratch,
+                "{}{}",
+                name.len(),
+                name
+            ));
+        }
+    }
+
+    pub(super) fn local_tag_ordinal(
+        &mut self,
+        tag: usize,
+        scope: usize,
+        name: StringCacheId,
+    ) -> usize {
+        let next = self
+            .function_extensions
+            .local_names
+            .values()
+            .filter(|&&(owner, spelling, _)| owner == scope && spelling == name)
+            .count();
+        self.function_extensions
+            .local_names
+            .entry(tag)
+            .or_insert((scope, name, next))
+            .2
     }
 }
 

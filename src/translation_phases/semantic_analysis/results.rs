@@ -223,13 +223,6 @@ pub(crate) struct FunctionRecord<'tu> {
     pub(crate) result:            TypeId,
     /// The function scope that holds the parameters and the body's
     /// outermost declarations (§6.9.1p9).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Retained lexical owner of the function parameters."
-        )
-    )]
     pub(crate) scope:             usize,
     /// Prototype bindings referenced by bounds and their corresponding body
     /// bindings, retained when replaying the definition's prototype scope.

@@ -372,3 +372,79 @@ int main(void) { { char data[9] __attribute__((cleanup(clean))); } return observ
         9,
     );
 }
+
+#[test]
+fn overload_floating_promotions_and_contextual_function_arguments_execute() {
+    let text = returns(
+        r"
+int widen(double value) __attribute__((overloadable)) { return value == 1.5; }
+int widen(int value) __attribute__((overloadable)) { return 20; }
+int transform(int value) __attribute__((overloadable)) { return value + 3; }
+int transform(double value) __attribute__((overloadable)) { return 30; }
+int apply(int (*function)(int)) __attribute__((overloadable)) { return function(4); }
+int apply(double value) __attribute__((overloadable)) { return 40; }
+int plain(int (*function)(int)) { return function(5); }
+int main(void) { return widen(1.5f) + apply(transform) + plain(&transform); }
+",
+        16,
+    );
+    assert!(
+        text.contains("@_Z5widend") && text.contains("@_Z5applyPFiiE"),
+        "{text}"
+    );
+}
+
+#[test]
+fn overload_mangling_preserves_complex_substitutions_and_c_function_types() {
+    let text = lowered(
+        r"
+int complex(float _Complex a, float _Complex b) __attribute__((overloadable)) { return 0; }
+int functions(int (*a)(), int (*b)(void)) __attribute__((overloadable)) { return 0; }
+typedef struct { int value; } Named;
+int record(Named *p) __attribute__((overloadable)) { return p->value; }
+int anonymous(struct { int value; } *p) __attribute__((overloadable)) { return p->value; }
+int main(void) { return 0; }
+",
+    );
+    for name in [
+        "_Z7complexCfS_",
+        "_Z9functionsPFiEPFivE",
+        "_Z6recordP5Named",
+        "_Z9anonymousP3$_0",
+    ] {
+        assert!(text.contains(name), "{name}\n{text}");
+    }
+}
+
+#[test]
+fn overload_local_tags_distinguish_repeated_names_and_internal_owners() {
+    let text = lowered(
+        r"
+void outer(void) {
+ { struct S { int x; }; extern int f(struct S *) __attribute__((overloadable)); f(0); }
+ { struct S { double x; }; extern int f(struct S *) __attribute__((overloadable)); f(0); }
+}
+static void inner(void) {
+ struct S { int x; }; extern int f(struct S *) __attribute__((overloadable)); f(0);
+}
+void *keep = (void *)inner;
+",
+    );
+    for name in ["_Z1fPZ5outerE1S", "_Z1fPZ5outerE1S_0", "_Z1fPZL5innerE1S"] {
+        assert!(text.contains(name), "{name}\n{text}");
+    }
+}
+
+#[test]
+fn overload_anonymous_tags_keep_identity_through_later_typeof_typedefs() {
+    for source in [
+        "struct {int x;} obj; typedef __typeof__(obj) Named; int f(Named*p) \
+         __attribute__((overloadable)){return p->x;}",
+        "typedef struct{int x;} *P; typedef __typeof__(*((P)0)) Named; int f(Named*p) \
+         __attribute__((overloadable)){return p->x;}",
+    ] {
+        let text = lowered(source);
+        assert!(text.contains("_Z1fP3$_0"), "{source}\n{text}");
+        assert!(!text.contains("_Z1fP5Named"), "{source}\n{text}");
+    }
+}

@@ -122,8 +122,8 @@ inference handles fixed objects, interior pointers and modeled dynamic bounds.
 Unmodeled allocation/conditional/compound-literal origins remain unknown, as do
 runtime member and nested-array offsets in subobject modes 1 and 3. Unsupported
 predicate shapes diagnose rather than being discarded. These contracts cover
-the exercised glibc level-2/3 fortify wrappers; full Clang type-generic overload
-resolution remains a separate scope. In MinGW-w64, `__CRT_INLINE` becomes
+the exercised glibc level-2/3 fortify wrappers and Clang C arithmetic,
+real/complex, pointer-qualification and variadic-fallback overload selection. In MinGW-w64, `__CRT_INLINE` becomes
 `extern inline` with `gnu_inline`, `setjmp` passes `__builtin_frame_address (0)`,
 `intrin.h` always includes the x86 intrinsic headers, the printf and strftime
 format archetypes become Clang's, and `intsafe.h` defines its functions as
@@ -848,10 +848,9 @@ Unmodeled names return 0. Clang's `__has_feature` and `__has_extension` share
 `__has_attribute`'s gate: `c_alignas`, `c_alignof`, `c_atomic`,
 `c_generic_selections`, `c_static_assert` and `c_thread_local` are features
 where the C11 feature is native and extensions wherever bcc accepts it, as in
-Clang; `attribute_deprecated_with_message` is a feature in every mode; every
-other name returns 0. In particular, `attribute_overloadable` remains 0:
-the modeled fortify overload contracts do not cover every Clang type-generic
-promotion and fallback. These tables describe the
+Clang; `attribute_deprecated_with_message` and `attribute_overloadable` are features
+in every mode. `overloadable_unmarked` is an extension but not a feature, as
+in Clang. Every other name returns 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -1249,11 +1248,12 @@ inferred declarations, fixed-underlying enums, MSVC pointer modifiers or
 
 The reachable old-GCC glibc
 `tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
-Clang rejects that builtin. No resource `tgmath.h` is supplied for MinGW.
-Clang's resource implementation needs promotion overloads, real/complex
-selection and an unavailable variadic fallback beyond the modeled fortify
-overload contracts, and its binary128 calls are ambiguous. No resource
-`tgmath.h` is supplied.
+Clang rejects that builtin. The embedded LLVM 23.1.1 resource `tgmath.h`
+uses arithmetic promotion overloads, real/complex selection and an unavailable
+variadic fallback. It is checked against pinned Clang in C17, GNU17 and C23
+on all four targets. Its binary128 calls retain Clang's ambiguous-overload
+diagnostic; the header does not define a binary128 promotion overload. The
+resource and its LLVM license are distributed together under `src/headers/`.
 
 Binary128 literals are parsed exactly with arena-backed integer rational
 conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,

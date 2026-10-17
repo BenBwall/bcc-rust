@@ -18,6 +18,7 @@ use super::super::{
     Namespace,
     ObjectSize,
     PredicateKind,
+    Scalar,
     SemanticErrorKind,
     SizeArgument,
     TypeId,
@@ -151,8 +152,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             _ = self.overload_previous.insert(index, previous);
         }
         self.install(name, Namespace::Ordinary, index);
-        if linkage != Linkage::None && identity == name.name {
-            _ = self.external.insert(name.name, index);
+        if linkage != Linkage::None {
+            _ = self.external.insert(identity, index);
         }
         true
     }
@@ -193,7 +194,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut best = viable.iter().filter(|&&(binding, rank)| {
             !viable.iter().any(|&(other, other_rank)| {
-                other != binding && self.better_candidate(other, other_rank, binding, rank)
+                other != binding
+                    && self.better_candidate(other, other_rank, binding, rank, arguments.as_slice())
             })
         });
         let Some(&(binding, _)) = best.next() else {
@@ -215,6 +217,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Some(self.bindings[anchor].name.name),
                 None,
             );
+            return ExpressionInfo {
+                ty: self.types.unknown(),
+                ..function
+            };
         }
         let mut result = function;
         result.binding = Some(binding);
@@ -276,6 +282,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result
     }
 
+    /// Clang extends C99 promotions to overload ranking: unlike C++, float
+    /// and double promote to long double and the corresponding complex types.
+    /// Sequences rank exact, promotion, conversion, real/complex, ellipsis,
+    /// then incompatible pointers. Qualification remains an exact match.
+    /// C99: §6.3.1.5p1, p. 44; PDF p. 56 (extended conversion ranking).
     fn candidate_rank(
         &mut self,
         binding: usize,
@@ -301,34 +312,93 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for (index, &argument) in arguments.iter().enumerate() {
             let info = self.expression_info(argument);
             let Some(&parameter) = parameters.get(index) else {
-                rank.push(3);
+                rank.push(4);
                 continue;
             };
-            let (from, _) = self.value_conversion(info);
-            if self
-                .types
-                .composite(from.unqualified(), parameter.unqualified())
-                .is_some()
+            let parameter = self.types.non_atomic(parameter);
+            if let Some(anchor) = info.binding.filter(|&binding| {
+                self.bindings[binding].kind == BindingKind::Function
+                    && (self.overload_previous.contains_key(&binding)
+                        || self.function_extensions.function(binding).is_some())
+            }) && let Some(target) = self.pointer_target(parameter)
+                && matches!(self.types.nodes[target.index], TypeKind::Function { .. })
             {
+                let (selected, ambiguous) = self.function_value_candidate(anchor, Some(target));
+                if selected.is_none() || ambiguous {
+                    return None;
+                }
+                rank.push(0);
+                continue;
+            }
+            let (from, _) = self.value_conversion(info);
+            if from.index == parameter.index {
                 rank.push(0);
                 continue;
             }
             if !self.assignable(parameter, info, from) {
+                if self.pointer_target(from).is_some() && self.pointer_target(parameter).is_some() {
+                    // Clang keeps incompatible pointer conversions as a last
+                    // resort, below even an ellipsis. The chosen call still
+                    // receives the ordinary pointer-constraint diagnostic.
+                    rank.push(5);
+                    continue;
+                }
+                if self.transparent_union_member(parameter, info).is_some() {
+                    rank.push(2);
+                    continue;
+                }
                 return None;
             }
             if let (Some(from), Some(to)) =
                 (self.pointer_target(from), self.pointer_target(parameter))
-                && self
-                    .types
-                    .composite(from.unqualified(), to.unqualified())
-                    .is_some()
+                && self.same_qualification_shape(from, to)
+                && !self.null_pointer_constant(info)
             {
-                rank.push(1);
+                rank.push(0);
                 continue;
             }
             let promotion = self.integer_type(from).is_some()
-                && self.promote(info, from).unqualified() == parameter.unqualified();
-            rank.push(if promotion { 1 } else { 2 });
+                && self.promote(info, from).index == parameter.index;
+            let from_scalar = self.types.nodes[from.index];
+            let to_scalar = self.types.nodes[parameter.index];
+            let floating_promotion = matches!(
+                (from_scalar, to_scalar),
+                (
+                    TypeKind::Scalar(Scalar::Float),
+                    TypeKind::Scalar(Scalar::Double | Scalar::LongDouble | Scalar::Float128)
+                ) | (
+                    TypeKind::Scalar(Scalar::Double),
+                    TypeKind::Scalar(Scalar::LongDouble | Scalar::Float128)
+                ) | (
+                    TypeKind::Scalar(Scalar::ComplexFloat),
+                    TypeKind::Scalar(
+                        Scalar::ComplexDouble | Scalar::ComplexLongDouble | Scalar::ComplexFloat128
+                    )
+                ) | (
+                    TypeKind::Scalar(Scalar::ComplexDouble),
+                    TypeKind::Scalar(Scalar::ComplexLongDouble | Scalar::ComplexFloat128)
+                )
+            );
+            let complex = |ty| {
+                matches!(
+                    ty,
+                    TypeKind::Scalar(
+                        Scalar::ComplexFloat
+                            | Scalar::ComplexDouble
+                            | Scalar::ComplexLongDouble
+                            | Scalar::ComplexFloat128
+                    )
+                )
+            };
+            rank.push(if promotion || floating_promotion {
+                1
+            } else if complex(from_scalar) != complex(to_scalar)
+                && !matches!(to_scalar, TypeKind::Scalar(Scalar::Bool))
+            {
+                3
+            } else {
+                2
+            });
         }
         if let Some(contract) = contract {
             for predicate in contract
@@ -350,11 +420,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     // A conversion must be no worse for every written argument and better
     // for at least one. Extension preference applies only to tied sequences.
-    fn better_candidate(&self, a: usize, ar: &[u8], b: usize, br: &[u8]) -> bool {
-        if ar.iter().zip(br).any(|(a, b)| a > b) {
+    fn better_candidate(
+        &mut self,
+        a: usize,
+        ar: &[u8],
+        b: usize,
+        br: &[u8],
+        arguments: &[&'tu Expression<'tu>],
+    ) -> bool {
+        // Ill-formed conversions are compared before ordinary sequence ranks,
+        // so a better second argument cannot rescue a bad pointer conversion.
+        if ar.iter().zip(br).any(|(&a, &b)| a == 5 && b != 5) {
             return false;
         }
-        if ar.iter().zip(br).any(|(a, b)| a < b) {
+        if ar.iter().zip(br).any(|(&a, &b)| a != 5 && b == 5) {
+            return true;
+        }
+        let parameters = |binding: usize| match self.types.nodes[self.bindings[binding].ty.index] {
+            | TypeKind::Function { parameters, .. } => parameters,
+            | _ => &[],
+        };
+        let ap = parameters(a);
+        let bp = parameters(b);
+        let mut better = false;
+        for (index, (&a, &b)) in ar.iter().zip(br).enumerate() {
+            let order = a.cmp(&b).then_with(|| {
+                let (Some(&a), Some(&b)) = (ap.get(index), bp.get(index)) else {
+                    return std::cmp::Ordering::Equal;
+                };
+                let info = self.expression_info(arguments[index]);
+                let (from, _) = self.value_conversion(info);
+                self.compare_overload_conversion(info, from, a, b)
+            });
+            if order.is_gt() {
+                return false;
+            }
+            better |= order.is_lt();
+        }
+        if better {
             return true;
         }
         let a = self.function_extensions.function(a);
@@ -376,6 +479,105 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         a.map_or(0, |a| a.sizes.len()) > b.map_or(0, |b| b.sizes.len())
+    }
+
+    /// Qualification conversions keep exact-match rank; compare their target
+    /// qualifier sets rather than treating every added qualifier as a
+    /// promotion. Clang's C overloading also inherits the pointer-to-bool
+    /// tie-break. C99: §6.3.2.3p1, p. 47; PDF p. 59 (extended conversion
+    /// ranking).
+    fn compare_overload_conversion(
+        &mut self,
+        info: ExpressionInfo<'tu>,
+        from: TypeId,
+        a: TypeId,
+        b: TypeId,
+    ) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let from_pointer = self.pointer_target(from).is_some();
+        if from_pointer {
+            let boolean =
+                |ty: TypeId| matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool));
+            let order = boolean(a).cmp(&boolean(b));
+            if !order.is_eq() {
+                return order;
+            }
+        }
+        let (Some(mut a), Some(mut b)) = (self.pointer_target(a), self.pointer_target(b)) else {
+            return Ordering::Equal;
+        };
+        if self.null_pointer_constant(info) {
+            // A C null pointer constant cast to void * uses pointer
+            // conversions, including to qualified void *. As in Clang's
+            // C++-based ranking, conversion to void * loses to another
+            // pointer target. Integer null constants have no such tie-break.
+            if from_pointer {
+                let void = |ty: TypeId| {
+                    matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void))
+                };
+                return void(a).cmp(&void(b));
+            }
+            return Ordering::Equal;
+        }
+        if self.pointer_target(from).is_some_and(|source| {
+            matches!(
+                self.types.nodes[source.index],
+                TypeKind::Scalar(Scalar::Void)
+            ) && source.index != a.index
+        }) {
+            return Ordering::Equal;
+        }
+        let mut a_subset = true;
+        let mut b_subset = true;
+        loop {
+            a_subset &= b.qualifiers.contains(a.qualifiers);
+            b_subset &= a.qualifiers.contains(b.qualifiers);
+            match (self.types.nodes[a.index], self.types.nodes[b.index]) {
+                | (TypeKind::Pointer(inner_a), TypeKind::Pointer(inner_b)) => {
+                    a = inner_a;
+                    b = inner_b;
+                },
+                | (TypeKind::Array(inner_a, bound_a), TypeKind::Array(inner_b, bound_b))
+                    if bound_a == bound_b =>
+                {
+                    a = inner_a;
+                    b = inner_b;
+                },
+                | _ => break,
+            }
+        }
+        if a.index != b.index {
+            return Ordering::Equal;
+        }
+        match (a_subset, b_subset) {
+            | (true, false) => Ordering::Less,
+            | (false, true) => Ordering::Greater,
+            | _ => Ordering::Equal,
+        }
+    }
+
+    /// Array element qualification participates in the same exact-match
+    /// sequence as pointer-target qualification, including nested arrays.
+    /// C99: §6.7.3p8, p. 109; PDF p. 121 (array qualification).
+    fn same_qualification_shape(&self, mut a: TypeId, mut b: TypeId) -> bool {
+        loop {
+            if a.index == b.index {
+                return true;
+            }
+            match (self.types.nodes[a.index], self.types.nodes[b.index]) {
+                | (TypeKind::Pointer(inner_a), TypeKind::Pointer(inner_b)) => {
+                    a = inner_a;
+                    b = inner_b;
+                },
+                | (TypeKind::Array(inner_a, bound_a), TypeKind::Array(inner_b, bound_b))
+                    if bound_a == bound_b =>
+                {
+                    a = inner_a;
+                    b = inner_b;
+                },
+                | _ => return false,
+            }
+        }
     }
 
     pub(super) fn call_attribute_diagnostic(
@@ -436,34 +638,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let target = target
             .and_then(|ty| self.pointer_target(ty))
             .filter(|ty| matches!(self.types.nodes[ty.index], TypeKind::Function { .. }));
-        let mut selected = None;
-        let mut seen = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
-        let mut candidate = Some(anchor);
-        let mut ambiguous = false;
-        while let Some(binding) = candidate {
-            let contract = self.function_extensions.function(binding);
-            if seen.insert(self.function_identity(binding))
-                && contract.is_none_or(|contract| {
-                    contract.sizes.is_empty()
-                        && !contract
-                            .predicates
-                            .iter()
-                            .any(|p| p.kind == PredicateKind::Enable)
-                })
-                && target.is_none_or(|target| {
-                    self.types
-                        .composite(target, self.bindings[binding].ty)
-                        .is_some()
-                })
-            {
-                if selected.is_some() {
-                    ambiguous = true;
-                } else {
-                    selected = Some(binding);
-                }
-            }
-            candidate = self.overload_previous.get(&binding).copied();
-        }
+        let (selected, ambiguous) = self.function_value_candidate(anchor, target);
         if let Some(binding) = selected.filter(|_| !ambiguous) {
             let mut leaf = self.selected_designator(source.expression);
             if let super::super::ExpressionType::Unary {
@@ -522,5 +697,50 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ..source
             }
         }
+    }
+
+    /// Speculative address selection must not commit binding uses or deferred
+    /// diagnostics while an enclosing overload is still being ranked.
+    /// C99: §6.3.2.1p4, p. 46; PDF p. 58 (extended function designation).
+    fn function_value_candidate(
+        &mut self,
+        anchor: usize,
+        target: Option<TypeId>,
+    ) -> (Option<usize>, bool) {
+        let mut selected = None;
+        let mut seen = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
+        let mut candidate = Some(anchor);
+        let mut ambiguous = false;
+        let mut selected_rank = u8::MAX;
+        while let Some(binding) = candidate {
+            let contract = self.function_extensions.function(binding);
+            if seen.insert(self.function_identity(binding))
+                && contract.is_none_or(|contract| {
+                    contract.sizes.is_empty()
+                        && !contract
+                            .predicates
+                            .iter()
+                            .any(|p| p.kind == PredicateKind::Enable)
+                })
+                && target.is_none_or(|target| {
+                    self.types
+                        .composite(target, self.bindings[binding].ty)
+                        .is_some()
+                })
+            {
+                let rank = u8::from(
+                    target.is_some_and(|target| target.index != self.bindings[binding].ty.index),
+                );
+                if rank < selected_rank {
+                    selected = Some(binding);
+                    selected_rank = rank;
+                    ambiguous = false;
+                } else if rank == selected_rank {
+                    ambiguous = true;
+                }
+            }
+            candidate = self.overload_previous.get(&binding).copied();
+        }
+        (selected, ambiguous)
     }
 }

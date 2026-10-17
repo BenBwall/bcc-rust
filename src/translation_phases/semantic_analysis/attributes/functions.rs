@@ -112,7 +112,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 match attribute.name {
                     | "overloadable" => {
                         overloadable = true;
-                        if attribute.arguments.is_some() {
+                        if attribute.arguments.is_some()
+                            || matches!(
+                                self.types.nodes[ty.index],
+                                TypeKind::Function {
+                                    prototype: false,
+                                    variadic: false,
+                                    ..
+                                }
+                            )
+                        {
                             self.contract_error(attribute.source, attribute.name);
                         }
                     },

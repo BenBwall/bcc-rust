@@ -31,7 +31,19 @@ pub(crate) struct FunctionExtensions<'tu> {
         ArenaMap<'tu, usize, &'tu FunctionExtension<'tu>>,
     pub(in crate::translation_phases::semantic_analysis) calls:
         ArenaMap<'tu, usize, ExtensionCall<'tu>>,
-    pub(in crate::translation_phases::semantic_analysis) values:        ArenaMap<'tu, usize, usize>,
+    pub(in crate::translation_phases::semantic_analysis) values: ArenaMap<'tu, usize, usize>,
+    /// Anonymous tag ordinals, assigned on first mangled use per enclosing
+    /// function; owner zero denotes file scope.
+    pub(in crate::translation_phases::semantic_analysis) anonymous_names:
+        ArenaMap<'tu, usize, (usize, usize)>,
+    /// Named local tags with the same spelling need a discriminator within
+    /// their enclosing function, assigned on first mangled use.
+    pub(in crate::translation_phases::semantic_analysis) local_names:
+        ArenaMap<'tu, usize, (usize, StringCacheId, usize)>,
+    /// Only a direct typedef in the anonymous tag's defining declaration
+    /// grants that tag a typedef name for ABI purposes.
+    pub(in crate::translation_phases::semantic_analysis) typedef_names:
+        ArenaMap<'tu, usize, StringCacheId>,
     pub(in crate::translation_phases::semantic_analysis) object_sizes:
         ArenaMap<'tu, usize, ObjectSize<'tu>>,
     /// Hidden size of a cleanup call's synthetic address argument, keyed by
@@ -43,11 +55,14 @@ pub(crate) struct FunctionExtensions<'tu> {
 impl<'tu> FunctionExtensions<'tu> {
     pub(in crate::translation_phases::semantic_analysis) fn new(arena: &'tu Bump) -> Self {
         Self {
-            functions:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            calls:         ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            values:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            object_sizes:  ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            cleanup_sizes: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            functions:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            calls:           ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            values:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            anonymous_names: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            local_names:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            typedef_names:   ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            object_sizes:    ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            cleanup_sizes:   ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
     }
 

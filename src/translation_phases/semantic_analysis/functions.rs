@@ -561,7 +561,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(b.name.source_vectors),
                 );
             }
-            if b.linkage == Linkage::Internal && !usage.sizeof.is_some_and(|s| ignored[s]) {
+            if b.linkage == Linkage::Internal
+                && !usage.sizeof.is_some_and(|s| ignored[s])
+                && !usage
+                    .reference_context
+                    .is_some_and(|s| ignored_references[s])
+            {
                 _ = used
                     .entry(self.function_identity(usage.binding))
                     .or_insert(usage.name);
@@ -1378,8 +1383,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.functions.sizeof = Some(index);
     }
 
-    /// Retains evaluation contexts for emission separately from definition
-    /// constraints. GNU typeof executes an expression only for VM types;
+    /// Retains evaluation contexts for emission and internal-definition use
+    /// tracking. GNU typeof executes an expression only for VM types;
     /// alignof never evaluates its operand. C99: §6.7.5.2p5, p. 117;
     /// PDF p. 129 (VM types); GCC manual, "Typeof".
     pub(super) fn enter_reference_context(

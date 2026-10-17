@@ -930,6 +930,8 @@ mod tests {
             "c_thread_local",
             "__c_static_assert__",
             "attribute_deprecated_with_message",
+            "attribute_overloadable",
+            "overloadable_unmarked",
             "__attribute_deprecated_with_message__",
             "address_sanitizer",
             "blocks",
@@ -977,8 +979,7 @@ mod tests {
         let output = bcc(&[
             "--tokens",
             "--input",
-            "#if __has_feature(attribute_overloadable) || \
-             __has_extension(nullability)\nyes\n#endif\n",
+            "#if __has_feature(address_sanitizer) || __has_extension(nullability)\nyes\n#endif\n",
         ]);
         clean(&output);
         assert_eq!(identifiers(&output), Vec::<String>::new());

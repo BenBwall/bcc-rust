@@ -1037,7 +1037,7 @@ pub(super) fn with_identity_macros<'a>(
 /// for the features bcc implements, after `__name__` normalization. A C11
 /// language feature is a feature where it is native and an extension wherever
 /// bcc accepts it, as in Clang. Every other name answers 0, including Clang
-/// features bcc lacks (sanitizers, blocks, `overloadable`, nullability), so
+/// features bcc lacks (sanitizers, blocks, nullability), so
 /// headers take their portable paths.
 /// Clang extension: Clang Language Extensions, "`__has_feature` and
 /// `__has_extension`".
@@ -1052,7 +1052,8 @@ fn clang_feature(configuration: CompilerConfiguration, name: &str, extension: bo
         | "c_static_assert" => Feature::StaticAssert,
         | "c_thread_local" => Feature::ThreadLocal,
         // GNU `deprecated` takes an optional message in every mode.
-        | "attribute_deprecated_with_message" => return true,
+        | "attribute_deprecated_with_message" | "attribute_overloadable" => return true,
+        | "overloadable_unmarked" => return extension,
         | _ => return false,
     };
     if extension {

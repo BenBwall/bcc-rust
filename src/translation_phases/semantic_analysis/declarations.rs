@@ -498,6 +498,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let file = self.scopes[self.scope].kind == ScopeKind::File;
         let typedef = spec.storage_class == Some(StorageClass::Typedef);
+        if typedef
+            && let TypeKind::Tag(tag) = self.types.nodes[ty.index]
+            && match spec.type_specifiers {
+                | TypeSpecifiers::StructOrUnion(specifier) =>
+                    specifier.identifier.is_none() && specifier.struct_declaration_list.is_some(),
+                | TypeSpecifiers::Enum(specifier) =>
+                    specifier.name.is_none() && specifier.enumeration_list.is_some(),
+                | _ => false,
+            }
+        {
+            _ = self
+                .function_extensions
+                .typedef_names
+                .entry(tag)
+                .or_insert(name.name);
+        }
         let prior = self
             .lookup(Namespace::Ordinary, name.name)
             .map(|e| self.bindings[e.binding]);
@@ -737,12 +753,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ) {
             return;
         }
+        let identity = self
+            .function_extensions
+            .function(self.bindings.len())
+            .filter(|_| kind == BindingKind::Function)
+            .map_or(name.name, |extension| extension.identity);
         let previous = visible
             .filter(|p| p.scope == self.scope)
             .map(|p| p.binding)
             .or_else(|| {
                 (linkage != Linkage::None)
-                    .then(|| self.external.get(&name.name).copied())
+                    .then(|| self.external.get(&identity).copied())
                     .flatten()
             });
         // C99 §6.2.7p4: only a visible linked declaration supplies a
@@ -864,7 +885,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.install(name, Namespace::Ordinary, index);
         if linkage != Linkage::None {
-            _ = self.external.insert(name.name, index);
+            _ = self.external.insert(identity, index);
         }
     }
 

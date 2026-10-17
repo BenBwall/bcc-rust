@@ -810,7 +810,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU extension: GCC manual, "Common Type Attributes".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
     /// C99: §6.5.2.2p7, p. 72; PDF p. 84; §6.5.16.1p1, p. 92; PDF p. 104.
-    fn transparent_union_member(
+    pub(in crate::translation_phases::semantic_analysis) fn transparent_union_member(
         &mut self,
         parameter: TypeId,
         argument: ExpressionInfo<'tu>,

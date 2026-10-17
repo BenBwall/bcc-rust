@@ -338,3 +338,188 @@ fn cleanup_accepts_single_overloads_redeclarations_and_disabled_enable_predicate
         });
     }
 }
+
+#[test]
+fn overload_floating_complex_and_qualification_sequences_match_clang() {
+    // The return type identifies the selected declaration without executing
+    // binary80/binary128 or complex arithmetic in the interpreter.
+    for (first, second, argument, expected) in [
+        ("double", "int", "1.0f", "char"),
+        ("float", "long double", "1.0", "long"),
+        ("int", "__float128", "1.0", "long"),
+        (
+            "float _Complex",
+            "double _Complex",
+            "(float _Complex)1",
+            "char",
+        ),
+        (
+            "float _Complex",
+            "long double _Complex",
+            "(double _Complex)1",
+            "long",
+        ),
+        ("float _Complex", "int", "1.0", "long"),
+        ("float", "double _Complex", "(float _Complex)1", "long"),
+        ("_Bool", "float", "(double _Complex)1", "char"),
+        ("_Bool", "void *", "(int *)0", "long"),
+        ("const int *", "void *", "(int *)0", "char"),
+        ("const int *", "const volatile int *", "(int *)0", "char"),
+        ("int", "enum E", "(enum E)0", "long"),
+    ] {
+        let source = format!(
+            "enum E{{zero}}; char f({first}) __attribute__((overloadable)); long f({second}) \
+             __attribute__((overloadable)); \
+             _Static_assert(__builtin_types_compatible_p(__typeof__(f({argument})),{expected}), \
+             \"selected overload\");"
+        );
+        with_source(&source, |context, sema| {
+            assert_eq!(
+                sema.errors,
+                0,
+                "{source}\n{:?}",
+                context.take_pending_errors()
+            );
+        });
+    }
+}
+
+#[test]
+fn overload_floating_promotions_and_crossed_qualifiers_remain_ambiguous() {
+    for (first, second, argument) in [
+        ("double", "long double", "1.0f"),
+        (
+            "double _Complex",
+            "long double _Complex",
+            "(float _Complex)1",
+        ),
+        ("float _Complex", "double _Complex", "1.0"),
+        ("const int *", "volatile int *", "(int *)0"),
+        ("int *", "void *", "0"),
+    ] {
+        let source = format!(
+            "int f({first}) __attribute__((overloadable)); int f({second}) \
+             __attribute__((overloadable)); int test(void){{return f({argument});}}"
+        );
+        with_source(&source, |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(sema.errors, 1, "{source}\n{errors:?}");
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::AmbiguousOverload,
+                        ..
+                    })]
+                ),
+                "{source}\n{errors:?}"
+            );
+            assert!(sema.function_extensions.calls.is_empty());
+        });
+    }
+}
+
+#[test]
+fn overload_ellipsis_beats_incompatible_pointers_and_reports_unavailability() {
+    for argument in ["(char *)0", "(const int *)0"] {
+        let source = format!(
+            "int f(int *) __attribute__((overloadable)); long f(...) \
+             __attribute__((overloadable,unavailable(\"non arithmetic\"))); void \
+             test(void){{f({argument});}}"
+        );
+        with_source(&source, |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(sema.errors, 1, "{source}\n{errors:?}");
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::CallAttribute,
+                        ..
+                    })]
+                ),
+                "{source}\n{errors:?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn overload_declarations_require_prototypes_and_one_unmarked_entity() {
+    for source in [
+        "int f() __attribute__((overloadable));",
+        "int f(int) __attribute__((overloadable)); int f(double); int f(float);",
+    ] {
+        with_source(source, |context, sema| {
+            assert_eq!(
+                sema.errors,
+                1,
+                "{source}\n{:?}",
+                context.take_pending_errors()
+            );
+        });
+    }
+}
+
+#[test]
+fn overload_null_pointer_conversions_do_not_prefer_added_qualifiers() {
+    for argument in ["0", "(void *)0", "(void *)1"] {
+        let source = format!(
+            "int f(int *) __attribute__((overloadable)); int f(const int *) \
+             __attribute__((overloadable)); int test(void){{return f({argument});}}"
+        );
+        with_source(&source, |context, sema| {
+            let errors = context.take_pending_errors();
+            assert_eq!(sema.errors, 1, "{argument}: {errors:?}");
+            assert!(matches!(
+                errors[0],
+                TranslationError::Semantic(SemanticError {
+                    kind: SemanticErrorKind::AmbiguousOverload,
+                    ..
+                })
+            ));
+        });
+    }
+    with_source(
+        r#"
+char f(int *) __attribute__((overloadable));
+long f(const void *) __attribute__((overloadable));
+_Static_assert(__builtin_types_compatible_p(__typeof__(f((void *)0)), char), "null pointer conversion");
+_Static_assert(__builtin_types_compatible_p(__typeof__(f((void *)1)), long), "qualification conversion");
+"#,
+        |context, sema| {
+            assert_eq!(sema.errors, 0, "{:?}", context.take_pending_errors());
+        },
+    );
+}
+
+#[test]
+fn overload_array_element_qualification_keeps_exact_conversion_rank() {
+    with_source(
+        r#"
+char f(const int (*)[3]) __attribute__((overloadable));
+long f(void *) __attribute__((overloadable));
+char g(const int (*)[2][3]) __attribute__((overloadable));
+long g(const volatile int (*)[2][3]) __attribute__((overloadable));
+int a[3], b[2][3];
+_Static_assert(__builtin_types_compatible_p(__typeof__(f(&a)), char), "array qualification");
+_Static_assert(__builtin_types_compatible_p(__typeof__(g(&b)), char), "nested qualifiers");
+"#,
+        |context, sema| {
+            assert_eq!(sema.errors, 0, "{:?}", context.take_pending_errors());
+        },
+    );
+}
+
+#[test]
+fn overload_hidden_block_externs_compare_mangled_entities() {
+    with_source(
+        r"
+void a(void) { extern int f(int) __attribute__((overloadable)); f(1); }
+void b(void) { extern int f(double) __attribute__((overloadable)); f(2.0); }
+",
+        |context, sema| {
+            assert_eq!(sema.errors, 0, "{:?}", context.take_pending_errors());
+        },
+    );
+}

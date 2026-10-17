@@ -1358,10 +1358,12 @@ dependent ICE diagnostic, and math builtin dispatch yields to a shadowing
 declaration. The ordinary explicit work stack visits all syntax operands.
 
 The reachable old-GCC glibc `tgmath.h` path needs these primitives rather than
-`__builtin_tgmath`, which the pinned Clang rejects. No MinGW resource
-`tgmath.h` is supplied: Clang's header needs promotion overloads,
-real/complex selection and an unavailable variadic fallback beyond the modeled
-fortify overload contracts, and its binary128 calls are ambiguous.
+`__builtin_tgmath`, which the pinned Clang rejects. The embedded LLVM 23.1.1
+resource `tgmath.h` now exercises arithmetic promotion overloads, real/complex
+selection and an unavailable variadic fallback. Resource-header regressions
+compare C17, GNU17 and C23 on all four targets against pinned Clang. Its
+binary128 calls remain ambiguous in both compilers because the resource
+header does not declare a binary128 promotion overload.
 The implementation also repairs the glibc macro pattern `cast function ##
 f128`: a multi-token paste operand is pasted at its final token before its
 prefix is rescanned, protected by a reduced preprocessor regression.
@@ -1504,10 +1506,10 @@ The `mingw` survey compares 448 rows against `vector-stacked`: 13 newly accepted
 GNU17 MinGW headers, zero newly rejected headers in either mode. Individual
 MinGW coverage is 57/58 Clang-accepted headers in GNU17 and 27/28 in the C17
 standard-header subset. Separate probes accept all 13 affected Windows and
-intrinsic headers in both modes. The remaining MinGW `tgmath.h` and combined
-standard-header failures require a resource header and Clang's type-generic
-overload behavior beyond the modeled fortify contracts. Promotion overloads,
-real/complex selection and an unavailable variadic fallback remain deferred.
+intrinsic headers in both modes. That survey predates the embedded `tgmath.h`
+and arithmetic/complex overload-selection implementation described above; its
+remaining-header counts are historical rather than a current implementation
+limit.
 
 
 ### Common GCC scalar builtin coverage (2026-10-12)
