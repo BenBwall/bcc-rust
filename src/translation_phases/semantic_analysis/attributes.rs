@@ -33,6 +33,7 @@
 //! GNU extension: GCC manual, "Attribute Syntax".
 //! <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
 
+mod call_diagnostics;
 mod catalog;
 mod entities;
 mod functions;
@@ -116,6 +117,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 continue;
             };
             let refusal = match rule {
+                | catalog::Rule::CallDiagnostic => {
+                    self.check_call_diagnostic(specifier, attribute);
+                    None
+                },
                 | catalog::Rule::Convention(convention) => match convention {
                     | catalog::Convention::Default => None,
                     | catalog::Convention::X86 | catalog::Convention::Pascal => {

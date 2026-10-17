@@ -79,6 +79,19 @@ impl FunctionBuilder<'_, '_> {
         inst
     }
 
+    /// Retains a frontend diagnostic ID while this call survives optimization.
+    /// It has no effect on the IR's executable or textual semantics.
+    pub(crate) fn set_call_diagnostic(&mut self, inst: Inst, diagnostic: u32) {
+        debug_assert!(
+            matches!(
+                self.body.inst(inst),
+                InstData::Call { .. } | InstData::CallIndirect { .. }
+            ),
+            "diagnostic IDs belong to call instructions"
+        );
+        _ = self.body.call_diagnostics.insert(inst, diagnostic);
+    }
+
     /// Like [`FunctionBuilder::insert`], returning the result value. Panics
     /// if the instruction has none.
     fn insert_value(&mut self, data: InstData) -> Value {

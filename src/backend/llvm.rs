@@ -40,6 +40,7 @@ pub(crate) use driver::{
     TemporaryObject,
     Toolchain,
     compile_module,
+    compile_module_checked,
 };
 #[cfg(test)]
 use target::data_layout;

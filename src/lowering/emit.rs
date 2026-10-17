@@ -38,6 +38,7 @@ pub(super) fn emit<'s>(
     mut draft: Draft<'s>,
     module: &mut Module<'_>,
     func: FuncId,
+    diagnostics: &mut ArenaVec<'_, super::CallDiagnostic>,
 ) -> Result<(), LoweringError> {
     let scratch = draft.scratch();
     let order = reverse_post_order(&draft);
@@ -102,6 +103,7 @@ pub(super) fn emit<'s>(
         let map = |value: Value, values: &ArenaVec<'_, Option<Value>>| {
             values[draft.resolve(value).index()].ok_or_else(missing)
         };
+        let mut call_diagnostic = None;
         for &(op, result) in &data.insts {
             let emitted = match op {
                 | Op::Inst(inst) => {
@@ -116,15 +118,27 @@ pub(super) fn emit<'s>(
                     let inst = builder.atomic(*data, &args);
                     builder.inst_result(inst)
                 },
+                | Op::Diagnostic(diagnostic) => {
+                    call_diagnostic =
+                        Some(u32::try_from(diagnostics.len()).expect("too many call diagnostics"));
+                    diagnostics.push(*diagnostic);
+                    None
+                },
                 | Op::Call(callee, args) => {
                     let args = map_list(args, &values, &map, scratch)?;
                     let inst = builder.call(callee, &args);
+                    if let Some(id) = call_diagnostic.take() {
+                        builder.set_call_diagnostic(inst, id);
+                    }
                     builder.inst_result(inst)
                 },
                 | Op::CallIndirect(sig, callee, args) => {
                     let callee = map(callee, &values)?;
                     let args = map_list(args, &values, &map, scratch)?;
                     let inst = builder.call_indirect(sig, callee, &args);
+                    if let Some(id) = call_diagnostic.take() {
+                        builder.set_call_diagnostic(inst, id);
+                    }
                     builder.inst_result(inst)
                 },
             };
@@ -220,7 +234,7 @@ fn used_poison<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, bool> {
                         Ok(value)
                     });
                 },
-                | Op::Iconst(..) | Op::Fconst(..) => {},
+                | Op::Iconst(..) | Op::Fconst(..) | Op::Diagnostic(_) => {},
                 | Op::Atomic(_, args) | Op::Call(_, args) =>
                     for &arg in args {
                         mark(arg);

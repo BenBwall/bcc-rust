@@ -251,7 +251,12 @@ impl<'s> Draft<'_, 's> {
                 | InstData::Unreachable => unreachable!("terminators are not in a block's list"),
             }
         };
-        _ = builder.insert_with_result(data, result);
+        let emitted = builder.insert_with_result(data, result);
+        if matches!(data, InstData::Call { .. } | InstData::CallIndirect { .. })
+            && let Some(id) = self.call_diagnostic(inst)
+        {
+            builder.set_call_diagnostic(emitted, id);
+        }
     }
 
     /// Appends a block's terminator with its edges renumbered.

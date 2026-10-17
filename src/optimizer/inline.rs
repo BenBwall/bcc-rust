@@ -208,6 +208,9 @@ fn expand(draft: &mut Draft<'_, '_>, body: &Body<'_>, block: Block, position: us
             if let Some(new_inst) = instructions[old.index()] {
                 let data = remap_inst(*body.inst(old), &map, &slots);
                 draft.replace_inst(new_inst, data);
+                if let Some(id) = body.call_diagnostic(old) {
+                    draft.set_call_diagnostic(new_inst, id);
+                }
                 if let Some(bits) = body.const_bits(body.inst(old)) {
                     draft.set_const_bits(new_inst, bits);
                 }

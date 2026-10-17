@@ -7,13 +7,13 @@
 //! the parser constructs the declaration. [`analyze_translation_unit`] then
 //! resolves its type and initializer from the finished tree.
 //!
-//! [`lower_translation_unit`] hands the analyzed unit to the middle end:
-//! lowering into an IR arena created after semantic analysis, the optimizer
-//! when one is requested, and ABI lowering for the back ends.
+//! [`lower_translation_unit_diagnosed`] hands the analyzed unit to the middle
+//! end: lowering into an IR arena created after semantic analysis, the
+//! optimizer when one is requested, and ABI lowering for the back ends.
 //!
 //! Read [`parse_translation_unit`], [`with_preprocessor`], and
 //! [`parse_with_arena`], then [`analyze_translation_unit`] and
-//! [`lower_translation_unit`].
+//! [`lower_translation_unit_diagnosed`].
 //!
 //! Files by role:
 //! - Stage drivers: `stages.rs` scopes the preprocessing and parser arenas to
@@ -32,9 +32,11 @@ mod middle_end;
 
 use std::path::Path;
 
+#[cfg(test)]
+pub(crate) use middle_end::lower_translation_unit;
 pub(crate) use middle_end::{
     MiddleEndError,
-    lower_translation_unit,
+    lower_translation_unit_diagnosed,
 };
 pub(crate) use stages::{
     parse_with_arena,

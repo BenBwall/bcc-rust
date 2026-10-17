@@ -136,6 +136,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             match rule {
+                | Rule::CallDiagnostic => self.apply_call_diagnostic(subject, specifier, attribute),
                 | Rule::Aligned => match subject {
                     | Subject::Function { binding, .. } => {
                         if let Some(alignment) = self
@@ -1001,6 +1002,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
     ) -> SymbolFacts<'tu> {
         let tu = self.types.tu;
+        self.finish_call_diagnostics();
         self.external_returns_twice();
         let mut aliases = ArenaVec::new_in(tu);
         let mut by_name = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
@@ -1149,6 +1151,7 @@ fn follows_definition(rule: Rule, name: &str) -> bool {
             | Rule::Convention(_)
             | Rule::RecordLayout { .. }
             | Rule::Alias
+            | Rule::CallDiagnostic
     ) && name != "noreturn"
 }
 
@@ -1157,7 +1160,9 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Specifier lists already checked by name, by address.
     pub(in crate::translation_phases::semantic_analysis) checked: ArenaMap<'s, usize, ()>,
     pub(in crate::translation_phases::semantic_analysis) refusals: ArenaVec<'s, AttributeRefusal>,
-    entities: ArenaMap<'s, EntityId, EntityAttributes<'tu>>,
+    pub(super) entities: ArenaMap<'s, EntityId, EntityAttributes<'tu>>,
+    pub(super) call_diagnostics:
+        ArenaMap<'s, (usize, usize), super::call_diagnostics::ParsedDiagnostic>,
     sections: ArenaMap<'s, EntityId, SourceVectors>,
     /// Constructor and destructor priorities requested for an entity.
     initializers: ArenaMap<'s, EntityId, (Option<u16>, Option<u16>)>,
@@ -1182,6 +1187,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             checked:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             refusals:           ArenaVec::new_in(scratch),
             entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            call_diagnostics:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             sections:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             initializers:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             aliases:            ArenaVec::new_in(scratch),
@@ -1202,7 +1208,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             .map(|&(variable, ..)| variable)
     }
 
-    fn entity(&mut self, entity: EntityId) -> &mut EntityAttributes<'tu> {
+    pub(super) fn entity(&mut self, entity: EntityId) -> &mut EntityAttributes<'tu> {
         self.entities.entry(entity).or_default()
     }
 }

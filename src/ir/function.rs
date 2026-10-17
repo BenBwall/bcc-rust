@@ -31,6 +31,7 @@ use super::{
     types::Type,
 };
 use crate::util::bump::{
+    ArenaMap,
     ArenaVec,
     Bump,
 };
@@ -39,17 +40,20 @@ use crate::util::bump::{
 /// parameters and its instructions in program order.
 #[derive(Debug)]
 pub(crate) struct Body<'ir> {
-    pub(super) blocks:      Table<'ir, Block, BlockData<'ir>>,
-    pub(super) insts:       Table<'ir, Inst, InstData>,
+    pub(super) blocks:           Table<'ir, Block, BlockData<'ir>>,
+    pub(super) insts:            Table<'ir, Inst, InstData>,
     /// The result of each instruction, beside its record.
-    pub(super) results:     Table<'ir, Inst, Option<Value>>,
-    pub(super) values:      Table<'ir, Value, ValueData>,
-    pub(super) stack_slots: Table<'ir, StackSlot, StackSlotData>,
+    pub(super) results:          Table<'ir, Inst, Option<Value>>,
+    pub(super) values:           Table<'ir, Value, ValueData>,
+    pub(super) stack_slots:      Table<'ir, StackSlot, StackSlotData>,
     /// The block each label names: the blocks whose address `block_addr`
     /// and global relocations may take.
-    pub(super) labels:      Table<'ir, BlockLabel, Block>,
-    pub(super) pool:        ArenaVec<'ir, Value>,
-    pub(super) constants:   Table<'ir, ConstId, u128>,
+    pub(super) labels:           Table<'ir, BlockLabel, Block>,
+    pub(super) pool:             ArenaVec<'ir, Value>,
+    pub(super) constants:        Table<'ir, ConstId, u128>,
+    /// Frontend diagnostic IDs for calls. Messages and source provenance live
+    /// outside the IR; these opaque IDs follow surviving calls through passes.
+    pub(super) call_diagnostics: ArenaMap<'ir, Inst, u32>,
 }
 
 impl<'ir> Body<'ir> {
@@ -84,6 +88,11 @@ impl<'ir> Body<'ir> {
 
     pub(crate) fn inst(&self, inst: Inst) -> &InstData {
         &self.insts[inst]
+    }
+
+    /// Frontend diagnostic associated with this call, if any.
+    pub(crate) fn call_diagnostic(&self, inst: Inst) -> Option<u32> {
+        self.call_diagnostics.get(&inst).copied()
     }
 
     pub(crate) fn inst_result(&self, inst: Inst) -> Option<Value> {
@@ -340,14 +349,15 @@ impl<'ir> Body<'ir> {
     /// An empty body.
     pub(crate) fn new_in(arena: &'ir Bump) -> Self {
         Self {
-            blocks:      Table::new_in(arena),
-            insts:       Table::new_in(arena),
-            results:     Table::new_in(arena),
-            values:      Table::new_in(arena),
-            stack_slots: Table::new_in(arena),
-            labels:      Table::new_in(arena),
-            pool:        ArenaVec::new_in(arena),
-            constants:   Table::new_in(arena),
+            blocks:           Table::new_in(arena),
+            insts:            Table::new_in(arena),
+            results:          Table::new_in(arena),
+            values:           Table::new_in(arena),
+            stack_slots:      Table::new_in(arena),
+            labels:           Table::new_in(arena),
+            pool:             ArenaVec::new_in(arena),
+            constants:        Table::new_in(arena),
+            call_diagnostics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
         }
     }
 }

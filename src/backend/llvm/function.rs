@@ -513,6 +513,9 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     self.emitter.module.function_signature(func),
                     self.body.value_list(args),
                 )?;
+                if let Some(id) = self.body.call_diagnostic(inst) {
+                    api.call_diagnostic(call, id);
+                }
                 if self.emitter.module.returns_twice(func) {
                     returns_twice(api, call, true);
                 }
@@ -530,6 +533,9 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     self.emitter.module.signature(sig),
                     args,
                 )?;
+                if let Some(id) = self.body.call_diagnostic(inst) {
+                    api.call_diagnostic(call, id);
+                }
                 if self.emitter.indirect_returns_twice {
                     returns_twice(api, call, true);
                 }

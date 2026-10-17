@@ -113,6 +113,7 @@ pub(super) enum Op<'s> {
     /// would enlarge every operation, including functions without atomics.
     Atomic(&'s InstData, &'s [Value]),
     Call(FuncId, &'s [Value]),
+    Diagnostic(&'s super::CallDiagnostic),
     CallIndirect(SigId, Value, &'s [Value]),
 }
 

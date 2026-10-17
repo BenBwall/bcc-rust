@@ -13,7 +13,10 @@
 use super::correspondence::EntityId;
 use crate::{
     translation_phases::SourceVectors,
-    util::bump::ArenaMap,
+    util::{
+        bump::ArenaMap,
+        string_cache::StringCacheId,
+    },
 };
 
 /// Retained entity attributes, constructor/destructor registrations and
@@ -66,6 +69,8 @@ pub(crate) struct EntityAttributes<'tu> {
     /// An empty slice applies to every pointer parameter. These facts are
     /// diagnostic only.
     pub(crate) nonnull:            Option<&'tu [usize]>,
+    /// GNU error/warning contract, retained from the first declaration.
+    pub(crate) call_diagnostic:    Option<FunctionCallDiagnostic>,
     /// A declaration of the object specifies its alignment, by GNU
     /// `aligned` or `_Alignas`, rather than a typedef: that alignment is the
     /// object's own, which the System V rule for large arrays does not raise
@@ -77,6 +82,16 @@ pub(crate) struct EntityAttributes<'tu> {
     /// Microsoft `selectany` on an external object: its definitions in
     /// different translation units are one, and the linker keeps any.
     pub(crate) select_any:         bool,
+}
+
+/// Diagnostic attached to an emitted direct call of a function.
+/// GNU extension: GCC Common Function Attributes, error and warning.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FunctionCallDiagnostic {
+    pub(crate) message: StringCacheId,
+    pub(crate) text:    StringCacheId,
+    pub(crate) source:  SourceVectors,
+    pub(crate) warning: bool,
 }
 
 /// A function's inline-control request. `Never` wins over `Always` when

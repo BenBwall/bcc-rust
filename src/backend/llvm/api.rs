@@ -5,6 +5,8 @@
 //! Transparent handle slices are borrowed directly by LLVM-C, whose array
 //! inputs are read-only despite `*mut`.
 
+mod call_diagnostics;
+
 use std::{
     ffi::{
         CStr,
@@ -1370,6 +1372,14 @@ impl<'id> Session<'id> {
         }
     }
 
+    pub(super) fn call_diagnostic(&self, call: Val<'id>, id: u32) {
+        call_diagnostics::attach(self, call, id);
+    }
+
+    pub(super) fn call_diagnostic_counts<'a>(&self, count: usize, arena: &'a Bump) -> &'a [usize] {
+        call_diagnostics::counts(self, count, arena)
+    }
+
     pub(super) fn verify(&self) -> Result<(), Message> {
         let mut error = ptr::null_mut();
         // SAFETY: A live module; verifier returns a separately owned message.
@@ -1389,13 +1399,12 @@ impl<'id> Session<'id> {
         PrintedModule(Message(unsafe { LLVMPrintModuleToString(self.module) }))
     }
 
-    pub(super) fn emit(
+    fn prepare_emission(
         &self,
         target: Target,
         opt: Option<OptLevel>,
         skip_passes: bool,
-        assembly: bool,
-    ) -> Result<Buffer, Message> {
+    ) -> Result<Machine, Message> {
         static INITIALIZE: Once = Once::new();
         INITIALIZE.call_once(|| {
             // SAFETY: Process-global registrations execute exactly once before
@@ -1489,6 +1498,34 @@ impl<'id> Session<'id> {
             }
         }
         self.verify()?;
+        Ok(machine)
+    }
+
+    #[cfg(test)]
+    pub(super) fn emit(
+        &self,
+        target: Target,
+        opt: Option<OptLevel>,
+        skip_passes: bool,
+        assembly: bool,
+    ) -> Result<Buffer, Message> {
+        self.emit_checked(target, opt, skip_passes, assembly, |_| true)
+            .map(|buffer| buffer.expect("unconditional emission produces a buffer"))
+    }
+
+    pub(super) fn emit_checked(
+        &self,
+        target: Target,
+        opt: Option<OptLevel>,
+        skip_passes: bool,
+        assembly: bool,
+        check: impl FnOnce(&Self) -> bool,
+    ) -> Result<Option<Buffer>, Message> {
+        let machine = self.prepare_emission(target, opt, skip_passes)?;
+        if !check(self) {
+            return Ok(None);
+        }
+        let mut error = ptr::null_mut();
         let mut buffer = ptr::null_mut();
         let kind = if assembly {
             LLVMCodeGenFileType::LLVMAssemblyFile
@@ -1509,7 +1546,7 @@ impl<'id> Session<'id> {
         {
             return Err(Message(error));
         }
-        Ok(Buffer(buffer))
+        Ok(Some(Buffer(buffer)))
     }
 }
 

@@ -1448,18 +1448,31 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Status | Attributes |
 | --- | --- |
 | Implemented (entity) | `noinline`, `noipa`, `always_inline`, diagnostic `nonnull`, `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `selectany`, `returns_twice` (the same retained fact the external-symbol catalog gives `setjmp`, `_setjmp`, `__sigsetjmp`, `vfork` and their MinGW-w64 spellings; the native back end refuses calls to such functions) |
+| Implemented (call diagnostics) | GNU `error("message")`, `warning("message")`, including `gnu::` spelling; emitted direct calls after bcc and LLVM IR optimization, with `-Wattribute-warning` control |
 | Implemented (call contracts) | `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`, `enable_if`, `unavailable`; unsupported predicate shapes diagnose and unmodeled object-size origins remain unknown |
 | Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
 | Partial retention support | `dllexport` at or before an ordinary MSVC inline body retains that definition and its dependencies; DLL export directives remain unsupported |
-| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, and the C23 standard attributes; see the catalog for the full list |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, and the C23 standard attributes; see the catalog for the full list |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and target-specific names on other targets |
 
-The accepted `error` and `warning` annotations do not yet issue diagnostics for
-calls that survive code generation. They are distinct from the implemented
-`diagnose_if` call contract.
+GNU `error` and `warning` require one unevaluated string argument and apply
+only to functions. The first declaration supplies the contract; unannotated
+redeclarations inherit it, conflicting kinds are errors, and a changed message
+warns while retaining the first. Native code generation and interpretation
+diagnose evaluated identifier calls (including parenthesized identifiers) that
+remain after the selected bcc passes and, for LLVM object/executable output,
+the actual LLVM IR pass pipeline. Diagnostics are reported before object
+emission. Address references, pointer calls, unevaluated
+operands, unreachable blocks and discarded internal bodies do not diagnose.
+Syntax/semantic-only and IR-only output modes defer these code-generation
+checks. `warning` is controlled by `-Wattribute-warning`, including per-group
+error promotion; `error` remains an error. These contracts are distinct from
+`diagnose_if`, which is checked during semantic analysis. LLVM source-marker
+retention follows pinned Clang, including suppression when LLVM merges distinct
+call sites and discards their source markers.
 
 `__declspec` modifiers use the names Clang supports there: `align(N)` is
 Clang's `aligned` attribute (it sets an object's or typedef's alignment, also

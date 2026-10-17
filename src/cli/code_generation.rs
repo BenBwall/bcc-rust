@@ -62,7 +62,7 @@ use crate::{
     pipeline::{
         MiddleEndError,
         analyze_translation_unit,
-        lower_translation_unit,
+        lower_translation_unit_diagnosed,
         parse_translation_unit,
     },
     target::{
@@ -121,9 +121,27 @@ pub(super) fn generate_code<'tu>(
     } else {
         Profile::PostAbi
     };
-    let lowered = lower_translation_unit(context, &unit, &sema, &ir, optimizer.as_ref(), profile);
-    let module = match lowered {
-        | Ok(module) => module,
+    let lowered =
+        lower_translation_unit_diagnosed(context, &unit, &sema, &ir, optimizer.as_ref(), profile);
+    let llvm_output =
+        options.emit.is_none() && options.output_path.is_some() && options.backend == BackEnd::Llvm;
+    let diagnosed = match lowered {
+        | Ok(diagnosed) => {
+            if !llvm_output && !matches!(options.emit, Some(Emit::Ir | Emit::IrAbi | Emit::Llvm)) {
+                for diagnostic in diagnosed.retained_diagnostics {
+                    diagnostic.report(context);
+                    // Emitted copies are distinct even when inlining preserves
+                    // their shared source location; do not fold them together.
+                    drop(reporter.report_pending(context, stderr));
+                }
+            }
+            drop(reporter.report_pending(context, stderr));
+            if context.error_count() != 0 {
+                drop(reporter.finish(context, stderr));
+                return FAILURE_STATUS;
+            }
+            diagnosed
+        },
         | Err(MiddleEndError::Lowering(errors)) => {
             for error in errors.errors {
                 reporter.report_late(error, error.source, context);
@@ -137,13 +155,48 @@ pub(super) fn generate_code<'tu>(
             return FAILURE_STATUS;
         },
     };
-    drop(reporter.finish(context, stderr));
+    let module = diagnosed.module;
     let target = context.configuration.target();
     let code = context.configuration.code_options();
     if let Some(conflict) = options.back_end_conflict() {
         report_stderr(format_args!("error: {conflict}"));
         return FAILURE_STATUS;
     }
+    if llvm_output && !diagnosed.call_diagnostics.is_empty() {
+        let output = options
+            .output_path
+            .as_deref()
+            .expect("LLVM output has a path");
+        let result = llvm::compile_module_checked(
+            &module,
+            output,
+            options.llvm_options(target, code),
+            diagnosed.call_diagnostics.len(),
+            |counts| {
+                for (&diagnostic, &count) in diagnosed.call_diagnostics.iter().zip(counts) {
+                    for _ in 0..count {
+                        diagnostic.report(context);
+                        drop(reporter.report_pending(context, stderr));
+                    }
+                }
+                drop(reporter.report_pending(context, stderr));
+                context.error_count() == 0
+            },
+        );
+        drop(reporter.finish(context, stderr));
+        return match result {
+            | Ok(true) => 0,
+            | Ok(false) => FAILURE_STATUS,
+            | Err(error) => {
+                report_stderr(format_args!(
+                    "error: cannot build `{}`: {error}",
+                    output.display()
+                ));
+                FAILURE_STATUS
+            },
+        };
+    }
+    drop(reporter.finish(context, stderr));
     // The LLVM back end verifies its input; the IR printer, the interpreter
     // and the native back end rely on the same invariants, so they verify
     // too rather than print, run or compile a malformed module.

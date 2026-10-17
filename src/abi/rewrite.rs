@@ -329,11 +329,23 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
             },
             | InstData::Call { func, args } => {
                 let sig = self.old_signatures[func.index()];
-                self.call(sig, Callee::Direct(func), old.value_list(args), result);
+                self.call(
+                    sig,
+                    Callee::Direct(func),
+                    old.value_list(args),
+                    result,
+                    old.call_diagnostic(inst),
+                );
             },
             | InstData::CallIndirect { sig, args } => {
                 let values = old.value_list(args);
-                self.call(sig, Callee::Indirect(values[0]), &values[1..], result);
+                self.call(
+                    sig,
+                    Callee::Indirect(values[0]),
+                    &values[1..],
+                    result,
+                    old.call_diagnostic(inst),
+                );
             },
             | InstData::Unary {
                 opcode: Opcode::VaArg,
@@ -415,7 +427,14 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
 
     /// Copies a call to a function of the pre-ABI signature `sig`, passing
     /// its arguments as the plan says.
-    fn call(&mut self, sig: SigId, callee: Callee, args: &[Value], result: Option<Value>) {
+    fn call(
+        &mut self,
+        sig: SigId,
+        callee: Callee,
+        args: &[Value],
+        result: Option<Value>,
+        diagnostic: Option<u32>,
+    ) {
         let plan = self.plans[sig.index()];
         let mut lowered = ArenaVec::with_capacity_in(args.len() + 2, self.scratch);
         if let Callee::Indirect(pointer) = callee {
@@ -517,9 +536,12 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 args: self.builder.value_list(&lowered),
             },
         };
-        _ = self
+        let call = self
             .builder
             .insert_with_result(data, if wide_result.is_some() { None } else { result });
+        if let Some(id) = diagnostic {
+            self.builder.set_call_diagnostic(call, id);
+        }
         if let (Some(area), Some(result)) = (wide_result, result) {
             _ = self.builder.insert_with_result(
                 InstData::Load {

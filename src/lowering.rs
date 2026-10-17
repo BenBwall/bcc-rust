@@ -82,11 +82,16 @@ mod floats;
 mod ssa;
 mod types;
 
-// Errors
+// Diagnostics
+mod call_diagnostics;
 mod errors;
 
 use std::fmt;
 
+pub(crate) use call_diagnostics::{
+    CallDiagnostic,
+    retained_call_diagnostics,
+};
 pub(crate) use errors::{
     Construct,
     LoweringError,
@@ -189,8 +194,10 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
         }
     }
     if errors.is_empty() {
+        let call_diagnostics = arena.alloc_slice_copy(&unit.call_diagnostics);
         Ok(LoweredUnit {
-            module:           unit.into_module(),
+            call_diagnostics,
+            module: unit.into_module(),
             function_sources: arena.alloc_slice_copy(&function_sources),
         })
     } else {
@@ -205,6 +212,7 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
 /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
 pub(crate) struct LoweredUnit<'ir> {
     pub(crate) module:           Module<'ir>,
+    pub(crate) call_diagnostics: &'ir [CallDiagnostic],
     pub(crate) function_sources: &'ir [(&'ir str, SourceVectors)],
 }
 
@@ -233,7 +241,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         lowerer.run()?;
         lowerer.finish_body()?;
         let FunctionLowerer { unit, draft, .. } = lowerer;
-        emit::emit(draft, &mut unit.module, func)?;
+        emit::emit(draft, &mut unit.module, func, &mut unit.call_diagnostics)?;
         if cfg!(debug_assertions) {
             let errors = verify_function(&unit.module, func, Profile::PreAbi, scratch);
             assert!(

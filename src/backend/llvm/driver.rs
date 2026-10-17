@@ -33,20 +33,36 @@ pub(crate) fn compile_module(
     out_path: &Path,
     options: LlvmOptions,
 ) -> io::Result<()> {
+    compile_module_checked(module, out_path, options, 0, |_| true).map(|_| ())
+}
+
+/// Checks surviving annotated calls after LLVM's actual IR pass pipeline and
+/// before object emission. Rejected diagnostics leave the output untouched.
+pub(crate) fn compile_module_checked(
+    module: &crate::ir::Module<'_>,
+    out_path: &Path,
+    options: LlvmOptions,
+    diagnostic_count: usize,
+    check: impl FnOnce(&[usize]) -> bool,
+) -> io::Result<bool> {
     let arena = crate::util::bump::Bump::new();
     let buffer = super::api::Session::with_code(&arena, options.target, options.code, |api| {
         super::build_module(module, options.target, api, &arena)
             .map_err(|error| io::Error::other(error.to_string()))?;
-        api.emit(
+        api.emit_checked(
             options.target,
             options.opt,
             options.disable_llvm_passes,
             false,
+            |api| check(api.call_diagnostic_counts(diagnostic_count, &arena)),
         )
         .map_err(|error| io::Error::other(error.to_string()))
     })?;
+    let Some(buffer) = buffer else {
+        return Ok(false);
+    };
     if options.kind == OutputKind::Object {
-        return std::fs::write(out_path, buffer.bytes());
+        return std::fs::write(out_path, buffer.bytes()).map(|()| true);
     }
     let (object, mut file) = TemporaryObject::create(out_path, "o", &arena)?;
     file.write_all(buffer.bytes())?;
@@ -64,13 +80,15 @@ pub(crate) fn compile_module(
         })
     });
     if !atomic_runtime {
-        return toolchain.link_object(&object.0, out_path, options);
+        return toolchain
+            .link_object(&object.0, out_path, options)
+            .map(|()| true);
     }
     let mut command = toolchain.command(&object.0, out_path, options);
     _ = command.arg("-latomic");
     let output = command.output()?;
     if output.status.success() {
-        Ok(())
+        Ok(true)
     } else {
         Err(io::Error::other(ClangError(output)))
     }

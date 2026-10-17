@@ -169,6 +169,8 @@ diagnostic_groups! {
     UnknownAttributes => Some("unknown-attributes"), Warning, false;
     /// A recognized attribute whose effect bcc drops.
     IgnoredAttributes => Some("ignored-attributes"), Warning, false;
+    /// A surviving direct call carries a GNU `warning` attribute.
+    AttributeWarning => Some("attribute-warning"), Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
     /// An initializer that replaces an earlier one for the same subobject

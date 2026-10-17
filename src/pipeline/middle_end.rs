@@ -45,25 +45,29 @@ use crate::{
 /// shared diagnostic interface; a case ABI lowering does not handle names
 /// its function.
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
-pub(crate) fn lower_translation_unit<'tu, 'ir>(
+pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
     sema: &SemanticTranslationUnit<'tu>,
     arena: &'ir Bump,
     optimizer: Option<&OptimizerOptions<'_>>,
     profile: Profile,
-) -> Result<Module<'ir>, MiddleEndError<'ir>> {
+) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
     let mut scratch = Bump::new();
     let target = context.configuration.target();
     let crate::lowering::LoweredUnit {
         mut module,
         function_sources,
+        call_diagnostics,
     } = crate::lowering::lower_with_sources(context, syntax, sema, target, arena, &mut scratch)
         .map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {
         scratch.reset();
         _ = optimize(&mut module, options, &scratch);
     }
+    scratch.reset();
+    let retained_diagnostics =
+        crate::lowering::retained_call_diagnostics(&module, call_diagnostics, arena, &scratch);
     if profile == Profile::PostAbi {
         scratch.reset();
         lower_abi(&mut module, target, &scratch).map_err(|error| MiddleEndError::Abi {
@@ -74,7 +78,50 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
             error,
         })?;
     }
-    Ok(module)
+    Ok(DiagnosedModule {
+        module,
+        call_diagnostics,
+        retained_diagnostics,
+    })
+}
+
+/// Internal module-only adapter. Callers that report diagnostics use the
+/// diagnosed entry point so warnings are retained alongside successful code.
+#[cfg(test)]
+pub(crate) fn lower_translation_unit<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    arena: &'ir Bump,
+    optimizer: Option<&OptimizerOptions<'_>>,
+    profile: Profile,
+) -> Result<Module<'ir>, MiddleEndError<'ir>> {
+    let DiagnosedModule {
+        module,
+        retained_diagnostics: diagnostics,
+        ..
+    } = lower_translation_unit_diagnosed(context, syntax, sema, arena, optimizer, profile)?;
+    let mut errors = crate::util::bump::ArenaVec::new_in(arena);
+    errors.extend(diagnostics.iter().filter(|d| !d.warning).map(|d| {
+        crate::lowering::LoweringError {
+            kind:   crate::lowering::LoweringErrorKind::CallDiagnostic(d.message),
+            source: Some(d.source),
+        }
+    }));
+    let errors = errors.leak();
+    if errors.is_empty() {
+        Ok(module)
+    } else {
+        Err(MiddleEndError::Lowering(LoweringErrors { errors }))
+    }
+}
+
+/// A module and its source diagnostic table; numeric call IDs index the full
+/// table, while the retained slice reflects the bcc optimizer's emitted calls.
+pub(crate) struct DiagnosedModule<'ir> {
+    pub(crate) module:               Module<'ir>,
+    pub(crate) call_diagnostics:     &'ir [crate::lowering::CallDiagnostic],
+    pub(crate) retained_diagnostics: &'ir [crate::lowering::CallDiagnostic],
 }
 
 /// Why the middle end produced no module.

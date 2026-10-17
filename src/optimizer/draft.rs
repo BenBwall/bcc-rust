@@ -67,6 +67,7 @@ use crate::{
         ValueDef,
     },
     util::bump::{
+        ArenaMap,
         ArenaVec,
         Bump,
     },
@@ -96,6 +97,8 @@ pub(super) struct Draft<'b, 's> {
     /// Owned call operands for inserted or rewritten calls. Other operands
     /// fit inline in `InstData`, including all three select operands.
     call_args:          ArenaVec<'s, Option<&'s [Value]>>,
+    /// Opaque frontend diagnostic IDs, including calls copied by inlining.
+    call_diagnostics:   ArenaMap<'s, Inst, u32>,
     /// Whether a stack slot was removed, by slot index.
     removed_slots:      ArenaVec<'s, bool>,
     /// Slots copied from an inlined body, after the original slots.
@@ -216,6 +219,17 @@ impl<'b, 's> Draft<'b, 's> {
             added_insts: ArenaVec::new_in(scratch),
             removed_slots,
             call_args,
+            call_diagnostics: {
+                let mut ids = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch);
+                for block in body.blocks() {
+                    for &inst in body.block_insts(block) {
+                        if let Some(id) = body.call_diagnostic(inst) {
+                            _ = ids.insert(inst, id);
+                        }
+                    }
+                }
+                ids
+            },
             added_slots: ArenaVec::new_in(scratch),
             constant_bits: {
                 let mut bits = ArenaVec::new_in(scratch);
@@ -425,6 +439,14 @@ impl<'b, 's> Draft<'b, 's> {
             "owned operand lists belong only to calls and atomics"
         );
         self.call_args[inst.index()] = Some(self.scratch.alloc_slice_copy(args));
+    }
+
+    pub(super) fn call_diagnostic(&self, inst: Inst) -> Option<u32> {
+        self.call_diagnostics.get(&inst).copied()
+    }
+
+    pub(super) fn set_call_diagnostic(&mut self, inst: Inst, diagnostic: u32) {
+        _ = self.call_diagnostics.insert(inst, diagnostic);
     }
 
     pub(super) fn call_operands(&self, inst: Inst, list: crate::ir::ValueList) -> &[Value] {

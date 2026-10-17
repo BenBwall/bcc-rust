@@ -952,7 +952,7 @@ void oldstyle(x, y) int x __attribute__((aligned(32))); T8 y __attribute__((alig
                     0,
                     "{target:?}: {:?}",
                     context.take_pending_errors()
-                )
+                );
             },
         );
     }
@@ -1000,7 +1000,7 @@ _Static_assert(_Alignof(__typeof__(sx+sy)) == 4, "integer promotion");
                     0,
                     "{target:?}: {:?}",
                     context.take_pending_errors()
-                )
+                );
             },
         );
     }

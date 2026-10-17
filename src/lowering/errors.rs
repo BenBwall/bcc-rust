@@ -50,6 +50,8 @@ pub(crate) enum LoweringErrorKind {
     /// Semantic analysis gave up on a type without a diagnostic, as it does
     /// for unmodeled extensions.
     UnanalyzedType,
+    #[cfg(test)]
+    CallDiagnostic(crate::util::string_cache::StringCacheId),
     UnmodeledType(UnmodeledType),
     /// A fact lowering relies on is missing from the semantic results: a
     /// compiler bug, reported rather than turned into wrong code.
@@ -149,6 +151,8 @@ impl Construct {
 impl LoweringErrorKind {
     fn message(self) -> &'static str {
         match self {
+            #[cfg(test)]
+            | Self::CallDiagnostic(_) => "function attribute diagnostic",
             | Self::UnitHasErrors => "code is not generated for a translation unit with errors",
             | Self::Unsupported(_) | Self::UnmodeledType(_) => "not yet supported by lowering",
             | Self::UnanalyzedType =>
@@ -162,11 +166,16 @@ impl LoweringErrorKind {
 impl ToDiagnostic for LoweringError {
     fn diagnostic_in<'d>(
         &self,
-        _context: &Context<'_>,
+        context: &Context<'_>,
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
+        #[cfg(not(test))]
+        let _ = context;
         let message = match self.kind {
+            #[cfg(test)]
+            | LoweringErrorKind::CallDiagnostic(message) =>
+                arena.alloc_str(context.string_cache.at(message)),
             | LoweringErrorKind::Unsupported(construct) => format_in!(
                 arena,
                 "{}: {}",

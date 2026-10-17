@@ -387,6 +387,8 @@ pub(crate) enum SemanticErrorKind {
     /// Clang extension: a selected `diagnose_if` or `unavailable` contract.
     /// <https://clang.llvm.org/docs/AttributeReference.html#diagnose-if>
     CallAttribute,
+    /// GNU function `warning` attribute on an emitted direct call.
+    CallAttributeWarning,
     /// Clang extension: overload candidates require viable conversions and
     /// satisfied `enable_if` predicates.
     /// <https://clang.llvm.org/docs/AttributeReference.html#overloadable>
@@ -521,6 +523,7 @@ impl SemanticErrorKind {
         match self {
             | Self::UnknownAttribute => Some(DiagnosticGroup::UnknownAttributes),
             | Self::IgnoredAttribute => Some(DiagnosticGroup::IgnoredAttributes),
+            | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
             | _ => None,
         }
     }
@@ -546,7 +549,7 @@ impl SemanticErrorKind {
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
-            | Self::CallAttribute => "function attribute diagnostic",
+            | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
             | Self::AmbiguousOverload => "ambiguous overload",
             | Self::UnknownAttribute => "unknown attribute",
@@ -709,6 +712,7 @@ impl SemanticErrorKind {
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
             | Self::CallAttribute
+            | Self::CallAttributeWarning
             | Self::NoViableOverload
             | Self::AmbiguousOverload
             | Self::UnknownAttribute
@@ -763,6 +767,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnknownWarningOption
                     | crate::configuration::DiagnosticGroup::UnknownAttributes
                     | crate::configuration::DiagnosticGroup::IgnoredAttributes
+                    | crate::configuration::DiagnosticGroup::AttributeWarning
                     | crate::configuration::DiagnosticGroup::UnknownStdcPragma
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
@@ -1436,10 +1441,9 @@ impl SemanticErrorKind {
 
     fn attribute_explanation(self) -> (&'static str, &'static str) {
         match self {
-            | Self::CallAttribute => (
+            | Self::CallAttribute | Self::CallAttributeWarning => (
                 "function attribute diagnostic",
-                "Clang diagnose_if/unavailable: the selected function declaration attaches this \
-                 diagnostic to its calls",
+                "GNU error/warning and Clang diagnose_if/unavailable attach a diagnostic to calls",
             ),
             | Self::NoViableOverload => (
                 "no matching function for call",
@@ -1602,7 +1606,10 @@ impl ToDiagnostic for SemanticError {
                 quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
                 context.string_cache.at(ty)
             )
-        } else if self.kind == SemanticErrorKind::CallAttribute {
+        } else if matches!(
+            self.kind,
+            SemanticErrorKind::CallAttribute | SemanticErrorKind::CallAttributeWarning
+        ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
             })

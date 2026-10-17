@@ -80,6 +80,8 @@ impl TranslationError<'_> {
             },
             | Self::Semantic(error) => match error.kind {
                 | semantic_analysis::SemanticErrorKind::PointerConstraint(group) => Some(group),
+                | semantic_analysis::SemanticErrorKind::CallAttributeWarning =>
+                    Some(G::AttributeWarning),
                 | semantic_analysis::SemanticErrorKind::PredefinedOutsideFunction =>
                     Some(G::PredefinedOutsideFunction),
                 | semantic_analysis::SemanticErrorKind::UnusedStaticFunction =>

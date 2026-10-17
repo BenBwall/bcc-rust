@@ -61,6 +61,8 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     /// IR function, as the external-symbol contract does for `setjmp`.
     ReturnsTwice,
     Nonnull,
+    /// GNU error/warning: diagnose emitted direct calls.
+    CallDiagnostic,
     /// A calling convention, checked against the target's default.
     Convention(Convention),
     /// Implemented elsewhere or without a code-generation meaning that bcc
@@ -204,6 +206,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "packed" | "mode" | "vector_size" | "ext_vector_type" | "matrix_type" | "align" =>
             Rule::Representation,
         | "aligned" => Rule::Aligned,
+        | "error" | "warning" => Rule::CallDiagnostic,
         | "cleanup" => Rule::Cleanup,
         | "constructor" => Rule::Constructor,
         | "destructor" => Rule::Destructor,
@@ -287,8 +290,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "enforce_tcb"
         | "enforce_tcb_leaf"
         | "enum_extensibility"
-        | "error"
-        | "warning"
         | "exclude_from_explicit_instantiation"
         | "externally_visible"
         | "fallthrough"

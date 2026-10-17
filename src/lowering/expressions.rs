@@ -1530,6 +1530,46 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let args = self.scratch.alloc_slice_copy(&args);
         let result = signature.result;
+        if let Some(binding) = direct {
+            let ExpressionType::Call {
+                function_expression: mut callee,
+                ..
+            } = info.expression.kind
+            else {
+                unreachable!("call reduction has call syntax")
+            };
+            loop {
+                callee = match callee.kind {
+                    | ExpressionType::Parenthesized { expression } => expression,
+                    | ExpressionType::Unary {
+                        operator: UnaryOperator::Extension,
+                        operand_expression,
+                    } => operand_expression,
+                    | ExpressionType::Generic(_) | ExpressionType::Builtin(_) => {
+                        let Some(selected) = self.info(callee)?.selected_expression else {
+                            break;
+                        };
+                        selected
+                    },
+                    | _ => break,
+                };
+            }
+            if matches!(callee.kind, ExpressionType::Identifier(_))
+                && let Some(diagnostic) = self
+                    .unit
+                    .sema
+                    .entity_attributes(binding)
+                    .and_then(|a| a.call_diagnostic)
+            {
+                let diagnostic = self.scratch.alloc(super::CallDiagnostic {
+                    message: diagnostic.message,
+                    declaration: diagnostic.source,
+                    source,
+                    warning: diagnostic.warning,
+                });
+                _ = self.draft.push(Op::Diagnostic(diagnostic), None);
+            }
+        }
         let value = match (direct, callee_value) {
             | (Some(binding), _) => {
                 let func = self
