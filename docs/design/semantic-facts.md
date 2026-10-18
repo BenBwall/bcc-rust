@@ -655,6 +655,11 @@ the last production consumer. Never leave a permanent fallback analyzer.
 | M9 Symbolic/converted constants and remaining operation facts; 400–750 | Retain address decompositions and destination constants; consolidate scalar constant conversion helpers and explicit increment/pointer operation facts. Delete `address_constant` syntax walk, static C conversion rechecks and width-based promotion inference. Cache retained-type ABI projections. | Static compound/array-member/selected/&* addresses, absolute/null pointers, 128-bit integers, all floating formats/signed zero/NaN, GNU address differences, narrow/enum/bit-field increments and pointer strides. Golden bytes/relocations and IR; two-direction Clang ABI conformance unchanged. |
 | M10 Enforce seam and rewrite design docs; 200–400 code/test lines plus docs | Remove raw `ParsedTranslationUnit` argument from lowering/pipeline if retained function/definition/declaration records now supply all roots. Make traversal helpers semantic-private; add architecture check and rule text below. Rewrite roadmap/history into current contracts, link archived evidence. | Zero consumer syntax-traversal helpers or builtin classifiers; no sema/syntax imports in ABI/optimizer. Canonical suite, allocation tests, differential tests and fresh matched torture survey unchanged or improved for every previously passing arm. Inspect final documentation links and `git diff --check`. |
 
+Status (2026-10-18): M6 is implemented; every builtin spelling and keyword
+form has one registry descriptor and `__has_builtin` queries the registry. See
+[the M6 receipt](../research/semantic-facts-m6.md) and the "Builtin families in
+the registry" section of `semantic-analysis.md`.
+
 For each landing, run focused tests while developing, then repository canonical
 checks: `cargo test --all-targets`, feature-enabled allocation counting, nightly
 format check and both required Clippy configurations with warnings denied.

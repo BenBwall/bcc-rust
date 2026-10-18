@@ -1431,7 +1431,7 @@ reject Boolean operands.
 
 `__builtin_shufflevector`, `__builtin_convertvector`, `__builtin_bit_cast` and
 the overloaded elementwise/nontemporal builtins used by the resources have
-operand-dependent typing. `builtins/x86_builtin_table.rs` declares 384 x86 builtins and two population-count builtins from
+operand-dependent typing. The generated registry shard `src/builtins/x86.rs` declares 384 x86 builtins (two population-count calls merge into scalar descriptors) from
 canonical Clang call signatures, with constant-operand positions and immediate
 ranges (including gather scale choices). `scripts/generate_x86_builtins.py`
 derives the catalog from names called by the shipped headers, queries Clang's
@@ -1799,9 +1799,10 @@ the callee expression ordinal, or `Builtin` with its optional named binding,
 designation-preserving directness and checked instance. It retains the point-of-use
 function type, fixed prefix, prototype/ellipsis status and each argument's expression ordinal
 and converted type. Argument ordinals reference the existing conversion runs;
-later composite binding types never replace the written call's type. M4 now
-retains checked scalar/library/varargs instances; remaining family descriptors
-are M6 work. Overloaded builtins may lack an ordinary function type; ordinary lowerable calls require it.
+later composite binding types never replace the written call's type. M4
+retains checked scalar/library/varargs instances; M6 registered the remaining
+families, whose calls retain no instance. Overloaded builtins may lack an
+ordinary function type; ordinary lowerable calls require it.
 The existing known-definition/open-external ABI policy remains downstream until
 M7. Returns-twice and unsupported-builtin capability refusals are unchanged.
 
@@ -1844,8 +1845,8 @@ semantic types, IR opcodes, checker/lowerer callbacks or diagnostic messages.
 Constraint identities adapt to the existing `SemanticErrorKind` catalog.
 
 Lookup first respects a visible user binding. `BindingOrigin` then distinguishes
-`User`, `Intrinsic(BuiltinId)`, `ImplicitOrdinary`, the explicit temporary M6
-`LegacyIntrinsic` bridge and unknown reserved `OpaqueIntrinsic` bindings.
+`User`, `Intrinsic(BuiltinId)`, `ImplicitOrdinary` and unknown reserved
+`OpaqueIntrinsic` bindings.
 Unknown reserved names keep opaque signatures. Plain implicit alloca is GNU-only;
 ordinary implicit library names are hosted-only. Reserved library aliases keep
 their signatures in freestanding mode. The fabs/fabsf/fabsl aliases share the
@@ -1870,19 +1871,59 @@ width, including 128-bit immediates. Assignment compatibility precedes dependent
 constant diagnostics. Dedicated overflow, floating and varargs handlers keep their
 type/precision/layout rules. Existing semantic/diagnostic/IR goldens are unchanged.
 
-Atomic, generated x86, vector and type-generic recognition and keyword checking,
-plus reserved builtin type spellings, remain explicit M6 bridges. The named
-capability adapter in `builtins/names.rs` joins the registry with those families;
-`__has_builtin` still uses the existing keyword classifier/semantic capability
-adapter. Exhaustive scalar/library agreement tests cover all current targets,
+Exhaustive scalar/library agreement tests cover all current targets,
 strict/GNU modes and hosted/freestanding environments. M5 later consumed the
-registry's effect classes in the retained expression effects; the
-external/returns-twice symbol policy remains later work.
+registry's effect classes in the retained expression effects; M6 (below)
+registered the remaining families; the external/returns-twice symbol policy
+remains later work.
 
 C99 §6.5.2.2p7, p. 72 (PDF p. 84), §6.2.1p4, pp. 29-30
 (PDF pp. 41-42), §7.15.1, pp. 249-251 (PDF pp. 261-263),
 and §7.1.4, pp. 166-167 (PDF pp. 178-179); scalar intrinsics are GNU
 extensions. Validation and corpus evidence: [M4 receipt](docs/research/semantic-facts-m4.md).
+
+### Builtin families in the registry
+
+**M6 is complete.** Every builtin spelling and keyword form has exactly one
+registry descriptor: the atomic shard (already registered with atomic
+execution), the generated `src/builtins/x86.rs` shard, and the handwritten
+`vector.rs` and `type_generic.rs` shards, beside the scalar, library, math and
+checked shards. There is no other recognizer: `builtins/names.rs`, the
+`LegacyIntrinsic` origin and the family name predicates are deleted.
+`__has_builtin` reads the registry directly (keyword forms where the keyword
+is active, ordinary calls by naming policy) and never consults semantic
+analysis or a local binding.
+
+Family descriptors name a closed `TypeRule` (`X86Signature`, `VectorShuffle`,
+`VectorOverload(op)`, `ConvertVector`, `BitCast`, `TypesCompatible`,
+`ChooseExpr`, `TypeClassify`, `Math128(rule)`, `Atomic`) and the dedicated
+handler keeps its algorithm. `common_builtin_call` is the single named-call
+entry: it reads the binding's descriptor once and dispatches on the rule;
+`type_builtin` does the same for keyword forms through `registry::keyword_descriptor`,
+the adapter from the one keyword classifier. Overload, binary128 and
+classification handlers take their operation from the descriptor payload, not
+from the spelling. The x86 signature is projected from symbolic
+`Vector`/`VectorPointer` signature types; each immediate is an argument rule with
+`ConstantConstraint::Immediate(low, high, mask)`, checked after prototype
+conversion and reported through the `Immediate` diagnostic identity. Families
+whose calls have no single C type use the `Opaque` signature, so their
+undeclared bindings keep the unprototyped unknown-result type they had.
+
+Family operations are `BuiltinOperation::Semantic(_)` (classification, type
+compatibility, constant selection and binary128 primitives: checked and folded
+or selected here) or `Unsupported(X86 | Vector)`. Neither retains a
+`BuiltinCallFacts` instance (`BuiltinOperation::retains_instance`), so their
+effect summary stays `UNKNOWN` and lowering keeps its earlier refusal (an
+unsupported builtin, or the opaque binding's unanalyzed type); a keyword form's spelling that is an identifier because its keyword is
+disabled stays an opaque reserved name. Two header calls of the x86 generator,
+`__builtin_popcount` and `__builtin_popcountll`, are merged into the scalar
+descriptor after a test checks that the signatures agree.
+
+`tests/fixtures/semantic/builtin-names.snap` pins every recognized spelling's
+`__has_builtin` answer in four configurations and the binding origin, type and
+diagnostics of an undeclared call; the snapshot keeps its own names under test.
+The reserved builtin type names (`__builtin_va_list`, `__int128_t`) still have
+no type descriptor. Validation: [M6 receipt](docs/research/semantic-facts-m6.md).
 
 ## 2026-10-13: Torture representation types and constant forms
 
