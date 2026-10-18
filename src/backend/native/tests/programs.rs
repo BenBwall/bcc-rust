@@ -542,6 +542,37 @@ int main(void) {
 }"#,
     },
     Program {
+        // Locals aligned above the stack's 16 bytes, in a leaf, beside a
+        // call, beside a dynamic allocation, and passed by address.
+        name:   "over_aligned_locals",
+        source: r#"int printf(const char *, ...);
+typedef unsigned long long u64;
+static int check(const void *p, u64 align) { return ((u64)p & (align - 1)) == 0; }
+static int leaf(int k) {
+    _Alignas(64) char buffer[100];
+    __attribute__((aligned(256))) int table[3];
+    for (int i = 0; i < 100; i++) buffer[i] = (char)(i * k);
+    table[0] = buffer[99]; table[1] = k; table[2] = (int)((u64)buffer & 63) + (int)((u64)table & 255);
+    return table[0] + table[1] + table[2];
+}
+static int caller(int k) {
+    _Alignas(32) double values[4] = { 1, 2, 3, 4 };
+    _Alignas(128) char small = (char)k;
+    int ok = check(values, 32) && check(&small, 128);
+    return ok * 1000 + leaf(k) + (int)values[3] + small;
+}
+static int dynamic(int n) {
+    char vla[n];
+    _Alignas(64) int aligned[2] = { n, 2 * n };
+    for (int i = 0; i < n; i++) vla[i] = (char)i;
+    return check(aligned, 64) * 100 + aligned[1] + vla[n - 1];
+}
+int main(void) {
+    printf("%d %d %d\n", caller(3), caller(-7), dynamic(17));
+    return 0;
+}"#,
+    },
+    Program {
         // An over-aligned dynamic block must not reach into the outgoing
         // arguments (`printf`'s stack arguments, and on Win64 the home area
         // it saves its registers into); a leaf's blocks are 16-byte aligned

@@ -1160,3 +1160,34 @@ block0(v0: ptr):
         "{f}"
     );
 }
+
+/// A stack object aligned above the stack's 16 bytes gets spare room and
+/// an address rounded up at run time, in place of a refusal.
+#[test]
+fn over_aligned_slots_round_their_address_up() {
+    let ir = "abi lowered
+function @f(i32) -> i32 external {
+    slot0 = stack_slot 40, align 64
+block0(v0: i32):
+    v1 = stack_addr slot0
+    v2 = iconst.i64 8
+    v3 = ptr_add v1, v2
+    store.i32 v0, v3, align 8
+    v4 = load.i32 v3, align 8
+    return v4
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let f = function_text(&text, "f");
+        assert!(
+            f.contains("addq\t$63, ") && f.contains("andq\t$-64, "),
+            "{f}"
+        );
+        // 40 bytes and 48 spare, after the 16-byte-aligned frame.
+        assert!(
+            f.contains("subq\t$88, %rsp") || f.contains("subq\t$96, %rsp"),
+            "{f}"
+        );
+    }
+}

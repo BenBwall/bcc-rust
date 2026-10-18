@@ -8,7 +8,7 @@
 //! definitions and dynamic stack allocation. It refuses `i128` bit counts,
 //! byte swaps and `switch`es, `i128` values where Win64 passes them only by
 //! reference, structure results in register combinations other than the
-//! ones System V and Win64 define, stack objects aligned above 16 bytes,
+//! ones System V and Win64 define, stack arguments aligned above 16 bytes,
 //! stack argument areas whose offsets would leave a 32-bit displacement,
 //! thread-local globals in named sections, and calls to functions that may
 //! return twice.
@@ -114,10 +114,11 @@ impl Checker<'_, '_> {
         self.signature(self.module.signature(function.signature))?;
         let mut frame = 0_u64;
         for (_, slot) in body.stack_slots() {
-            if slot.align.bytes() > 16 {
-                return Err(Construct::SlotAlignment(slot.align.bytes()));
-            }
-            frame += u64::from(slot.size).next_multiple_of(slot.align.bytes());
+            // An over-aligned object takes `align - 16` spare bytes.
+            let align = slot.align.bytes();
+            let spare = align.saturating_sub(16);
+            frame = frame
+                .saturating_add((u64::from(slot.size) + spare).next_multiple_of(align.min(16)));
         }
         if frame > MAX_FRAME_BYTES {
             return Err(Construct::FrameSize(frame));
@@ -283,6 +284,8 @@ pub(crate) enum Construct {
     WideByValue,
     /// A structure result returned in registers of this type.
     RegisterResult(Type),
+    /// A stack argument or return area aligned above 16 bytes, which the
+    /// caller's 16-byte-aligned stack cannot place without realigning it.
     SlotAlignment(u64),
     FrameSize(u64),
     /// Stack arguments, chiefly `byval` structures, of this many bytes.
@@ -314,7 +317,7 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::RegisterResult(ty) =>
                 write!(f, "a structure result returned in an {ty} register")?,
             | Construct::SlotAlignment(align) =>
-                write!(f, "a stack object aligned to {align} bytes")?,
+                write!(f, "a stack argument aligned to {align} bytes")?,
             | Construct::FrameSize(bytes) => write!(f, "a {bytes}-byte stack frame")?,
             | Construct::ArgumentArea(bytes) => write!(f, "{bytes} bytes of stack arguments")?,
             | Construct::SymbolName => write!(f, "a symbol name with quotes or controls")?,

@@ -112,9 +112,17 @@ pub(crate) fn select<'a>(
     let tree = DominatorTree::compute(body, &cfg, arena);
     let mut selector = Selector::new(module, function, body, target, tls_model, arena);
     for (_, slot) in body.stack_slots() {
+        // An object aligned above the stack's 16 bytes gets room to round
+        // its address up at run time (see `over_aligned_address`).
+        let align = slot.align.bytes();
+        let (size, align) = if align > 16 {
+            (u64::from(slot.size) + align - 16, 16)
+        } else {
+            (u64::from(slot.size), align)
+        };
         selector.func.slots.push(FrameSlotData {
-            size:  slot.size,
-            align: u32::try_from(slot.align.bytes()).expect("the support check bounds alignments"),
+            size:  u32::try_from(size).expect("the support check bounds frames"),
+            align: u32::try_from(align).expect("alignments are at most 16 here"),
         });
     }
     for &block in tree.reverse_post_order() {
@@ -358,6 +366,9 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 opcode: Opcode::Null | Opcode::Poison,
                 ..
             } => ValueKind::Const(0),
+            // An over-aligned object's address is computed.
+            | InstData::StackAddr { slot } if self.body.stack_slot(slot).align.bytes() > 16 =>
+                return None,
             | InstData::StackAddr { slot } => ValueKind::Addr(AddrBase::Slot(slot.as_u32()), 0),
             // A thread-local address differs per thread: it is computed.
             | InstData::GlobalAddr { global } if self.module.global(global).thread_local =>
@@ -656,6 +667,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             | InstData::GlobalAddr { global } => {
                 let dst = self.result_reg(result);
                 self.thread_local_address(dst, global);
+            },
+            | InstData::StackAddr { slot } => {
+                let dst = self.result_reg(result);
+                let align = self.body.stack_slot(slot).align.bytes();
+                self.over_aligned_address(dst, slot.as_u32(), align);
             },
             | InstData::BlockAddr { label } => {
                 let dst = self.result_reg(result);
@@ -1231,6 +1247,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             width,
             dst,
             src: Operand::Reg(src),
+        });
+    }
+
+    /// The address of a stack object aligned to `align` bytes, more than
+    /// the stack's 16: its slot's address rounded up, which the slot has
+    /// `align - 16` spare bytes for. Frame layout puts a slot aligned to 16
+    /// at a 16-byte boundary, so rounding moves it at most that far.
+    fn over_aligned_address(&mut self, dst: Reg, slot: u32, align: u64) {
+        let mask = i32::try_from(align - 1).expect("the support check bounds alignments");
+        self.emit(MInst::Lea {
+            dst,
+            addr: Mem::new(Base::Frame(FrameObject::Slot(slot)), 0),
+        });
+        self.emit(MInst::Alu {
+            op: AluOp::Add,
+            width: Width::B64,
+            dst,
+            src: Operand::Imm(mask),
+        });
+        self.emit(MInst::Alu {
+            op: AluOp::And,
+            width: Width::B64,
+            dst,
+            src: Operand::Imm(!mask),
         });
     }
 
