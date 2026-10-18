@@ -60,7 +60,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> ObjectSize<'tu> {
         let mut node = expression;
         let mut lvalue = false;
-        let mut offset = 0_u64;
+        // Steps are met outermost first, so a later (inner) step may raise
+        // a running offset that an earlier one lowered (`buf + 4 - 2`).
+        // C99 §6.5.6p8: only the final position must lie within the object.
+        let mut offset = 0_i128;
         let mut runtime_offset = false;
         loop {
             node = self.selected_designator(node);
@@ -86,12 +89,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 let ty = self.bindings[variable].ty;
                                 if !runtime_offset {
                                     if let Some(layout) = self.types.layout(ty) {
-                                        return ObjectSize::Constant(
-                                            layout.size.saturating_sub(offset),
-                                        );
+                                        return ObjectSize::Constant(remaining(
+                                            layout.size,
+                                            offset,
+                                        ));
                                     }
                                     if dynamic && self.variably_modified(ty) {
-                                        return ObjectSize::Dynamic { ty, offset };
+                                        return dynamic_remainder(ty, offset);
                                     }
                                 }
                                 return ObjectSize::Unknown;
@@ -105,7 +109,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             && offset == 0
                             && !runtime_offset
                         {
-                            return ObjectSize::Incoming { binding, offset };
+                            return ObjectSize::Incoming { binding, offset: 0 };
                         }
                         return ObjectSize::Unknown;
                     },
@@ -138,7 +142,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let constant = index
                             .integer
                             .filter(|_| index.ice)
-                            .and_then(Integer::to_u64);
+                            .and_then(Integer::to_i128);
                         let Some(index) = constant else {
                             if dynamic {
                                 runtime_offset = true;
@@ -155,7 +159,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let Some(step) = self
                             .types
                             .layout(target)
-                            .map(|layout| layout.size)
+                            .map(|layout| i128::from(layout.size))
                             .and_then(|size| size.checked_mul(index))
                         else {
                             return ObjectSize::Unknown;
@@ -189,13 +193,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         };
                     }
                     if let Some(size) = self.types.layout(info.ty).map(|layout| layout.size) {
-                        return ObjectSize::Constant(size.saturating_sub(offset));
+                        return ObjectSize::Constant(remaining(size, offset));
                     }
                     if dynamic && self.variably_modified(info.ty) {
-                        return ObjectSize::Dynamic {
-                            ty: info.ty,
-                            offset,
-                        };
+                        return dynamic_remainder(info.ty, offset);
                     }
                     return ObjectSize::Unknown;
                 },
@@ -213,13 +214,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             // boundary; no separate subobject address is saved.
                             return ObjectSize::Unknown;
                         }
-                        return self
-                            .types
-                            .layout(info.ty)
-                            .map(|layout| layout.size)
-                            .map_or(ObjectSize::Unknown, |size| {
-                                ObjectSize::Constant(size.saturating_sub(offset))
-                            });
+                        if let Some(size) = outside_subobject(mode, offset) {
+                            return size;
+                        }
+                        if offset >= 0 {
+                            return self
+                                .types
+                                .layout(info.ty)
+                                .map(|layout| layout.size)
+                                .map_or(ObjectSize::Unknown, |size| {
+                                    ObjectSize::Constant(remaining(size, offset))
+                                });
+                        }
                     }
                     let base = self.expression_info(base_expression);
                     let indirect = matches!(node.kind, ExpressionType::IndirectMember { .. });
@@ -240,7 +246,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let Some(field) = self.types.tags[id].fields.get().get(index) else {
                         return ObjectSize::Unknown;
                     };
-                    let Some(next) = offset.checked_add(field.offset) else {
+                    let Some(next) = offset.checked_add(i128::from(field.offset)) else {
                         return ObjectSize::Unknown;
                     };
                     offset = next;
@@ -258,12 +264,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         if runtime_offset {
                             return ObjectSize::Unknown;
                         }
-                        return self
-                            .types
-                            .layout(info.ty)
-                            .map_or(ObjectSize::Unknown, |layout| {
-                                ObjectSize::Constant(layout.size.saturating_sub(offset))
-                            });
+                        if let Some(size) = outside_subobject(mode, offset) {
+                            return size;
+                        }
+                        if offset >= 0 {
+                            return self
+                                .types
+                                .layout(info.ty)
+                                .map_or(ObjectSize::Unknown, |layout| {
+                                    ObjectSize::Constant(remaining(layout.size, offset))
+                                });
+                        }
                     }
                     let left = self.expression_info(left_expression);
                     let right = self.expression_info(right_expression);
@@ -278,7 +289,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let Some(index) = index
                         .integer
                         .filter(|_| index.ice)
-                        .and_then(Integer::to_u64)
+                        .and_then(Integer::to_i128)
                     else {
                         if dynamic {
                             runtime_offset = true;
@@ -291,7 +302,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let Some(next) = self
                         .types
                         .layout(info.ty)
-                        .map(|layout| layout.size)
+                        .map(|layout| i128::from(layout.size))
                         .and_then(|size| size.checked_mul(index))
                         .and_then(|step| offset.checked_add(step))
                     else {
@@ -312,4 +323,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
     }
+}
+
+/// The bytes from a signed `offset` to the end of a `size`-byte object; a
+/// position before the object or past its end leaves none, as in Clang.
+fn remaining(size: u64, offset: i128) -> u64 {
+    u64::try_from(offset).map_or(0, |offset| size.saturating_sub(offset))
+}
+
+/// A runtime-sized object's remainder at a constant `offset`.
+fn dynamic_remainder(ty: super::TypeId, offset: i128) -> ObjectSize<'static> {
+    match u64::try_from(offset) {
+        | Ok(offset) => ObjectSize::Dynamic { ty, offset },
+        | Err(_) if offset < 0 => ObjectSize::Constant(0),
+        | Err(_) => ObjectSize::Unknown,
+    }
+}
+
+/// A position before a subobject designates no part of it. Clang then
+/// answers mode 3 with 0 and mode 1 from the complete object (`None`).
+fn outside_subobject(mode: u8, offset: i128) -> Option<ObjectSize<'static>> {
+    (offset < 0 && mode == 3).then_some(ObjectSize::Constant(0))
 }

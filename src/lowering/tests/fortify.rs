@@ -53,6 +53,34 @@ int main(void) { struct S s; return
     );
 }
 
+/// Constant pointer steps accumulate signed, so an outer subtraction does
+/// not underflow a position an inner addition advances, and a
+/// final position before the object leaves no bytes, as in Clang. A
+/// position before a member falls back to the complete object for mode 1
+/// and leaves none for mode 3.
+/// C99: §6.5.6p8, p. 83; PDF p. 95. GNU extension: GCC manual,
+/// "Object Size Checking".
+#[test]
+fn constant_offsets_accumulate_signed_steps() {
+    let _text = returns(
+        r"
+struct S { int a; char b[4]; } s;
+int main(void) { char buf[10]; return
+    (__builtin_object_size(buf + 4 - 2, 0) != 8) |
+    (__builtin_object_size(buf + 4 - 2, 2) != 8) << 1 |
+    (__builtin_object_size(&buf[4] - 2, 0) != 8) << 2 |
+    (__builtin_object_size(&buf[4] - 2, 1) != 8) << 3 |
+    (__builtin_object_size(buf + 12 - 4, 0) != 2) << 4 |
+    (__builtin_object_size(buf - 2, 0) != 0) << 5 |
+    (__builtin_object_size(&buf[4] - 6, 2) != 0) << 6 |
+    (__builtin_object_size(s.b + 2 - 1, 1) != 3) << 7 |
+    (__builtin_object_size(s.b - 1, 1) != 5) << 8 |
+    (__builtin_object_size(s.b - 1, 3) != 0) << 9; }
+",
+        0,
+    );
+}
+
 #[test]
 fn dynamic_size_uses_saved_vla_bound_and_static_size_is_unknown() {
     let _text = returns(
