@@ -250,10 +250,11 @@ impl Selector<'_, '_, '_> {
                 for (index, &register) in conv.float_arguments.iter().enumerate() {
                     let offset = 48 + 16 * u32::try_from(index).expect("eight registers");
                     debug_assert!(offset < REGISTER_SAVE_BYTES, "the save area holds it");
-                    self.emit(MInst::XStore {
-                        width: Width::B64,
-                        dst:   Mem::new(Base::Frame(FrameObject::RegisterSave(offset)), 0),
-                        src:   Reg::Phys(register),
+                    // All 16 bytes: a `__float128` argument fills its register.
+                    self.emit(MInst::Move128 {
+                        load: false,
+                        reg:  Reg::Phys(register),
+                        mem:  Mem::new(Base::Frame(FrameObject::RegisterSave(offset)), 0),
                     });
                 }
             },
