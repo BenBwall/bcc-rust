@@ -61,8 +61,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let binding = self.expression_info(callee).binding?;
         let descriptor = self.bindings[binding].origin.descriptor()?;
         let builtin = descriptor.operation;
-        if matches!(builtin, CommonBuiltin::Atomic(_)) {
-            return self.atomic_call(e, callee, arguments);
+        match descriptor.type_rule {
+            | crate::builtins::TypeRule::Atomic => {
+                let CommonBuiltin::Atomic(atomic) = builtin else {
+                    return None;
+                };
+                return Some(self.atomic_call(e, atomic, arguments));
+            },
+            // A prototyped call whose immediates `type_call` checks.
+            | crate::builtins::TypeRule::X86Signature => return None,
+            | crate::builtins::TypeRule::VectorShuffle => {
+                if let Some(feature) = descriptor.availability.feature {
+                    self.context.report_extension(
+                        feature,
+                        descriptor.spelling,
+                        name.source_vectors,
+                    );
+                }
+                return Some(self.shuffle_vector_builtin(e, arguments));
+            },
+            | crate::builtins::TypeRule::VectorOverload(operation) =>
+                return Some(self.vector_overload(e, name, operation, arguments)),
+            | crate::builtins::TypeRule::TypeClassify =>
+                return Some(self.classify_type(e, &arguments)),
+            | crate::builtins::TypeRule::Math128(rule) =>
+                return Some(self.math128_builtin(e, rule, &arguments)),
+            | _ => {},
         }
         if builtin == CommonBuiltin::Library {
             return None;
@@ -276,7 +300,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Offsetof
             | CommonBuiltin::ReadTimestamp
             | CommonBuiltin::DebugTrap
-            | CommonBuiltin::Annotation => {},
+            | CommonBuiltin::Annotation
+            | CommonBuiltin::Semantic(_)
+            | CommonBuiltin::Unsupported(_) => {},
         }
         Some(info)
     }
@@ -303,7 +329,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let info = self.expression_info(argument);
         let valid = match rule.constraint {
-            | ConstantConstraint::None => true,
+            // Immediates belong to x86 prototypes, checked by `x86_immediates`.
+            | ConstantConstraint::None | ConstantConstraint::Immediate(..) => true,
             | ConstantConstraint::ConvertedIntegerRange(max) => self
                 .common_integer_constant(argument, ty)
                 .and_then(Integer::to_u64)

@@ -39,9 +39,13 @@ const PROBES: &[&str] = &[
 ];
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Snapshot names and spelled types are outside compiler allocation measurements."
+)]
 fn builtin_names_match_the_recognition_snapshot() {
     let mut names = BTreeSet::new();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOT);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOT);
     if let Ok(previous) = std::fs::read_to_string(path) {
         names.extend(
             previous
@@ -51,7 +55,6 @@ fn builtin_names_match_the_recognition_snapshot() {
         );
     }
     names.extend(PROBES.iter().map(|&name| name.to_owned()));
-    names.extend(baseline_names());
     names.extend(
         crate::builtins::test_descriptors().map(|descriptor| descriptor.spelling.to_owned()),
     );
@@ -160,6 +163,10 @@ fn call(name: &str) -> String {
 }
 
 /// A type as a compact C-like string; vectors as `V<lanes>(element)`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Snapshot names and spelled types are outside compiler allocation measurements."
+)]
 pub(super) fn spell(
     unit: &SemanticTranslationUnit<'_>,
     context: &Context<'_>,
@@ -202,34 +209,4 @@ pub(super) fn spell(
         | kind => format!("{kind:?}"),
     };
     format!("{constant}{body}")
-}
-
-/// Families recognized outside the registry before M6. The snapshot
-/// retains them once blessed.
-fn baseline_names() -> impl Iterator<Item = String> {
-    include_str!("../builtins/x86_builtin_table.rs")
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("(\""))
-        .filter_map(|line| line.split('"').next())
-        .chain([
-            "__builtin_classify_type",
-            "__builtin_shufflevector",
-            "__builtin_elementwise_abs",
-            "__builtin_elementwise_sqrt",
-            "__builtin_elementwise_add_sat",
-            "__builtin_elementwise_sub_sat",
-            "__builtin_elementwise_min",
-            "__builtin_elementwise_max",
-            "__builtin_nondeterministic_value",
-            "__builtin_nontemporal_load",
-            "__builtin_nontemporal_store",
-            "__builtin_nans",
-            "__builtin_huge_valf128",
-            "__builtin_inff128",
-            "__builtin_nanf128",
-            "__builtin_nansf128",
-            "__builtin_fabsf128",
-            "__builtin_copysignf128",
-        ])
-        .map(str::to_owned)
 }

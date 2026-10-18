@@ -4,7 +4,6 @@
 
 use std::cell::Cell;
 
-use super::modeled;
 use crate::translation_phases::{
     parsing::{
         Builtin,
@@ -12,7 +11,6 @@ use crate::translation_phases::{
         SyntaxOperand,
         syntax::Expression,
     },
-    preprocessing::KeywordTokenType,
     semantic_analysis::{
         Analyzer,
         SemanticErrorKind,
@@ -41,32 +39,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         e: &'tu Expression<'tu>,
         b: &'tu Builtin<'tu>,
     ) -> ExpressionInfo<'tu> {
-        use KeywordTokenType as K;
-        if matches!(b.keyword, K::BuiltinTypesCompatible | K::BuiltinChooseExpr) {
-            return self.type_generic_builtin(e, b);
-        }
-        if matches!(b.keyword, K::BuiltinBitCast | K::BuiltinConvertVector) {
-            self.context.report_extension(
-                crate::configuration::Feature::VectorBuiltins,
-                "vector builtin",
-                b.source_vectors,
-            );
-        }
-        if b.keyword == K::BuiltinBitCast {
-            return self.bit_cast_builtin(e, b);
-        }
-        if b.keyword == K::BuiltinConvertVector {
-            return self.convert_vector_builtin(e, b);
-        }
-        if b.keyword == K::BuiltinOffsetof {
-            return self.type_offsetof(e, b);
-        }
-        if !modeled(b.keyword) || b.recovered {
-            return Self::expression_result(e, self.types.unknown());
-        }
+        use crate::builtins::TypeRule as R;
         let Some(descriptor) = super::registry::keyword_descriptor(b.keyword) else {
             return Self::expression_result(e, self.types.unknown());
         };
+        match descriptor.type_rule {
+            | R::TypesCompatible | R::ChooseExpr => return self.type_generic_builtin(e, b),
+            | R::BitCast | R::ConvertVector => {
+                if let Some(feature) = descriptor.availability.feature {
+                    self.context
+                        .report_extension(feature, "vector builtin", b.source_vectors);
+                }
+                return if descriptor.type_rule == R::BitCast {
+                    self.bit_cast_builtin(e, b)
+                } else {
+                    self.convert_vector_builtin(e, b)
+                };
+            },
+            | R::Offsetof => return self.type_offsetof(e, b),
+            | _ => {},
+        }
+        if b.recovered {
+            return Self::expression_result(e, self.types.unknown());
+        }
         let crate::builtins::BuiltinOperation::Varargs(operation) = descriptor.operation else {
             return Self::expression_result(e, self.types.unknown());
         };

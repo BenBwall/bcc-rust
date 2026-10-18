@@ -111,7 +111,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn type_generic_constant(&self, e: &'tu Expression<'tu>) -> bool {
         use super::ExpressionType as E;
         matches!(e.kind, E::Generic(_))
-            || matches!(e.kind, E::Builtin(b) if matches!(b.keyword, KeywordTokenType::BuiltinTypesCompatible | KeywordTokenType::BuiltinChooseExpr))
+            || matches!(e.kind, E::Builtin(b) if keyword_selection(b.keyword))
             || matches!(
                 e.kind,
                 E::Unary {
@@ -132,32 +132,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn math128_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
-        function: &'tu Expression<'tu>,
+        rule: crate::builtins::Math128,
         arguments: &[&'tu Expression<'tu>],
-    ) -> Option<ExpressionInfo<'tu>> {
+    ) -> ExpressionInfo<'tu> {
         use super::ExpressionType as E;
-        let function = self.selected_designator(function);
-        let E::Identifier(name) = function.kind else {
-            return None;
-        };
-        // C99 §6.5.2.2p1: a shadowing declaration uses ordinary call typing.
-        if !self
-            .expression_info(function)
-            .binding
-            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
-        {
-            return None;
-        }
-        let (scalar, count, nan, operation) = match self.context.string_cache.at(name.name) {
-            | "__builtin_nans" => (Scalar::Double, 1, true, false),
-            | "__builtin_huge_valf128" | "__builtin_inff128" => (Scalar::Float128, 0, false, false),
-            | "__builtin_nanf128" | "__builtin_nansf128" => (Scalar::Float128, 1, true, false),
-            | "__builtin_fabsf128" => (Scalar::Float128, 1, false, true),
-            | "__builtin_copysignf128" => (Scalar::Float128, 2, false, true),
-            | _ => return None,
-        };
+        let crate::builtins::Math128 {
+            result: scalar,
+            arguments: count,
+            tag: nan,
+            arithmetic: operation,
+        } = rule;
         if arguments.len() != count {
-            return Some(self.invalid_expression(e, SemanticErrorKind::InvalidArgumentCount));
+            return self.invalid_expression(e, SemanticErrorKind::InvalidArgumentCount);
         }
         let result_type = self.types.scalar(scalar);
         let tag_type = nan.then(|| {
@@ -172,7 +158,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let info = self.expression_info(argument);
             let ty = self.converted(info);
             if self.types.unanalyzed(ty) {
-                return Some(Self::expression_result(e, self.types.unknown()));
+                return Self::expression_result(e, self.types.unknown());
             }
             let mut literal = argument;
             while let E::Parenthesized { expression } = literal.kind {
@@ -181,7 +167,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if (operation && !self.arithmetic(ty))
                 || tag_type.is_some_and(|target| !self.assignment_compatible(target, info))
             {
-                return Some(self.invalid_expression(e, SemanticErrorKind::InvalidArgumentType));
+                return self.invalid_expression(e, SemanticErrorKind::InvalidArgumentType);
             }
             if operation {
                 constant &= info.constant == ConstantClass::Arithmetic;
@@ -205,17 +191,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 })));
             }
         }
-        Some(result)
+        result
     }
 
+    /// A callee bound to GNU `__builtin_classify_type`, through selections.
     pub(super) fn classify_type_callee(&self, function: &'tu Expression<'tu>) -> bool {
-        use super::ExpressionType as E;
         let function = self.selected_designator(function);
-        matches!(function.kind, E::Identifier(name) if named_builtin(self.context.string_cache.at(name.name)))
-            && self
-                .expression_info(function)
-                .binding
-                .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
+        self.expression_info(function)
+            .binding
+            .and_then(|id| self.bindings[id].origin.descriptor())
+            .is_some_and(|descriptor| {
+                descriptor.type_rule == crate::builtins::TypeRule::TypeClassify
+            })
     }
 
     pub(super) fn binary128_type(&self, ty: TypeId) -> bool {
@@ -351,8 +338,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
-/// GNU `__builtin_classify_type` implementation identity.
-/// GCC: Other Builtins, <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-pub(super) fn named_builtin(name: &str) -> bool {
-    name == "__builtin_classify_type"
+/// GNU type compatibility and constant selection keep their own
+/// unevaluated-operand constant rules.
+fn keyword_selection(keyword: KeywordTokenType) -> bool {
+    use crate::builtins::TypeRule as R;
+    super::builtins::registry::keyword_descriptor(keyword).is_some_and(|descriptor| {
+        matches!(descriptor.type_rule, R::TypesCompatible | R::ChooseExpr)
+    })
 }

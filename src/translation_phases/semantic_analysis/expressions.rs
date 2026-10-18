@@ -56,7 +56,6 @@ use super::{
     BindingKind,
     Duration,
     SemanticErrorKind,
-    builtins::atomics,
     constants::Floating,
     integer::Integer,
     scopes::Namespace,
@@ -411,28 +410,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .expression_info(vector_callee)
                     .binding
                     .is_some_and(|id| self.bindings[id].origin.is_intrinsic());
-                info = if !intrinsic {
-                    self.type_call(e, self.expression_info(function_expression), arguments)
-                } else if let Some(info) =
-                    self.common_builtin_call(e, function_expression, arguments)
+                info = if intrinsic
+                    && let Some(info) = self.common_builtin_call(e, function_expression, arguments)
                 {
-                    info
-                } else if let ExpressionType::Identifier(name) = vector_callee.kind
-                    && super::vectors::named_builtin(self.context.string_cache.at(name.name))
-                {
-                    self.context.report_extension(
-                        crate::configuration::Feature::VectorBuiltins,
-                        "__builtin_shufflevector",
-                        name.source_vectors,
-                    );
-                    self.shuffle_vector_builtin(e, arguments)
-                } else if let Some(info) = self.vector_overload(e, vector_callee, arguments) {
-                    info
-                } else if let Some(info) = self.atomic_call(e, vector_callee, arguments) {
-                    info
-                } else if self.classify_type_callee(vector_callee) {
-                    self.classify_type(e, &arguments)
-                } else if let Some(info) = self.math128_builtin(e, vector_callee, &arguments) {
                     info
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)

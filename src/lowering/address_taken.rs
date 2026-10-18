@@ -42,7 +42,10 @@ pub(super) fn find<'a>(
                 instance: None,
                 ..
             } = call.callee
-                && sema.bindings[binding].origin.descriptor().is_some()
+                && sema.bindings[binding]
+                    .origin
+                    .descriptor()
+                    .is_some_and(|descriptor| descriptor.operation.retains_instance())
             {
                 return Err(super::LoweringError::missing(
                     "checked named builtin is not retained",
