@@ -102,7 +102,9 @@ pub(super) fn build(version: &str) -> PathBuf {
 /// Installs ABI-compatible static LLVM libraries in a separate cache and links
 /// their transitive closure. llvm-sys supplies declarations only: dependency
 /// build scripts run before this one, so it cannot bootstrap our installation.
-pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
+/// Returns the prefix of the installation whose libraries are linked, whose
+/// headers C++ code calling into them must be compiled against.
+pub(super) fn link_libraries(version: &str, tools: &std::path::Path) -> PathBuf {
     use std::process::Command;
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let host = env::var("HOST").unwrap();
@@ -317,4 +319,5 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
         );
         println!("cargo:rustc-link-lib=static=stdc++");
     }
+    install.to_path_buf()
 }

@@ -84,7 +84,7 @@ pub(super) fn compile(out_dir: &str) {
         .find_map(|line| line.strip_prefix("LLVM version: "))
         .unwrap();
     let prefix = super::llvm::build(version);
-    super::llvm::link_libraries(version, &prefix);
+    let libraries = super::llvm::link_libraries(version, &prefix);
     let directory = prefix.join("bin");
     let clang = find_tool(
         &directory,
@@ -141,7 +141,10 @@ pub(super) fn compile(out_dir: &str) {
     native.compile("float_parsing");
     let mut target_options = cc::Build::new();
     // LLVM's headers are external code; keep warnings on the bridge itself.
-    let llvm_headers = format!("-isystem{}", prefix.join("include").display());
+    // The bridge is linked with the static LLVM libraries, so it must see
+    // their headers: on windows-gnu those are a separate installation from
+    // the tools, whose headers can differ in configuration.
+    let llvm_headers = format!("-isystem{}", libraries.join("include").display());
     _ = target_options
         .compiler(&clang)
         .archiver(&archiver)
