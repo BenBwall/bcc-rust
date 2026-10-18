@@ -81,6 +81,32 @@ int main(void) { char buf[10]; return
     );
 }
 
+/// `&a[i]` designates an element of `a`, so mode 1 measures the rest of
+/// `a`; the decayed `a[i]` designates the inner array's first element, so
+/// mode 1 measures that inner array. Values match Clang.
+/// C99: §6.5.2.1p3-4, p. 70; PDF p. 82 (successive subscripts);
+/// §6.3.2.1p3, p. 46; PDF p. 58 (array decay). GNU extension: GCC manual,
+/// "Object Size Checking".
+#[test]
+fn subobject_sizes_distinguish_element_addresses_from_decay() {
+    let _text = returns(
+        r"
+int main(void) { char a[2][10]; char b[3][4][5]; return
+    (__builtin_object_size(&a[0], 1) != 20) |
+    (__builtin_object_size(&a[1], 1) != 10) << 1 |
+    (__builtin_object_size(a[0], 1) != 10) << 2 |
+    (__builtin_object_size(&a[0][0], 1) != 10) << 3 |
+    (__builtin_object_size(&a[1][3], 1) != 7) << 4 |
+    (__builtin_object_size(&a[0] + 1, 1) != 10) << 5 |
+    (__builtin_object_size(&b[1][2], 1) != 10) << 6 |
+    (__builtin_object_size(b[1], 1) != 20) << 7 |
+    (__builtin_object_size(&b[1], 1) != 40) << 8 |
+    (__builtin_object_size(&a[0], 3) != 20) << 9; }
+",
+        0,
+    );
+}
+
 #[test]
 fn dynamic_size_uses_saved_vla_bound_and_static_size_is_unknown() {
     let _text = returns(

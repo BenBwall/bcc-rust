@@ -60,6 +60,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> ObjectSize<'tu> {
         let mut node = expression;
         let mut lvalue = false;
+        // Whether the current array lvalue was reached by decay, so that its
+        // elements, not the array as an element of an enclosing one, are
+        // what the pointer designates.
+        let mut decayed = false;
         // Steps are met outermost first, so a later (inner) step may raise
         // a running offset that an earlier one lowered (`buf + 4 - 2`).
         // C99 §6.5.6p8: only the final position must lie within the object.
@@ -71,6 +75,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if !lvalue {
                 if matches!(self.types.nodes[info.ty.index], TypeKind::Array(..)) {
                     lvalue = true;
+                    decayed = true;
                     continue;
                 }
                 match node.kind {
@@ -122,6 +127,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } => {
                         node = operand_expression;
                         lvalue = true;
+                        decayed = false;
                     },
                     | ExpressionType::Binary {
                         operator:
@@ -258,7 +264,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     left_expression,
                     right_expression,
                 } => {
+                    // `&a[i]` of `char a[2][10]` designates an element of `a`,
+                    // whose closest subobject is `a` itself; the decayed
+                    // `a[i]` designates the inner array's first element.
                     if mode & 1 != 0
+                        && decayed
                         && matches!(self.types.nodes[info.ty.index], TypeKind::Array(..))
                     {
                         if runtime_offset {
