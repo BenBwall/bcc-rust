@@ -498,6 +498,50 @@ int main(void) {
 }"#,
     },
     Program {
+        // `i128` to and from `f32` and `f64` through the runtime's
+        // `__floattidf`, `__fixsfti` and their unsigned forms, with values
+        // that round, exceed 64 bits, and set the top bit.
+        name:   "int128_float_conversions",
+        source: r#"int printf(const char *, ...);
+typedef __int128 i128;
+typedef unsigned __int128 u128;
+static unsigned long long bits(double d) { unsigned long long b; __builtin_memcpy(&b, &d, 8); return b; }
+static unsigned fbits(float f) { unsigned b; __builtin_memcpy(&b, &f, 4); return b; }
+static void show(u128 x) { printf(" %llx:%llx", (unsigned long long)(x >> 64), (unsigned long long)x); }
+static i128 big(int k) { return ((i128)0x123456789ABCDEFLL << 40) * k + k; }
+int main(void) {
+    i128 values[] = { 0, 1, -1, 1000000007, -((i128)1 << 100), big(3), big(-7),
+                      ((i128)1 << 64) + 1, ((i128)1 << 24) + 1, -(((i128)1 << 53) + 1) };
+    u128 uvalues[] = { 0, 5, ~(u128)0, (u128)1 << 127, ((u128)1 << 64) - 1, big(9) };
+    for (int i = 0; i < 10; i++) {
+        double d = (double)values[i];
+        float f = (float)values[i];
+        printf("%llx %x", bits(d), fbits(f));
+        show((u128)(i128)d);
+        show((u128)(i128)f);
+        printf("\n");
+    }
+    for (int i = 0; i < 6; i++) {
+        double d = (double)uvalues[i];
+        float f = (float)uvalues[i];
+        printf("%llx %x", bits(d), fbits(f));
+        if (i != 2) {
+            show((u128)d);
+            show((u128)f);
+        }
+        printf("\n");
+    }
+    double x = 1.5e30;
+    float y = -2.5e20f;
+    show((u128)(i128)x);
+    show((u128)(i128)y);
+    show((u128)3.0e38f);
+    show((u128)-0.75);
+    printf("\n");
+    return 0;
+}"#,
+    },
+    Program {
         // An over-aligned dynamic block must not reach into the outgoing
         // arguments (`printf`'s stack arguments, and on Win64 the home area
         // it saves its registers into); a leaf's blocks are 16-byte aligned

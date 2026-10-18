@@ -76,7 +76,7 @@ use crate::{
 /// Symbols the back end calls or reads on its own (`_tls_index` is the
 /// Windows image's TLS index); a module may not define them internally,
 /// since those references would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 46] = [
+pub(crate) const RUNTIME_SYMBOLS: [&str; 54] = [
     "memmove",
     "__main",
     "___chkstk_ms",
@@ -89,12 +89,20 @@ pub(crate) const RUNTIME_SYMBOLS: [&str; 46] = [
     "__udivti3",
     "__modti3",
     "__umodti3",
+    "__floattisf",
+    "__floattidf",
     "__floattixf",
     "__floattitf",
+    "__floatuntisf",
+    "__floatuntidf",
     "__floatuntixf",
     "__floatuntitf",
+    "__fixsfti",
+    "__fixdfti",
     "__fixxfti",
     "__fixtfti",
+    "__fixunssfti",
+    "__fixunsdfti",
     "__fixunsxfti",
     "__fixunstfti",
     "__addtf3",

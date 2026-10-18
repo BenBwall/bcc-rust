@@ -1,5 +1,5 @@
-//! `f128` through runtime routines, and every conversion with an `f80` or
-//! `f128` on either side.
+//! `f128` through runtime routines, and every conversion with an `i128`,
+//! `f80` or `f128` on either side.
 //!
 //! An `f128` lives in a pair of general registers like an `i128`, so copies,
 //! spills, selects, loads, stores, bit casts to and from `i128`, and `fneg`
@@ -15,8 +15,9 @@
 //! Reference: GCC Internals, "Routines for floating point emulation"
 //! (`__unordtf2`, `__eqtf2` … and their return values).
 //!
-//! `f80` conversions other than with `i128` and `f128` stay on the x87 unit
-//! (`isel/x87.rs`).
+//! Conversions between `i128` and `f32` or `f64` call `__floattisf`,
+//! `__fixdfti` and their unsigned forms the same way; `f80` conversions
+//! other than with `i128` and `f128` stay on the x87 unit (`isel/x87.rs`).
 
 use super::{
     Selector,
@@ -49,7 +50,8 @@ use crate::{
 };
 
 impl Selector<'_, '_, '_> {
-    /// A unary operation that involves an `f80` or `f128`.
+    /// A unary operation that involves an `f80` or `f128`, or converts
+    /// between an `i128` and a float.
     pub(super) fn wide_float_unary(
         &mut self,
         inst: Inst,
@@ -78,7 +80,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// The routine, and where its result goes, for a conversion from an
-    /// `f128` to a narrower type.
+    /// `i128` or `f128` to a narrower type.
     fn narrowing_routine(
         opcode: Opcode,
         ty: Type,
@@ -88,6 +90,10 @@ impl Selector<'_, '_, '_> {
         let float = |name| Ok((name, LibResult::Xmm(dst)));
         let int = |name| Ok((name, LibResult::Gpr(dst)));
         match (opcode, from, ty) {
+            | (Opcode::Sitofp, Type::I128, Type::F32) => float("__floattisf"),
+            | (Opcode::Sitofp, Type::I128, _) => float("__floattidf"),
+            | (Opcode::Uitofp, Type::I128, Type::F32) => float("__floatuntisf"),
+            | (Opcode::Uitofp, Type::I128, _) => float("__floatuntidf"),
             | (Opcode::Fptrunc, Type::F128, Type::F32) => float("__trunctfsf2"),
             | (Opcode::Fptrunc, Type::F128, _) => float("__trunctfdf2"),
             // Narrower results come from the 32-bit signed routine, whose
@@ -133,8 +139,12 @@ impl Selector<'_, '_, '_> {
                 self.convert_to_x87(opcode, dst, arg);
                 return Ok(());
             },
+            | (Opcode::Fptosi, Type::F32, _) => "__fixsfti",
+            | (Opcode::Fptosi, Type::F64, _) => "__fixdfti",
             | (Opcode::Fptosi, Type::F80, _) => "__fixxfti",
             | (Opcode::Fptosi, Type::F128, _) => "__fixtfti",
+            | (Opcode::Fptoui, Type::F32, _) => "__fixunssfti",
+            | (Opcode::Fptoui, Type::F64, _) => "__fixunsdfti",
             | (Opcode::Fptoui, Type::F80, _) => "__fixunsxfti",
             | (Opcode::Fptoui, Type::F128, _) => "__fixunstfti",
             | (Opcode::Sitofp, Type::I128, Type::F80) => "__floattixf",

@@ -1268,9 +1268,12 @@ pub(super) const fn is_pair(ty: Type) -> bool {
 }
 
 /// Whether a unary operation from `from` to `ty` involves an `f80` or
-/// `f128`.
+/// `f128`, or converts between an `i128` and a float.
 const fn wide_float(ty: Type, from: Type) -> bool {
-    matches!(ty, Type::F80 | Type::F128) || matches!(from, Type::F80 | Type::F128)
+    matches!(ty, Type::F80 | Type::F128)
+        || matches!(from, Type::F80 | Type::F128)
+        || (matches!(ty, Type::I128) && from.is_float())
+        || (matches!(from, Type::I128) && ty.is_float())
 }
 
 /// The register class that holds a value of `ty`; a pair's halves are

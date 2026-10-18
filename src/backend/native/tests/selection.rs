@@ -1064,6 +1064,53 @@ block0:
     );
 }
 
+/// Conversions between `i128` and `f64` call the runtime as Clang does:
+/// `__floattidf` and `__fixunsdfti` take the `i128` in `%rsi:%rdi` and
+/// return it in `%rdx:%rax` on System V; on Win64 the `i128` argument is a
+/// pointer to a copy in `%rcx` and the result comes back in `%xmm0`, as
+/// `clang --target=x86_64-w64-windows-gnu -S` calls them.
+#[test]
+fn int128_float_conversions_call_the_runtime() {
+    let ir = "abi lowered
+function @to_float(ptr) -> f64 external {
+block0(v0: ptr):
+    v1 = load.i128 v0, align 16
+    v2 = sitofp.f64 v1
+    return v2
+}
+function @to_int(f32, ptr) external {
+block0(v0: f32, v1: ptr):
+    v2 = fptoui.i128 v0
+    store.i128 v2, v1, align 16
+    return
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let to_float = function_text(&text, "to_float");
+    assert!(to_float.contains("callq\t__floattidf@PLT"), "{to_float}");
+    let setup = call_setup(to_float, "__floattidf");
+    assert!(
+        setup.contains(", %rdi\n") && setup.contains(", %rsi\n"),
+        "{to_float}"
+    );
+    let to_int = function_text(&text, "to_int");
+    assert!(to_int.contains("callq\t__fixunssfti@PLT"), "{to_int}");
+    assert!(
+        to_int.contains("%rax, (%") && to_int.contains("%rdx, 8(%"),
+        "{to_int}"
+    );
+    let text = assembly(ir, Target::WindowsGnu);
+    let to_float = function_text(&text, "to_float");
+    let setup = call_setup(to_float, "__floattidf");
+    assert!(
+        setup.contains("leaq\t") && setup.contains(", %rcx\n"),
+        "{to_float}"
+    );
+    let to_int = function_text(&text, "to_int");
+    assert!(to_int.contains("callq\t__fixunssfti"), "{to_int}");
+    assert!(to_int.contains("movups\t%xmm0, "), "{to_int}");
+}
+
 /// `f128` operations call the soft-float routines: on System V with the
 /// operands in whole SSE registers and the result in `%xmm0`; on Win64 as
 /// `clang --target=x86_64-w64-windows-gnu -S` calls `__addtf3`, with the

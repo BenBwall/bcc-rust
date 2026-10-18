@@ -6,8 +6,7 @@
 //! The back end (see `docs/design/native-backend.md`) compiles integer,
 //! pointer, `i128`, `f32`, `f64`, `f80` and `f128` code, variadic
 //! definitions and dynamic stack allocation. It refuses `i128` bit counts,
-//! byte swaps, `switch`es and conversions to or from `f32` and `f64`,
-//! `i128` values where Win64 passes them only by
+//! byte swaps and `switch`es, `i128` values where Win64 passes them only by
 //! reference, structure results in register combinations other than the
 //! ones System V and Win64 define, stack objects aligned above 16 bytes,
 //! stack argument areas whose offsets would leave a 32-bit displacement,
@@ -147,14 +146,6 @@ impl Checker<'_, '_> {
                 ty: Type::I1 | Type::I128,
                 ..
             } if opcode.is_bit_unary() => Err(Construct::Opcode(opcode)),
-            | InstData::Unary { ty, arg, .. }
-                if matches!(
-                    opcode,
-                    Opcode::Sitofp | Opcode::Uitofp | Opcode::Fptosi | Opcode::Fptoui
-                ) && ((ty == Type::I128
-                    && matches!(body.value_type(arg), Type::F32 | Type::F64))
-                    || (wide(arg) && matches!(ty, Type::F32 | Type::F64))) =>
-                Err(Construct::WideConversion(opcode)),
             | InstData::Switch { value, .. } if wide(value) => Err(Construct::WideSwitch),
             | InstData::Unary { .. } if opcode == Opcode::VaArg => Err(Construct::Opcode(opcode)),
             | InstData::Atomic { .. }
@@ -286,8 +277,6 @@ pub(crate) enum Construct {
     /// Memory accesses of this type (`i1`).
     Type(Type),
     Opcode(Opcode),
-    /// A conversion between `i128` and `f32` or `f64`.
-    WideConversion(Opcode),
     /// A `switch` on an `i128`.
     WideSwitch,
     /// A Win64 `i128` passed by value.
@@ -320,8 +309,6 @@ impl fmt::Display for Unsupported<'_> {
         match self.construct {
             | Construct::Type(ty) => write!(f, "{ty} values")?,
             | Construct::Opcode(opcode) => write!(f, "the `{opcode}` instruction")?,
-            | Construct::WideConversion(opcode) =>
-                write!(f, "the `{opcode}` instruction between i128 and a float")?,
             | Construct::WideSwitch => write!(f, "a switch on an i128 value")?,
             | Construct::WideByValue => write!(f, "an i128 passed by value on Win64")?,
             | Construct::RegisterResult(ty) =>
