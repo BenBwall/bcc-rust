@@ -442,3 +442,32 @@ fn private_inline_bodies_keep_their_refusals() {
         "{assembly:?}"
     );
 }
+
+/// A private `always_inline` body stands in for its own entity only: the
+/// glibc `__REDIRECT` alias that labels another declaration with the same
+/// symbol calls the external `read`, so the private body does not call
+/// itself.
+/// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125. GNU extension: GCC manual,
+/// "Asm Labels".
+#[test]
+fn private_inline_bodies_do_not_capture_redirected_symbols() {
+    let text = lower(
+        "extern int __read_alias(int, void *, unsigned long) __asm__(\"read\"); extern __inline \
+         __attribute__((always_inline, gnu_inline)) int read(int fd, void *b, unsigned long n) { \
+         return __read_alias(fd, b, n); } int main(void) { char c; return read(0, &c, 1); }",
+    )
+    .unwrap_or_else(|error| panic!("{error:?}"));
+    let private = text
+        .split("function @read.always_inline(")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the private body is defined\n{text}"));
+    let private = private.split("\nfunction ").next().unwrap_or(private);
+    assert!(private.contains("call @read("), "{text}");
+    assert!(!private.contains("call @read.always_inline("), "{text}");
+    let main = text
+        .split("function @main(")
+        .nth(1)
+        .expect("main is defined");
+    let main = main.split("\nfunction ").next().unwrap_or(main);
+    assert!(main.contains("call @read.always_inline("), "{text}");
+}

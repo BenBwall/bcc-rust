@@ -83,6 +83,27 @@ fn always_inline_gnu_bodies_reach_their_calls() {
     );
 }
 
+/// glibc's `__REDIRECT` names an inline function's external symbol from
+/// another entity with an assembler label; a call through that entity runs
+/// the external definition, never the private body, which would otherwise
+/// recurse into itself.
+/// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125. GNU extension: GCC manual,
+/// "Asm Labels".
+#[test]
+fn redirected_symbols_keep_their_external_definition() {
+    let source = "int twice(int x) __asm__(\"wrapped\"); int twice(int x) { return 2 * x; } \
+                  extern __inline__ __attribute__((__always_inline__, __gnu_inline__)) int \
+                  wrapped(int x) { return twice(x) + 1; } int main(void) { return wrapped(20) - \
+                  41; }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            with_module(source, target, optimize, profile, |module, target| {
+                assert_eq!(interpret_main_only(module, target), 0, "{module}");
+            });
+        }
+    }
+}
+
 /// Inline-only definitions keep their entity's returns-twice contract, so
 /// `always_inline` cannot bypass the optimizer's frame safeguards.
 #[test]

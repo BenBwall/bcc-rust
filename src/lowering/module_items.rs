@@ -148,8 +148,11 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// Each generated base probes a suffix at most once.
     next_name_suffix: ArenaMap<'a, &'a str, u64>,
     /// The private copies of `always_inline` GNU and C99 inline bodies,
-    /// by the external symbol they stand in for at direct calls.
-    private_bodies: ArenaMap<'a, &'a str, FuncId>,
+    /// by the identity of the entity they stand in for at direct calls.
+    /// The emitted symbol is not a key: a different entity may name it
+    /// with an assembler label (glibc's `__REDIRECT`) and must still call
+    /// the external definition.
+    private_bodies: ArenaMap<'a, StringCacheId, FuncId>,
     /// The inline-only definitions lowered as private bodies
     /// ([`Unit::private_inline`]).
     private_inline: ArenaSet<'a, usize>,
@@ -380,7 +383,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let source = record.syntax.source_vectors;
         let external = self.symbol_name(binding);
-        if let Some(&func) = self.private_bodies.get(external) {
+        let identity = self.binding_identity(binding);
+        if let Some(&func) = self.private_bodies.get(&identity) {
             return Ok(Some(func));
         }
         let signature = self
@@ -398,17 +402,19 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .sema
             .entity_attributes(binding)
             .is_some_and(|attributes| attributes.returns_twice);
-        _ = self.private_bodies.insert(external, func);
+        _ = self.private_bodies.insert(identity, func);
         Ok(Some(func))
     }
 
     /// The function a direct call to `binding` runs: the private copy of an
     /// `always_inline` inline body when there is one, else the function
-    /// the binding names.
+    /// the binding names. Only bindings of the inline definition's entity
+    /// use the private copy; another entity labelled with the same symbol
+    /// calls the external definition.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
     pub(super) fn direct_callee(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         if self.sema.bindings[binding].linkage == Linkage::External
-            && let Some(&func) = self.private_bodies.get(self.symbol_name(binding))
+            && let Some(&func) = self.private_bodies.get(&self.binding_identity(binding))
         {
             return Ok(func);
         }
