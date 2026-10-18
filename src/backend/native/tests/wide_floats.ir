@@ -1,0 +1,649 @@
+abi lowered
+global @fmt internal constant size 11, align 1 = bytes "256c6c783a256c6c782000"
+global @nl internal constant size 2, align 1 = bytes "0a00"
+function @printf(ptr, ...) -> i32 external
+
+function @show(i128) -> i32 internal {
+block0(v0: i128):
+    v1 = global_addr @fmt
+    v2 = iconst.i128 64
+    v3 = lshr.i128 v0, v2
+    v4 = trunc.i64 v3
+    v5 = trunc.i64 v0
+    v6 = call @printf(v1, v4, v5)
+    return v6
+}
+
+function @newline() -> i32 internal {
+block0:
+    v0 = global_addr @nl
+    v1 = call @printf(v0)
+    return v1
+}
+
+function @show80(f80) -> i32 internal {
+    slot0 = stack_slot 16, align 16
+block0(v0: f80):
+    v1 = stack_addr slot0
+    v2 = iconst.i128 0
+    store.i128 v2, v1, align 16
+    store.f80 v0, v1, align 16
+    v3 = load.i128 v1, align 16
+    v4 = call @show(v3)
+    return v4
+}
+
+function @show128(f128) -> i32 internal {
+block0(v0: f128):
+    v1 = bitcast.i128 v0
+    v2 = call @show(v1)
+    return v2
+}
+
+function @ops80(f80, f80) -> i32 internal {
+block0(v0: f80, v1: f80):
+    v2 = fadd.f80 v0, v1
+    v3 = call @show80(v2)
+    v4 = fsub.f80 v0, v1
+    v5 = call @show80(v4)
+    v6 = fmul.f80 v0, v1
+    v7 = call @show80(v6)
+    v8 = fdiv.f80 v0, v1
+    v9 = call @show80(v8)
+    v10 = frem.f80 v0, v1
+    v11 = call @show80(v10)
+    v12 = fneg.f80 v0
+    v13 = call @show80(v12)
+    v14 = iconst.i128 0
+    v15 = fcmp.f80 oeq v0, v1
+    v16 = zext.i128 v15
+    v17 = iconst.i128 0
+    v18 = shl.i128 v16, v17
+    v19 = or.i128 v14, v18
+    v20 = fcmp.f80 ogt v0, v1
+    v21 = zext.i128 v20
+    v22 = iconst.i128 1
+    v23 = shl.i128 v21, v22
+    v24 = or.i128 v19, v23
+    v25 = fcmp.f80 oge v0, v1
+    v26 = zext.i128 v25
+    v27 = iconst.i128 2
+    v28 = shl.i128 v26, v27
+    v29 = or.i128 v24, v28
+    v30 = fcmp.f80 olt v0, v1
+    v31 = zext.i128 v30
+    v32 = iconst.i128 3
+    v33 = shl.i128 v31, v32
+    v34 = or.i128 v29, v33
+    v35 = fcmp.f80 ole v0, v1
+    v36 = zext.i128 v35
+    v37 = iconst.i128 4
+    v38 = shl.i128 v36, v37
+    v39 = or.i128 v34, v38
+    v40 = fcmp.f80 one v0, v1
+    v41 = zext.i128 v40
+    v42 = iconst.i128 5
+    v43 = shl.i128 v41, v42
+    v44 = or.i128 v39, v43
+    v45 = fcmp.f80 ord v0, v1
+    v46 = zext.i128 v45
+    v47 = iconst.i128 6
+    v48 = shl.i128 v46, v47
+    v49 = or.i128 v44, v48
+    v50 = fcmp.f80 ueq v0, v1
+    v51 = zext.i128 v50
+    v52 = iconst.i128 7
+    v53 = shl.i128 v51, v52
+    v54 = or.i128 v49, v53
+    v55 = fcmp.f80 ugt v0, v1
+    v56 = zext.i128 v55
+    v57 = iconst.i128 8
+    v58 = shl.i128 v56, v57
+    v59 = or.i128 v54, v58
+    v60 = fcmp.f80 uge v0, v1
+    v61 = zext.i128 v60
+    v62 = iconst.i128 9
+    v63 = shl.i128 v61, v62
+    v64 = or.i128 v59, v63
+    v65 = fcmp.f80 ult v0, v1
+    v66 = zext.i128 v65
+    v67 = iconst.i128 10
+    v68 = shl.i128 v66, v67
+    v69 = or.i128 v64, v68
+    v70 = fcmp.f80 ule v0, v1
+    v71 = zext.i128 v70
+    v72 = iconst.i128 11
+    v73 = shl.i128 v71, v72
+    v74 = or.i128 v69, v73
+    v75 = fcmp.f80 une v0, v1
+    v76 = zext.i128 v75
+    v77 = iconst.i128 12
+    v78 = shl.i128 v76, v77
+    v79 = or.i128 v74, v78
+    v80 = fcmp.f80 uno v0, v1
+    v81 = zext.i128 v80
+    v82 = iconst.i128 13
+    v83 = shl.i128 v81, v82
+    v84 = or.i128 v79, v83
+    v85 = call @show(v84)
+    v86 = fcmp.f80 olt v0, v1
+    v87 = select.f80 v86, v0, v1
+    v88 = call @show80(v87)
+    v89 = call @newline()
+    return v89
+}
+
+function @ops128(f128, f128) -> i32 internal {
+block0(v0: f128, v1: f128):
+    v2 = fadd.f128 v0, v1
+    v3 = call @show128(v2)
+    v4 = fsub.f128 v0, v1
+    v5 = call @show128(v4)
+    v6 = fmul.f128 v0, v1
+    v7 = call @show128(v6)
+    v8 = fdiv.f128 v0, v1
+    v9 = call @show128(v8)
+    v10 = frem.f128 v0, v1
+    v11 = call @show128(v10)
+    v12 = fneg.f128 v0
+    v13 = call @show128(v12)
+    v14 = iconst.i128 0
+    v15 = fcmp.f128 oeq v0, v1
+    v16 = zext.i128 v15
+    v17 = iconst.i128 0
+    v18 = shl.i128 v16, v17
+    v19 = or.i128 v14, v18
+    v20 = fcmp.f128 ogt v0, v1
+    v21 = zext.i128 v20
+    v22 = iconst.i128 1
+    v23 = shl.i128 v21, v22
+    v24 = or.i128 v19, v23
+    v25 = fcmp.f128 oge v0, v1
+    v26 = zext.i128 v25
+    v27 = iconst.i128 2
+    v28 = shl.i128 v26, v27
+    v29 = or.i128 v24, v28
+    v30 = fcmp.f128 olt v0, v1
+    v31 = zext.i128 v30
+    v32 = iconst.i128 3
+    v33 = shl.i128 v31, v32
+    v34 = or.i128 v29, v33
+    v35 = fcmp.f128 ole v0, v1
+    v36 = zext.i128 v35
+    v37 = iconst.i128 4
+    v38 = shl.i128 v36, v37
+    v39 = or.i128 v34, v38
+    v40 = fcmp.f128 one v0, v1
+    v41 = zext.i128 v40
+    v42 = iconst.i128 5
+    v43 = shl.i128 v41, v42
+    v44 = or.i128 v39, v43
+    v45 = fcmp.f128 ord v0, v1
+    v46 = zext.i128 v45
+    v47 = iconst.i128 6
+    v48 = shl.i128 v46, v47
+    v49 = or.i128 v44, v48
+    v50 = fcmp.f128 ueq v0, v1
+    v51 = zext.i128 v50
+    v52 = iconst.i128 7
+    v53 = shl.i128 v51, v52
+    v54 = or.i128 v49, v53
+    v55 = fcmp.f128 ugt v0, v1
+    v56 = zext.i128 v55
+    v57 = iconst.i128 8
+    v58 = shl.i128 v56, v57
+    v59 = or.i128 v54, v58
+    v60 = fcmp.f128 uge v0, v1
+    v61 = zext.i128 v60
+    v62 = iconst.i128 9
+    v63 = shl.i128 v61, v62
+    v64 = or.i128 v59, v63
+    v65 = fcmp.f128 ult v0, v1
+    v66 = zext.i128 v65
+    v67 = iconst.i128 10
+    v68 = shl.i128 v66, v67
+    v69 = or.i128 v64, v68
+    v70 = fcmp.f128 ule v0, v1
+    v71 = zext.i128 v70
+    v72 = iconst.i128 11
+    v73 = shl.i128 v71, v72
+    v74 = or.i128 v69, v73
+    v75 = fcmp.f128 une v0, v1
+    v76 = zext.i128 v75
+    v77 = iconst.i128 12
+    v78 = shl.i128 v76, v77
+    v79 = or.i128 v74, v78
+    v80 = fcmp.f128 uno v0, v1
+    v81 = zext.i128 v80
+    v82 = iconst.i128 13
+    v83 = shl.i128 v81, v82
+    v84 = or.i128 v79, v83
+    v85 = call @show(v84)
+    v86 = fcmp.f128 olt v0, v1
+    v87 = select.f128 v86, v0, v1
+    v88 = call @show128(v87)
+    v89 = call @newline()
+    return v89
+}
+
+function @conv80(f80, f80, f80) -> i32 internal {
+block0(v0: f80, v1: f80, v2: f80):
+    v3 = fptosi.i8 v1
+    v4 = sext.i128 v3
+    v5 = call @show(v4)
+    v6 = fptoui.i8 v0
+    v7 = zext.i128 v6
+    v8 = call @show(v7)
+    v9 = fptosi.i16 v1
+    v10 = sext.i128 v9
+    v11 = call @show(v10)
+    v12 = fptoui.i16 v0
+    v13 = zext.i128 v12
+    v14 = call @show(v13)
+    v15 = fptosi.i32 v1
+    v16 = sext.i128 v15
+    v17 = call @show(v16)
+    v18 = fptoui.i32 v0
+    v19 = zext.i128 v18
+    v20 = call @show(v19)
+    v21 = fptosi.i64 v1
+    v22 = sext.i128 v21
+    v23 = call @show(v22)
+    v24 = fptoui.i64 v0
+    v25 = zext.i128 v24
+    v26 = call @show(v25)
+    v27 = fptoui.i64 v2
+    v28 = zext.i128 v27
+    v29 = call @show(v28)
+    v30 = fptosi.i128 v1
+    v31 = call @show(v30)
+    v32 = fptoui.i128 v0
+    v33 = call @show(v32)
+    v34 = fptoui.i128 v2
+    v35 = call @show(v34)
+    v36 = sitofp.f80 v3
+    v37 = call @show80(v36)
+    v38 = sitofp.f80 v9
+    v39 = call @show80(v38)
+    v40 = sitofp.f80 v15
+    v41 = call @show80(v40)
+    v42 = sitofp.f80 v21
+    v43 = call @show80(v42)
+    v44 = sitofp.f80 v30
+    v45 = call @show80(v44)
+    v46 = uitofp.f80 v6
+    v47 = call @show80(v46)
+    v48 = uitofp.f80 v12
+    v49 = call @show80(v48)
+    v50 = uitofp.f80 v18
+    v51 = call @show80(v50)
+    v52 = uitofp.f80 v24
+    v53 = call @show80(v52)
+    v54 = uitofp.f80 v27
+    v55 = call @show80(v54)
+    v56 = uitofp.f80 v32
+    v57 = call @show80(v56)
+    v58 = uitofp.f80 v34
+    v59 = call @show80(v58)
+    v60 = fptrunc.f32 v0
+    v61 = bitcast.i32 v60
+    v62 = zext.i128 v61
+    v63 = call @show(v62)
+    v64 = fptrunc.f64 v1
+    v65 = bitcast.i64 v64
+    v66 = zext.i128 v65
+    v67 = call @show(v66)
+    v68 = fpext.f128 v0
+    v69 = call @show128(v68)
+    v70 = fpext.f128 v2
+    v71 = call @show128(v70)
+    v72 = fconst.f32 0x3DCCCCCD
+    v73 = fpext.f80 v72
+    v74 = call @show80(v73)
+    v75 = fconst.f64 0xC0091EB851EB851F
+    v76 = fpext.f80 v75
+    v77 = call @show80(v76)
+    v78 = fcmp.f80 olt v1, v0
+    v79 = sitofp.f80 v78
+    v80 = call @show80(v79)
+    v81 = uitofp.f80 v78
+    v82 = call @show80(v81)
+    v83 = iconst.i64 -1
+    v84 = sitofp.f80 v83
+    v85 = call @show80(v84)
+    v86 = uitofp.f80 v83
+    v87 = call @show80(v86)
+    v88 = iconst.i64 -9223372036854775808
+    v89 = sitofp.f80 v88
+    v90 = call @show80(v89)
+    v91 = uitofp.f80 v88
+    v92 = call @show80(v91)
+    v93 = iconst.i64 9223372036854775807
+    v94 = sitofp.f80 v93
+    v95 = call @show80(v94)
+    v96 = uitofp.f80 v93
+    v97 = call @show80(v96)
+    v98 = iconst.i128 -1
+    v99 = sitofp.f80 v98
+    v100 = call @show80(v99)
+    v101 = uitofp.f80 v98
+    v102 = call @show80(v101)
+    v103 = iconst.i128 -170141183460469231731687303715884105728
+    v104 = sitofp.f80 v103
+    v105 = call @show80(v104)
+    v106 = uitofp.f80 v103
+    v107 = call @show80(v106)
+    v108 = iconst.i32 -1
+    v109 = sitofp.f80 v108
+    v110 = call @show80(v109)
+    v111 = uitofp.f80 v108
+    v112 = call @show80(v111)
+    v113 = iconst.i16 -1
+    v114 = sitofp.f80 v113
+    v115 = call @show80(v114)
+    v116 = uitofp.f80 v113
+    v117 = call @show80(v116)
+    v118 = iconst.i8 -1
+    v119 = sitofp.f80 v118
+    v120 = call @show80(v119)
+    v121 = uitofp.f80 v118
+    v122 = call @show80(v121)
+    v123 = call @newline()
+    return v123
+}
+
+function @conv128(f128, f128, f128) -> i32 internal {
+block0(v0: f128, v1: f128, v2: f128):
+    v3 = fptosi.i8 v1
+    v4 = sext.i128 v3
+    v5 = call @show(v4)
+    v6 = fptoui.i8 v0
+    v7 = zext.i128 v6
+    v8 = call @show(v7)
+    v9 = fptosi.i16 v1
+    v10 = sext.i128 v9
+    v11 = call @show(v10)
+    v12 = fptoui.i16 v0
+    v13 = zext.i128 v12
+    v14 = call @show(v13)
+    v15 = fptosi.i32 v1
+    v16 = sext.i128 v15
+    v17 = call @show(v16)
+    v18 = fptoui.i32 v0
+    v19 = zext.i128 v18
+    v20 = call @show(v19)
+    v21 = fptosi.i64 v1
+    v22 = sext.i128 v21
+    v23 = call @show(v22)
+    v24 = fptoui.i64 v0
+    v25 = zext.i128 v24
+    v26 = call @show(v25)
+    v27 = fptoui.i64 v2
+    v28 = zext.i128 v27
+    v29 = call @show(v28)
+    v30 = fptosi.i128 v1
+    v31 = call @show(v30)
+    v32 = fptoui.i128 v0
+    v33 = call @show(v32)
+    v34 = fptoui.i128 v2
+    v35 = call @show(v34)
+    v36 = sitofp.f128 v3
+    v37 = call @show128(v36)
+    v38 = sitofp.f128 v9
+    v39 = call @show128(v38)
+    v40 = sitofp.f128 v15
+    v41 = call @show128(v40)
+    v42 = sitofp.f128 v21
+    v43 = call @show128(v42)
+    v44 = sitofp.f128 v30
+    v45 = call @show128(v44)
+    v46 = uitofp.f128 v6
+    v47 = call @show128(v46)
+    v48 = uitofp.f128 v12
+    v49 = call @show128(v48)
+    v50 = uitofp.f128 v18
+    v51 = call @show128(v50)
+    v52 = uitofp.f128 v24
+    v53 = call @show128(v52)
+    v54 = uitofp.f128 v27
+    v55 = call @show128(v54)
+    v56 = uitofp.f128 v32
+    v57 = call @show128(v56)
+    v58 = uitofp.f128 v34
+    v59 = call @show128(v58)
+    v60 = fptrunc.f32 v0
+    v61 = bitcast.i32 v60
+    v62 = zext.i128 v61
+    v63 = call @show(v62)
+    v64 = fptrunc.f64 v1
+    v65 = bitcast.i64 v64
+    v66 = zext.i128 v65
+    v67 = call @show(v66)
+    v68 = fptrunc.f80 v0
+    v69 = call @show80(v68)
+    v70 = fptrunc.f80 v1
+    v71 = call @show80(v70)
+    v72 = fconst.f32 0x3DCCCCCD
+    v73 = fpext.f128 v72
+    v74 = call @show128(v73)
+    v75 = fconst.f64 0xC0091EB851EB851F
+    v76 = fpext.f128 v75
+    v77 = call @show128(v76)
+    v78 = fcmp.f128 olt v1, v0
+    v79 = sitofp.f128 v78
+    v80 = call @show128(v79)
+    v81 = uitofp.f128 v78
+    v82 = call @show128(v81)
+    v83 = iconst.i64 -1
+    v84 = sitofp.f128 v83
+    v85 = call @show128(v84)
+    v86 = uitofp.f128 v83
+    v87 = call @show128(v86)
+    v88 = iconst.i64 -9223372036854775808
+    v89 = sitofp.f128 v88
+    v90 = call @show128(v89)
+    v91 = uitofp.f128 v88
+    v92 = call @show128(v91)
+    v93 = iconst.i64 9223372036854775807
+    v94 = sitofp.f128 v93
+    v95 = call @show128(v94)
+    v96 = uitofp.f128 v93
+    v97 = call @show128(v96)
+    v98 = iconst.i128 -1
+    v99 = sitofp.f128 v98
+    v100 = call @show128(v99)
+    v101 = uitofp.f128 v98
+    v102 = call @show128(v101)
+    v103 = iconst.i128 -170141183460469231731687303715884105728
+    v104 = sitofp.f128 v103
+    v105 = call @show128(v104)
+    v106 = uitofp.f128 v103
+    v107 = call @show128(v106)
+    v108 = iconst.i32 -1
+    v109 = sitofp.f128 v108
+    v110 = call @show128(v109)
+    v111 = uitofp.f128 v108
+    v112 = call @show128(v111)
+    v113 = iconst.i16 -1
+    v114 = sitofp.f128 v113
+    v115 = call @show128(v114)
+    v116 = uitofp.f128 v113
+    v117 = call @show128(v116)
+    v118 = iconst.i8 -1
+    v119 = sitofp.f128 v118
+    v120 = call @show128(v119)
+    v121 = uitofp.f128 v118
+    v122 = call @show128(v121)
+    v123 = call @newline()
+    return v123
+}
+
+function @series(i32) -> i32 internal {
+block0(v0: i32):
+    v1 = fconst.f80 0x0
+    v2 = fconst.f128 0x0
+    v3 = iconst.i32 0
+    jump block1(v3, v1, v2, v2, v1)
+block1(v4: i32, v5: f80, v6: f128, v20: f128, v21: f80):
+    v7 = icmp.i32 slt v4, v0
+    brif v7, block2, block3
+block2:
+    v8 = iconst.i32 1
+    v9 = iadd.i32 v4, v8
+    v10 = sitofp.f80 v9
+    v11 = fconst.f80 0x3FFF8000000000000000
+    v12 = fdiv.f80 v11, v10
+    v13 = fadd.f80 v5, v12
+    v14 = sitofp.f128 v9
+    v15 = fconst.f128 0x3FFF0000000000000000000000000000
+    v16 = fdiv.f128 v15, v14
+    v17 = fadd.f128 v6, v16
+    jump block1(v9, v13, v17, v6, v5)
+block3:
+    v18 = call @show80(v5)
+    v19 = call @show128(v6)
+    v22 = call @show80(v21)
+    v23 = call @show128(v20)
+    v24 = call @newline()
+    return v24
+}
+
+function @many(f128, f128, f128, f128, f128, f128, f128, f128, f128, f128, f80, i32, f80, f80) -> f128 internal {
+block0(v0: f128, v1: f128, v2: f128, v3: f128, v4: f128, v5: f128, v6: f128, v7: f128, v8: f128, v9: f128, v10: f80, v11: i32, v12: f80, v13: f80):
+    v14 = fadd.f128 v0, v1
+    v15 = fmul.f128 v14, v2
+    v16 = fsub.f128 v15, v3
+    v17 = fadd.f128 v16, v4
+    v18 = fdiv.f128 v17, v5
+    v19 = fadd.f128 v18, v6
+    v20 = fmul.f128 v19, v7
+    v21 = fsub.f128 v20, v8
+    v22 = fadd.f128 v21, v9
+    v23 = fsub.f80 v10, v12
+    v24 = sitofp.f80 v11
+    v25 = fmul.f80 v23, v24
+    v26 = fdiv.f80 v25, v13
+    v27 = fpext.f128 v26
+    v28 = fadd.f128 v22, v27
+    return v28
+}
+
+function @many80(f80, i32, f80, f64, f80, f80, f80, f80, f80, f80) -> f80 internal {
+block0(v0: f80, v1: i32, v2: f80, v3: f64, v4: f80, v5: f80, v6: f80, v7: f80, v8: f80, v9: f80):
+    v10 = sitofp.f80 v1
+    v11 = fmul.f80 v0, v10
+    v12 = fpext.f80 v3
+    v13 = fsub.f80 v11, v12
+    v14 = fadd.f80 v13, v2
+    v15 = fmul.f80 v14, v4
+    v16 = fsub.f80 v15, v5
+    v17 = fdiv.f80 v16, v6
+    v18 = fadd.f80 v17, v7
+    v19 = fmul.f80 v18, v8
+    v20 = fsub.f80 v19, v9
+    return v20
+}
+
+function @main() -> i32 external {
+block0:
+    v0 = fconst.f80 0x3FFFC000000000000000
+    v1 = fconst.f80 0xC000F000000000000000
+    v2 = call @ops80(v0, v1)
+    v3 = fconst.f80 0x4005C880000000000000
+    v4 = fconst.f80 0x3FFBCCCCCCCCCCCCCCCC
+    v5 = call @ops80(v3, v4)
+    v6 = fconst.f80 0x4001E000000000000000
+    v7 = fconst.f80 0x4001E000000000000000
+    v8 = call @ops80(v6, v7)
+    v9 = fconst.f80 0xC000A000000000000000
+    v10 = fconst.f80 0x4004AB00000000000000
+    v11 = call @ops80(v9, v10)
+    v12 = fconst.f80 0x0
+    v13 = fconst.f80 0x0
+    v14 = call @ops80(v12, v13)
+    v15 = fconst.f80 0x7FFF8000000000000000
+    v16 = fconst.f80 0x7FFFC000000000000000
+    v17 = fconst.f80 0x3FFFC000000000000000
+    v18 = call @ops80(v16, v17)
+    v19 = call @ops80(v15, v16)
+    v20 = call @ops80(v17, v15)
+    v21 = fconst.f80 0x4004AB00000000000000
+    v22 = fconst.f80 0xC000A000000000000000
+    v23 = fconst.f80 0x403E8AC7230489E80000
+    v24 = call @conv80(v21, v22, v23)
+    v25 = fconst.f80 0x4005C700000000000000
+    v26 = fconst.f80 0xC005C700000000000000
+    v27 = fconst.f80 0x403EF9CCD8A1C5080000
+    v28 = call @conv80(v25, v26, v27)
+    v29 = fconst.f80 0x3FFD8000000000000000
+    v30 = fconst.f80 0xBFFEC000000000000000
+    v31 = fconst.f80 0x403E81103CB9FB220000
+    v32 = call @conv80(v29, v30, v31)
+    v33 = fconst.f128 0x3FFF8000000000000000000000000000
+    v34 = fconst.f128 0xC000E000000000000000000000000000
+    v35 = call @ops128(v33, v34)
+    v36 = fconst.f128 0x40059100000000000000000000000000
+    v37 = fconst.f128 0x3FFB9999999999999999999999999999
+    v38 = call @ops128(v36, v37)
+    v39 = fconst.f128 0x4001C000000000000000000000000000
+    v40 = fconst.f128 0x4001C000000000000000000000000000
+    v41 = call @ops128(v39, v40)
+    v42 = fconst.f128 0xC0004000000000000000000000000000
+    v43 = fconst.f128 0x40045600000000000000000000000000
+    v44 = call @ops128(v42, v43)
+    v45 = fconst.f128 0x0
+    v46 = fconst.f128 0x0
+    v47 = call @ops128(v45, v46)
+    v48 = fconst.f128 0x7FFF0000000000000000000000000000
+    v49 = fconst.f128 0x7FFF8000000000000000000000000000
+    v50 = fconst.f128 0x3FFF8000000000000000000000000000
+    v51 = call @ops128(v49, v50)
+    v52 = call @ops128(v48, v49)
+    v53 = call @ops128(v50, v48)
+    v54 = fconst.f128 0x40045600000000000000000000000000
+    v55 = fconst.f128 0xC0004000000000000000000000000000
+    v56 = fconst.f128 0x403E158E460913D00000000000000000
+    v57 = call @conv128(v54, v55, v56)
+    v58 = fconst.f128 0x40058E00000000000000000000000000
+    v59 = fconst.f128 0xC0058E00000000000000000000000000
+    v60 = fconst.f128 0x403EF399B1438A100000000000000000
+    v61 = call @conv128(v58, v59, v60)
+    v62 = fconst.f128 0x3FFD0000000000000000000000000000
+    v63 = fconst.f128 0xBFFE8000000000000000000000000000
+    v64 = fconst.f128 0x403E02207973F6440000000000000000
+    v65 = call @conv128(v62, v63, v64)
+    v66 = iconst.i32 50
+    v67 = call @series(v66)
+    v68 = fconst.f128 0x3FFF8000000000000000000000000000
+    v69 = fconst.f128 0x40004000000000000000000000000000
+    v70 = fconst.f128 0x4000C000000000000000000000000000
+    v71 = fconst.f128 0x40012000000000000000000000000000
+    v72 = fconst.f128 0x40016000000000000000000000000000
+    v73 = fconst.f128 0x4001A000000000000000000000000000
+    v74 = fconst.f128 0x4001E000000000000000000000000000
+    v75 = fconst.f128 0x40021000000000000000000000000000
+    v76 = fconst.f128 0x40023000000000000000000000000000
+    v77 = fconst.f128 0x40025000000000000000000000000000
+    v78 = fconst.f80 0x4002A800000000000000
+    v79 = iconst.i32 3
+    v80 = fconst.f80 0x3FFE8000000000000000
+    v81 = fconst.f80 0x40018000000000000000
+    v82 = call @many(v68, v69, v70, v71, v72, v73, v74, v75, v76, v77, v78, v79, v80, v81)
+    v83 = call @show128(v82)
+    v84 = fconst.f80 0x3FFD8000000000000000
+    v85 = fconst.f80 0x3FFFA000000000000000
+    v86 = fconst.f80 0x40009000000000000000
+    v87 = fconst.f80 0x4000D000000000000000
+    v88 = fconst.f80 0x40018800000000000000
+    v89 = fconst.f80 0x4001A800000000000000
+    v90 = fconst.f80 0x4001C800000000000000
+    v91 = fconst.f80 0x4001E800000000000000
+    v92 = fconst.f80 0x40028400000000000000
+    v93 = iconst.i32 7
+    v94 = fconst.f64 0x400C000000000000
+    v95 = call @many80(v84, v93, v85, v94, v86, v87, v88, v89, v90, v91)
+    v96 = call @show80(v95)
+    v97 = call @newline()
+    v98 = iconst.i32 0
+    return v98
+}

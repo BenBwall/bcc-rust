@@ -138,24 +138,19 @@ impl Selector<'_, '_, '_> {
     pub(super) fn float_compare(&mut self, cond: FloatCC, ty: Type, dst: Reg, [a, b]: [Value; 2]) {
         let a = self.reg(a);
         let b = self.reg(b);
-        let width = float_width(ty);
-        let (lhs, rhs, test) = match cond {
-            | FloatCC::Ogt => (a, b, Test::One(Cond::A)),
-            | FloatCC::Oge => (a, b, Test::One(Cond::Ae)),
-            | FloatCC::Olt => (b, a, Test::One(Cond::A)),
-            | FloatCC::Ole => (b, a, Test::One(Cond::Ae)),
-            | FloatCC::Ult => (a, b, Test::One(Cond::B)),
-            | FloatCC::Ule => (a, b, Test::One(Cond::Be)),
-            | FloatCC::Ugt => (b, a, Test::One(Cond::B)),
-            | FloatCC::Uge => (b, a, Test::One(Cond::Be)),
-            | FloatCC::One => (a, b, Test::One(Cond::Ne)),
-            | FloatCC::Ueq => (a, b, Test::One(Cond::E)),
-            | FloatCC::Ord => (a, b, Test::One(Cond::Np)),
-            | FloatCC::Uno => (a, b, Test::One(Cond::P)),
-            | FloatCC::Oeq => (a, b, Test::Both(Cond::E, Cond::Np)),
-            | FloatCC::Une => (a, b, Test::Either(Cond::Ne, Cond::P)),
-        };
-        self.emit(MInst::Ucomi { width, lhs, rhs });
+        let (swapped, test) = float_test(cond);
+        let (lhs, rhs) = if swapped { (b, a) } else { (a, b) };
+        self.emit(MInst::Ucomi {
+            width: float_width(ty),
+            lhs,
+            rhs,
+        });
+        self.set_test(test, dst);
+    }
+
+    /// `dst ←` the canonical `i1` of a flag test, right after the
+    /// comparison that set the flags.
+    pub(super) fn set_test(&mut self, test: Test, dst: Reg) {
         let byte = self.vreg();
         match test {
             | Test::One(cond) => self.emit(MInst::Setcc { cond, dst: byte }),
@@ -461,12 +456,35 @@ impl Selector<'_, '_, '_> {
     }
 }
 
-/// The comparison a `setcc` sequence makes from the flags of `ucomis*`.
+/// The comparison a `setcc` sequence makes from the flags of `ucomis*` or
+/// `fucomip`.
 #[derive(Clone, Copy)]
-enum Test {
+pub(super) enum Test {
     One(Cond),
     Both(Cond, Cond),
     Either(Cond, Cond),
+}
+
+/// How a float comparison reads the flags of comparing its operands:
+/// whether they are swapped first, and the flag test that is true exactly
+/// when the condition holds.
+pub(super) const fn float_test(cond: FloatCC) -> (bool, Test) {
+    match cond {
+        | FloatCC::Ogt => (false, Test::One(Cond::A)),
+        | FloatCC::Oge => (false, Test::One(Cond::Ae)),
+        | FloatCC::Olt => (true, Test::One(Cond::A)),
+        | FloatCC::Ole => (true, Test::One(Cond::Ae)),
+        | FloatCC::Ult => (false, Test::One(Cond::B)),
+        | FloatCC::Ule => (false, Test::One(Cond::Be)),
+        | FloatCC::Ugt => (true, Test::One(Cond::B)),
+        | FloatCC::Uge => (true, Test::One(Cond::Be)),
+        | FloatCC::One => (false, Test::One(Cond::Ne)),
+        | FloatCC::Ueq => (false, Test::One(Cond::E)),
+        | FloatCC::Ord => (false, Test::One(Cond::Np)),
+        | FloatCC::Uno => (false, Test::One(Cond::P)),
+        | FloatCC::Oeq => (false, Test::Both(Cond::E, Cond::Np)),
+        | FloatCC::Une => (false, Test::Either(Cond::Ne, Cond::P)),
+    }
 }
 
 /// The SSE width of a float type: `B32` for `f32`, `B64` for `f64`.

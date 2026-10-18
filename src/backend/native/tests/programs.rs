@@ -606,3 +606,171 @@ int main(void) {
 }"#,
     },
 ];
+
+/// Programs with `long double` values, which the interpreter does not
+/// run: the LLVM back end's executable of the same module is the expected
+/// behaviour. Each prints the bits of what it computes, so that printing
+/// does not depend on the C library's `long double` support.
+pub(super) const WIDE_FLOAT_PROGRAMS: &[Program] = &[
+    Program {
+        name:   "long_double_arithmetic",
+        source: r#"int printf(const char *, ...);
+long double fmodl(long double, long double);
+typedef long double ld;
+static void show(ld x) {
+    // The sign and payload of a NaN that arithmetic makes are unspecified.
+    if (x != x) { printf(" nan"); return; }
+    unsigned long long words[2] = { 0, 0 };
+    __builtin_memcpy(words, &x, 10);
+    printf(" %llx:%llx", words[1] & 0xffff, words[0]);
+}
+static ld add(ld a, ld b) { return a + b; }
+static ld sub(ld a, ld b) { return a - b; }
+static ld mul(ld a, ld b) { return a * b; }
+static ld quo(ld a, ld b) { return a / b; }
+static ld neg(ld a) { return -a; }
+static ld pick(int c, ld a, ld b) { return c ? a : b; }
+int main(void) {
+    ld zero = 0.0L;
+    ld values[] = { 0.0L, -0.0L, 1.5L, -2.25L, 0.1L, 3.0L, 1e4000L, 1e-4000L, zero / zero, 1.0L / zero };
+    for (int i = 0; i < 10; i++) {
+        for (int j = 0; j < 10; j++) {
+            ld a = values[i], b = values[j];
+            printf("%d%d%d%d%d%d", a < b, a <= b, a == b, a != b, a > b, a >= b);
+            printf("%d%d ", !(a >= b), !(a < b) && !(a >= b));
+            if (j % 3 == 0) {
+                show(add(a, b));
+                show(sub(a, b));
+                show(mul(a, b));
+                show(quo(a, b));
+                printf("\n");
+            }
+        }
+        show(neg(values[i]));
+        show(pick(i & 1, values[i], values[9 - i]));
+        printf("\n");
+    }
+    ld sum = 0;
+    for (int i = 1; i <= 1000; i++) sum += 1.0L / i;
+    show(sum);
+    ld product = 1;
+    for (int i = 1; i <= 30; i++) product *= i;
+    show(product);
+    show(fmodl(values[2] * 1000, 3.25L));
+    printf("\n");
+    return 0;
+}"#,
+    },
+    Program {
+        name:   "long_double_conversions",
+        source: r#"int printf(const char *, ...);
+typedef long double ld;
+static void show(ld x) {
+    // The sign and payload of a NaN that arithmetic makes are unspecified.
+    if (x != x) { printf(" nan"); return; }
+    unsigned long long words[2] = { 0, 0 };
+    __builtin_memcpy(words, &x, 10);
+    printf(" %llx:%llx", words[1] & 0xffff, words[0]);
+}
+static unsigned long long dbits(double d) { unsigned long long b; __builtin_memcpy(&b, &d, 8); return b; }
+static unsigned fbits(float f) { unsigned b; __builtin_memcpy(&b, &f, 4); return b; }
+static void wide(unsigned __int128 x) { printf(" %llx:%llx", (unsigned long long)(x >> 64), (unsigned long long)x); }
+int main(void) {
+    ld values[] = { 0.0L, 1.0L, -1.0L, 2.5L, -2.5L, 3.75L, -3.75L, 100.9L, -127.9L, 32767.5L };
+    for (int i = 0; i < 10; i++) {
+        ld x = values[i];
+        printf("%d %d %d %d %lld", (short)x, (int)x, (_Bool)(x != 0), (int)(long long)x, (long long)(x * 1e14L));
+        if (x > -128 && x < 128) printf(" %d", (signed char)x);
+        if (x >= 0 && x < 256) printf(" %u", (unsigned char)x);
+        if (x >= 0)
+            printf(" %u %u %llu", (unsigned short)x, (unsigned)(x * 1e5L), (unsigned long long)(x * 1e14L));
+        printf(" %llx %x", dbits((double)x), fbits((float)x));
+        wide((unsigned __int128)(__int128)(x * 1e30L));
+        printf("\n");
+    }
+    long long ints[] = { 0, 1, -1, 123456789, -987654321012345LL, 9223372036854775807LL, (-9223372036854775807LL - 1) };
+    for (int i = 0; i < 7; i++) {
+        show((ld)ints[i]);
+        show((ld)(int)ints[i]);
+        show((ld)(short)ints[i]);
+        show((ld)(signed char)ints[i]);
+        show((ld)(unsigned long long)ints[i]);
+        show((ld)(unsigned)ints[i]);
+        show((ld)(unsigned short)ints[i]);
+        show((ld)(unsigned char)ints[i]);
+        show((ld)(_Bool)ints[i]);
+        printf("\n");
+    }
+    unsigned long long big[] = { 9223372036854775808ULL, 18446744073709551615ULL, 18000000000000000000ULL };
+    for (int i = 0; i < 3; i++) {
+        ld x = (ld)big[i];
+        show(x);
+        printf(" %llu %llu\n", (unsigned long long)x, (unsigned long long)(x / 2));
+    }
+    double doubles[] = { 0.1, -1e300, 1e-310, 3.5 };
+    float floats[] = { 0.1f, -3e38f, 1e-40f, 7.25f };
+    for (int i = 0; i < 4; i++) {
+        show((ld)doubles[i]);
+        show((ld)floats[i]);
+        printf(" %llx %x\n", dbits((double)((ld)doubles[i] / 3)), fbits((float)((ld)floats[i] / 3)));
+    }
+    __int128 wides[] = { 0, -1, (__int128)1 << 100, -((__int128)12345678901234567LL * 1000000007), ((__int128)1 << 64) + 3 };
+    for (int i = 0; i < 5; i++) {
+        ld x = (ld)wides[i];
+        show(x);
+        show((ld)(unsigned __int128)wides[i]);
+        wide((unsigned __int128)(__int128)x);
+        if (x >= 0) wide((unsigned __int128)x);
+        printf("\n");
+    }
+    return 0;
+}"#,
+    },
+    Program {
+        // System V passes `long double` in memory and returns it in
+        // `%st0`; Win64 passes it by reference and returns it through a
+        // hidden pointer. Structures and complex values of `long double`
+        // come back in `%st0` (and `%st1`) on System V.
+        name:   "long_double_calls",
+        source: r#"int printf(const char *, ...);
+typedef long double ld;
+struct wrap { ld x; };
+struct mixed { ld x; int n; };
+static void show(ld x) {
+    // The sign and payload of a NaN that arithmetic makes are unspecified.
+    if (x != x) { printf(" nan"); return; }
+    unsigned long long words[2] = { 0, 0 };
+    __builtin_memcpy(words, &x, 10);
+    printf(" %llx:%llx", words[1] & 0xffff, words[0]);
+}
+static ld many(ld a, int i, ld b, double d, ld c, float f, ld e, long long k, ld g, ld h, int j, ld l) {
+    return a * i + b - d * c + f / e + k - g * h + j * l;
+}
+static struct wrap wrapped(ld x) { struct wrap w = { x * 3 }; return w; }
+static struct mixed mix(struct mixed m) { m.x += m.n; m.n *= 2; return m; }
+static ld unwrap(struct wrap w, struct wrap v) { return w.x - v.x; }
+static _Complex long double cplx(ld r, ld i) { return __builtin_complex(r * 2, i - 1); }
+static ld (*pointer)(ld, int, ld, double, ld, float, ld, long long, ld, ld, int, ld) = many;
+static ld global = 2.75L;
+static ld array[3] = { 1.0L, 2.0L, 4.0L };
+static ld recurse(int n, ld x) { return n == 0 ? x : recurse(n - 1, x * 1.5L) + n; }
+int main(void) {
+    show(many(1.5L, 2, 3.25L, 0.5, 4.0L, 0.25f, 8.0L, 7, 1.25L, 2.0L, 3, 0.1L));
+    show(pointer(1.5L, 2, 3.25L, 0.5, 4.0L, 0.25f, 8.0L, 7, 1.25L, 2.0L, 3, 0.1L));
+    struct wrap w = wrapped(1.25L);
+    show(w.x);
+    struct mixed m = mix((struct mixed){ 0.5L, 3 });
+    show(m.x);
+    printf(" %d", m.n);
+    show(unwrap(w, (struct wrap){ 0.125L }));
+    _Complex long double z = cplx(1.5L, 2.5L);
+    show(__real__ z);
+    show(__imag__ z);
+    global += array[2];
+    show(global);
+    show(recurse(10, 1.0L));
+    printf("\n");
+    return 0;
+}"#,
+    },
+];

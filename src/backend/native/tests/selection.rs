@@ -511,16 +511,22 @@ fn returns_twice_calls_and_addresses_are_refused() {
 fn unsupported_constructs_are_refused_with_their_function() {
     let message = refusal(
         "abi lowered
-function @f(f128) -> f128 external {
-block0(v0: f128):
-    return v0
+function @s(i128) -> i32 external {
+block0(v0: i128):
+    switch v0, block1, [1: block2]
+block1:
+    v1 = iconst.i32 0
+    return v1
+block2:
+    v2 = iconst.i32 1
+    return v2
 }
 ",
         Target::LinuxGnu,
     );
     assert_eq!(
         message,
-        "not yet supported by the native back end: f128 values (in @f)"
+        "not yet supported by the native back end: a switch on an i128 value (in @s)"
     );
     let message = refusal(
         "abi lowered
@@ -954,4 +960,156 @@ block3:
     assert!(f[landing..].contains("\tjmp\t"), "{f}");
     assert!(text.contains("\t.quad\t.LBA0_0+2\n"), "{text}");
     assert!(text.contains("\t.long\t.LBA0_1-.LBA0_0\n"), "{text}");
+}
+
+/// The instructions from the previous call (or the function's start) up to
+/// and including the call of `callee`: where its arguments are placed.
+fn call_setup<'a>(function: &'a str, callee: &str) -> &'a str {
+    let end = function
+        .find(&format!("callq\t{callee}"))
+        .unwrap_or_else(|| panic!("no call of {callee} in\n{function}"));
+    let start = function[..end].rfind("callq").map_or(0, |start| start + 5);
+    &function[start..end + 6 + callee.len()]
+}
+
+/// `long double` arithmetic, comparisons and conversions on System V: the
+/// operands pushed from memory, the results popped, the integer
+/// conversion under a truncating control word, and the result returned in
+/// `%st0`, as Clang's code does.
+#[test]
+fn long_double_uses_x87_memory_sequences() {
+    let ir = "abi lowered
+function @f(f80, f80, ptr) -> f80 external {
+block0(v0: f80, v1: f80, v2: ptr):
+    v3 = fadd.f80 v0, v1
+    v4 = fcmp.f80 olt v3, v1
+    v5 = zext.i32 v4
+    store.i32 v5, v2, align 4
+    v6 = fptosi.i64 v3
+    v7 = iconst.i64 4
+    v8 = ptr_add v2, v7
+    store.i64 v6, v8, align 8
+    v9 = fneg.f80 v3
+    return v9
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    for expected in [
+        "fadd\t%st(1), %st",
+        "fucomip\t%st(1), %st",
+        "fstp\t%st(0)",
+        "fnstcw",
+        "fldcw",
+        "fistpll",
+        "xorl\t$32768",
+    ] {
+        assert!(f.contains(expected), "{expected}:\n{f}");
+    }
+    // The two arguments come from their 16-byte stack slots.
+    assert!(f.contains("8(%rsp)") || f.contains("(%rsp)"), "{f}");
+    // The result is pushed last and left on the x87 stack.
+    let last_push = f.rfind("fldt").unwrap();
+    let last_pop = f.rfind("fstp").unwrap();
+    assert!(last_pop < last_push, "{f}");
+    assert!(f[last_push..].contains("retq"), "{f}");
+}
+
+/// Win64 passes `long double` by reference and returns it through a
+/// hidden pointer in `%rcx`, returned in `%rax`, as `clang
+/// --target=x86_64-w64-windows-gnu -S` writes `long double f(long double a,
+/// long double b)`: `movq %rcx, %rax; fldt (%rdx); fldt (%r8); ...; fstpt
+/// (%rcx)`. A caller passes the addresses of copies and of the result area.
+#[test]
+fn win64_passes_long_double_by_reference() {
+    let ir = "abi lowered
+function @f(f80, f80) -> f80 external {
+block0(v0: f80, v1: f80):
+    v2 = fadd.f80 v0, v1
+    return v2
+}
+function @g() -> f80 external {
+block0:
+    v0 = fconst.f80 0x3FFF8000000000000000
+    v1 = fconst.f80 0x40008000000000000000
+    v2 = call @f(v0, v1)
+    v3 = fmul.f80 v2, v2
+    return v3
+}
+";
+    let text = assembly(ir, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    for expected in [
+        "(%rdx)",
+        "8(%rdx)",
+        "(%r8)",
+        "8(%r8)",
+        "movq\t%rcx, %rax",
+        "fldt",
+    ] {
+        assert!(f.contains(expected), "{expected}:\n{f}");
+    }
+    assert!(f.contains("movw\t") && f.contains(", 8(%rcx)"), "{f}");
+    let g = function_text(&text, "g");
+    let setup = call_setup(g, "f");
+    for register in ["%rcx", "%rdx", "%r8"] {
+        assert!(
+            setup.contains("leaq\t") && setup.contains(&format!(", {register}\n")),
+            "{register}:\n{g}"
+        );
+    }
+    assert!(
+        g.contains("movq\t%rcx, %rax") || g.contains(", %rax\n"),
+        "{g}"
+    );
+}
+
+/// `f128` operations call the soft-float routines: on System V with the
+/// operands in whole SSE registers and the result in `%xmm0`; on Win64 as
+/// `clang --target=x86_64-w64-windows-gnu -S` calls `__addtf3`, with the
+/// result area's address in `%rcx` and the operands' addresses in `%rdx`
+/// and `%r8`.
+#[test]
+fn quad_operations_call_soft_float_routines() {
+    let ir = "abi lowered
+function @f(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = load.f128 v0, align 16
+    v2 = iconst.i64 16
+    v3 = ptr_add v0, v2
+    v4 = load.f128 v3, align 16
+    v5 = fadd.f128 v1, v4
+    store.f128 v5, v0, align 16
+    v6 = fcmp.f128 ueq v1, v4
+    v7 = zext.i32 v6
+    return v7
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    let setup = call_setup(f, "__addtf3@PLT");
+    assert!(
+        setup.contains(", %xmm0\n") && setup.contains(", %xmm1\n"),
+        "{f}"
+    );
+    assert!(f.contains("movups\t%xmm0, "), "{f}");
+    assert!(
+        f.contains("callq\t__eqtf2@PLT") && f.contains("callq\t__unordtf2@PLT"),
+        "{f}"
+    );
+    let text = assembly(ir, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    let setup = call_setup(f, "__addtf3");
+    for register in ["%rcx", "%rdx", "%r8"] {
+        assert!(
+            setup.contains(&format!(", {register}\n")),
+            "{register}:\n{f}"
+        );
+    }
+    assert!(setup.matches("leaq").count() >= 3, "{f}");
+    let compare = call_setup(f, "__eqtf2");
+    assert!(
+        compare.contains(", %rcx\n") && compare.contains(", %rdx\n"),
+        "{f}"
+    );
 }
