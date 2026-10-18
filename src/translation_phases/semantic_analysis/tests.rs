@@ -15,6 +15,7 @@ mod atomics;
 mod attributes;
 mod bit_field_alignment;
 mod bit_field_results;
+mod builtin_names;
 mod checked_builtins;
 mod control_facts;
 mod correspondence;
