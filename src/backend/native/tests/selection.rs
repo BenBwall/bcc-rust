@@ -373,6 +373,41 @@ function @thunk() -> i32 external
 }
 
 #[test]
+fn mingw_addresses_hidden_undefined_data_directly() {
+    // A hidden or protected declaration names data of this module, never a
+    // DLL's, so Clang (`shouldAssumeDSOLocal`) and the LLVM path address it
+    // directly; a hidden weak declaration may still be null and keeps its
+    // stub.
+    let ir = "abi lowered
+global @own external size 4, align 4 hidden
+global @shared external size 4, align 4 protected
+global @maybe weak size 4, align 4 hidden
+function @read() -> i32 external {
+block0:
+    v0 = global_addr @own
+    v1 = load.i32 v0, align 4
+    v2 = global_addr @shared
+    v3 = load.i32 v2, align 4
+    v4 = global_addr @maybe
+    v5 = load.i32 v4, align 4
+    v6 = iadd.i32 v1, v3
+    v7 = iadd.i32 v6, v5
+    return v7
+}
+";
+    let coff = assembly(ir, Target::WindowsGnu);
+    for line in [
+        "movl\town(%rip), %",
+        "movl\tshared(%rip), %",
+        "movq\t.refptr.maybe(%rip), %",
+    ] {
+        assert!(coff.contains(line), "{line}\n{coff}");
+    }
+    assert!(!coff.contains("refptr.own"), "{coff}");
+    assert!(!coff.contains("refptr.shared"), "{coff}");
+}
+
+#[test]
 fn symbol_attributes_become_directives() {
     let ir = "abi lowered
 global @value external size 4, align 4 hidden section \"mine\" = bytes \"05000000\"

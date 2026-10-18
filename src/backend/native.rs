@@ -63,6 +63,7 @@ use crate::{
         Linkage,
         Module,
         Symbol,
+        Visibility,
     },
     target::{
         CodeOptions,
@@ -115,6 +116,9 @@ pub(crate) fn defines(module: &Module<'_>, symbol: Symbol) -> bool {
 /// more than 2 GiB from the executable. Microsoft's linker does not
 /// auto-import, so on MSVC such data needs `__declspec(dllimport)`, and an
 /// undefined global is otherwise addressed directly, as Clang addresses it.
+/// A hidden or protected global is the module's own, never a DLL's, so on
+/// MinGW too it is addressed directly unless it is a weak declaration, as
+/// Clang's `shouldAssumeDSOLocal` decides.
 /// LLD: "MinGW auto-import"; Microsoft Learn, "PE Format", base relocations,
 /// and "dllexport, dllimport".
 pub(crate) fn through_stub(module: &Module<'_>, target: Target, symbol: Symbol) -> bool {
@@ -125,7 +129,9 @@ pub(crate) fn through_stub(module: &Module<'_>, target: Target, symbol: Symbol) 
             imported(module, symbol)
                 || weak_declaration(module, symbol)
                 || matches!(symbol, Symbol::Global(global)
-                    if !defines(module, symbol) && !module.global(global).thread_local),
+                    if !defines(module, symbol)
+                        && !module.global(global).thread_local
+                        && module.symbol_attributes(symbol).visibility == Visibility::Default),
     }
 }
 
