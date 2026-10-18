@@ -888,6 +888,26 @@ fn elf_thread_locals_use_local_exec_for_definitions_and_initial_exec_otherwise()
 }
 
 #[test]
+fn elf_comdat_zero_objects_have_contents_only_when_read_only() {
+    // A COMDAT copy of a constant zero object (`__declspec(selectany) const
+    // int k = 0;`) lives in `.rodata`, which has file contents, as Clang
+    // writes it; only the zero-filled `.bss` and `.tbss` copies are nobits.
+    let ir = "abi lowered
+global @k selectany constant size 4, align 4 = zero
+global @z selectany size 4, align 4 = zero
+global @t selectany thread_local size 4, align 4 = zero
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    for line in [
+        "\t.section\t.rodata.k,\"aG\",@progbits,k,comdat\n",
+        "\t.section\t.bss.z,\"awG\",@nobits,z,comdat\n",
+        "\t.section\t.tbss.t,\"awTG\",@nobits,t,comdat\n",
+    ] {
+        assert!(text.contains(line), "{line}\n{text}");
+    }
+}
+
+#[test]
 fn windows_thread_locals_index_the_tls_array() {
     let text = assembly(THREAD_LOCALS, Target::WindowsGnu);
     let f = function_text(&text, "f");

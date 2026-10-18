@@ -791,7 +791,11 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     | (Some(_), false) => "dw",
                     | (None, _) => flags,
                 };
-                let nobits = self.elf && zero && global.attributes.section.is_none();
+                // Only the zero-filled sections have no file contents; a
+                // constant zero object lives in `.rodata`, which has them.
+                let nobits = self.elf
+                    && matches!(base, ".bss" | ".tbss")
+                    && global.attributes.section.is_none();
                 self.comdat_section(global.attributes.section, base, flags, nobits, name)?;
             } else if let Some(section) = global.attributes.section {
                 let section = Name(section);
