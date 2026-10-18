@@ -35,6 +35,7 @@ use super::{
         RegClass,
     },
     regalloc::Allocation,
+    support::Construct,
 };
 use crate::util::bump::{
     ArenaVec,
@@ -44,6 +45,9 @@ use crate::util::bump::{
 /// The bytes of the System V register save area: six general registers and
 /// eight 16-byte SSE registers (psABI §3.5.7, Figure 3.33).
 pub(crate) const REGISTER_SAVE_BYTES: u32 = 6 * 8 + 8 * 16;
+
+/// The largest frame offset an operand's signed 32-bit displacement holds.
+const MAX_DISPLACEMENT: u64 = 0x7FFF_FFFF;
 
 /// A laid-out frame.
 pub(crate) struct Frame<'a> {
@@ -65,13 +69,17 @@ pub(crate) struct Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
-    /// Lays out the frame of an allocated and rewritten function.
+    /// Lays out the frame of an allocated and rewritten function, or
+    /// refuses it when an offset would not fit an operand's signed 32-bit
+    /// displacement. The support check bounds the IR stack slots and each
+    /// call's stack arguments separately; together with the spill slots and
+    /// the incoming arguments above the frame they can still exceed it.
     pub(crate) fn layout(
         func: &MFunction<'_>,
         allocation: &Allocation<'_>,
         conv: CallConv,
         arena: &'a Bump,
-    ) -> Self {
+    ) -> Result<Self, Construct> {
         let written = written(func);
         let frame_pointer = func.dynamic;
         let mut saved = ArenaVec::new_in(arena);
@@ -95,9 +103,11 @@ impl<'a> Frame<'a> {
         let mut aligned = func.calls || !xmm.is_empty() || func.register_save || func.dynamic;
         // Dynamic allocations start right above the outgoing arguments and
         // keep 16-byte alignment.
-        let outgoing_end = func.outgoing.next_multiple_of(16);
+        // Offsets are summed in 64 bits and narrowed once they are known to
+        // fit.
+        let outgoing_end = u64::from(func.outgoing).next_multiple_of(16);
         let spills = outgoing_end;
-        let mut end = spills + 8 * allocation.spill_slots;
+        let mut end = spills + 8 * u64::from(allocation.spill_slots);
         let mut saved_xmm = ArenaVec::with_capacity_in(xmm.len(), arena);
         for register in xmm {
             end = end.next_multiple_of(16);
@@ -108,34 +118,46 @@ impl<'a> Frame<'a> {
         if func.register_save {
             end = end.next_multiple_of(16);
             register_save = end;
-            end += REGISTER_SAVE_BYTES;
+            end += u64::from(REGISTER_SAVE_BYTES);
         }
         let mut slots = ArenaVec::with_capacity_in(func.slots.len(), arena);
         for slot in &func.slots {
             let align = slot.align.max(1);
             aligned |= align >= 16;
-            end = end.next_multiple_of(align);
+            end = end.next_multiple_of(u64::from(align));
             slots.push(end);
-            end += slot.size;
+            end += u64::from(slot.size);
         }
-        let pushes = 8 * u32::try_from(saved.len()).expect("at most 16 registers");
+        let pushes = 8 * u64::try_from(saved.len()).expect("at most 16 registers");
         let mut size = end.next_multiple_of(8);
         if aligned && !(8 + pushes + size).is_multiple_of(16) {
             size += 8;
         }
-        let incoming = size + pushes + 8 + conv.home_area;
-        Self {
+        let incoming = size + pushes + 8 + u64::from(conv.home_area);
+        // The highest offset a frame operand names: the last incoming
+        // stack argument, above every other object.
+        let reach = incoming + u64::from(func.incoming);
+        if reach > MAX_DISPLACEMENT {
+            return Err(Construct::FrameSize(reach));
+        }
+        let narrow = |offset: u64| u32::try_from(offset).expect("bounded by the reach");
+        let mut saved_xmm_offsets = ArenaVec::with_capacity_in(saved_xmm.len(), arena);
+        saved_xmm_offsets.extend(saved_xmm.into_iter().map(|(r, at)| (r, narrow(at))));
+        let mut slot_offsets = ArenaVec::with_capacity_in(slots.len(), arena);
+        slot_offsets.extend(slots.into_iter().map(narrow));
+        let incoming = narrow(incoming);
+        Ok(Self {
             saved,
-            saved_xmm,
-            size,
+            saved_xmm: saved_xmm_offsets,
+            size: narrow(size),
             rbp_based: frame_pointer,
-            slots,
-            spills,
-            outgoing_end,
-            register_save,
+            slots: slot_offsets,
+            spills: narrow(spills),
+            outgoing_end: narrow(outgoing_end),
+            register_save: narrow(register_save),
             incoming,
             home: incoming - conv.home_area,
-        }
+        })
     }
 
     /// The register and offset that address a frame object: `%rsp` after

@@ -196,7 +196,12 @@ pub(crate) fn emit_assembly_with<'m>(
                 })?;
             let allocation = regalloc::allocate(&mut func, conv, arena);
             regalloc::rewrite(&mut func, &allocation, arena);
-            let frame = Frame::layout(&func, &allocation, conv, arena);
+            let frame = Frame::layout(&func, &allocation, conv, arena).map_err(|construct| {
+                Unsupported {
+                    function: Some(function.name),
+                    construct,
+                }
+            })?;
             emitter.function(id, &func, &frame)?;
         }
         scratch.reset();

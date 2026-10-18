@@ -44,6 +44,10 @@ pub(crate) struct MFunction<'a> {
     pub(crate) constants:        ArenaVec<'a, u128>,
     /// Bytes of the outgoing argument area, including Win64's home area.
     pub(crate) outgoing:         u32,
+    /// The largest [`FrameObject::Incoming`] offset the function names:
+    /// where its last stack parameter, or its variadic arguments, start
+    /// beyond Win64's home area.
+    pub(crate) incoming:         u32,
     /// Whether the function calls anything, which fixes its stack alignment.
     pub(crate) calls:            bool,
     /// Whether `%rsp` moves after the prologue (`dyn_alloca`,
@@ -75,6 +79,7 @@ impl<'a> MFunction<'a> {
             slots:            ArenaVec::new_in(arena),
             constants:        ArenaVec::new_in(arena),
             outgoing:         0,
+            incoming:         0,
             calls:            false,
             dynamic:          false,
             register_save:    false,

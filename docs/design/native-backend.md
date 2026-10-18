@@ -161,7 +161,10 @@ conversions to or from floats, `i128` positions Win64 never passes by value,
 structure results in `f80`/`f128` registers, stack objects aligned above 16,
 frames larger than 1 GiB, stack arguments (chiefly `byval` structures) of
 more than 1 GiB in one signature, whose offsets and copy lengths would leave
-32-bit operands, and thread-local globals in named sections.
+32-bit operands, and thread-local globals in named sections. Frame layout
+then refuses a frame whose combined outgoing arguments, spills, locals and
+incoming stack parameters would still need offsets beyond 32-bit
+displacements.
 
 ### Legalization
 

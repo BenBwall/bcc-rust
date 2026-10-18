@@ -582,6 +582,65 @@ block0(v0: ptr):
 }
 
 #[test]
+fn frames_beyond_32_bit_displacements_are_refused() {
+    // The local slots and the stack arguments of each call and of the
+    // function itself stay within their separate 1 GiB bounds, but the
+    // final frame would need offsets beyond signed 32-bit displacements:
+    // the outgoing area below 1 GiB of locals (`f`), or a stack parameter
+    // after 1 GiB of incoming arguments, above 1 GiB of outgoing ones (`h`).
+    for (ir, function) in [
+        (
+            "abi lowered
+function @g(ptr byval(size 1073741816, align 8)) external
+function @f() -> i32 external {
+    slot0 = stack_slot 1073741824, align 8
+block0:
+    v0 = stack_addr slot0
+    call @g(v0)
+    v1 = load.i32 v0, align 4
+    return v1
+}
+",
+            "f",
+        ),
+        (
+            "abi lowered
+function @g(ptr byval(size 1073741816, align 8)) external
+function @h(ptr byval(size 1073741760, align 8), i64, i64, i64, i64, i64, i64, i64) -> i64 \
+             external {
+    slot0 = stack_slot 4096, align 8
+block0(v0: ptr, v1: i64, v2: i64, v3: i64, v4: i64, v5: i64, v6: i64, v7: i64):
+    v8 = stack_addr slot0
+    call @g(v8)
+    return v7
+}
+",
+            "h",
+        ),
+    ] {
+        let message = refusal(ir, Target::LinuxGnu);
+        assert!(
+            message.starts_with("not yet supported by the native back end: a ")
+                && message.ends_with(&format!("-byte stack frame (in @{function})")),
+            "{message}"
+        );
+    }
+    // The same frames with half the locals or incoming arguments compile.
+    let fitting = "abi lowered
+function @g(ptr byval(size 1073741816, align 8)) external
+function @f() -> i32 external {
+    slot0 = stack_slot 536870912, align 8
+block0:
+    v0 = stack_addr slot0
+    call @g(v0)
+    v1 = load.i32 v0, align 4
+    return v1
+}
+";
+    assert!(assembly(fitting, Target::LinuxGnu).contains("rep movsb"));
+}
+
+#[test]
 fn bit_operations_use_baseline_instructions() {
     let text = assembly(
         "abi lowered

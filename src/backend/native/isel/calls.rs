@@ -177,6 +177,11 @@ impl Selector<'_, '_, '_> {
                 },
             }
         }
+        // The highest incoming offset a frame operand names: a stack
+        // parameter's, or where `va_start` finds the variadic arguments.
+        let named = stack.iter().map(|&(_, offset, _)| offset).max();
+        let variadic = uses_va_start.then(|| assigner.stack_bytes());
+        self.func.incoming = named.max(variadic).unwrap_or(0);
         for (dst, offset, ty) in stack {
             let mem = Mem::new(Base::Frame(FrameObject::Incoming(offset)), 0);
             match ty {
