@@ -13,6 +13,7 @@
 mod aggregate_varargs;
 mod complex_values;
 mod layout_alignment;
+mod native_wide_floats;
 mod noundef;
 mod poison_returns;
 mod transparent_unions;
@@ -380,6 +381,12 @@ fn structures_cross_between_bcc_and_clang() {
         _ = optimize(&mut module, &options, &scratch);
         lower_abi(&mut module, target, &scratch).unwrap();
         assert_conforms("structures", target, &module, &format!("{TYPES}{CLANG}"));
+        assert_native_conforms(
+            "structures-native",
+            target,
+            &module,
+            &format!("{TYPES}{CLANG}"),
+        );
     }
 }
 

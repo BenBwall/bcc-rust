@@ -181,6 +181,12 @@ static {c_type} make(void) {{
         lower_abi(&mut module, target, &Bump::new()).unwrap();
         assert_verified(&module, Profile::PostAbi, &module.to_string());
         assert_conforms(&format!("{ty}-varargs-{bcc_opt}"), target, &module, &clang);
+        assert_native_conforms(
+            &format!("{ty}-varargs-native-{bcc_opt}"),
+            target,
+            &module,
+            &clang,
+        );
     }
 }
 
