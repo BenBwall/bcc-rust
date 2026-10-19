@@ -108,6 +108,10 @@ pub fn run() -> Result<i32, MainError> {
             target: args.target.triple(),
         });
     }
+    if let Some(conflict) = args.code_generation.back_end_conflict() {
+        code_generation::report_stderr(format_args!("error: {conflict}"));
+        return Ok(1);
+    }
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {
@@ -170,7 +174,7 @@ pub fn run() -> Result<i32, MainError> {
             && args.code_generation.object
             && let Some(output) = &args.code_generation.output_path
         {
-            output_file::remove_failed_object(output);
+            output_file::remove_failed_object(output, &tu);
         }
         return Ok(status);
     } else {

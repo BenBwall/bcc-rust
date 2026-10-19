@@ -1780,6 +1780,56 @@ int main(void) { printf("main\n"); return zero; }
     }
 
     #[test]
+    fn driver_conflicts_preserve_stale_object_files() {
+        for conflict in [
+            &["--native-object"][..],
+            &["--backend=native", "--llvm-opt=O2"][..],
+            &["--backend=native", "--llvm-codegen-only"][..],
+        ] {
+            let object = temporary("driver-conflict.o");
+            std::fs::write(&object, b"existing object").unwrap();
+            let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+            flags.extend_from_slice(conflict);
+            // A usage error must precede even invalid source diagnostics.
+            let output = bcc("int value = not_declared;", &flags);
+            assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+            assert!(text(&output.stderr).contains("--backend=native"));
+            assert!(!text(&output.stderr).contains("not_declared"));
+            assert_eq!(std::fs::read(&object).unwrap(), b"existing object");
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_compilation_preserves_read_only_object_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // Root's access(W_OK) succeeds even for mode 0444, as it does in LLVM.
+        // SAFETY: getuid has no preconditions.
+        if unsafe { libc::getuid() } == 0 {
+            return;
+        }
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for source in ["int value;", "int value = not_declared;"] {
+                let object = temporary("read-only-object.o");
+                std::fs::write(&object, b"existing object").unwrap();
+                std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o444)).unwrap();
+                let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+                assert_eq!(std::fs::read(&object).unwrap(), b"existing object");
+                std::fs::remove_file(object).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn front_end_failure_preserves_stale_executable_like_clang() {
         for backend in [
             &[][..],

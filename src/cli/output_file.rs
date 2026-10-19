@@ -45,9 +45,9 @@ pub(super) fn is_input(input: &Path, output: &Path) -> io::Result<bool> {
 /// protected the source and its aliases. Devices, directories and FIFOs are
 /// not object files; inspecting them never opens a potentially blocking file.
 /// This is the CLI compile-job policy, not a backend API ownership rule.
-pub(super) fn remove_failed_object(output: &Path) {
+pub(super) fn remove_failed_object(output: &Path, arena: &crate::util::bump::Bump) {
     let result = fs::metadata(output).and_then(|metadata| {
-        if metadata.is_file() {
+        if metadata.is_file() && can_write(output, &metadata, arena) {
             fs::remove_file(output)
         } else {
             Ok(())
@@ -63,6 +63,31 @@ pub(super) fn remove_failed_object(output: &Path) {
                 output.display()
             ),
         ));
+    }
+}
+
+/// LLVM's CleanupFile uses can_write before unlinking, including when the
+/// compile failed before opening its output. POSIX access follows symlinks and
+/// checks the caller's permissions (including ACLs), rather than mode bits
+/// alone.
+fn can_write(output: &Path, metadata: &fs::Metadata, arena: &crate::util::bump::Bump) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let _ = metadata;
+        let bytes = output.as_os_str().as_bytes();
+        if bytes.contains(&0) {
+            return false;
+        }
+        let path = arena.alloc_slice_fill_iter(bytes.iter().copied().chain([0]));
+        // SAFETY: path is NUL terminated and stays alive throughout access.
+        unsafe { libc::access(path.as_ptr().cast(), libc::W_OK) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (output, arena);
+        !metadata.permissions().readonly()
     }
 }
 
