@@ -263,7 +263,10 @@ pub(crate) fn analyze<'tu>(
                     }
                 },
             ));
-    SemanticTranslationUnit {
+    let unit_arena = analyzer.types.tu;
+    let symbol_requests = analyzer.symbol_requests;
+    let mut result = SemanticTranslationUnit {
+        entities: EntityFacts::empty(analyzer.types.tu),
         declarator_functions: analyzer.declarator_functions.leak(),
         references: analyzer.references.leak(),
         resolved: analyzer.resolved.retain(),
@@ -293,7 +296,9 @@ pub(crate) fn analyze<'tu>(
         size_query_sites: analyzer.size_query_sites,
         tag_declarations: analyzer.tag_declarations.leak(),
         errors: analyzer.error_diagnostics,
-    }
+    };
+    result.entities = EntityFacts::retain(context, &result, &scratch, unit_arena, &symbol_requests);
+    result
 }
 
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
@@ -763,6 +768,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             },
             | Work::DeclaratorDone(d, mut base, parameter) => {
+                self.record_symbol_requests(d);
                 if d.pointer
                     .levels
                     .iter()
@@ -1800,6 +1806,7 @@ struct Analyzer<'a, 'tu, 's> {
     pack_alignments:         &'s [(usize, u32)],
     bindings:                ArenaVec<'tu, Binding>,
     declarators:             ArenaVec<'tu, Declarator<'tu>>,
+    symbol_requests:         ArenaVec<'s, facts::entities::PendingSymbolRequest<'tu>>,
     definitions:             ArenaVec<'tu, Definition>,
     /// Indexed by the function definition's traversal id.
     function_records:        ArenaVec<'tu, FunctionRecord<'tu>>,

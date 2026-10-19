@@ -72,6 +72,27 @@ fn evaluate(
         | Operation::Nan => (&[Type::Ptr], precision),
         | _ => (&[precision], precision),
     };
+    #[cfg(test)]
+    {
+        let shared =
+            crate::builtins::external_signature(call.name).expect("math signature is cataloged");
+        assert_eq!(
+            shared
+                .parameters
+                .iter()
+                .map(|&p| super::external_type(p, long_width, long_double))
+                .collect::<Vec<_>>(),
+            params.iter().copied().map(Some).collect::<Vec<_>>(),
+            "{}",
+            call.name
+        );
+        assert_eq!(
+            super::external_type(shared.result, long_width, long_double),
+            Some(result),
+            "{}",
+            call.name
+        );
+    }
     if call.arg_types != params || call.result != Some(result) || call.args.len() != params.len() {
         return Err(UbKind::SignatureMismatch.into());
     }

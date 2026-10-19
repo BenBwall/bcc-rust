@@ -8,6 +8,7 @@ mod call_diagnostics;
 mod complex;
 mod correspondence;
 mod effects;
+mod entities;
 mod extensions;
 mod floats;
 mod fortify;
@@ -62,6 +63,7 @@ fn lower_with(
         HeaderSearch::default(),
     );
     let sema = analyze_translation_unit(&mut context, &unit);
+    entities::compare_legacy(&context, &sema, target);
     let arena = Bump::new();
     let mut scratch = Bump::new();
     match lower_translation_unit(&context, &unit, &sema, target, &arena, &mut scratch) {

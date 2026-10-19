@@ -42,6 +42,7 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
+    pub(crate) entities:             super::EntityFacts<'tu>,
     /// Function owners of declarators with assembler labels, in the order
     /// of `declarators`; None is outside any function definition.
     /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125 (emission).

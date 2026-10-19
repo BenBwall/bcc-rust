@@ -46,6 +46,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             pack_alignments,
             bindings: ArenaVec::new_in(tu),
             declarators: ArenaVec::new_in(tu),
+            symbol_requests: ArenaVec::new_in(scratch),
             definitions: ArenaVec::new_in(tu),
             function_records: ArenaVec::new_in(tu),
             scopes: ArenaVec::new_in(tu),

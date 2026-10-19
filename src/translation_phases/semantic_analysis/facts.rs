@@ -21,6 +21,7 @@ mod builtin_instances;
 mod control;
 pub(super) mod correspondence;
 pub(super) mod effects;
+pub(super) mod entities;
 mod function_extensions;
 mod parameters;
 pub(super) mod resolved;
@@ -42,6 +43,15 @@ pub(crate) use effects::{
     EffectContext,
     EffectFacts,
     EffectRecipe,
+};
+pub(crate) use entities::{
+    BodyEmission,
+    Entity,
+    EntityFacts,
+    FunctionEnd,
+    FunctionPolicy,
+    SymbolRefusal,
+    SymbolRequest,
 };
 pub(crate) use function_extensions::*;
 pub(crate) use resolved::{

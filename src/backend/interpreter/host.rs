@@ -326,6 +326,28 @@ fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
             | None => return Ok(()),
         },
     };
+    #[cfg(test)]
+    {
+        let shared =
+            crate::builtins::external_signature(call.name).expect("host signature is cataloged");
+        assert_eq!(shared.variadic, variadic, "{}", call.name);
+        assert_eq!(
+            shared
+                .parameters
+                .iter()
+                .map(|&p| external_type(p, 64, Type::F80))
+                .collect::<Vec<_>>(),
+            params.iter().copied().map(Some).collect::<Vec<_>>(),
+            "{}",
+            call.name
+        );
+        assert_eq!(
+            external_type(shared.result, 64, Type::F80),
+            result,
+            "{}",
+            call.name
+        );
+    }
     if call.result != result
         || (!variadic && call.arg_types.len() != params.len())
         || !call.arg_types.starts_with(params)
@@ -737,5 +759,72 @@ impl<'a> DefaultHost<'a> {
             },
             ..Self::new_in(arena)
         }
+    }
+}
+
+/// Projects a neutral external signature to the interpreter's scalar ABI.
+/// All current targets have 64-bit pointers and size_t; long and long double
+/// follow the configured target. No semantic types enter the host.
+fn external_type(
+    pattern: crate::builtins::SignatureType,
+    long_width: u32,
+    long_double: Type,
+) -> Option<Type> {
+    use crate::{
+        builtins::SignatureType as T,
+        target::Scalar as S,
+    };
+    Some(match pattern {
+        | T::Scalar(S::Void) => return None,
+        | T::Scalar(S::Bool | S::Char | S::SignedChar | S::UnsignedChar) => Type::I8,
+        | T::Scalar(S::Short | S::UnsignedShort) => Type::I16,
+        | T::Scalar(S::Int | S::UnsignedInt) => Type::I32,
+        | T::Scalar(S::Long | S::UnsignedLong) if long_width == 32 => Type::I32,
+        | T::Scalar(S::Long | S::UnsignedLong | S::LongLong | S::UnsignedLongLong) | T::Size =>
+            Type::I64,
+        | T::Scalar(S::Int128 | S::UnsignedInt128) => Type::I128,
+        | T::Scalar(S::Float) => Type::F32,
+        | T::Scalar(S::Double) => Type::F64,
+        | T::Scalar(S::LongDouble) => long_double,
+        | T::Pointer(..) | T::VaList | T::File | T::VectorPointer(..) => Type::Ptr,
+        | _ => return None,
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn m7_external_signatures_match_legacy_host_tables() {
+    for name in HOST_FUNCTIONS.iter().copied().chain([
+        "__memcpy_chk",
+        "__memmove_chk",
+        "__mempcpy_chk",
+        "__memset_chk",
+        "__strcpy_chk",
+        "__stpcpy_chk",
+        "__strncpy_chk",
+        "__stpncpy_chk",
+        "__strcat_chk",
+        "__strncat_chk",
+        "__sprintf_chk",
+        "__snprintf_chk",
+        "__vsprintf_chk",
+        "__vsnprintf_chk",
+        "__vprintf_chk",
+        "__vfprintf_chk",
+    ]) {
+        let signature = crate::builtins::external_signature(name).expect("cataloged signature");
+        let params = signature
+            .parameters
+            .iter()
+            .map(|&p| external_type(p, 64, Type::F80).unwrap())
+            .collect::<Vec<_>>();
+        let call = HostCall {
+            name,
+            args: &[],
+            arg_types: &params,
+            result: external_type(signature.result, 64, Type::F80),
+            va_list: HostVaList::None,
+        };
+        assert!(check_signature(call).is_ok(), "{name}");
     }
 }
