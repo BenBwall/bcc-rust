@@ -1056,13 +1056,16 @@ the diagnostic is reported, so withheld diagnostics are not counted.
   regression modules beside it; token snapshots under `tests/fixtures/lexing/`
   pin the mode-dependent token streams, including the ISO, GNU and MSVC parser
   seams.
-- CLI: [`tests/cli.rs`](tests/cli.rs) covers flag parsing and overrides;
-  [`tests/language_cli.rs`](tests/language_cli.rs) runs every accepted
-  standard spelling through preprocessing, parsing and syntax inspection, with
-  GNU and MSVC programs, disabled gates and malformed cross-phase input.
+- CLI: [`tests/integration/cli.rs`](tests/integration/cli.rs) covers flag
+  parsing and overrides;
+  [`tests/integration/language_cli.rs`](tests/integration/language_cli.rs) runs
+  every accepted standard spelling through preprocessing, parsing and syntax
+  inspection, with GNU and MSVC programs, disabled gates and malformed
+  cross-phase input.
 - Diagnostics: golden inputs under `tests/fixtures/diagnostics/` take optional
   `.args` sidecars that select mode and policy; see its `COVERAGE.md`.
-- Hosted translation: [`tests/hosted_cli.rs`](tests/hosted_cli.rs) covers the
+- Hosted translation:
+  [`tests/integration/hosted_cli.rs`](tests/integration/hosted_cli.rs) covers the
   execution environment, the header search order and its options, resource
   headers chained to the fake glibc-like library under
   `tests/fixtures/hosted/`, `mm_malloc.h` against POSIX-, MinGW-w64- and
@@ -1758,5 +1761,5 @@ The #49 static function-designator-to-`void *` initializer remains accepted as
 a GNU extension and is diagnosed only under pedantic policy. Regression tests
 replay its original reproducer, retain a function relocation in the static table,
 and call through the stored address in interpreter and native execution.
-`tests/diagnostic_parity.rs` compares constraints, warnings, modes and locations
-with the pinned Clang; semantic and pipeline tests cover the retained facts.
+`tests/integration/diagnostic_parity.rs` compares constraints, warnings, modes
+and locations with the pinned Clang; semantic and pipeline tests cover the retained facts.

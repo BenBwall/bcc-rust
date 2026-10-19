@@ -31,6 +31,7 @@ use super::{
     Selector,
     ValueKind,
     calls::Passed,
+    is_pair,
     width,
 };
 use crate::{
@@ -237,7 +238,7 @@ impl Selector<'_, '_, '_> {
     /// Loads, stores, `copy` and `fill`.
     pub(super) fn memory(&mut self, inst: Inst, data: InstData) -> Result<(), Construct> {
         match data {
-            | InstData::Load { ty, addr, .. } if ty != Type::I128 => {
+            | InstData::Load { ty, addr, .. } if !is_pair(ty) => {
                 let Some(ValueKind::Reg(dst)) =
                     self.body.inst_result(inst).map(|value| self.kind(value))
                 else {
@@ -246,22 +247,18 @@ impl Selector<'_, '_, '_> {
                 let mem = self.address(addr);
                 self.load(ty, Reg::Virt(dst), mem);
             },
-            | InstData::Load {
-                ty: Type::I128,
-                addr,
-                ..
-            } => {
+            | InstData::Load { ty, addr, .. } => {
                 let dst = self.result_pair(inst);
                 let mem = self.address(addr);
-                self.wide_load(dst, mem);
+                self.pair_load(ty, dst, mem);
             },
             | InstData::Store {
-                ty: Type::I128,
+                ty,
                 args: [value, addr],
                 ..
-            } => {
+            } if is_pair(ty) => {
                 let mem = self.address(addr);
-                self.wide_store(value, mem);
+                self.pair_store(ty, value, mem);
             },
             | InstData::Store {
                 ty,

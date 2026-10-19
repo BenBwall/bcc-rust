@@ -1,7 +1,7 @@
 # Native x86-64 back end
 
-Status: design, with stages 1 and 2 and most of stage 3 implemented in
-`src/backend/native/` (2026-10-14); see "Implementation status" at the end.
+Status: design, with stages 1 and 3 and most of stage 2 implemented in
+`src/backend/native/` (2026-10-18); see "Implementation status" at the end.
 
 This document designs bcc-rust's own code generator for x86-64: the path from
 the post-ABI bcc IR to assembly and, later, to object files, without LLVM. It
@@ -156,9 +156,9 @@ with exit status 1. The selector re-checks every case it handles (an
 panic), but the up-front check keeps refusals independent of selection order
 and lets the survey classify them. Stage 1 refused floats, `i128`, variadic
 definitions and dynamic stack allocation; **today** the check refuses only
-`f80` and `f128` values, `i128` bit counts, byte swaps, `switch`es and
-conversions to or from floats, `i128` positions Win64 never passes by value,
-structure results in `f80`/`f128` registers, stack objects aligned above 16,
+`i128` bit counts, byte swaps and `switch`es, `i128` positions Win64 never
+passes by value, structure results in register combinations neither
+convention defines, stack arguments aligned above 16,
 frames larger than 1 GiB, stack arguments (chiefly `byval` structures) of
 more than 1 GiB in one signature, whose offsets and copy lengths would leave
 32-bit operands, and thread-local globals in named sections. Frame layout
@@ -179,8 +179,8 @@ in a later stage:
 | `i1` | a 32-bit register holding 0 or 1 | 1 |
 | `i128` | a pair of 64-bit values; `add`/`adc`, `sub`/`sbb`, `mul` + `imul` cross terms, shifts by `shld`/`shrd` with a ≥64 select; division through `__divti3`/`__udivti3`/`__modti3`/`__umodti3` | 3 (done, in selection rather than a separate pass) |
 | `f32`/`f64` | XMM registers (a second register class) | 3 (done) |
-| `f80` | the x87 stack, selected as memory-to-memory sequences (no x87 register allocation) | 3 |
-| `f128` | libcalls (`__addtf3` …) over XMM | 3 |
+| `f80` | a pair of 64-bit registers (significand, then sign and exponent); x87 memory-to-memory sequences (no x87 register allocation) | 3 (done) |
+| `f128` | a pair of 64-bit registers; libcalls (`__addtf3` …), whole XMM registers only at calls | 3 (done) |
 
 **Narrow integer representation.** A value of type `iN` with N < 64 lives in a
 64-bit register whose bits above N are unspecified, as in LLVM. Operations
@@ -526,9 +526,13 @@ aligned, except within the prolog"). Every call is made at that alignment.
   popped in reverse. Win64's XMM6-XMM15 are callee-saved too; they matter only
   once floats are selected (stage 3, saved with `movaps` into the frame and
   described with `.seh_savexmm`).
-- **Over-aligned slots** (above 16) need a realigned frame with a frame
-  pointer (`and $-align, %rsp` after `mov %rsp, %rbp`); stage 2, together with
-  `dyn_alloca`, which also needs `%rbp` because `%rsp` then moves at run time.
+- **Over-aligned slots** (above 16) were planned with a realigned frame and
+  a frame pointer (`and $-align, %rsp` after `mov %rsp, %rbp`). As built
+  (stage 2, 2026-10-18), such a slot instead gets `align - 16` spare bytes
+  and its address is computed, not folded: `lea` of the slot, `add
+  $align-1`, `and $-align`, into a register every use goes through. The frame,
+  its unwind information and `%rbp` stay as they are; stack arguments aligned
+  above 16, which need the caller's stack realigned, are still refused.
 
 **Prologue and epilogue**:
 
@@ -609,8 +613,19 @@ Post-ABI aggregate kinds:
   callee allocates it as a frame slot (`ResultRegisters::area_bytes`, its
   alignment) and at `return` loads `%rax` (and `%rdx`) from offsets 0 and 8; the
   caller stores `%rax`/`%rdx` into the area it passed after the call. Stage 1
-  supports integer parts; SSE parts (`%xmm0`/`%xmm1`) and `f80` (`%st0`) come
-  with floats.
+  supports integer parts; stage 3 adds SSE parts (`%xmm0`/`%xmm1`), a whole
+  `%xmm0` for `__float128` (System V) and `__int128` (Win64), and `%st0`
+  (and `%st1` for a complex `long double`) for X87 results.
+
+Wide scalars that ABI lowering leaves as they are travel as LLVM's code
+generator passes them, which is what Clang's objects expect: under System V
+an `i128` in a register pair or a 16-byte-aligned stack slot, an `f80` always
+in a 16-byte stack slot and returned in `%st0`, an `f128` in a whole SSE
+register (or a 16-byte stack slot) and returned in `%xmm0`; under Win64 an
+`f80` or `f128` argument as a pointer to a 16-byte copy, and its result
+through a hidden pointer passed first and returned in `%rax`. Runtime routines
+take them the same way, except that Win64 routines take an `i128` by
+reference and return it in `%xmm0` (`__fixdfti`, `__divti3`).
 
 **Variadic definitions** (stage 2). After ABI lowering only `va_start`,
 `va_copy` and `va_end` remain (ABI lowering expanded `va_arg` into loads from
@@ -723,7 +738,7 @@ Following [CONTRIBUTING.md](../../CONTRIBUTING.md#source-layout):
 | `native/support.rs` | the up-front support check and `Unsupported` |
 | `native/conv.rs` | `CallConv`: argument and result registers, saved sets, shadow space |
 | `native/mir.rs` | the machine IR: registers, operands, instructions, blocks |
-| `native/isel.rs` | instruction selection, with `isel/calls.rs` (calls, returns, entry, `va_start`), `isel/edges.rs` (terminators and parallel copies), `isel/memory.rs` (addresses, loads, stores, `copy`, `fill`), `isel/float.rs` (SSE), `isel/wide.rs` (`i128` pairs) and `isel/stack.rs` (dynamic allocation) |
+| `native/isel.rs` | instruction selection, with `isel/calls.rs` (calls, returns, entry, `va_start`), `isel/edges.rs` (terminators and parallel copies), `isel/memory.rs` (addresses, loads, stores, `copy`, `fill`), `isel/float.rs` (SSE), `isel/wide.rs` (`i128` pairs), `isel/x87.rs` (`f80`), `isel/quad.rs` (`f128` and the conversions that call the runtime) and `isel/stack.rs` (dynamic allocation) |
 | `native/regalloc.rs` | linear scan, with `regalloc/liveness.rs` (liveness, intervals, fixed ranges) and `regalloc/rewrite.rs` (spill code and physical rewrite) |
 | `native/frame.rs` | frame layout, prologue and epilogue |
 | `native/emit.rs` | AT&T text: instructions, functions, globals, symbols |
@@ -782,8 +797,8 @@ Sizes are estimated Rust lines including tests.
 | --- | --- | ---: | --- | --- |
 | 0 | This design | — | reviewed | done |
 | 1 | Integer and pointer code: arithmetic, comparisons, branches, switch chains, block parameters, direct and indirect calls (SysV and Win64, stack arguments, calls to variadic functions), stack slots, loads and stores, globals with relocated initializers, `copy`/`fill` inline or through `rep movsb`/`memmove`, bit operations, `sret`/`byval`/integer `registers`; linear scan with spilling; assembly text through clang; `--backend=native`, `--emit=asm`; arms B0/B1 in the torture survey | 5-6k | e2e programs match the interpreter on Windows and WSL; difftest native oracle clean; torture survey: zero native wrong results where A0 passes, zero crashes | done |
-| 2 | Variadic definitions (`va_start` save areas), `dyn_alloca`/`stack_save`/`stack_restore` with a frame pointer, inline `copy`/`fill` for small constant sizes; over-aligned slots and jump tables for dense switches | 2k | torture: every integer-only source A0 passes also passes B0 | done except over-aligned slots and jump tables |
-| 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done except `f80`, `f128` and `i128`/float conversions |
+| 2 | Variadic definitions (`va_start` save areas), `dyn_alloca`/`stack_save`/`stack_restore` with a frame pointer, inline `copy`/`fill` for small constant sizes; over-aligned slots and jump tables for dense switches | 2k | torture: every integer-only source A0 passes also passes B0 | done except jump tables (and stack arguments aligned above 16) |
+| 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done |
 | 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | B1/A1 is 1.25-1.40× on Windows already; the allocator work is open |
 | 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | open |
 | 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | open |
@@ -893,9 +908,8 @@ Implemented in the priority order of the stage 1 refusals:
 - **Two peepholes**: a multiply by a power of two is a shift, and `zext` of a
   narrow load reuses the load's zero-extended register.
 
-`f80` was not attempted: it needs memory-resident x87 values, `fnstcw`
-truncation sequences, and ST0 returns, which is not cheap; 16 sources need
-it.
+`f80`, `f128` and conversions between `i128` and floats were left for the
+stage 3 completion below.
 
 Measured on 2026-10-14 (release build, same corpus and target as stage 1,
 `--arms A0,B0,B1`; the 22 sources whose first run timed out or failed under
@@ -1000,3 +1014,81 @@ B1 differs from B0 on the four undefined-behaviour programs of stage 1
 (`980526-2`, `pr43629`, `pr99079`, and `pr22493-1`, now a timeout) and on
 `frame-address`, which fails in A1 as well, so the bcc pipeline, not the
 native back end, changes it.
+
+### Stage 3 completion: wide floats
+
+Done on 2026-10-18 in `isel/x87.rs` and `isel/quad.rs`, with the calling
+convention parts in `isel/calls.rs`:
+
+- **One representation for the three wide scalars.** `i128`, `f80` and
+  `f128` values all live in a pair of general registers, low eight bytes
+  first; an `f80`'s high register holds its sign and exponent in the low 16
+  bits, the rest unspecified like a narrow integer's. Block parameters,
+  parallel copies, spills, `select`, `freeze`, loads and stores (ten bytes
+  for `f80`), `fneg` (an `xor` of the sign bit) and bit casts between `i128`
+  and `f128` (aliases) therefore needed nothing new, and the allocator still
+  has two register classes. Constants of all three are 16-byte entries of the
+  function's constants, from which `fldt` reads directly.
+- **`f80` through x87 memory sequences.** Each operation stores its operands
+  to a 32-byte, 16-aligned scratch slot made on first use, pushes them with
+  `fldt`, computes with `fadd`/`fsub`/`fmul`/`fdiv %st(1), %st`, and pops the
+  result with `fstpt` and the other operand with `fstp %st(0)`. Every sequence
+  leaves the x87 stack empty, so the register stack is never allocated; only
+  a System V `return` leaves its value in `%st0`, and a call's `%st0` result
+  is popped right after the call (even when unused). Comparisons use
+  `fucomip`, whose flags are those of `ucomisd`, so they share the SSE flag
+  tests. Integer conversions use `fild`/`fistp` at 16, 32 or 64 bits, the
+  stores under a control word with rounding toward zero (`fnstcw`, `or
+  $0xC00`, `fldcw`, `fistp`, `fldcw`), since `fisttp` is SSE3; unsigned
+  64-bit conversions add 2^64 after a negative signed load, or subtract 2^63
+  before the store and pick the result with `cmov`. `frem` calls `fmodl`.
+- **`f128` through runtime routines**, as LLVM lowers it: `__addtf3`,
+  `__subtf3`, `__multf3`, `__divtf3`, `fmodf128`, the comparison routines
+  (`__eqtf2` … `__unordtf2`; the unordered conditions negate the opposite
+  ordered routine, and `ueq`/`one` add `__unordtf2`), `__extend{s,d,x}ftf2`,
+  `__trunctf{s,d,x}f2`, `__float{si,unsi,di,undi,ti,unti}tf` and
+  `__fix{,uns}tf{si,di,ti}`; narrower integers go through the 32-bit signed
+  routines, as LLVM promotes them.
+- **`i128` and floats** convert through `__float{,un}ti{sf,df,xf}` and
+  `__fix{,uns}{sf,df,xf}ti`.
+- **Passing**, as LLVM's code generator does and Clang's objects expect (see
+  "Calls"): System V `f80` in 16-byte stack slots and `%st0`, `f128` in whole
+  SSE registers (or 16-byte stack slots) and `%xmm0`, `registers(f80)`,
+  complex `registers(f80, f80)` in `%st0`/`%st1` and `registers(f128)` in
+  `%xmm0`; Win64 `f80` and `f128` by reference with a hidden result pointer,
+  and the routines' `i128` by reference with the result in `%xmm0`. The
+  System V variadic prologue now saves all 16 bytes of each SSE argument
+  register, which a `__float128` argument fills. The emitted calls were
+  compared with `clang -S` for both targets (`__addtf3(&result, &a, &b)`,
+  `__floattidf(&x)`, `__fixdfti` returning `%xmm0`, `long double f(long
+  double, long double)` reading `(%rdx)` and `(%r8)` and storing through
+  `%rcx`).
+
+Validation: the interpreter does not run `f80` or `f128`, so
+`native/tests/end_to_end.rs` compares the native executables of three
+`long double` C programs (both optimizer settings) and of an IR program
+covering every `f80` and `f128` operation, comparison and conversion with
+the LLVM back end's executables of the same modules; `i128`/float
+conversions are checked against the interpreter there and in the difftest
+native oracle. The ABI conformance tests link native objects with Clang's in
+both directions: the structure exchange (with `struct { long double }` and
+`struct { __int128 }`), complex `long double`, `long double` and
+`__float128` variadic arguments and definitions, and new `long double`,
+`i128`/float and `__float128` exchanges. Win64 paths are checked at the
+assembly level against `clang --target=x86_64-w64-windows-gnu -S`
+(`native/tests/selection.rs`), since no Windows host ran them.
+
+The C front end still refuses `__float128` values, so `f128` arithmetic is
+reachable only from IR; `f80` and `f128` `va_arg` on Win64 are refused by ABI
+lowering, not here. Still refused by the back end: `i128` bit counts, byte
+swaps and `switch`es, and stack arguments aligned above 16 bytes. Stack
+objects aligned above 16 bytes, the stage 2 leftover, now compile with a
+computed address (see "Frame layout"), checked against the interpreter by
+the `over_aligned_locals` end-to-end program.
+
+Measured on 2026-10-18 on Linux (debug build, `cargo test --all-targets
+--no-fail-fast` at the conformance commit): 2,361 tests passed, none
+failed, 7 ignored. The GCC torture survey was not rerun: the full
+`gcc.c-torture/execute` corpus is not on the Linux host used, so the 16
+`f80` refusals of the last Windows survey are expected to become passes
+but are not yet measured.

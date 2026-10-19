@@ -39,6 +39,7 @@ pub(crate) use contract::*;
 pub(crate) use external::{
     ExternalContract,
     external_contract,
+    external_signature,
     returns_twice,
 };
 #[cfg(test)]

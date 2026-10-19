@@ -44,35 +44,13 @@ fn evaluate(
     long_width: u32,
     text: &mut crate::util::bump::ArenaVec<'_, u8>,
 ) -> Result<RuntimeValue, Fault> {
+    super::check_signature(call, long_width, long_double)?;
     let long = if long_width == 32 {
         Type::I32
     } else {
         Type::I64
     };
-    let (params, result): (&[Type], Type) = match operation {
-        | Operation::Atan2
-        | Operation::Hypot
-        | Operation::Pow
-        | Operation::Fmod
-        | Operation::Remainder
-        | Operation::Copysign
-        | Operation::Nextafter
-        | Operation::Fdim
-        | Operation::Fmax
-        | Operation::Fmin => (&[precision, precision], precision),
-        | Operation::Fma => (&[precision, precision, precision], precision),
-        | Operation::Frexp | Operation::Modf => (&[precision, Type::Ptr], precision),
-        | Operation::Remquo => (&[precision, precision, Type::Ptr], precision),
-        | Operation::Ilogb => (&[precision], Type::I32),
-        | Operation::Lrint | Operation::Lround => (&[precision], long),
-        | Operation::Llrint | Operation::Llround => (&[precision], Type::I64),
-        | Operation::Ldexp | Operation::Scalbn => (&[precision, Type::I32], precision),
-        | Operation::Scalbln => (&[precision, long], precision),
-        | Operation::Nexttoward => (&[precision, long_double], precision),
-        | Operation::Nan => (&[Type::Ptr], precision),
-        | _ => (&[precision], precision),
-    };
-    if call.arg_types != params || call.result != Some(result) || call.args.len() != params.len() {
+    if call.args.len() != call.arg_types.len() {
         return Err(UbKind::SignatureMismatch.into());
     }
     if precision == Type::F80 || (operation == Operation::Nexttoward && long_double == Type::F80) {
@@ -93,8 +71,21 @@ fn evaluate(
     }
 }
 
-fn lookup(name: &str, long_double: Type) -> Option<(Operation, Type)> {
-    Some(match name {
+// Generate the lookup and exhaustive test inventory from the same entries.
+macro_rules! math_functions {
+    ($long_double:ident; $(| $name:literal => $value:expr,)*) => {
+        fn lookup(name: &str, $long_double: Type) -> Option<(Operation, Type)> {
+            Some(match name {
+                $($name => $value,)*
+                _ => return None,
+            })
+        }
+        #[cfg(test)]
+        const NAMES: &[&str] = &[$($name,)*];
+    };
+}
+
+math_functions! { long_double;
         | "acos" => (Operation::Acos, Type::F64),
         | "acosf" => (Operation::Acos, Type::F32),
         | "acosl" => (Operation::Acos, long_double),
@@ -266,8 +257,6 @@ fn lookup(name: &str, long_double: Type) -> Option<(Operation, Type)> {
         | "fma" => (Operation::Fma, Type::F64),
         | "fmaf" => (Operation::Fma, Type::F32),
         | "fmal" => (Operation::Fma, long_double),
-        | _ => return None,
-    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -775,5 +764,115 @@ mod native {
         debug_assert_eq!(tag.last(), Some(&0), "host tags have a terminating null");
         // SAFETY: The host copied the complete tag and appended its null.
         unsafe { native_nanf(tag.as_ptr().cast()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        backend::interpreter::host::HostVaList,
+        util::bump::{
+            ArenaVec,
+            Bump,
+        },
+    };
+
+    #[test]
+    fn every_host_math_name_rejects_malformed_signatures() {
+        for (long_width, long_double) in [(64, Type::F80), (32, Type::F64)] {
+            for &name in NAMES {
+                let signature = crate::builtins::external_signature(name)
+                    .unwrap_or_else(|| panic!("missing host math signature: {name}"));
+                let arena = Bump::new();
+                let mut params = ArenaVec::new_in(&arena);
+                params.extend(
+                    signature
+                        .parameters
+                        .iter()
+                        .map(|&p| super::super::external_type(p, long_width, long_double).unwrap()),
+                );
+                let result = super::super::external_type(signature.result, long_width, long_double);
+                let mut values = ArenaVec::new_in(&arena);
+                values.resize(params.len(), RuntimeValue::Poison);
+                let valid = HostCall {
+                    name,
+                    args: &values,
+                    arg_types: &params,
+                    result,
+                    va_list: HostVaList::None,
+                };
+                assert!(
+                    super::super::check_signature(valid, long_width, long_double).is_ok(),
+                    "{name}"
+                );
+                // A wrong parameter must be diagnosed before poison operands.
+                for index in 0..params.len() {
+                    let arena = Bump::new();
+                    let mut wrong = ArenaVec::new_in(&arena);
+                    wrong.extend_from_slice(&params);
+                    wrong[index] = Type::I128;
+                    let mut memory = Memory::new(&arena, 1024);
+                    let mut text = ArenaVec::new_in(&arena);
+                    assert!(
+                        matches!(
+                            call(
+                                HostCall {
+                                    arg_types: &wrong,
+                                    ..valid
+                                },
+                                &mut memory,
+                                long_double,
+                                long_width,
+                                &mut text
+                            ),
+                            Some(Err(Fault::Ub(UbKind::SignatureMismatch)))
+                        ),
+                        "{name} parameter {index}"
+                    );
+                }
+                // Run the actual dispatch with malformed calls, before
+                // wide-float refusal, pointer access or native
+                // libm can hide a mismatch.
+                for malformed in [
+                    HostCall {
+                        result: Some(Type::Ptr),
+                        ..valid
+                    },
+                    HostCall {
+                        args: &[],
+                        arg_types: &[],
+                        ..valid
+                    },
+                ] {
+                    // nan takes one pointer: the wrong result also covers it;
+                    // every host math operation has at least one parameter.
+                    let mut memory = Memory::new(&arena, 1024);
+                    let mut text = ArenaVec::new_in(&arena);
+                    assert!(
+                        matches!(
+                            call(malformed, &mut memory, long_double, long_width, &mut text),
+                            Some(Err(Fault::Ub(UbKind::SignatureMismatch)))
+                        ),
+                        "{name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_signature_fails_closed() {
+        let call = HostCall {
+            name:      "unknown_math",
+            args:      &[],
+            arg_types: &[],
+            result:    Some(Type::F64),
+            va_list:   HostVaList::None,
+        };
+        assert!(matches!(
+            super::super::check_signature(call, 64, Type::F80),
+            Err(Fault::Ub(UbKind::SignatureMismatch))
+        ));
     }
 }

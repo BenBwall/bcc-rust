@@ -284,7 +284,7 @@ parser and later semantic analysis. Evidence is the
 [ISO mode suite](./src/translation_phases/parsing/tests/standards.rs),
 [modern frame](./src/translation_phases/parsing/extensions/modern.rs),
 [inspection](./src/translation_phases/parsing/inspection.rs), and
-[CLI/goldens](./tests/cli.rs). Lexical behavior is upstream-owned.
+[CLI/goldens](./tests/integration/cli.rs). Lexical behavior is upstream-owned.
 
 | Surface | Recognition and retained fact | Standard |
 | --- | --- | --- |

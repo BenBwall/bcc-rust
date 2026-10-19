@@ -572,12 +572,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 _ = owners.insert(std::ptr::from_ref(function.syntax).addr(), binding);
             }
         }
-        for owner in self.declarator_functions.iter_mut().chain(
-            self.attributes
-                .refusals
-                .iter_mut()
-                .map(|refusal| &mut refusal.owner),
-        ) {
+        for owner in self
+            .attributes
+            .refusals
+            .iter_mut()
+            .map(|refusal| &mut refusal.owner)
+            .chain(
+                self.attributes
+                    .conventions
+                    .iter_mut()
+                    .map(|convention| &mut convention.owner),
+            )
+            .chain(
+                self.symbol_requests
+                    .iter_mut()
+                    .map(|request| &mut request.owner),
+            )
+        {
             *owner = owner.and_then(|syntax| owners.get(&syntax).copied());
         }
         let mut evaluated = ArenaVec::new_in(self.scratch);

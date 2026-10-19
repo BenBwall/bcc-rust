@@ -8,6 +8,7 @@ mod call_diagnostics;
 mod complex;
 mod correspondence;
 mod effects;
+mod entities;
 mod extensions;
 mod floats;
 mod fortify;

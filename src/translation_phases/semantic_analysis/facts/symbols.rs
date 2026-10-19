@@ -25,6 +25,18 @@ use crate::{
 pub(crate) struct SymbolFacts<'tu> {
     pub(in crate::translation_phases::semantic_analysis) entities:
         ArenaMap<'tu, EntityId, EntityAttributes<'tu>>,
+    /// Resolved convention requests on declarations and callable type sites.
+    /// All supported requests currently resolve to the target C convention;
+    /// other requests retain their existing downstream capability refusal.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained convention sites are inspectable; unsupported requests use \
+                      refusals."
+        )
+    )]
+    pub(crate) conventions: &'tu [ConventionFacts],
     /// Constructor and destructor definitions in definition order.
     pub(crate) init_functions: &'tu [InitFunctionFacts],
     /// Every alias declaration, resolved to the definition it names.
@@ -238,4 +250,28 @@ impl UnsupportedAttribute {
             | Self::InternalLinkage => "the `internal_linkage` attribute",
         }
     }
+}
+
+/// Effective convention of a written request, including an ignored x86
+/// convention. Canonical C type identity is unchanged by ignored requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallingConvention {
+    SystemV,
+    Microsoft,
+    Unsupported,
+}
+
+/// A checked convention occurrence, including abstract callable types.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Convention occurrences remain available for later ABI support."
+    )
+)]
+pub(crate) struct ConventionFacts {
+    pub(crate) convention: CallingConvention,
+    pub(crate) source:     SourceVectors,
+    pub(crate) owner:      Option<usize>,
 }

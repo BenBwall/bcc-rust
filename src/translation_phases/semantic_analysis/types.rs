@@ -372,9 +372,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     pub(crate) fn finish(self) -> Types<'tu> {
         Types {
-            nodes:  self.nodes.leak(),
-            tags:   self.tags.leak(),
-            target: self.target,
+            variably_modified: self.tu.alloc_slice_copy(&self.variably_modified),
+            nodes:             self.nodes.leak(),
+            tags:              self.tags.leak(),
+            target:            self.target,
         }
     }
 
@@ -559,6 +560,11 @@ pub(crate) enum TypeKind<'tu> {
 /// Durable type graph, retained after semantic working storage is released.
 #[derive(Debug)]
 pub(crate) struct Types<'tu> {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained for the canonical VM predicate.")
+    )]
+    variably_modified: &'tu [bool],
     pub(crate) nodes:  &'tu [TypeKind<'tu>],
     pub(crate) tags:   &'tu [&'tu Tag<'tu>],
     pub(crate) target: TargetLayout,
@@ -768,6 +774,12 @@ pub(crate) fn align_up(value: u64, align: u64) -> Option<u64> {
 }
 
 impl TypeId {
+    /// Whether reading or writing this qualified type is a volatile access.
+    /// C99: §6.7.3p6, p. 109; PDF p. 121.
+    pub(crate) fn is_volatile(self) -> bool {
+        self.qualifiers.contains(TypeQualifiers::VOLATILE)
+    }
+
     /// GCC Common Attributes: alignment does not alter the underlying C type.
     pub(crate) const fn with_alignment(self, alignment: u32) -> Self {
         Self { alignment, ..self }
@@ -845,6 +857,36 @@ fn unmodeled_type(
 }
 
 impl<'tu> Types<'tu> {
+    /// Retained classification from type interning, including pointers to VLAs.
+    /// C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained VM predicate is available beside size-query facts for later \
+                      consumers."
+        )
+    )]
+    pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
+        self.variably_modified[ty.index]
+    }
+
+    /// Whole-object readonly storage, distinct from a record containing a
+    /// const member (the modifiable-lvalue constraint). Preserve the first
+    /// const-qualified array derivation's volatile exclusion.
+    /// C99: §6.7.3p5, p. 109; PDF p. 121.
+    pub(crate) fn readonly_object(&self, mut ty: TypeId) -> bool {
+        loop {
+            if ty.qualifiers.contains(TypeQualifiers::CONST) {
+                return !ty.is_volatile();
+            }
+            match self.kind(ty) {
+                | TypeKind::Array(element, _) => ty = element,
+                | _ => return false,
+            }
+        }
+    }
+
     pub(crate) fn unmodeled_type(&self, ty: TypeId) -> Option<UnmodeledType> {
         unmodeled_type(self.nodes, self.tags, ty)
     }

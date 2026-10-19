@@ -21,9 +21,13 @@
 //! 32-bit ones to 64. An unsigned 64-bit integer with its top bit set is
 //! halved (keeping the low bit, so rounding is unchanged), converted and
 //! doubled; a float at or above 2^63 converts to unsigned after subtracting
-//! 2^63 and setting the top bit again. Both pick their result with `cmov`,
-//! without branches. Out-of-range conversions are poison in the IR, so the
-//! hardware's "integer indefinite" result refines them.
+//! 2^63 and setting the top bit again. Both pick with `cmov`, without
+//! branches: the integer one picks its result, the float one the 2^63 to
+//! subtract, before its only conversion, so that an in-range value raises
+//! no "invalid" exception (C99 §F.4p1); Clang's code converts twice and
+//! raises it for every value at or above 2^63. Out-of-range conversions are
+//! poison in the IR, so the hardware's "integer indefinite" result refines
+//! them.
 
 use super::{
     Selector,
@@ -138,24 +142,19 @@ impl Selector<'_, '_, '_> {
     pub(super) fn float_compare(&mut self, cond: FloatCC, ty: Type, dst: Reg, [a, b]: [Value; 2]) {
         let a = self.reg(a);
         let b = self.reg(b);
-        let width = float_width(ty);
-        let (lhs, rhs, test) = match cond {
-            | FloatCC::Ogt => (a, b, Test::One(Cond::A)),
-            | FloatCC::Oge => (a, b, Test::One(Cond::Ae)),
-            | FloatCC::Olt => (b, a, Test::One(Cond::A)),
-            | FloatCC::Ole => (b, a, Test::One(Cond::Ae)),
-            | FloatCC::Ult => (a, b, Test::One(Cond::B)),
-            | FloatCC::Ule => (a, b, Test::One(Cond::Be)),
-            | FloatCC::Ugt => (b, a, Test::One(Cond::B)),
-            | FloatCC::Uge => (b, a, Test::One(Cond::Be)),
-            | FloatCC::One => (a, b, Test::One(Cond::Ne)),
-            | FloatCC::Ueq => (a, b, Test::One(Cond::E)),
-            | FloatCC::Ord => (a, b, Test::One(Cond::Np)),
-            | FloatCC::Uno => (a, b, Test::One(Cond::P)),
-            | FloatCC::Oeq => (a, b, Test::Both(Cond::E, Cond::Np)),
-            | FloatCC::Une => (a, b, Test::Either(Cond::Ne, Cond::P)),
-        };
-        self.emit(MInst::Ucomi { width, lhs, rhs });
+        let (swapped, test) = float_test(cond);
+        let (lhs, rhs) = if swapped { (b, a) } else { (a, b) };
+        self.emit(MInst::Ucomi {
+            width: float_width(ty),
+            lhs,
+            rhs,
+        });
+        self.set_test(test, dst);
+    }
+
+    /// `dst ←` the canonical `i1` of a flag test, right after the
+    /// comparison that set the flags.
+    pub(super) fn set_test(&mut self, test: Test, dst: Reg) {
         let byte = self.vreg();
         match test {
             | Test::One(cond) => self.emit(MInst::Setcc { cond, dst: byte }),
@@ -403,8 +402,13 @@ impl Selector<'_, '_, '_> {
         });
     }
 
-    /// `fptoui` to `i64`: values at or above 2^63 convert after subtracting
-    /// it, and get the top bit back.
+    /// `fptoui` to `i64`: one truncating conversion of the value plus
+    /// `adjust`, which is -2^63 when the value is at or above 2^63 and 0
+    /// otherwise, then `adjust` xored back in to set the top bit. Both sums
+    /// are exact. Picking the adjustment before converting keeps an
+    /// in-range value out of reach of the "invalid" exception, which only
+    /// an out-of-range value raises, and adds no inexact subtraction.
+    /// C99: §F.4 paragraph 1, p. 447; PDF p. 459.
     fn float_to_unsigned(&mut self, from: Type, dst: Reg, arg: Value) {
         let float = float_width(from);
         let x = self.reg(arg);
@@ -415,37 +419,16 @@ impl Selector<'_, '_, '_> {
         };
         let limit = Reg::Virt(self.func.vreg_of(RegClass::Xmm));
         self.float_constant(limit, limit_bits, from);
-        self.emit(MInst::FloatToInt {
-            float,
-            int: Width::B64,
-            dst,
-            src: x,
-        });
-        let reduced = Reg::Virt(self.func.vreg_of(RegClass::Xmm));
-        self.copy(reduced, x);
-        self.emit(MInst::XAlu {
-            op:    XOp::Sub,
-            width: float,
-            dst:   reduced,
-            src:   Operand::Reg(limit),
-        });
-        let high = self.vreg();
-        self.emit(MInst::FloatToInt {
-            float,
-            int: Width::B64,
-            dst: high,
-            src: reduced,
+        let adjust = self.vreg();
+        self.emit(MInst::Mov {
+            width: Width::B32,
+            dst:   adjust,
+            src:   Operand::Imm(0),
         });
         let top = self.vreg();
         self.emit(MInst::MovImm64 {
             dst: top,
             imm: i64::MIN,
-        });
-        self.emit(MInst::Alu {
-            op:    AluOp::Xor,
-            width: Width::B64,
-            dst:   high,
-            src:   Operand::Reg(top),
         });
         self.emit(MInst::Ucomi {
             width: float,
@@ -453,20 +436,70 @@ impl Selector<'_, '_, '_> {
             rhs:   limit,
         });
         self.emit(MInst::Cmov {
-            cond: Cond::Ae,
+            cond:  Cond::Ae,
+            width: Width::B64,
+            dst:   adjust,
+            src:   top,
+        });
+        let offset = Reg::Virt(self.func.vreg_of(RegClass::Xmm));
+        self.emit(MInst::IntToFloat {
+            int: Width::B64,
+            float,
+            dst: offset,
+            src: adjust,
+        });
+        let reduced = Reg::Virt(self.func.vreg_of(RegClass::Xmm));
+        self.copy(reduced, x);
+        self.emit(MInst::XAlu {
+            op:    XOp::Add,
+            width: float,
+            dst:   reduced,
+            src:   Operand::Reg(offset),
+        });
+        self.emit(MInst::FloatToInt {
+            float,
+            int: Width::B64,
+            dst,
+            src: reduced,
+        });
+        self.emit(MInst::Alu {
+            op: AluOp::Xor,
             width: Width::B64,
             dst,
-            src: high,
+            src: Operand::Reg(adjust),
         });
     }
 }
 
-/// The comparison a `setcc` sequence makes from the flags of `ucomis*`.
+/// The comparison a `setcc` sequence makes from the flags of `ucomis*` or
+/// `fucomip`.
 #[derive(Clone, Copy)]
-enum Test {
+pub(super) enum Test {
     One(Cond),
     Both(Cond, Cond),
     Either(Cond, Cond),
+}
+
+/// How a float comparison reads the flags of comparing its operands:
+/// whether they are swapped first, and the flag test that is true exactly
+/// when the condition holds.
+pub(super) const fn float_test(cond: FloatCC) -> (bool, Test) {
+    match cond {
+        | FloatCC::Ogt => (false, Test::One(Cond::A)),
+        | FloatCC::Oge => (false, Test::One(Cond::Ae)),
+        | FloatCC::Olt => (true, Test::One(Cond::A)),
+        | FloatCC::Ole => (true, Test::One(Cond::Ae)),
+        | FloatCC::Ult => (false, Test::One(Cond::B)),
+        | FloatCC::Ule => (false, Test::One(Cond::Be)),
+        | FloatCC::Ugt => (true, Test::One(Cond::B)),
+        | FloatCC::Uge => (true, Test::One(Cond::Be)),
+        | FloatCC::One => (false, Test::One(Cond::Ne)),
+        | FloatCC::Ueq => (false, Test::One(Cond::E)),
+        | FloatCC::Ord => (false, Test::One(Cond::Np)),
+        | FloatCC::Uno => (false, Test::One(Cond::P)),
+        | FloatCC::Oeq => (false, Test::Both(Cond::E, Cond::Np)),
+        | FloatCC::Une => (false, Test::Either(Cond::Ne, Cond::P)),
+    }
 }
 
 /// The SSE width of a float type: `B32` for `f32`, `B64` for `f64`.

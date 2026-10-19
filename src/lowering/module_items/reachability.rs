@@ -40,7 +40,13 @@ impl<'a> Unit<'a, '_, '_> {
         heads.resize(canonical.len(), None);
         let mut edges = ArenaVec::new_in(self.tables);
         for reference in self.sema.references {
-            if self.definitions.get(&reference.owner) == Some(&DefinitionKind::Inline)
+            if self
+                .sema
+                .function_policy(reference.owner)
+                .is_some_and(|policy| {
+                    policy.body
+                        == crate::translation_phases::semantic_analysis::BodyEmission::InlineOnly
+                })
                 && !self.private_inline(reference.owner)
             {
                 continue;

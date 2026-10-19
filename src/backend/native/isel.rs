@@ -23,8 +23,13 @@
 //! block labels and the parallel copies that replace block parameters in
 //! `isel/edges.rs`; loads, stores, `copy`, `fill` and thread-local
 //! addresses in `isel/memory.rs`; `f32` and `f64` operations in
-//! `isel/float.rs`; `i128` register pairs in `isel/wide.rs`; dynamic stack
-//! allocation in `isel/stack.rs`.
+//! `isel/float.rs`; `i128` register pairs in `isel/wide.rs`; `f80` through
+//! the x87 unit in `isel/x87.rs`; `f128` through runtime routines in
+//! `isel/quad.rs`; dynamic stack allocation in `isel/stack.rs`.
+//!
+//! `i128`, `f80` and `f128` values all live in pairs of general registers,
+//! the low eight bytes first: block parameters, spills and copies treat them
+//! alike, and only the operations on them differ.
 //!
 //! Integer values narrower than 64 bits live in registers whose upper bits
 //! are unspecified, except `i1`, which is always 0 or 1 in the whole
@@ -36,8 +41,10 @@ mod calls;
 mod edges;
 mod float;
 mod memory;
+mod quad;
 mod stack;
 mod wide;
+mod x87;
 
 use super::{
     conv::CallConv,
@@ -105,9 +112,17 @@ pub(crate) fn select<'a>(
     let tree = DominatorTree::compute(body, &cfg, arena);
     let mut selector = Selector::new(module, function, body, target, tls_model, arena);
     for (_, slot) in body.stack_slots() {
+        // An object aligned above the stack's 16 bytes gets room to round
+        // its address up at run time (see `over_aligned_address`).
+        let align = slot.align.bytes();
+        let (size, align) = if align > 16 {
+            (u64::from(slot.size) + align - 16, 16)
+        } else {
+            (u64::from(slot.size), align)
+        };
         selector.func.slots.push(FrameSlotData {
-            size:  slot.size,
-            align: u32::try_from(slot.align.bytes()).expect("the support check bounds alignments"),
+            size:  u32::try_from(size).expect("the support check bounds frames"),
+            align: u32::try_from(align).expect("alignments are at most 16 here"),
         });
     }
     for &block in tree.reverse_post_order() {
@@ -157,9 +172,11 @@ pub(super) enum ValueKind {
     Reg(VReg),
     /// A constant, masked to its type's width.
     Const(u64),
-    /// An `i128` in two virtual registers, low half first.
+    /// An `i128`, `f80` or `f128` in two virtual registers, low half
+    /// first; an `f80`'s high register holds its sign and exponent in the
+    /// low 16 bits.
     Pair(VReg, VReg),
-    /// An `i128` constant.
+    /// An `i128`, `f80` or `f128` constant.
     Wide(u128),
     /// An address: a frame slot or symbol plus a byte offset.
     Addr(AddrBase, i64),
@@ -208,6 +225,8 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     /// The registers an `indirect_br` assigns a labeled block's parameters
     /// through, one per parameter, in block order.
     pub(super) incoming:  ArenaVec<'a, ValueKind>,
+    /// The frame slot of [`Self::scratch`], once a sequence needs it.
+    pub(super) scratch:   Option<u32>,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -239,6 +258,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             va_start: calls::VaStart::None,
             labeled: filled(arena, body.block_count(), None),
             incoming: ArenaVec::new_in(arena),
+            scratch: None,
         }
     }
 
@@ -276,9 +296,10 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         }
     }
 
-    /// Fresh registers for a value of `ty`: a pair for `i128`.
+    /// Fresh registers for a value of `ty`: a pair for `i128`, `f80` and
+    /// `f128`.
     fn fresh(&mut self, ty: Type) -> ValueKind {
-        if ty == Type::I128 {
+        if is_pair(ty) {
             ValueKind::Pair(self.func.vreg(), self.func.vreg())
         } else {
             ValueKind::Reg(self.func.vreg_of(class_of(ty)))
@@ -286,30 +307,29 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     }
 
     /// Whether [`Self::classify_wide`] classifies an instruction: one with
-    /// an `i128` result, or a conversion from an `i128`.
+    /// a pair result, or a conversion from a pair.
     fn is_wide(&self, ty: Type, data: InstData) -> bool {
-        ty == Type::I128
-            || matches!(data, InstData::Unary { arg, .. } if self.ty(arg) == Type::I128)
+        is_pair(ty) || matches!(data, InstData::Unary { arg, .. } if is_pair(self.ty(arg)))
     }
 
     /// [`Self::classify`] for the instructions [`Self::is_wide`] accepts.
     fn classify_wide(&self, ty: Type, data: InstData) -> Option<ValueKind> {
         match data {
-            | InstData::Const { bits, .. } if ty == Type::I128 =>
+            | InstData::Const { bits, .. } if is_pair(ty) =>
                 Some(ValueKind::Wide(u128::from(bits.get()))),
-            | InstData::WideConst { constant, .. } if ty == Type::I128 =>
+            | InstData::WideConst { constant, .. } if is_pair(ty) =>
                 Some(ValueKind::Wide(self.body.constant(constant))),
             | InstData::Nullary {
                 opcode: Opcode::Poison,
                 ..
-            } if ty == Type::I128 => Some(ValueKind::Wide(0)),
-            | InstData::Unary { opcode, arg, .. }
-                if ty == Type::I128 || self.ty(arg) == Type::I128 =>
-            {
+            } if is_pair(ty) => Some(ValueKind::Wide(0)),
+            | InstData::Unary { opcode, arg, .. } if is_pair(ty) || is_pair(self.ty(arg)) => {
                 let from = self.ty(arg);
                 match (opcode, self.kind(arg)) {
                     | (_, ValueKind::Unknown) => None,
                     | (Opcode::Freeze, kind) => Some(kind),
+                    // `i128` and `f128` bits in the same pair.
+                    | (Opcode::Bitcast, kind) if is_pair(ty) && is_pair(from) => Some(kind),
                     | (Opcode::Zext | Opcode::Ptrtoint, ValueKind::Const(bits)) =>
                         Some(ValueKind::Wide(wide::widen(bits, from, false))),
                     | (Opcode::Sext, ValueKind::Const(bits)) =>
@@ -346,6 +366,9 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 opcode: Opcode::Null | Opcode::Poison,
                 ..
             } => ValueKind::Const(0),
+            // An over-aligned object's address is computed.
+            | InstData::StackAddr { slot } if self.body.stack_slot(slot).align.bytes() > 16 =>
+                return None,
             | InstData::StackAddr { slot } => ValueKind::Addr(AddrBase::Slot(slot.as_u32()), 0),
             // A thread-local address differs per thread: it is computed.
             | InstData::GlobalAddr { global } if self.module.global(global).thread_local =>
@@ -466,17 +489,48 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         let opcode = data.opcode();
         match data {
             | InstData::Binary {
+                ty: Type::F80,
+                args,
+                ..
+            } => {
+                let dst = self.result_pair(inst);
+                self.x87_binary(opcode, dst, args)?;
+            },
+            | InstData::Binary {
+                ty: Type::F128,
+                args,
+                ..
+            } => {
+                let dst = self.result_pair(inst);
+                self.quad_binary(opcode, dst, args)?;
+            },
+            | InstData::FloatCompare {
+                cond,
+                ty: Type::F80,
+                args,
+            } => {
+                let dst = self.result_reg(result);
+                self.x87_compare(cond, dst, args);
+            },
+            | InstData::FloatCompare {
+                cond,
+                ty: Type::F128,
+                args,
+            } => {
+                let dst = self.result_reg(result);
+                self.quad_compare(cond, dst, args);
+            },
+            | InstData::Binary {
                 ty: Type::I128,
                 args,
                 ..
             } => self.wide_binary(inst, opcode, args)?,
-            | InstData::Select {
-                ty: Type::I128,
-                args,
-            } => {
+            | InstData::Select { ty, args } if is_pair(ty) => {
                 let dst = self.result_pair(inst);
                 self.wide_select(dst, args);
             },
+            | InstData::Unary { opcode, ty, arg } if wide_float(ty, self.ty(arg)) =>
+                self.wide_float_unary(inst, opcode, ty, arg)?,
             | InstData::Unary { opcode, ty, arg }
                 if ty == Type::I128 || self.ty(arg) == Type::I128 =>
                 self.wide_conversion(inst, opcode, ty, arg)?,
@@ -613,6 +667,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             | InstData::GlobalAddr { global } => {
                 let dst = self.result_reg(result);
                 self.thread_local_address(dst, global);
+            },
+            | InstData::StackAddr { slot } => {
+                let dst = self.result_reg(result);
+                let align = self.body.stack_slot(slot).align.bytes();
+                self.over_aligned_address(dst, slot.as_u32(), align);
             },
             | InstData::BlockAddr { label } => {
                 let dst = self.result_reg(result);
@@ -1191,6 +1250,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         });
     }
 
+    /// The address of a stack object aligned to `align` bytes, more than
+    /// the stack's 16: its slot's address rounded up, which the slot has
+    /// `align - 16` spare bytes for. Frame layout puts a slot aligned to 16
+    /// at a 16-byte boundary, so rounding moves it at most that far.
+    fn over_aligned_address(&mut self, dst: Reg, slot: u32, align: u64) {
+        let mask = i32::try_from(align - 1).expect("the support check bounds alignments");
+        self.emit(MInst::Lea {
+            dst,
+            addr: Mem::new(Base::Frame(FrameObject::Slot(slot)), 0),
+        });
+        self.emit(MInst::Alu {
+            op: AluOp::Add,
+            width: Width::B64,
+            dst,
+            src: Operand::Imm(mask),
+        });
+        self.emit(MInst::Alu {
+            op: AluOp::And,
+            width: Width::B64,
+            dst,
+            src: Operand::Imm(!mask),
+        });
+    }
+
     /// Keeps only the low bit of an `i1` result.
     pub(super) fn canonical_bool(&mut self, dst: Reg) {
         self.emit(MInst::Alu {
@@ -1219,9 +1302,24 @@ pub(super) const fn width(ty: Type) -> Width {
     }
 }
 
-/// The register class that holds a value of `ty`.
+/// Whether values of `ty` live in a pair of general registers.
+pub(super) const fn is_pair(ty: Type) -> bool {
+    matches!(ty, Type::I128 | Type::F80 | Type::F128)
+}
+
+/// Whether a unary operation from `from` to `ty` involves an `f80` or
+/// `f128`, or converts between an `i128` and a float.
+const fn wide_float(ty: Type, from: Type) -> bool {
+    matches!(ty, Type::F80 | Type::F128)
+        || matches!(from, Type::F80 | Type::F128)
+        || (matches!(ty, Type::I128) && from.is_float())
+        || (matches!(from, Type::I128) && ty.is_float())
+}
+
+/// The register class that holds a value of `ty`; a pair's halves are
+/// general registers.
 pub(super) const fn class_of(ty: Type) -> RegClass {
-    if ty.is_float() {
+    if matches!(ty, Type::F32 | Type::F64) {
         RegClass::Xmm
     } else {
         RegClass::Gpr

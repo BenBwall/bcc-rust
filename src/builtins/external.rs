@@ -72,3 +72,33 @@ pub(crate) fn external_contract(name: &str) -> Option<ExternalContract> {
 pub(crate) fn returns_twice(name: &str) -> bool {
     external_contract(name).is_some_and(ExternalContract::returns_twice)
 }
+
+/// Canonical C signatures for cataloged external library names. Reserved
+/// builtin aliases, implicit ordinary declarations and host validation all
+/// read the same descriptor, including fortified libc entry points.
+/// C99: §7.1.4, pp. 166-167; PDF pp. 178-179.
+pub(crate) fn external_signature(name: &str) -> Option<super::Signature> {
+    let scalar = match name {
+        | "copysign" => Some(super::BuiltinId::Copysign),
+        | "copysignf" => Some(super::BuiltinId::Copysignf),
+        | "copysignl" => Some(super::BuiltinId::Copysignl),
+        | _ => None,
+    };
+    scalar
+        .map(super::BuiltinId::descriptor)
+        .or_else(|| super::ordinary(name))
+        .or_else(|| {
+            super::checked::BUILTINS
+                .iter()
+                .find(|d| d.library == Some(name))
+        })
+        .map(|descriptor| descriptor.signature)
+        .or_else(|| {
+            (name == "isprint").then_some(super::Signature {
+                result:     super::SignatureType::Scalar(crate::target::Scalar::Int),
+                parameters: &[super::SignatureType::Scalar(crate::target::Scalar::Int)],
+                prototype:  true,
+                variadic:   false,
+            })
+        })
+}
