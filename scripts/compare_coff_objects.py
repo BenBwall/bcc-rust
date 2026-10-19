@@ -26,14 +26,19 @@ import subprocess
 import sys
 
 
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
 def view(path):
     """Return every semantic field of a standard AMD64 COFF object."""
     data = Path(path).read_bytes()
     machine, count, timestamp, symtab, nsyms, optional, characteristics = struct.unpack_from('<HHIIIHH', data)
-    assert machine == 0x8664 and optional == 0
+    require(machine == 0x8664 and optional == 0, "expected classic AMD64 COFF header")
     strtab = symtab + nsyms * 18
     string_size, = struct.unpack_from('<I', data, strtab)
-    assert strtab + string_size == len(data)
+    require(string_size >= 4 and strtab + string_size == len(data), "invalid COFF string table extent")
 
     def name(raw, section=False):
         if raw[:4] == bytes(4):
@@ -42,14 +47,14 @@ def view(path):
             offset = int(raw[1:].split(b'\0')[0])
         else:
             return raw.split(b'\0')[0].decode('utf-8')
-        assert 4 <= offset < string_size
+        require(4 <= offset < string_size, "COFF name outside string table")
         return data[strtab + offset:strtab + string_size].split(b'\0')[0].decode('utf-8')
 
     symbols = {}
     index = 0
     while index < nsyms:
         raw, value, section, kind, storage, naux = struct.unpack_from('<8sIhHBB', data, symtab + index * 18)
-        assert index + naux < nsyms
+        require(index + naux < nsyms, "COFF auxiliary records outside symbol table")
         aux = data[symtab + (index + 1) * 18:symtab + (index + 1 + naux) * 18]
         symbols[index] = [name(raw), value, section, kind, storage, aux, '']
         index += 1 + naux
@@ -62,10 +67,10 @@ def view(path):
     sections, relocations, comdats = [], [], []
     for index in range(count):
         raw, virtual_size, address, size, pointer, relptr, lines, nrel, nlines, flags = struct.unpack_from('<8sIIIIIIHHI', data, 20 + index * 40)
-        assert virtual_size == address == lines == nlines == 0
+        require(virtual_size == address == lines == nlines == 0, "nonzero COFF reserved section fields")
         body = b'' if flags & 0x80 or not size else data[pointer:pointer + size]
         if body:
-            assert pointer >= 20 + count * 40 and len(body) == size
+            require(pointer >= 20 + count * 40 and len(body) == size, "invalid COFF section data extent")
         sections.append((name(raw, True), size, flags, body))
         if flags & 0x1000:
             section_symbols = [s for s in symbols.values() if s[2] == index + 1]
@@ -74,14 +79,14 @@ def view(path):
                 key = next((s for s in section_symbols if not s[5]), None)
                 comdats.append((index, tuple(key[:5]) if key else None))
         if flags & 0x01000000:  # IMAGE_SCN_LNK_NRELOC_OVFL
-            assert nrel == 0xFFFF
+            require(nrel == 0xFFFF, "invalid COFF relocation overflow count")
             extended_count, target, kind = struct.unpack_from('<IIH', data, relptr)
-            assert extended_count > 0xFFFF and target == kind == 0
+            require(extended_count > 0xFFFF and target == kind == 0, "invalid COFF relocation overflow sentinel")
             nrel = extended_count - 1  # the sentinel is not a relocation
             relptr += 10
         for rel in range(nrel):
             offset, target, kind = struct.unpack_from('<IIH', data, relptr + rel * 10)
-            assert offset < size
+            require(offset < size, "COFF relocation outside section")
             relocations.append((index, offset, kind, tuple(symbols[target][:5])))
     return {'header': (machine, count, timestamp, optional, characteristics),
             'sections': sections, 'symbols': sorted(tuple(s) for s in symbols.values()),
