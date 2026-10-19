@@ -343,3 +343,48 @@ fn m7_review_redeclaration_fixtures_keep_lowering() {
         }
     }
 }
+
+#[test]
+fn dense_entity_membership_preserves_declaration_order() {
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let syntax = parse_translation_unit(
+        &mut context,
+        Path::new("<dense-entities>"),
+        tu.alloc_str(
+            "extern int a; int f(int p){int local=p; static int s; extern int a; return \
+             a+s+local;} extern int b; int a=3; extern int a; int g(void){static int s; return \
+             s;}\n",
+        ),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &syntax);
+    assert!(sema.lowerable(&context));
+    for (binding, &data) in sema.bindings.iter().enumerate() {
+        let Some(entity) = sema.entity(binding) else {
+            assert!(!data.needs_entity_policy());
+            continue;
+        };
+        let id = sema.correspondence.entity_of(binding, data);
+        let final_binding = entity
+            .definition
+            .map_or_else(|| *entity.bindings.last().unwrap(), |d| d.binding);
+        assert_eq!(entity.ty, sema.bindings[final_binding].ty);
+        assert!(
+            entity.bindings.iter().copied().eq(sema
+                .bindings
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &b)| (b.needs_entity_policy()
+                    && sema.correspondence.entity_of(i, b) == id)
+                    .then_some(i)))
+        );
+        assert!(
+            entity.occurrences.iter().copied().eq(sema
+                .correspondence
+                .declarations
+                .iter()
+                .filter_map(|f| (f.entity == Some(id)).then_some(f.id)))
+        );
+    }
+}

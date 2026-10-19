@@ -52,6 +52,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     }
 
     pub(super) fn binding_identity(&self, binding: usize) -> StringCacheId {
+        debug_assert!(
+            self.sema.bindings[binding].needs_entity_policy(),
+            "symbol queries require a function or linked/static object; Unit::new validates their \
+             entity records"
+        );
         self.sema
             .entity(binding)
             .expect("entity facts checked by Unit::new")
@@ -59,6 +64,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     }
 
     pub(super) fn symbol_request(&self, binding: usize) -> Option<SymbolRequest<'tu>> {
+        debug_assert!(
+            self.sema.bindings[binding].needs_entity_policy(),
+            "symbol queries require a function or linked/static object; Unit::new validates their \
+             entity records"
+        );
         self.sema
             .entity(binding)
             .expect("entity facts checked by Unit::new")
@@ -66,6 +76,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     }
 
     pub(super) fn symbol_name(&self, binding: usize) -> &'a str {
+        debug_assert!(
+            self.sema.bindings[binding].needs_entity_policy(),
+            "symbol queries require a function or linked/static object; Unit::new validates their \
+             entity records"
+        );
         let entity = self
             .sema
             .entity(binding)
