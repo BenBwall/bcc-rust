@@ -9,6 +9,7 @@ use rustc_hash::FxBuildHasher;
 use super::{
     super::{
         Analyzer,
+        Binding,
         BindingKind,
         Definition,
         DefinitionKind,
@@ -96,12 +97,24 @@ impl<'tu> EntityFacts<'tu> {
         tu: &'tu Bump,
         requests: &[PendingSymbolRequest<'tu>],
     ) -> Self {
-        let mut records = ArenaMap::with_hasher_in(FxBuildHasher, tu);
-        let mut functions = ArenaMap::with_hasher_in(FxBuildHasher, tu);
-        let mut definitions = ArenaMap::with_hasher_in(FxBuildHasher, scratch);
-        let mut bindings = ArenaMap::with_hasher_in(FxBuildHasher, scratch);
-        let mut occurrences = ArenaMap::with_hasher_in(FxBuildHasher, scratch);
+        // Automatic objects and parameters need no symbol/entity completion.
+        // Reserve once: bump arenas cannot reclaim discarded hash tables.
+        let count = sema
+            .bindings
+            .iter()
+            .filter(|b| b.needs_entity_policy())
+            .count();
+        let mut records = ArenaMap::with_capacity_and_hasher_in(count, FxBuildHasher, tu);
+        let mut functions =
+            ArenaMap::with_capacity_and_hasher_in(sema.functions.len(), FxBuildHasher, tu);
+        let mut definitions =
+            ArenaMap::with_capacity_and_hasher_in(sema.definitions.len(), FxBuildHasher, scratch);
+        let mut bindings = ArenaMap::with_capacity_and_hasher_in(count, FxBuildHasher, scratch);
+        let mut occurrences = ArenaMap::with_capacity_and_hasher_in(count, FxBuildHasher, scratch);
         for (index, &binding) in sema.bindings.iter().enumerate() {
+            if !binding.needs_entity_policy() {
+                continue;
+            }
             let id = sema.correspondence.entity_of(index, binding);
             let linked = bindings
                 .entry(id)
@@ -129,7 +142,9 @@ impl<'tu> EntityFacts<'tu> {
             entity.ty = binding.ty;
         }
         for fact in sema.correspondence.declarations {
-            if let Some(id) = fact.entity {
+            if let Some(id) = fact.entity
+                && records.contains_key(&id)
+            {
                 occurrences
                     .entry(id)
                     .or_insert_with(|| ArenaVec::new_in(scratch))
@@ -141,7 +156,9 @@ impl<'tu> EntityFacts<'tu> {
             let id = sema
                 .correspondence
                 .entity_of(definition.binding, sema.bindings[definition.binding]);
-            let entity = records.get_mut(&id).expect("definitions have entities");
+            let Some(entity) = records.get_mut(&id) else {
+                continue;
+            };
             entity.definition = Some(*definition);
             entity.ty = sema.bindings[definition.binding].ty;
         }
@@ -175,10 +192,9 @@ impl<'tu> EntityFacts<'tu> {
                 matches!(data.kind, BindingKind::Object | BindingKind::Function)
                     && (data.linkage != Linkage::None || data.duration.is_static_or_thread())
             });
-            let entity = records
-                .get_mut(&sema.correspondence.entity_of(binding, data))
-                .expect("bindings have entities");
+            let entity = records.get_mut(&sema.correspondence.entity_of(binding, data));
             if let Some(name) = name
+                && let Some(entity) = entity
                 && entity.symbol.is_none_or(|previous| previous.name == name)
             {
                 if entity.symbol.is_none() {
@@ -262,6 +278,16 @@ impl<'tu> EntityFacts<'tu> {
             functions,
             refusals: refusals.leak(),
         }
+    }
+}
+
+impl Binding {
+    /// Entities that require symbol completion or static object association.
+    /// C99: §6.2.2p2, p. 30; PDF p. 42; §6.2.4p3, p. 32; PDF p. 44.
+    pub(crate) fn needs_entity_policy(self) -> bool {
+        self.kind == BindingKind::Function
+            || self.kind == BindingKind::Object
+                && (self.linkage != Linkage::None || self.duration.is_static_or_thread())
     }
 }
 

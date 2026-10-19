@@ -2137,7 +2137,8 @@ Clang Attributes Reference. C99 §6.2.2p2, p. 30 (PDF p. 42); §6.2.4p5, p. 32
 
 **M7 entity and symbol completion.** `facts/entities.rs` finalizes entities
 after definitions, DLL/inline attributes and overload ABI names. The retained
-record joins linked binding and occurrence IDs, final type, definition and
+record is sparse over functions and linked/static-duration objects; automatic
+objects and parameters have no record. It joins binding and occurrence IDs, final type, definition and
 initializer association and known function definition. Per-occurrence
 `FunctionPolicy` keeps body permission and end policy so a GNU inline body and
 its replacement definition can differ. Each binding keeps its point-of-use

@@ -3,9 +3,7 @@ LinuxGnu case=0 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
   1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
   2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
-  3: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
-  5: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
 LinuxGnu case=1 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]
@@ -71,9 +69,7 @@ LinuxMusl case=0 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
   1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
   2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
-  3: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
-  5: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
 LinuxMusl case=1 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]
@@ -139,9 +135,7 @@ WindowsGnu case=0 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
   1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
   2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
-  3: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
-  5: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
 WindowsGnu case=1 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]
@@ -207,9 +201,7 @@ WindowsMsvc case=0 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
   1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
   2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
-  3: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
-  5: x identity=x abi=x asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[]
   6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
 WindowsMsvc case=1 errors=0 refusals=0
   0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]

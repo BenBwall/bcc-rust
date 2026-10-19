@@ -85,7 +85,10 @@ fn m7_retained_policy_snapshot() {
             )
             .unwrap();
             for (binding, data) in sema.bindings.iter().enumerate() {
-                let entity = sema.entity(binding).unwrap();
+                let Some(entity) = sema.entity(binding) else {
+                    assert!(!data.needs_entity_policy());
+                    continue;
+                };
                 if let Some(request) = entity.symbol {
                     assert_ne!(context.get_source_vectors(request.source), []);
                 }
@@ -266,5 +269,77 @@ fn m7_main_end_policy_follows_c_identifier_across_asm_renaming() {
         let alias = lower_for("int f(void) __asm__(\"main\"); int f(void){}", target).unwrap();
         assert!(alias.contains("function @main()"), "{alias}");
         assert!(alias.contains("poison.i32"), "{alias}");
+    }
+}
+
+#[test]
+fn m7_nested_function_does_not_close_unrelated_external_signature() {
+    // C99 §6.5.2.2p6, pp. 71-72; PDF pp. 83-84: default promotions
+    // apply to the external f(), independently of the GNU nested definition.
+    let ir = lowered(
+        "int f(); int g(void){return f(42);} inline int outer(void){int f(int x){return x;} \
+         return f(1);}",
+    );
+    assert!(ir.contains("function @f(..."), "{ir}");
+}
+
+#[test]
+fn m7_automatic_objects_do_not_retain_entity_records() {
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let syntax = parse_translation_unit(
+        &mut context,
+        Path::new("<sparse-entities>"),
+        tu.alloc_str(
+            "int global; int f(int p){int local=p; static int s; return local+s+__func__[0];}\n",
+        ),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &syntax);
+    assert!(sema.lowerable(&context));
+    for (index, data) in sema.bindings.iter().enumerate() {
+        let name = context.string_cache.at(data.name.name);
+        if matches!(name, "p" | "local") {
+            assert!(sema.entity(index).is_none(), "{name}");
+        } else if matches!(name, "global" | "f" | "s" | "__func__") {
+            assert!(sema.entity(index).is_some(), "{name}");
+        }
+    }
+}
+
+#[test]
+fn m7_review_redeclaration_fixtures_keep_lowering() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for (case, source) in [
+            "int main(void){return f(42);} int f(int x){return x;}",
+            "int main(void){extern int f(); return f(42);} int f(x) int x; {return x;}",
+            "int a=42; int a; int main(void){return a;}",
+            "extern int __r(int) __asm__(\"myread\"); extern inline \
+             __attribute__((always_inline,gnu_inline)) int myread(int x){return __r(x)+1;} int \
+             main(void){return myread(20);} int myread(int x){return x*2;}",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let config = crate::configuration::CompilerConfiguration::default().with_target(target);
+            let config = if case == 0 {
+                crate::configuration::CompilerConfiguration::new(
+                    crate::configuration::CStandard::C89,
+                    crate::configuration::ExtensionPolicy::Allow,
+                )
+                .with_target(target)
+            } else {
+                config
+            };
+            drop(
+                lower_with(source, config)
+                    .unwrap_or_else(|errors| panic!("case={case} {target:?}: {errors:?}")),
+            );
+        }
     }
 }

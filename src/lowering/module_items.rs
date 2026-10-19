@@ -163,6 +163,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         // Reserve every user spelling before any initializer or body creates
         // internal storage (GNU labels extend C99 §6.2.2p2).
         for (index, binding) in self.sema.bindings.iter().enumerate() {
+            if !binding.needs_entity_policy() {
+                continue;
+            }
             let name = if binding.linkage == Linkage::None {
                 self.symbol_request(index).map(|r| r.name)
             } else {
@@ -1531,7 +1534,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let mut module = Module::new(arena);
         module.set_target(target.triple(), types::data_layout(target));
         for (index, binding) in sema.bindings.iter().enumerate() {
-            if sema.entity(index).is_none() {
+            if binding.needs_entity_policy() && sema.entity(index).is_none() {
                 return Err(LoweringError::missing(
                     "entity policy is not retained",
                     binding.name.source_vectors,
