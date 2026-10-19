@@ -44,6 +44,12 @@ mod tests {
             ".sbssx",
             ".gnu.linkonce.b.z",
             ".llvm.linkonce.b.z",
+            ".gnu.linkonce.sb.z",
+            ".llvm.linkonce.sb.z",
+            ".gnu.linkonce.tb.z",
+            ".llvm.linkonce.tb.z",
+            ".gnu.linkonce.td.z",
+            ".llvm.linkonce.td.z",
             ".tbss",
             ".tbss.z",
             ".tdata",
@@ -51,6 +57,11 @@ mod tests {
             ".note",
             ".note.mine",
             ".notefoo",
+            ".ltext",
+            ".ltext.z",
+            ".ltextx",
+            ".data.z",
+            ".text.z",
             ".ldata",
             ".ldata.z",
             ".ldatax",
@@ -84,14 +95,19 @@ mod tests {
                 "__attribute__((selectany)) const int x = 0;",
                 "__attribute__((selectany)) int x = 5;",
             ] {
-                // Array rows explicitly account for the assembler's mandatory
-                // W; every other row requires exact Clang -c flags.
+                // Assembler section-name defaults add W to array/data
+                // sections and X to text sections, even with explicit flags.
                 let array = [".init_array", ".fini_array", ".preinit_array"]
                     .iter()
                     .any(|stem| section == *stem || section.starts_with(&format!("{stem}.")));
-                let assembler_write =
-                    array && (declaration.contains("const") || declaration.contains("int f("));
-                check_case(&directory, section, declaration, assembler_write);
+                let defaults = if array || section == ".data.z" {
+                    "W"
+                } else if section == ".text.z" {
+                    "X"
+                } else {
+                    ""
+                };
+                check_case(&directory, section, declaration, defaults);
             }
         }
         // BSS fixups include addresses with nonzero and zero addends; a
@@ -103,7 +119,7 @@ mod tests {
             "int x[2] = {[0] = 5, [0] = 0};",
             "__attribute__((selectany)) int *x = &other;",
         ] {
-            check_case(&directory, ".sbss.z", declaration, false);
+            check_case(&directory, ".sbss.z", declaration, "");
         }
         // A redeclaration and an inherited section still diagnose at
         // the function definition, rather than failing in the assembler.
@@ -155,7 +171,7 @@ mod tests {
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
-    fn check_case(directory: &Path, section: &str, declaration: &str, assembler_write: bool) {
+    fn check_case(directory: &Path, section: &str, declaration: &str, assembler_defaults: &str) {
         let source = directory.join("input.c");
         let reference = directory.join("clang.o");
         std::fs::write(
@@ -194,13 +210,15 @@ mod tests {
                 if let Some((kind, flags)) = &expected {
                     let actual = section_header(&output, section);
                     let mut expected_flags = flags.clone();
-                    if assembler_write && !expected_flags.contains(&'W') {
-                        // Clang -S followed by its assembler has this same
-                        // difference from Clang -c. No section directive can
-                        // clear the assembler's name-default SHF_WRITE.
-                        expected_flags.push('W');
-                        expected_flags.sort_unstable();
+                    // Clang -S followed by assembly has these same W/X
+                    // differences from Clang -c: explicit flags cannot clear
+                    // assembler section-name defaults.
+                    for flag in assembler_defaults.chars() {
+                        if !expected_flags.contains(&flag) {
+                            expected_flags.push(flag);
+                        }
                     }
+                    expected_flags.sort_unstable();
                     assert_eq!(
                         actual,
                         (kind.clone(), expected_flags),

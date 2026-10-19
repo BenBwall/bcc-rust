@@ -78,7 +78,13 @@ use crate::{
         Symbol,
         Visibility,
     },
-    target::Target,
+    target::{
+        Target,
+        sections::{
+            ElfSectionKind,
+            family as elf_section_family,
+        },
+    },
     util::bump::{
         ArenaSet,
         ArenaVec,
@@ -1213,35 +1219,22 @@ fn symbol_name<'m>(module: &Module<'m>, symbol: SymbolRef) -> Name<'m> {
 // LLVM's ELF lowering gives explicitly named array and BSS families their
 // semantic types too, so section attributes agree with constructor emission.
 fn elf_section_type(name: &str) -> &'static str {
-    if elf_section_family(name, ".init_array") {
-        "init_array"
-    } else if elf_section_family(name, ".fini_array") {
-        "fini_array"
-    } else if elf_section_family(name, ".preinit_array") {
-        "preinit_array"
-    } else if [".bss", ".tbss", ".sbss"]
-        .iter()
-        .any(|stem| elf_section_family(name, stem))
-        || name.starts_with(".gnu.linkonce.b.")
-        || name.starts_with(".llvm.linkonce.b.")
-    {
-        "nobits"
-    } else if name.starts_with(".note") {
-        "note"
-    } else {
-        "progbits"
-    }
+    ElfSectionKind::named(name).asm_type()
 }
 
 // LLVM's named-section kind overrides the source entity kind for BSS/TLS;
 // large data is an x86-64 flag, not a request to make `.lbss` NOBITS.
 fn elf_section_flags(name: &str, function: bool, read_only: bool) -> &'static str {
-    if elf_section_family(name, ".tbss") || elf_section_family(name, ".tdata") {
+    if ElfSectionKind::named(name).is_thread_local() {
         "awT"
     } else if elf_section_type(name) == "nobits" {
         "aw"
     } else if function {
-        "ax"
+        if elf_section_family(name, ".ltext") {
+            "axl"
+        } else {
+            "ax"
+        }
     } else if [".ldata", ".lbss", ".lrodata"]
         .iter()
         .any(|stem| elf_section_family(name, stem))
@@ -1252,10 +1245,6 @@ fn elf_section_flags(name: &str, function: bool, read_only: bool) -> &'static st
     } else {
         "aw"
     }
-}
-
-fn elf_section_family(name: &str, stem: &str) -> bool {
-    name == stem || name.strip_prefix(stem).is_some_and(|s| s.starts_with('.'))
 }
 
 /// LLVM MC's BSS diagnostic, shared by text and direct object emission.

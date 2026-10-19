@@ -1096,13 +1096,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 && (self.bindings[definition.binding].linkage == Linkage::External
                     || attributes.used)
                 && let Some(section) = attributes.section
-                && ([".bss", ".tbss", ".sbss"].iter().any(|stem| {
-                    section == *stem
-                        || section
-                            .strip_prefix(stem)
-                            .is_some_and(|s| s.starts_with('.'))
-                }) || section.starts_with(".gnu.linkonce.b.")
-                    || section.starts_with(".llvm.linkonce.b."))
+                && crate::target::sections::ElfSectionKind::named(section).is_bss()
             {
                 let name = self.context.string_cache.intern(section);
                 self.error(

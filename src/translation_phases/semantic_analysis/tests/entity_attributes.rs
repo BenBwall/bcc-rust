@@ -945,3 +945,31 @@ __attribute__((always_inline, gnu_inline)) extern inline int twice(int x) { retu
         assert_eq!(kinds(source, target), [], "{target:?}");
     }
 }
+
+#[test]
+fn bss_function_checks_only_definitions_that_must_be_emitted() {
+    for section in [
+        ".bss.z",
+        ".sbss.z",
+        ".tbss.z",
+        ".gnu.linkonce.sb.z",
+        ".llvm.linkonce.tb.z",
+    ] {
+        for (declaration, expected) in [
+            (
+                "extern int f(void) { return 1; }",
+                &[SemanticErrorKind::BssFunction][..],
+            ),
+            (
+                "__attribute__((used)) static int f(void) { return 1; }",
+                &[SemanticErrorKind::BssFunction][..],
+            ),
+            ("static int f(void) { return 1; }", &[][..]),
+            ("inline int f(void) { return 1; }", &[][..]),
+            ("extern int f(void);", &[][..]),
+        ] {
+            let source = format!("__attribute__((section(\"{section}\"))) {declaration}");
+            assert_eq!(kinds(&source, Target::LinuxGnu), expected, "{source}");
+        }
+    }
+}
