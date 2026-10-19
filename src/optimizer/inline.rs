@@ -108,7 +108,7 @@ pub(super) fn run(
         if !report.allow() {
             break;
         }
-        expand(draft, body, block, position, call);
+        _ = expand(draft, body, block, position, call);
         size = grown;
         changed = true;
     }
@@ -140,13 +140,14 @@ fn live_size(draft: &Draft<'_, '_>) -> usize {
 
 /// Splits the call's block, reserves all copied definitions before remapping
 /// operands (layout need not be dominance order), and joins every return.
+/// Returns the block that continues after the call.
 pub(super) fn expand(
     draft: &mut Draft<'_, '_>,
     body: &Body<'_>,
     block: Block,
     position: usize,
     call: Inst,
-) {
+) -> Block {
     let scratch = draft.scratch;
     let InstData::Call { args, .. } = *draft.inst(call) else {
         unreachable!()
@@ -240,6 +241,7 @@ pub(super) fn expand(
         target: blocks[entry.index()],
         args:   ArenaVec::new_in(scratch),
     });
+    continuation
 }
 
 fn remap_inst(mut data: InstData, map: &impl Fn(Value) -> Value, slots: &[StackSlot]) -> InstData {

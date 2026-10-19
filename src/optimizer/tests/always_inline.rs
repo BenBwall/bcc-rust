@@ -133,3 +133,60 @@ block0(v0: i32):
     );
     assert!(!function(&text, "u").contains("call"), "{text}");
 }
+
+/// LLVM expands a body that allocates dynamically, bracketing it with a
+/// stack save and restore, and a variadic body that does not start its
+/// argument list; so does the resolution, rather than calling the external
+/// definition (#109 review).
+#[test]
+fn dynamic_allocation_and_variadic_bodies_are_expanded() {
+    let vla = resolve(
+        "\
+function @f.copy(i64) -> i32 internal alwaysinline inline_copy_of @f {
+block0(v0: i64):
+    v1 = dyn_alloca.i64 v0, align 16
+    v2 = iconst.i32 7
+    store.i32 v2, v1, align 4
+    v3 = load.i32 v1, align 4
+    return v3
+}
+
+function @f(i64) -> i32 external alwaysinline
+
+function @u(i64) -> i32 external {
+block0(v0: i64):
+    v1 = call @f.copy(v0)
+    return v1
+}
+",
+    );
+    let u = function(&vla, "u");
+    assert!(!u.contains("call"), "{vla}");
+    // The save precedes the expanded body; the restore begins the block
+    // that continues after it.
+    assert!(
+        u.contains("v1 = stack_save\n    jump block2")
+            && u.contains("block1(v2: i32):\n    stack_restore v1\n    return v2")
+            && u.contains("dyn_alloca"),
+        "{vla}"
+    );
+    let variadic = resolve(
+        "\
+function @f.copy(i32, ...) -> i32 internal alwaysinline inline_copy_of @f {
+block0(v0: i32):
+    v1 = iconst.i32 1
+    v2 = iadd.i32 v0, v1
+    return v2
+}
+
+function @f(i32, ...) -> i32 external alwaysinline
+
+function @u(i32) -> i32 external {
+block0(v0: i32):
+    v1 = call @f.copy(v0, v0)
+    return v1
+}
+",
+    );
+    assert!(!function(&variadic, "u").contains("call"), "{variadic}");
+}

@@ -25,6 +25,7 @@ use crate::{
         Linkage,
         Module,
         Opcode,
+        Type,
     },
     util::bump::{
         ArenaVec,
@@ -42,9 +43,10 @@ use crate::{
 /// through its external function). Expanding one function into another can
 /// make the second recursive, so the order decides which calls stay calls:
 /// with `f` and `g` calling each other, `f` is expanded into its callers and
-/// `g`, and `g` then calls itself and is not. bcc's expansion also refuses a
-/// variadic body, one with indirect control, and one whose frame must stay
-/// (`setjmp`, VLAs), which keep their calls.
+/// `g`, and `g` then calls itself and is not. Lowering declares the
+/// `always_inline` bodies in the order Clang creates them, which the LLVM
+/// back end and this walk both follow
+/// ([`Unit::declare_items`](crate::lowering)), so all three agree.
 ///
 /// Only a module whose choice can differ runs the walk: it has an
 /// `always_inline` copy with an external function, or a weak `always_inline`
@@ -115,36 +117,39 @@ pub(crate) fn resolve_inline_copies(module: &mut Module<'_>, scratch: &Bump) {
 }
 
 /// Whether `body` can be expanded into its callers: LLVM's inline viability
-/// (no call of itself, no `va_start`, indirect branch or `setjmp`), plus
-/// the frames bcc's expansion does not copy (dynamic allocation).
+/// (`isInlineViable`). The body does not call itself, start a variadic
+/// argument list, branch indirectly, or call a function that may return
+/// twice unless it may itself. A variadic body without `va_start` and one
+/// with dynamic allocation are viable, as in LLVM; [`expand_calls`] brackets
+/// the second with a stack save and restore, as LLVM's inliner does.
 fn viable(
     module: &Module<'_>,
     func: FuncId,
     body: &Body<'_>,
     names_callee: impl Fn(FuncId) -> bool,
 ) -> bool {
-    if module.function_signature(func).variadic
-        || body.has_indirect_control()
-        || module.returns_twice(func)
-    {
+    if body.has_indirect_control() {
         return false;
     }
+    let returns_twice = module.returns_twice(func);
     let indirect_returns_twice = module.returns_twice_escapes();
     body.blocks().all(|block| {
         body.block_insts(block)
             .iter()
             .all(|&inst| match *body.inst(inst) {
-                | InstData::Call { func, .. } => !names_callee(func) && !module.returns_twice(func),
-                | InstData::CallIndirect { .. } => !indirect_returns_twice,
-                | ref data => !matches!(
-                    data.opcode(),
-                    Opcode::VaStart | Opcode::DynAlloca | Opcode::StackSave | Opcode::StackRestore
-                ),
+                | InstData::Call { func, .. } =>
+                    !names_callee(func) && (returns_twice || !module.returns_twice(func)),
+                | InstData::CallIndirect { .. } => returns_twice || !indirect_returns_twice,
+                | ref data => data.opcode() != Opcode::VaStart,
             })
     })
 }
 
-/// Expands every call of `callee` in `user`'s body.
+/// Expands every call of `callee` in `user`'s body. A callee that allocates
+/// dynamically gets its own stack region: its storage is released where
+/// the call would have returned, so a call in a loop does not grow the
+/// stack (LLVM's `InlineFunction` inserts `stacksave`/`stackrestore`).
+/// C99: §6.2.4p6, p. 32; PDF p. 44.
 fn expand_calls(
     module: &mut Module<'_>,
     user: FuncId,
@@ -154,9 +159,9 @@ fn expand_calls(
 ) {
     let calls = module.function(user).body.as_ref().is_some_and(|body| {
         body.blocks().any(|block| {
-            body.block_insts(block)
-                .iter()
-                .any(|&inst| matches!(*body.inst(inst), InstData::Call { func, .. } if names_callee(func)))
+            body.block_insts(block).iter().any(
+                |&inst| matches!(*body.inst(inst), InstData::Call { func, .. } if names_callee(func)),
+            )
         })
     });
     if !calls {
@@ -181,6 +186,12 @@ fn expand_calls(
         .body
         .as_ref()
         .expect("a viable callee has a body");
+    let dynamic = callee_body.blocks().any(|block| {
+        callee_body
+            .block_insts(block)
+            .iter()
+            .any(|&inst| callee_body.inst(inst).opcode() == Opcode::DynAlloca)
+    });
     for call in sites {
         let location = draft.alive_blocks().find_map(|block| {
             draft
@@ -190,8 +201,34 @@ fn expand_calls(
                 .position(|&inst| inst == call)
                 .map(|position| (block, position))
         });
-        if let Some((block, position)) = location {
-            inline::expand(&mut draft, callee_body, block, position, call);
+        let Some((block, mut position)) = location else {
+            continue;
+        };
+        let save = dynamic.then(|| {
+            let save = draft.add_inst(
+                block,
+                position,
+                InstData::Nullary {
+                    opcode: Opcode::StackSave,
+                    ty:     Type::Ptr,
+                },
+                Some(Type::Ptr),
+            );
+            position += 1;
+            save.expect("a stack save has a result")
+        });
+        let continuation = inline::expand(&mut draft, callee_body, block, position, call);
+        if let Some(save) = save {
+            _ = draft.add_inst(
+                continuation,
+                0,
+                InstData::Unary {
+                    opcode: Opcode::StackRestore,
+                    ty:     Type::Ptr,
+                    arg:    save,
+                },
+                None,
+            );
         }
     }
     draft.lower(module, user);
