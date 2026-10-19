@@ -1441,6 +1441,45 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn native_named_array_and_bss_sections_run() {
+        let source = r#"int printf(const char *, ...);
+static void hello(void) { printf("ctor\n"); }
+static void goodbye(void) { printf("fini\n"); }
+__attribute__((section(".init_array"), used)) static void (*p)(void) = hello;
+__attribute__((section(".fini_array.101"), used)) static void (*q)(void) = goodbye;
+__attribute__((section(".bss.foo"))) int zero;
+int main(void) { printf("main\n"); return zero; }
+"#;
+        for flags in [
+            &[][..],
+            &["--opt=bcc"][..],
+            &["--native-object"][..],
+            &["--native-object", "--opt=bcc"][..],
+        ] {
+            let executable = temporary("native-named-sections.exe");
+            let built = bcc(
+                source,
+                &[
+                    &[
+                        "--target=x86_64-unknown-linux-gnu",
+                        "--backend=native",
+                        "-o",
+                        executable.to_str().unwrap(),
+                    ][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0));
+            assert_eq!(text(&run.stdout), "ctor\nmain\nfini\n");
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    #[test]
     fn native_assembly_and_option_conflicts() {
         let asm = bcc(
             SUM,

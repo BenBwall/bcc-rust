@@ -223,7 +223,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             | None => write!(self.out, "\"{base}{suffix}{}\"", name.0)?,
         }
         if self.elf {
-            let kind = if nobits { "nobits" } else { "progbits" };
+            let kind = section.map_or(if nobits { "nobits" } else { "progbits" }, elf_section_type);
             writeln!(self.out, ",\"{flags}G\",@{kind},{name},comdat")
         } else {
             writeln!(self.out, ",\"{flags}\",discard,{name}")
@@ -819,13 +819,13 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     && global.attributes.section.is_none();
                 self.comdat_section(global.attributes.section, base, flags, nobits, name)?;
             } else if let Some(section) = global.attributes.section {
+                let kind = elf_section_type(section);
                 let section = Name(section);
                 // A position-independent executable relocates addresses at
                 // load time, so a relocated constant needs a writable section.
                 match (self.elf, global.constant && !relocated) {
-                    | (true, true) => writeln!(self.out, "\t.section\t{section},\"a\",@progbits")?,
-                    | (true, false) =>
-                        writeln!(self.out, "\t.section\t{section},\"aw\",@progbits")?,
+                    | (true, true) => writeln!(self.out, "\t.section\t{section},\"a\",@{kind}")?,
+                    | (true, false) => writeln!(self.out, "\t.section\t{section},\"aw\",@{kind}")?,
                     | (false, true) => writeln!(self.out, "\t.section\t{section},\"dr\"")?,
                     | (false, false) => writeln!(self.out, "\t.section\t{section},\"dw\"")?,
                 }
@@ -1128,6 +1128,24 @@ fn symbol_name<'m>(module: &Module<'m>, symbol: SymbolRef) -> Name<'m> {
     match symbol {
         | SymbolRef::Ir(symbol) => Name(module.symbol_name(symbol)),
         | SymbolRef::Runtime(name) => Name(name),
+    }
+}
+
+// LLVM's ELF lowering gives explicitly named array and BSS families their
+// semantic types too, so section attributes agree with constructor emission.
+fn elf_section_type(name: &str) -> &'static str {
+    let family =
+        |stem: &str| name == stem || name.strip_prefix(stem).is_some_and(|s| s.starts_with('.'));
+    if family(".init_array") {
+        "init_array"
+    } else if family(".fini_array") {
+        "fini_array"
+    } else if family(".preinit_array") {
+        "preinit_array"
+    } else if family(".bss") || family(".tbss") {
+        "nobits"
+    } else {
+        "progbits"
     }
 }
 

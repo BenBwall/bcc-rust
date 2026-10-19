@@ -80,7 +80,8 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                                 | _ => return Err(Error("unknown section flag")),
                             })
                     })?;
-                    let kind = match parts.next() {
+                    let explicit_kind = parts.next();
+                    let mut kind = match explicit_kind {
                         | None => default_kind,
                         | Some("@progbits") => 1,
                         | Some("@nobits") => 8,
@@ -90,9 +91,6 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                         | Some("@preinit_array") => 16,
                         | _ => return Err(Error("unknown section type")),
                     };
-                    if matches!(default_kind, 8 | 14..=16) && kind != default_kind {
-                        return Err(Error("section type conflicts with reserved section name"));
-                    }
                     if matches!(name, ".eh_frame" | ".gcc_except_table") && flags != 2 {
                         return Err(Error("unsupported reserved section flags"));
                     }
@@ -109,6 +107,14 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                     };
                     if parts.next().is_some() {
                         return Err(Error("unsupported section arguments"));
+                    }
+                    if explicit_kind.is_none()
+                        && let Some(existing) = object
+                            .sections
+                            .iter()
+                            .find(|s| s.name == name && s.group == group)
+                    {
+                        kind = existing.kind;
                     }
                     section = object.section(name, kind, flags, group)?;
                     continue;
@@ -364,7 +370,7 @@ fn section_defaults(name: &str) -> (u32, u64) {
         (1, 0x403)
     } else if family(".data") || name == ".data1" {
         (1, 3)
-    } else if family(".rodata") || name == ".rodata1" || family(".gcc_except_table") {
+    } else if family(".rodata") || matches!(name, ".rodata1" | ".gcc_except_table") {
         (1, 2)
     } else if family(".init_array") {
         (14, 3)
@@ -374,7 +380,7 @@ fn section_defaults(name: &str) -> (u32, u64) {
         (16, 3)
     } else if name == ".eh_frame" {
         (0x7000_0001, 2)
-    } else if family(".note") {
+    } else if name.starts_with(".note") {
         (7, 0)
     } else {
         (1, 0)

@@ -78,6 +78,10 @@ pub(crate) fn equivalent(text: &str) -> io::Result<()> {
 
 fn assert_equivalent(actual: &View, expected: &View, text: &str) {
     assert_eq!(
+        actual.elf_header, expected.elf_header,
+        "ELF headers differ:\n{text}"
+    );
+    assert_eq!(
         actual.headers, expected.headers,
         "section headers differ:\n{text}"
     );
@@ -117,6 +121,7 @@ fn assert_equivalent(actual: &View, expected: &View, text: &str) {
 
 #[derive(Debug, PartialEq, Eq)]
 struct View {
+    elf_header:  [u8; 64],
     headers:     Vec<SectionHeader>,
     sections:    BTreeMap<String, (u32, u64, u64, Vec<u8>, u64)>,
     symbols:     Vec<(String, u8, u8, String, u64, u64)>,
@@ -139,6 +144,10 @@ struct SectionHeader {
 
 fn inspect(bytes: &[u8]) -> View {
     assert_eq!(&bytes[..7], b"\x7fELF\x02\x01\x01");
+    let mut elf_header: [u8; 64] = bytes[..64].try_into().unwrap();
+    // String-table packing and section placement can change e_shoff. All
+    // other header fields, including sizes, counts and e_shstrndx, must match.
+    elf_header[40..48].fill(0);
     let at = usize::try_from(u64_at(bytes, 40)).unwrap();
     let count = usize::from(u16_at(bytes, 60));
     let headers = (0..count)
@@ -150,11 +159,12 @@ fn inspect(bytes: &[u8]) -> View {
         .map(|h| cstr(shstrings, usize::try_from(u32_at(h, 0)).unwrap()).to_owned())
         .collect::<Vec<_>>();
     let mut view = View {
-        headers:     Vec::new(),
-        sections:    BTreeMap::new(),
-        symbols:     Vec::new(),
+        elf_header,
+        headers: Vec::new(),
+        sections: BTreeMap::new(),
+        symbols: Vec::new(),
         relocations: Vec::new(),
-        groups:      Vec::new(),
+        groups: Vec::new(),
     };
     let symtab = headers.iter().position(|h| u32_at(h, 4) == 2).unwrap();
     let strings = section_data(
@@ -297,6 +307,9 @@ fn inspect(bytes: &[u8]) -> View {
             s[5],
             if section == 0 {
                 "UND".to_owned()
+            } else if section >= 0xFF00 {
+                // clang -c adds an STT_FILE symbol with SHN_ABS.
+                format!("SPECIAL:{section}")
             } else {
                 names[usize::from(section)].clone()
             },
@@ -841,9 +854,11 @@ fn section_names_infer_flags_and_types() {
         ".fini",
         ".eh_frame",
         ".gcc_except_table",
+        ".gcc_except_table.foo",
         ".data1",
         ".rodata1",
         ".note.foo",
+        ".notefoo",
         ".note.GNU-stack",
         ".ctors",
         ".bssfoo",
@@ -857,7 +872,140 @@ fn section_names_infer_flags_and_types() {
             }
         }
     }
-    refuses(".section .bss.x,\"aw\",@progbits\n.zero 1", "conflicts");
+}
+
+#[test]
+fn explicit_section_types_override_name_defaults() {
+    for section in [
+        ".bss.x",
+        ".tbss.x",
+        ".init_array",
+        ".fini_array.101",
+        ".preinit_array",
+    ] {
+        equivalent(&format!(
+            ".section {section},\"aw\",@progbits\n.zero 8\n.section {section}\n.zero 8\n"
+        ))
+        .unwrap();
+        refuses(
+            &format!(".section {section},\"aw\",@progbits\n.section {section},\"aw\",@nobits"),
+            "inconsistent section attributes",
+        );
+    }
+}
+
+#[test]
+fn named_sections_from_c_match_clang_types() {
+    let directory = TempDir::new("native-c-section-types");
+    let source = directory.join("sections.c");
+    let reference = directory.join("sections.o");
+    let toolchain = Toolchain::bundled(Target::LinuxGnu).unwrap();
+    for section in [
+        ".init_array",
+        ".fini_array.101",
+        ".preinit_array",
+        ".bss.foo",
+    ] {
+        let declaration = if section == ".bss.foo" {
+            "int p;"
+        } else {
+            "void (*p)(void) = f;"
+        };
+        let text = format!(
+            "static void f(void) {{}}\n__attribute__((section(\"{section}\"), used)) \
+             {declaration}\n"
+        );
+        std::fs::write(&source, &text).unwrap();
+        let result = Command::new(toolchain.clang())
+            .args(["--target=x86_64-unknown-linux-gnu", "-c"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        let expected = inspect(&std::fs::read(&reference).unwrap());
+        for optimize in [false, true] {
+            super::end_to_end::with_module(&text, Target::LinuxGnu, optimize, |module| {
+                let mut assembly = String::new();
+                super::super::emit_assembly(module, Target::LinuxGnu, &mut assembly).unwrap();
+                equivalent(&assembly).unwrap();
+                let arena = Bump::new();
+                let bytes = super::super::object::encode(&assembly, &arena).unwrap();
+                let actual = inspect(&bytes);
+                let find = |view: &View| {
+                    let h = view.headers.iter().find(|h| h.name == section).unwrap();
+                    (h.kind, h.flags, h.size, h.align, h.entry_size)
+                };
+                assert_eq!(find(&actual), find(&expected), "{section}: {assembly}");
+            });
+        }
+    }
+}
+
+#[test]
+fn direct_control_transfers_with_addends_are_refused() {
+    for instruction in [
+        "callq ext+4",
+        "callq ext-4",
+        "jmp ext+4",
+        "jmpq ext+4",
+        "jne ext+4",
+    ] {
+        refuses(instruction, "native object emission");
+    }
+    equivalent("callq ext+0\n").unwrap();
+}
+
+#[test]
+fn unsigned_immediates_select_sign_extended_short_forms() {
+    let text = "addl $4294967295,%eax\n";
+    let arena = Bump::new();
+    let bytes = super::super::object::encode(text, &arena).unwrap();
+    assert_eq!(inspect(&bytes).sections[".text"].3, [0x83, 0xC0, 0xFF]);
+    for (suffix, register, values) in [
+        ("w", "%ax", [65_407_i64, 65_408, 65_535, 127, 128]),
+        (
+            "l",
+            "%eax",
+            [4_294_967_167, 4_294_967_168, 4_294_967_295, 127, 128],
+        ),
+    ] {
+        for value in values {
+            for mnemonic in ["add", "sub", "and", "or", "xor", "cmp", "adc", "sbb"] {
+                equivalent(&format!("{mnemonic}{suffix} ${value},{register}\n")).unwrap();
+                equivalent(&format!("{mnemonic}{suffix} ${value},(%rax)\n")).unwrap();
+            }
+            equivalent(&format!("imul{suffix} ${value},{register},{register}\n")).unwrap();
+        }
+    }
+    for text in [
+        "addl $8589934591,%eax",
+        "addw $131071,%ax",
+        "imull $8589934591,%eax,%eax",
+    ] {
+        refuses(text, "operand width");
+    }
+}
+
+#[test]
+fn equivalence_rejects_elf_header_mutations() {
+    let arena = Bump::new();
+    let bytes = super::super::object::encode("retq\n", &arena).unwrap();
+    let base = inspect(&bytes);
+    // OSABI, ABI version, padding, type, machine, version, entry, program
+    // header offset, flags, and header/entry sizes are all significant.
+    for field in [7, 8, 9, 16, 18, 20, 24, 32, 48, 52, 54, 56, 58] {
+        let mut mutated = bytes.to_vec();
+        mutated[field] ^= 1;
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_equivalent(&inspect(&mutated), &base, "ELF header mutation");
+            })
+            .is_err(),
+            "ELF header mutation {field} escaped comparison"
+        );
+    }
 }
 
 #[test]

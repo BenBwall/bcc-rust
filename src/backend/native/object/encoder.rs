@@ -278,9 +278,7 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
         | name if name.starts_with("imul") => {
             let bits = width(name)?;
             if let Operand::Imm(imm) = a {
-                if bits == 64 {
-                    signed32(imm)?;
-                }
+                let imm = signed_immediate(imm, bits)?;
                 let small = i8::try_from(imm).is_ok();
                 code.rm(
                     if bits == 16 { &[0x66] } else { &[] },
@@ -420,9 +418,7 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
             };
             let prefix = if bits == 16 { &[0x66][..] } else { &[][..] };
             if let Operand::Imm(imm) = a {
-                if bits == 64 {
-                    signed32(imm)?;
-                }
+                let imm = signed_immediate(imm, bits)?;
                 if ext == 8 {
                     return Err(Error("immediate test is not in emitter vocabulary"));
                 }
@@ -730,6 +726,18 @@ fn signed32(value: i64) -> Result<()> {
         .map_err(|_| Error("value exceeds signed 32-bit encoding field"))
 }
 
+// Validate before truncating, then select sign-extending imm8 forms from the
+// operand-width bit pattern (e.g. 4294967295 is -1 for a 32-bit operation).
+fn signed_immediate(value: i64, bits: u8) -> Result<i64> {
+    if bits == 64 {
+        signed32(value)?;
+    } else if i128::from(value) < -(1_i128 << (bits - 1)) || i128::from(value) >= (1_i128 << bits) {
+        return Err(Error("integer does not fit operand width"));
+    }
+    let shift = 64 - bits;
+    Ok((value << shift) >> shift)
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Code<'a> {
     pub(super) bytes: [u8; 15],
@@ -912,14 +920,24 @@ impl<'a> Code<'a> {
                 } else if name == "callq" {
                     let target =
                         super::listing::expression(args.strip_suffix("@PLT").unwrap_or(args))?;
-                    if target.symbol.is_none() || target.subtract.is_some() {
+                    if target.symbol.is_none() || target.subtract.is_some() || target.addend != 0 {
                         return Err(Error("unsupported call target expression"));
                     }
                     self.byte(0xE8)?;
                     self.fixup = Some(Fixup {
                         at:         self.len,
                         expression: args,
-                        kind:       4,
+                        // LLVM uses PC32 even for a binary expression whose
+                        // addend is zero; a plain symbol uses PLT32.
+                        kind:       if super::listing::symbol_name(
+                            args.strip_suffix("@PLT").unwrap_or(args),
+                        )
+                        .is_ok()
+                        {
+                            4
+                        } else {
+                            2
+                        },
                         bias:       0,
                     });
                     self.integer(0, 4)?;
