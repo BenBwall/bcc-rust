@@ -66,10 +66,10 @@ pub(super) fn remove_failed_object(output: &Path, arena: &crate::util::bump::Bum
     }
 }
 
-/// LLVM's CleanupFile uses can_write before unlinking, including when the
-/// compile failed before opening its output. POSIX access follows symlinks and
-/// checks the caller's permissions (including ACLs), rather than mode bits
-/// alone.
+/// Checks writability before unlinking, following LLVM output cleanup even
+/// when compilation failed before opening its output. POSIX access follows
+/// symlinks and checks the caller's permissions (including ACLs), rather than
+/// mode bits alone.
 fn can_write(output: &Path, metadata: &fs::Metadata, arena: &crate::util::bump::Bump) -> bool {
     #[cfg(unix)]
     {
