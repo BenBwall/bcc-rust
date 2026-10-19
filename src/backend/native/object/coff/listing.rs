@@ -7,6 +7,7 @@ use super::{
         Kind,
         encoder,
         listing::{
+            alignment,
             expression,
             symbol_name,
             unquote,
@@ -144,26 +145,14 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                         continue;
                     },
                     | ".p2align" => {
-                        arity(args, 1, 2)?;
-                        let power = u32::try_from(unsigned(first)?)
-                            .map_err(|_| Error("COFF alignment too large"))?;
-                        if power > 13 {
-                            return Err(Error("COFF alignment exceeds 8192"));
+                        // MC's `.p2align align[, [fill][, max]]`, as on ELF;
+                        // a COFF section aligns to at most 8192 bytes.
+                        if args.is_empty() || split(args).count() > 3 {
+                            return Err(Error("unsupported COFF directive operands"));
                         }
-                        let align = 1_u64 << power;
+                        let (align, fill, max) = alignment(first, &mut parts, 8192)?;
                         object.sections[section].align = object.sections[section].align.max(align);
-                        let fill = parts
-                            .next()
-                            .map(|n| {
-                                u8::try_from(unsigned(n)?)
-                                    .map_err(|_| Error("COFF fill exceeds byte"))
-                            })
-                            .transpose()?;
-                        Kind::Align {
-                            align,
-                            fill,
-                            max: align,
-                        }
+                        Kind::Align { align, fill, max }
                     },
                     | ".zero" => {
                         arity(args, 1, 1)?;

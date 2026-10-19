@@ -452,6 +452,79 @@ fn coff_programs_match_both_targets_at_b0_and_b1() {
     }
 }
 
+/// `.p2align` with a fill and a maximum lays out and relaxes branches across
+/// its padding as MC does, on COFF as on ELF.
+#[test]
+fn coff_alignment_maximums_and_relaxation_match_clang() {
+    for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+        for text in
+            super::object::alignment_maximum_listings().chain(super::object::relaxation_listings())
+        {
+            equivalent(&text, target).unwrap();
+        }
+    }
+}
+
+/// Loop headers start at 16-byte boundaries inside their functions, and
+/// the branches into and across that padding (some beyond rel8) are laid
+/// out as Clang lays out the same listing.
+#[test]
+fn coff_loop_header_alignment_matches_clang() {
+    const LOOPS: &str = r#"int printf(const char *, ...);
+int sum(const int *a, int n) {
+    int s = 0;
+    for (int i = 0; i < n; i++) s += a[i];
+    return s;
+}
+int nested(int n) {
+    int s = 0;
+    for (int i = 0; i < n; i++)
+        for (int j = i; j < n; j++) s += i * j ^ (s >> 3);
+    return s;
+}
+unsigned long long long_body(unsigned long long x, int n) {
+    do {
+        switch (x % 7) {
+        case 0: x = x * 6364136223846793005ULL + 1442695040888963407ULL; break;
+        case 1: x ^= x << 13; x ^= x >> 7; x ^= x << 17; break;
+        case 2: x = (x >> 3) * 2654435761u + (x << 5); break;
+        case 3: x += 0x9E3779B97F4A7C15ULL; x ^= x >> 29; break;
+        case 4: x = ~x * 31 + n; break;
+        case 5: x = (x << 7 | x >> 57) + 12345; break;
+        default: x = x / 3 + x % 11; break;
+        }
+    } while (--n > 0);
+    return x;
+}
+int main(void) {
+    int a[5] = {1, 2, 3, 4, 5};
+    printf("%d %d %llu\n", sum(a, 5), nested(9), long_body(42, 100));
+    return 0;
+}"#;
+    for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+        for optimize in [false, true] {
+            super::end_to_end::with_module(LOOPS, target, optimize, |module| {
+                let mut text = String::new();
+                super::super::emit_assembly(module, target, &mut text).unwrap();
+                let aligned = text
+                    .split(".seh_endprologue")
+                    .skip(1)
+                    .filter(|body| {
+                        body.split(".seh_endproc")
+                            .next()
+                            .is_some_and(|body| body.contains("\t.p2align\t4\n"))
+                    })
+                    .count();
+                assert!(
+                    aligned >= 3,
+                    "{aligned} functions align a loop header:\n{text}"
+                );
+                equivalent(&text, target).unwrap();
+            });
+        }
+    }
+}
+
 #[test]
 fn coff_direct_objects_link_with_both_bundled_windows_linkers() {
     let directory = TempDir::new("coff-link");

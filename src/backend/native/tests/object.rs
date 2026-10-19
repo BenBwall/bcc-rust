@@ -674,10 +674,16 @@ fn implicit_code_alignment_uses_canonical_nops() {
 
 #[test]
 fn alignment_maximums_match_clang() {
-    // Code alignment pads with `nop`s, a fill with that byte, and either
-    // emits nothing when it would take more than the maximum; a maximum of
-    // at least the alignment has no effect.
-    for max in [1, 2, 3, 7, 10, 11, 14, 15, 16, 40] {
+    for text in alignment_maximum_listings() {
+        equivalent(&text).unwrap();
+    }
+}
+
+/// Code alignment pads with `nop`s, a fill with that byte, and either
+/// emits nothing when it would take more than the maximum; a maximum of at
+/// least the alignment has no effect. The listings hold for COFF as well.
+pub(super) fn alignment_maximum_listings() -> impl Iterator<Item = String> {
+    [1, 2, 3, 7, 10, 11, 14, 15, 16, 40].into_iter().map(|max| {
         let mut text = String::from(".text\n");
         for gap in 0..17 {
             write!(
@@ -691,8 +697,8 @@ fn alignment_maximums_match_clang() {
             write!(&mut text, ".zero {gap}\n.p2align 3,0x2a,{max}\n.byte 1\n").unwrap();
         }
         text.push_str(".bss\n.zero 3\n.p2align 4,0,8\n.zero 1\n");
-        equivalent(&text).unwrap();
-    }
+        text
+    })
 }
 
 /// Alignment padding shrinks when branches before it grow, so whether a
@@ -703,14 +709,22 @@ fn alignment_maximums_match_clang() {
 /// the encoder first did, gives other sizes than MC's fused pass.
 #[test]
 fn branch_relaxation_across_alignment_matches_mc() {
+    for text in relaxation_listings() {
+        equivalent(&text).unwrap();
+    }
+}
+
+/// The 150 random listings of `branch_relaxation_across_alignment_matches_mc`,
+/// which hold for COFF as well.
+pub(super) fn relaxation_listings() -> impl Iterator<Item = String> {
     let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-    let mut next = |bound: u64| {
+    let mut next = move |bound: u64| {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
         state % bound
     };
-    for _ in 0..150 {
+    (0..150).map(move |_| {
         let labels = 24 + next(8);
         let mut text = String::from(".text\nf:\n");
         for label in 0..labels {
@@ -730,8 +744,8 @@ fn branch_relaxation_across_alignment_matches_mc() {
             writeln!(&mut text, ".L{label}:").unwrap();
         }
         text.push_str("retq\n");
-        equivalent(&text).unwrap();
-    }
+        text
+    })
 }
 
 fn refuses(text: &str, diagnostic: &str) {

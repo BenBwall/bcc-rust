@@ -1374,7 +1374,9 @@ small/large stack allocations, saved GPR/XMM registers and frame pointers.
 MinGW uses discardable `.xdata$*`/`.pdata$*` subsections; MSVC uses associative
 COMDATs emitted after ordinary unwind sections.
 `.refptr`, selectany, `.drectve` exports, `.ctors`/`.dtors` and `.CRT$XC*` arrays
-use the same private listing as the text path.
+use the same private listing as the text path. The COFF listing reads
+`.p2align` with the ELF parser, so loop headers inside functions and the
+max-skip form lay out and relax as on ELF.
 
 `native/tests/object_coff.rs` independently parses COFF and compares section
 order, bytes/characteristics, symbol types/storage classes and complete aux

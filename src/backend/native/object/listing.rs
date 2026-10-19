@@ -175,35 +175,8 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                     )
                 },
                 | ".p2align" => {
-                    let align = 1_u64
-                        .checked_shl(
-                            u32::try_from(unsigned(first)?)
-                                .map_err(|_| Error("alignment too large"))?,
-                        )
-                        .ok_or(Error("alignment too large"))?;
-                    if align > (1 << 30) {
-                        return Err(Error("alignment too large"));
-                    }
+                    let (align, fill, max) = alignment(first, &mut parts, 1 << 30)?;
                     object.sections[section].align = object.sections[section].align.max(align);
-                    // `.p2align align[, [fill][, max]]`: an omitted fill pads
-                    // code with `nop`s. A maximum below one is an error in
-                    // MC; one of at least the alignment has no effect.
-                    let (fill, max) = (parts.next(), parts.next());
-                    if fill == Some("") && max.is_none() {
-                        return Err(Error("missing alignment fill"));
-                    }
-                    let fill = fill
-                        .filter(|fill| !fill.is_empty())
-                        .map(|fill| {
-                            u8::try_from(unsigned(fill)?)
-                                .map_err(|_| Error("alignment fill exceeds one byte"))
-                        })
-                        .transpose()?;
-                    let max = match max.map(unsigned).transpose()? {
-                        | Some(0) => return Err(Error("unsatisfiable alignment maximum")),
-                        | Some(max) if max < align => max,
-                        | _ => align,
-                    };
                     Kind::Align { align, fill, max }
                 },
                 | ".zero" => Kind::Zero(unsigned(first)?),
@@ -251,6 +224,40 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
         });
     }
     Ok(object)
+}
+
+/// The operands of `.p2align align[, [fill][, max]]`, after the power of
+/// two `first`, as MC reads them for ELF and COFF alike: the alignment in
+/// bytes (at most `limit`), the fill byte (none pads code with `nop`s) and
+/// the most padding to emit. A maximum below one is an error in MC; one of
+/// at least the alignment has no effect.
+pub(super) fn alignment<'t>(
+    first: &str,
+    parts: &mut impl Iterator<Item = &'t str>,
+    limit: u64,
+) -> Result<(u64, Option<u8>, u64)> {
+    let align = 1_u64
+        .checked_shl(u32::try_from(unsigned(first)?).map_err(|_| Error("alignment too large"))?)
+        .ok_or(Error("alignment too large"))?;
+    if align > limit {
+        return Err(Error("alignment too large"));
+    }
+    let (fill, max) = (parts.next(), parts.next());
+    if fill == Some("") && max.is_none() {
+        return Err(Error("missing alignment fill"));
+    }
+    let fill = fill
+        .filter(|fill| !fill.is_empty())
+        .map(|fill| {
+            u8::try_from(unsigned(fill)?).map_err(|_| Error("alignment fill exceeds one byte"))
+        })
+        .transpose()?;
+    let max = match max.map(unsigned).transpose()? {
+        | Some(0) => return Err(Error("unsatisfiable alignment maximum")),
+        | Some(max) if max < align => max,
+        | _ => align,
+    };
+    Ok((align, fill, max))
 }
 
 pub(super) fn split(text: &str) -> impl Iterator<Item = &str> {
