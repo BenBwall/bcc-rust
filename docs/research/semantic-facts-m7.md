@@ -6,7 +6,8 @@ Base: `codex/semantic-facts-m7` at `94212cd9`, based on M6's
 Microsoft inline COMDAT policy, semantic overload identities and emitted ABI
 names were already present at the base; this step preserves their producers.
 The retained/legacy comparison is `9055bc01`; the consumer switch is
-`ec0b9496`. Measurements below describe the latter revision.
+`ec0b9496`. Round-1 source counts describe that consumer switch; round-2
+measurements identify their separate compiler revisions below.
 
 ## Result and choices
 
@@ -78,18 +79,56 @@ math execution dispatch and runtime validation remain downstream.
 
 ## Coverage and validation
 
-Before switching consumers, the shared lowering test helper compared the new
-records against the unchanged lowerer for every lowerable fixture it exercised:
-requested names and semantic identity, label refusals and provenance, open
-externals, definition association, linked occurrences, private-inline permission,
-readonly storage, returns-twice and function-end policy. A permanent policy
-snapshot pins linked redeclarations, asm aliases, completed arrays, static locals,
-asm-renamed `main`, inline bodies, overload ABI names and readonly objects on all
-four targets. Transitional comparisons were removed with the old consumers.
+Before switching consumers, the shared `lower_with` test helper ran the
+comparison over 182 lowering tests (one ignored). Genuine old-versus-new checks
+covered requested names, semantic identity, label refusals/provenance, open
+externals and private-inline permission. Readonly used a classifier copied into
+the test. Definition, initializer, returns-twice, occurrence membership and
+main-end assertions used expectations computed from semantic inputs; they did
+**not** compare those fields against the old lowerer's maps or execution paths.
+The convention test compared retained semantic requests/refusals and covered
+attribute spellings only. The hook did not cover the full fixture suite, host math dispatch or nested-function
+name collisions. Transitional checks were removed with the old consumers.
 
-The comparison caught the GNU inline replacement case: using only the final
-entity definition would emit the earlier inline body. Policy is therefore
-retained per body, with the entity separately recording its final definition.
+A permanent policy snapshot pins linked redeclarations, asm aliases, completed
+arrays, static locals, asm-renamed `main`, inline bodies, overload ABI names and
+readonly objects on all four targets.
+
+Round 2 adds the reproducible [legacy comparison harness](semantic-facts-m7-compare.py).
+It temporarily restores the intact M6 lowering implementation from `9055bc01`
+(the pre-deletion comparison commit), leaves the current entity producer in
+place, and restores every modified source file in `finally`. Run it alone from
+the M7 worktree with `--wrapper <swarm/run.py> --output <scratch-directory>`.
+It runs `cargo test --all-targets --no-fail-fast` through that wrapper.
+
+The additional assertions read the old lowerer's actual per-binding
+`definitions` map and body decision, its reconstructed initializer map when
+emitting linked objects, the actual function `returns_twice` flag after symbol
+attributes/asm-label handling, and `FunctionLowerer.name` at closing-brace
+lowering. They run in the production decision sites, including integration-test
+CLI compilations; the earlier name/refusal checks run at the production lowering
+entry in library tests. The fixtures include the reviewer's implicit call (in
+C89 so it reaches lowering), block-extern K&R, initializer followed by tentative
+declaration, `__REDIRECT` replacement and nested-function source on four targets.
+The nested-name difference below is explicitly allowed only for a distinct nested
+entity sharing the old identity. The intentionally corrupted empty declaration
+table skips the entry comparison; a deliberately removed object initializer is
+rejected by the old lowerer before the emission assertion. The old policy
+snapshot, which included every binding, is ignored because storage shape changed;
+the revised snapshot is checked in the normal gate. No readonly, occurrence or
+convention formula is reported as an old-lowerer comparison. Private inline
+return contracts still use the unchanged semantic attribute directly.
+
+The round-2 full-suite comparison passed **2,367 tests, 0 failed, 8 ignored**
+across 30 binaries (library: 2,148 passed, 0 failed, 5 ignored), recorded in
+`round2-legacy-all.log`. Those totals describe the test suite, not a count of
+policy comparisons: only invocations reaching the old lowering decision sites
+execute the corresponding assertions. Semantic-only and non-lowerable fixtures
+are not claimed as old-lowerer comparisons.
+
+Per-body policy matters for GNU inline replacement: using only the final
+entity definition would emit the earlier inline body. Policy is retained per
+body, with the entity separately recording its final definition.
 This is covered by the existing replacement-body test and the policy snapshot.
 
 The snapshot covers 14 sources on four targets (56 translation units).
@@ -106,6 +145,33 @@ final full suite additionally covers the real-math family. Existing malformed
 textual-IR tests retain runtime signature-mismatch checks before host effects;
 returns-twice optimizer-wrapper and native frame exclusions still pass.
 
+## Behaviour changes
+
+A GNU nested function in an inline body that is not emitted no longer closes the
+call interface of an unrelated external declaration with the same C identifier:
+
+```c
+int f();
+int g(void) { return f(42); }
+inline int outer(void) { int f(int x) { return x; } return f(1); }
+```
+
+The old set of defined function names emitted `declare i32 @f()`; the retained
+entity identity emits `declare i32 @f(...)`. This is an intentional correction,
+separately evidenced by the cross-review and
+`m7_nested_function_does_not_close_unrelated_external_signature`. C99
+§6.5.2.2p6, pp. 71–72 (PDF pp. 83–84) requires default argument promotions for
+calls through a type without a prototype. The GNU nested definition denotes a
+different entity and supplies no definition for the external `f`. This correction
+is the migration's recorded exception to behavior preservation.
+
+The interpreter signature regression introduced during round 1 is repaired:
+`copysign`, `copysignf` and `copysignl` read their scalar builtin descriptors from
+the shared external catalog. A missing catalog entry now rejects a recognized
+host math call before argument access, wide-float refusal or libm execution.
+The dispatch macro supplies an exhaustive name inventory to the malformed-call
+test (all 171 names, both LP64/f80 and LLP64/f64 projections).
+
 ## Measurements
 
 The 64-bit policy snapshot measures `size_of`, rather than inferring layouts:
@@ -117,23 +183,67 @@ The 64-bit policy snapshot measures `size_of`, rather than inferring layouts:
 | `SymbolRequest` | 24 |
 | `ConventionFacts` | 32 |
 
-Entity membership adds one `usize` per binding and occurrence, function policy
-is sparse by body occurrence, and VM classification adds one byte per canonical
-type. These are payload sizes, excluding map capacity and arena growth waste.
+Entity membership adds one `usize` per retained binding and occurrence. Function
+policy is sparse by body occurrence, and VM classification adds one byte per
+canonical type. These are payload sizes, excluding map capacity and arena growth waste.
+Entity records are now sparse: functions and objects with linkage or static/
+thread duration retain them; automatic objects, parameters, typedefs and enum
+constants do not. Static locals and function-name objects retain their required
+associations. Finalization maps reserve from known eligible-binding, definition
+and function counts so replaced hash tables do not stay resident in bump arenas.
 The vendor-declarator and owner arrays and lowerer's definition, known-function,
 private-inline and symbol-name maps are gone. Finalization makes linear passes
 over bindings, occurrences, definitions, requests and function bodies; it does
 not revisit syntax trees or scan a TU per function.
 
-No retained-arena peak, process working set or controlled timing comparison was
-measured. The allocation gate checks global allocation calls, not semantic
+Round 1 did not measure retained-arena peak, process working set or controlled
+timing. The allocation gate checks global allocation calls, not semantic
 residency or performance. No matched GCC torture affected-source subset was
-run: this work has no prepared baseline executable and corpus. The design
+run in round 1: no baseline executable/corpus had been prepared then. The design
 reserves full surveys for M1/M6/M8/M10; M7 still lacks its requested targeted
 survey evidence. Existing IR and diagnostic goldens, the independent old/new
 comparisons and execution suites provide equivalence evidence, but do not replace that survey.
 
-Source line counts (`git diff --numstat 94212cd9..ec0b9496`, excluding documentation):
+Round 2 repeats the reviewer's exact generated sources from
+`scratch/review-m7/scale/`: 2k/4k/8k functions with two parameters and 50 locals,
+plus repeated declarations, distinct assembler labels and repeated labeled
+declarations. The 4k-local workload uses `--emit=ir`; the others use semantic-only
+CLI output. Each version runs seven times, interleaved with a rotating order,
+under the shared wrapper's lock. M6 (`94212cd9`) and round 1 (`2ebe58fa`) use the
+reviewer's saved debug binaries; round 2 uses `dde9cccf`, built with the same
+Rust 1.99.0/default-feature wrapper profile and LLVM 23.1.1. Binary SHA-256s,
+per-child `wait4` peak RSS, wall times, exit statuses and the runner are retained
+in `scratch/m7/round2-*`. RSS is MiB (`ru_maxrss / 1024`); wall times below use
+the minimum of seven as the repository measurement guidance requests. These are
+whole-process CLI measurements, not retained-arena byte counts or Criterion
+estimates. The later correctness guard in `25f593bb` skips recovered bodies bound
+to typedefs; it adds no records or allocations on these valid measurement
+inputs. The timing numbers remain measurements of `dde9cccf`, not that later
+guard.
+
+Peaks below are the maximum observed across each version’s seven runs.
+
+| Input | Peak RSS MiB, M6 / round 1 / round 2 | Minimum seconds, M6 / round 1 / round 2 | Round-2 RSS vs M6 |
+| --- | --- | --- | ---: |
+| 2k functions × 50 locals | 527.5 / 596.0 / 530.1 | 3.729 / 4.077 / 3.798 | +0.49% |
+| 4k functions × 50 locals, IR | 1025.9 / 1162.8 / 1030.4 | 9.417 / 10.076 / 9.575 | +0.44% |
+| 8k functions × 50 locals | 2024.0 / 2296.7 / 2031.6 | 14.829 / 16.241 / 15.153 | +0.38% |
+| Repeated declarations | 149.9 / 151.4 / 151.6 | 1.253 / 1.287 / 1.286 | +1.12% |
+| Distinct assembler labels | 100.6 / 131.6 / 116.0 | 0.708 / 0.820 / 0.807 | +15.34% |
+| Repeated labeled declarations | 165.1 / 171.1 / 170.0 | 1.650 / 1.749 / 1.760 | +2.93% |
+
+All 126 compiler runs exited zero. The reported local-binding regression now
+stays below 0.5% over M6 peak RSS, meeting the requested few-percent target;
+minimum times are 1.67–2.19% over M6. The distinct-label input remains a measured
+limitation: every object needs a retained symbol record, so its semantic-only
+peak is 15.34% over M6 (round 1 was 30.86%), and minimum time is 14.08% higher.
+Repeated declarations add 1.12% peak RSS; repeated labeled declarations are shown
+separately above. This follow-up does not claim a universal memory/time bound for
+translation units dominated by symbols, or that 136-byte payloads describe
+retained cost. Further compaction of legitimate entity records is deferred; the
+over-retention of automatic bindings reported by finding 2 is fixed.
+
+Round-1 source line counts (`git diff --numstat 94212cd9..ec0b9496`, excluding documentation):
 
 | Category | Added | Deleted | Files |
 | --- | ---: | ---: | ---: |
@@ -145,10 +255,10 @@ The handwritten change exceeds the 400–700 estimate: completing linked
 membership and initializer associations and retaining per-body policy add a
 399-line producer, alongside the convention/object contract and host projection.
 The transitional comparison was committed separately, then deleted with the
-legacy consumers. Counts above describe the final net change, not that temporary
-instrumentation.
+legacy consumers. Counts above describe the round-1 net change, excluding
+temporary instrumentation.
 
-## Final checks
+## Round-1 checks
 
 All build/test/Clippy commands ran through the required shared swarm wrapper
 on Linux with pinned Clang/LLD 23.1.1. Logs live under
@@ -172,6 +282,40 @@ abort occurred. Existing goldens were unchanged; only the new policy snapshot
 was written during the comparison stage. Windows DLL import/export interop,
 Microsoft inline coalescing, private-inline redirection and overload mangling
 regressions pass.
+
+## Round-2 checks
+
+The focused round-2 checks passed **12 tests, 0 failed, 0 ignored**
+(`round2-focused-2.log`). The malformed copysign probes again exit 70 with the
+old signature-mismatch diagnostic (`round2-probes.log`). Only the M7 policy
+snapshot changed; existing diagnostic and IR goldens were not rewritten.
+
+The first full legacy comparison recorded **2,362 passed, 5 failed, 8 ignored**
+across 30 binaries (`round2-legacy-all-1.log`). Four failures exposed a panic in
+sparse policy finalization for recovered typedef function definitions; the
+`25f593bb` guard preserves their diagnostic paths. The fifth was a harness
+assertion before the old lowerer's intentional missing-initializer refusal;
+that assertion now runs only at successful object emission. The rerun passed
+**2,367 tests, 0 failed, 8 ignored** (`round2-legacy-all.log`). No allocation
+abort occurred in either run.
+
+The restored implementation at `25f593bb` passed the complete required gate.
+One shared-wrapper invocation held the lock and supplied its environment for
+all Cargo commands below; no build/test commands ran outside that wrapper.
+
+| Command | Result | Log |
+| --- | --- | --- |
+| `cargo test --all-targets --no-fail-fast` | PASS: 2,371 passed, 0 failed, 7 ignored across 30 binaries; library: 2,152 passed, 0 failed, 4 ignored | `round2-gate-all.log` |
+| `cargo test --features benchmarking-internals --test allocation_count` | PASS: 31 passed, 0 failed, 0 ignored | `round2-gate-allocation.log` |
+| `cargo clippy --all-targets -- -D warnings` | PASS | `round2-gate-clippy.log` |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | PASS | `round2-gate-clippy-feature.log` |
+| `cargo +nightly fmt --check` | PASS | `round2-gate-fmt.log` |
+| `git diff --check` | PASS | `round2-gate-diff.log` |
+
+No allocation abort occurred. The final gate needed no retries or source fixes.
+The remaining changes after it are this receipt and the comparison harness,
+whose syntax was checked separately and whose executed instrumentation is
+retained in `round2-legacy-instrumentation.patch`.
 
 ## Residual items for M8–M10
 
