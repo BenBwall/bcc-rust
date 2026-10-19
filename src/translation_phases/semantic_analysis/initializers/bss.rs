@@ -24,6 +24,7 @@ use super::super::{
     DefinitionKind,
     InitOperation,
     InitializerPlan,
+    Linkage,
     Scalar,
     SemanticError,
     SemanticErrorKind,
@@ -76,8 +77,15 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
             continue;
         }
         let binding = definition.binding;
-        let Some(section) = sema
-            .entity_attributes(binding)
+        let attributes = sema.entity_attributes(binding);
+        // Match BssFunction: internal objects without `used` may be omitted.
+        // Backend guards still validate any retained through evaluated uses.
+        if sema.bindings[binding].linkage != Linkage::External
+            && !attributes.is_some_and(|attributes| attributes.used)
+        {
+            continue;
+        }
+        let Some(section) = attributes
             .and_then(|a| a.section)
             .filter(|section| ElfSectionKind::named(section).is_bss())
         else {

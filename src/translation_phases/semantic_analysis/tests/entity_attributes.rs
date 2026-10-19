@@ -1080,6 +1080,13 @@ fn bss_initializers_report_every_object_with_source_locations() {
             "void f(void) { static int a __attribute__((section(\".bss.z\"))) = 4; }",
             Target::LinuxGnu
         ),
+        []
+    );
+    assert_eq!(
+        kinds(
+            "static int a __attribute__((used,section(\".bss.z\"))) = 4;",
+            Target::LinuxGnu
+        ),
         [K::BssInitializer]
     );
     // A prior section declaration is inherited by the initialized definition.

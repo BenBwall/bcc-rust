@@ -1740,6 +1740,71 @@ int main(void) { printf("main\n"); return zero; }
     }
 
     #[test]
+    fn bss_static_objects_are_checked_only_when_emitted() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for optimize in [false, true] {
+                for (source, emitted) in [
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\"))) = {1}; int \
+                         f(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\"))) = {1}; int \
+                         *f(void){return b;}",
+                        true,
+                    ),
+                    (
+                        "static int b[4] __attribute__((used,section(\".bss.t\"))) = {1}; int \
+                         f(void){return 0;}",
+                        true,
+                    ),
+                    (
+                        "struct P {int a,b;}; static struct P p[1000] \
+                         __attribute__((section(\".bss.t\"))) = {[0 ... 999]={0,1}}; int \
+                         f(void){return 0;}",
+                        false,
+                    ),
+                ] {
+                    let object = temporary("bss-static.o");
+                    let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+                    flags.extend_from_slice(backend);
+                    if optimize {
+                        flags.push(if backend.is_empty() {
+                            "--llvm-opt=O2"
+                        } else {
+                            "--opt=bcc"
+                        });
+                    }
+                    let output = bcc(source, &flags);
+                    assert_eq!(
+                        output.status.success(),
+                        !emitted,
+                        "{backend:?} optimize={optimize}: {}",
+                        text(&output.stderr)
+                    );
+                    assert_eq!(object.exists(), !emitted);
+                    if emitted {
+                        assert!(
+                            text(&output.stderr)
+                                .contains("BSS section '.bss.t' cannot have non-zero bytes"),
+                            "{}",
+                            text(&output.stderr)
+                        );
+                    } else {
+                        assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+                        std::fs::remove_file(object).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn failed_compilation_removes_stale_object_files() {
         let cases = [
             ("preprocessing", "#error deliberate failure\n"),
