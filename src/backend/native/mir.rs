@@ -1194,6 +1194,53 @@ impl MInst {
             | _ => false,
         }
     }
+
+    /// Whether removing the instruction changes nothing but the virtual
+    /// register it defines and the flags: integer arithmetic on registers
+    /// and immediates.
+    pub(crate) fn is_pure_but_flags(&self) -> bool {
+        match self {
+            | Self::Alu { dst, src, .. } =>
+                matches!(dst, Reg::Virt(_)) && !matches!(src, Operand::Mem(_)),
+            | Self::Shift { dst, .. } | Self::Unary { dst, .. } | Self::BitScan { dst, .. } =>
+                matches!(dst, Reg::Virt(_)),
+            | _ => false,
+        }
+    }
+
+    /// Whether the instruction reads the flags, and whether it certainly
+    /// overwrites all of them (a shift by `%cl` may leave them alone).
+    pub(crate) const fn flags(&self) -> (bool, bool) {
+        match self {
+            | Self::Jcc { .. } | Self::Setcc { .. } | Self::Cmov { .. } => (true, false),
+            | Self::Alu {
+                op: AluOp::Adc | AluOp::Sbb,
+                ..
+            } => (true, true),
+            | Self::Alu { .. }
+            | Self::Imul3 { .. }
+            | Self::Cmp { .. }
+            | Self::Test { .. }
+            | Self::Ucomi { .. }
+            | Self::BitScan { .. }
+            | Self::Div { .. }
+            | Self::MulWide { .. }
+            | Self::Call { .. }
+            | Self::X87Compare
+            | Self::Unary {
+                op: UnaryOp::Neg, ..
+            }
+            | Self::Shift {
+                amount: ShiftAmount::Imm(1..),
+                ..
+            }
+            | Self::ShiftDouble {
+                amount: ShiftAmount::Imm(1..),
+                ..
+            } => (false, true),
+            | _ => (false, false),
+        }
+    }
 }
 
 /// Visits the registers of a source operand, which are all read.

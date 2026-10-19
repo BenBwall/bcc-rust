@@ -1,34 +1,50 @@
-//! Register allocation: linear scan over whole live intervals with
-//! fixed-register ranges (Poletto and Sarkar, "Linear Scan Register
-//! Allocation", TOPLAS 21(5), 1999).
+//! Register allocation: linear scan over split live intervals with
+//! lifetime holes and fixed-register ranges (Wimmer and Mössenböck,
+//! "Optimized Interval Splitting in a Linear Scan Register Allocator", VEE
+//! 2005), after copy coalescing, proven by a symbolic checker.
 //!
 //! Instruction `i` (numbered in block layout order) reads at position `2i`
 //! and writes at `2i+1`, so a value that dies at an instruction may share a
 //! register with one it defines. Liveness is backward dataflow over the
-//! blocks; each virtual register gets one interval from its first to its
-//! last live position, holes included. Each physical register gets the
-//! ranges where a precolored value lives in it (an argument between its
-//! `mov` and the `call`, `%rax` between a `call` and the copy of its
-//! result) and a point at each clobber. An interval may take a register
-//! only if it overlaps none of that register's fixed ranges, so a value
-//! live across a call, which overlaps every caller-saved clobber, lands in
-//! a callee-saved register or on the stack without a special case.
+//! blocks; each virtual register's interval is the set of positions where
+//! its value is needed, with holes where it is not. Each physical register
+//! gets the ranges where a precolored value lives in it (an argument
+//! between its `mov` and the `call`, `%rax` between a `call` and the copy
+//! of its result) and a point at each clobber. An interval may hold a
+//! register only where it meets none of that register's fixed ranges, so a
+//! value live across a call, which meets every caller-saved clobber, is
+//! split around the call or lands in a callee-saved register, without a
+//! special case.
 //!
-//! The scan visits intervals by start, expires those that ended, and gives
-//! the current one its hint (the register a copy connects it to) or the
-//! first free register in the convention's order. With none free it spills
-//! whichever of the current interval and the active ones that could yield
-//! a compatible register ends last. A spilled value lives in its own stack
-//! slot for its whole life; `rewrite.rs` loads it into a scratch register
-//! before each use and stores it after each definition. In debug builds,
-//! `checker.rs` then proves the rewritten function against the
-//! virtual-register program.
+//! In order:
 //!
-//! Read [`allocate`], then `liveness.rs` for intervals and fixed ranges,
-//! then `rewrite.rs` and `checker.rs`.
+//! 1. `edges.rs` splits critical edges, so moves can go on any edge.
+//! 2. `liveness.rs` removes dead pure instructions and builds the intervals and
+//!    fixed ranges.
+//! 3. `coalesce.rs` joins the two sides of copies whose intervals do not
+//!    overlap.
+//! 4. `scan.rs` assigns registers, splitting intervals where a register is free
+//!    only for a while and spilling the parts that are not needed soon.
+//! 5. `resolve.rs` lists each register's pieces and the moves between them,
+//!    within blocks and on edges.
+//! 6. `rewrite.rs` replaces virtual registers by locations and inserts the
+//!    moves; in debug builds `checker.rs` then proves the result against the
+//!    virtual-register program. Identity copies go, and `edges.rs` removes the
+//!    blocks that only jump.
+//!
+//! Read [`allocate`], then the files in that order.
+
+// Control flow
+mod edges;
 
 // Analysis
+mod coalesce;
+mod intervals;
 mod liveness;
+
+// Assignment
+mod resolve;
+mod scan;
 
 // Rewriting and its proof
 mod checker;
@@ -36,7 +52,6 @@ mod rewrite;
 
 pub(crate) use rewrite::rewrite;
 
-use self::liveness::Liveness;
 #[cfg(test)]
 pub(crate) use self::{
     checker::{
@@ -45,12 +60,17 @@ pub(crate) use self::{
     },
     rewrite::rewrite_checked,
 };
+use self::{
+    liveness::Liveness,
+    scan::Scan,
+};
 use super::{
     conv::CallConv,
     mir::{
+        MBlock,
         MFunction,
+        MInst,
         PReg,
-        PRegSet,
         Reg,
         VReg,
     },
@@ -63,180 +83,178 @@ use crate::{
     },
 };
 
-/// Allocates every virtual register of `func`, after deleting the pure
-/// instructions whose results are dead.
+/// Allocates every virtual register of `func`, after splitting its critical
+/// edges and deleting the pure instructions whose results are dead.
 pub(crate) fn allocate<'a>(
-    func: &mut MFunction<'_>,
+    func: &mut MFunction<'a>,
     conv: CallConv,
     arena: &'a Bump,
 ) -> Allocation<'a> {
+    edges::split_critical_edges(func, arena);
     let liveness = Liveness::compute(func, arena);
-    let mut intervals = liveness.intervals(func, arena);
-    let fixed = liveness.fixed_ranges(func, arena);
-    intervals.sort_unstable_by_key(|interval| (interval.start, interval.vreg));
-    let mut locations = ArenaVec::with_capacity_in(func.vreg_count(), arena);
-    locations.resize(func.vreg_count(), Location::None);
-    let mut allocation = Allocation {
-        locations,
-        spill_slots: 0,
-    };
-    let mut active: ArenaVec<'_, Active> = ArenaVec::new_in(arena);
-    for &interval in &intervals {
-        active.retain(|active| active.end >= interval.start);
-        let class = func.classes[interval.vreg.index()];
-        // With a frame pointer, `%rbp` addresses the frame.
-        let order = conv.order(class);
-        let allowed = |register: &PReg| !(func.dynamic && *register == PReg::Rbp);
-        let occupied = active
-            .iter()
-            .fold(PRegSet::EMPTY, |set, active| set.with(active.reg));
-        let free = |register: PReg| {
-            !occupied.contains(register) && !fixed.overlaps(register, interval.start, interval.end)
-        };
-        let hint = match func.hints[interval.vreg.index()] {
-            | Some(Reg::Phys(register)) => Some(register),
-            | Some(Reg::Virt(other)) => match allocation.locations[other.index()] {
-                | Location::Reg(register) => Some(register),
-                | _ => None,
-            },
-            | None => None,
-        };
-        let choice = hint
-            .filter(|register| order.contains(register) && allowed(register) && free(*register))
-            .or_else(|| {
-                order
-                    .iter()
-                    .filter(|register| allowed(register))
-                    .copied()
-                    .find(|&register| free(register))
-            });
-        if let Some(register) = choice {
-            allocation.locations[interval.vreg.index()] = Location::Reg(register);
-            active.push(Active {
-                end:  interval.end,
-                vreg: interval.vreg,
-                reg:  register,
-            });
-            continue;
-        }
-        let victim = active
-            .iter()
-            .enumerate()
-            .filter(|(_, active)| {
-                active.reg.class() == class
-                    && !fixed.overlaps(active.reg, interval.start, interval.end)
-            })
-            .max_by_key(|(_, active)| active.end)
-            .map(|(index, &active)| (index, active));
-        match victim {
-            | Some((index, victim)) if victim.end > interval.end => {
-                allocation.locations[victim.vreg.index()] = Location::Spill(allocation.spill());
-                allocation.locations[interval.vreg.index()] = Location::Reg(victim.reg);
-                active[index] = Active {
-                    end:  interval.end,
-                    vreg: interval.vreg,
-                    reg:  victim.reg,
-                };
-            },
-            | _ =>
-                allocation.locations[interval.vreg.index()] = Location::Spill(allocation.spill()),
+    let (mut intervals, fixed) = liveness.intervals(func, arena);
+    let depth = loop_depths(func, arena);
+    let mut copy_hints = ArenaVec::with_capacity_in(func.vreg_count(), arena);
+    copy_hints.resize(func.vreg_count(), None);
+    for (index, hint) in func.hints.iter().enumerate() {
+        match *hint {
+            | Some(Reg::Phys(register)) => intervals[index].hint = Some(register),
+            | Some(Reg::Virt(other)) => copy_hints[index] = Some(other),
+            | None => {},
         }
     }
-    if cfg!(debug_assertions) {
-        check(&intervals, &allocation, &fixed, arena);
+    let rep = coalesce::coalesce(func, &mut intervals, &depth, arena);
+    // A representative takes the first copy hint of the registers it
+    // joined that names another representative.
+    let mut rep_hints = ArenaVec::with_capacity_in(copy_hints.len(), arena);
+    rep_hints.resize(copy_hints.len(), None);
+    for (index, hint) in copy_hints.iter().enumerate() {
+        if let Some(other) = *hint {
+            let (vreg, other) = (rep[index], rep[other.index()]);
+            if vreg != other && rep_hints[vreg.index()].is_none() {
+                rep_hints[vreg.index()] = Some(other);
+            }
+        }
     }
-    allocation
+    mark_unsplittable(func, &liveness, &rep, &mut intervals);
+    let mut block_starts = ArenaVec::with_capacity_in(func.blocks.len() + 1, arena);
+    block_starts.extend((0..=func.blocks.len()).map(|block| liveness.block_start(block)));
+    let mut scan = Scan::new(
+        intervals,
+        &fixed,
+        conv,
+        func.dynamic,
+        &rep_hints,
+        &depth,
+        &block_starts,
+        arena,
+    );
+    scan::run(&mut scan);
+    let fallbacks = scan.fallbacks;
+    resolve::resolve(func, &liveness, &scan.intervals, rep, fallbacks, arena)
 }
 
-/// Where each virtual register lives, and what the frame must provide.
+/// Where each virtual register lives at each position, and the moves the
+/// rewrite inserts between its locations.
 pub(crate) struct Allocation<'a> {
-    pub(crate) locations:   ArenaVec<'a, Location>,
+    /// Each virtual register's representative: the registers coalescing
+    /// joined share it, and only representatives have pieces.
+    rep:                    ArenaVec<'a, VReg>,
+    /// Each representative's pieces as `(from, location)`: the location
+    /// holds the value from that position until the next piece's.
+    pieces:                 ArenaVec<'a, (u32, Location)>,
+    /// Where each register's pieces start in `pieces`, then their end.
+    piece_index:            ArenaVec<'a, u32>,
+    /// The moves to insert, by block, instruction and phase.
+    edits:                  ArenaVec<'a, Edit>,
     /// Spill slots used, 8 bytes each.
     pub(crate) spill_slots: u32,
+    /// Intervals left in a spill slot whose uses go through the scratch
+    /// registers.
+    pub(crate) fallbacks:   u32,
 }
 
 impl Allocation<'_> {
-    /// A new spill slot.
-    fn spill(&mut self) -> u32 {
-        let slot = self.spill_slots;
-        self.spill_slots += 1;
-        slot
+    /// Where `vreg` lives at `position`, a position where it is live.
+    pub(crate) fn location(&self, vreg: VReg, position: u32) -> Location {
+        let rep = self.rep[vreg.index()];
+        let pieces = self.pieces(rep);
+        let index = pieces.partition_point(|&(from, _)| from <= position);
+        index
+            .checked_sub(1)
+            .map_or(Location::None, |index| pieces[index].1)
+    }
+
+    /// The pieces of a representative.
+    fn pieces(&self, rep: VReg) -> &[(u32, Location)] {
+        let start = self.piece_index[rep.index()] as usize;
+        let end = self.piece_index[rep.index() + 1] as usize;
+        &self.pieces[start..end]
+    }
+
+    /// Every location `vreg` has anywhere.
+    pub(crate) fn locations(&self, vreg: VReg) -> impl Iterator<Item = Location> + '_ {
+        self.pieces(self.rep[vreg.index()])
+            .iter()
+            .map(|&(_, location)| location)
+    }
+
+    /// Puts every piece of `vreg` in `location`, to show that the checker
+    /// rejects a wrong allocation.
+    #[cfg(test)]
+    pub(crate) fn force(&mut self, vreg: VReg, location: Location) {
+        let rep = self.rep[vreg.index()];
+        let start = self.piece_index[rep.index()] as usize;
+        let end = self.piece_index[rep.index() + 1] as usize;
+        for piece in &mut self.pieces[start..end] {
+            piece.1 = location;
+        }
     }
 }
 
-/// A virtual register's home.
+/// A virtual register's home over one piece.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[expect(
     variant_size_differences,
-    reason = "A spill slot is one word; locations are a dense per-register table."
+    reason = "A spill slot is one word; locations are a dense per-piece table."
 )]
 pub(crate) enum Location {
-    /// The register never occurs.
+    /// The register is not live there.
     None,
     Reg(PReg),
     Spill(u32),
 }
 
-/// A virtual register's live interval, positions inclusive.
+/// A move of one register's value between two of its locations, inserted
+/// before instruction `index` of `block`. Moves at one place form a
+/// parallel copy per phase; a block's end has the split moves (phase 0)
+/// before the edge moves (phase 1) that read their result.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Interval {
-    pub(crate) vreg:  VReg,
-    pub(crate) start: u32,
-    pub(crate) end:   u32,
+pub(crate) struct Edit {
+    block: u32,
+    index: u32,
+    phase: u8,
+    vreg:  VReg,
+    /// The position whose location the value moves from.
+    src:   u32,
+    /// The position whose location it moves to.
+    dst:   u32,
 }
 
-/// An interval holding a register during the scan.
-#[derive(Clone, Copy, Debug)]
-struct Active {
-    end:  u32,
-    vreg: VReg,
-    reg:  PReg,
-}
-
-/// Disjoint, sorted ranges per physical register where a precolored value
-/// lives or the register is clobbered.
-pub(crate) struct FixedRanges<'a> {
-    ranges: [ArenaVec<'a, (u32, u32)>; PReg::COUNT],
-}
-
-impl FixedRanges<'_> {
-    /// Whether `[start, end]` meets a fixed range of `register`.
-    pub(crate) fn overlaps(&self, register: PReg, start: u32, end: u32) -> bool {
-        let ranges = &self.ranges[register.index()];
-        let first = ranges.partition_point(|&(_, range_end)| range_end < start);
-        ranges
-            .get(first)
-            .is_some_and(|&(range_start, _)| range_start <= end)
-    }
-}
-
-/// Checks the allocation in debug builds: no two intervals in one register
-/// overlap, and none overlaps a fixed range of its register.
-fn check(
-    intervals: &[Interval],
-    allocation: &Allocation<'_>,
-    fixed: &FixedRanges<'_>,
-    arena: &Bump,
-) {
-    let mut last_end: ArenaVec<'_, Option<(u32, VReg)>> = ArenaVec::new_in(arena);
-    last_end.resize(PReg::COUNT, None);
-    for interval in intervals {
-        let Location::Reg(register) = allocation.locations[interval.vreg.index()] else {
-            continue;
-        };
-        assert!(
-            !fixed.overlaps(register, interval.start, interval.end),
-            "{:?} in {register:?} overlaps a fixed range",
-            interval.vreg
-        );
-        if let Some((end, other)) = last_end[register.index()] {
-            assert!(
-                end < interval.start,
-                "{:?} and {other:?} share {register:?} while both live",
-                interval.vreg
-            );
+/// The loop depth of each block, approximated from the layout: an edge to
+/// an earlier (or the same) block closes a loop over the blocks between.
+/// Only split heuristics read it.
+fn loop_depths<'a>(func: &MFunction<'_>, arena: &'a Bump) -> ArenaVec<'a, u32> {
+    let blocks = func.blocks.len();
+    let mut depth = ArenaVec::with_capacity_in(blocks, arena);
+    depth.resize(blocks, 0_u32);
+    for block in 0..blocks {
+        for successor in func.successors(MBlock::new(block)) {
+            if successor.index() <= block {
+                for inner in &mut depth[successor.index()..=block] {
+                    *inner += 1;
+                }
+            }
         }
-        let end = last_end[register.index()].map_or(interval.end, |(end, _)| end.max(interval.end));
-        last_end[register.index()] = Some((end, interval.vreg));
+    }
+    depth
+}
+
+/// Marks the intervals live into a block that an indirect jump reaches:
+/// such an edge cannot be split, so the value keeps one location.
+fn mark_unsplittable(
+    func: &MFunction<'_>,
+    liveness: &Liveness<'_>,
+    rep: &[VReg],
+    intervals: &mut [intervals::Interval<'_>],
+) {
+    for block in &func.blocks {
+        if let Some(&MInst::JmpIndirect { dests, .. }) = block.insts.last() {
+            for &target in &func.indirect[dests as usize] {
+                liveness::members(liveness.live_in(target.index()), |vreg: VReg| {
+                    intervals[rep[vreg.index()].index()].unsplittable = true;
+                });
+            }
+        }
     }
 }
