@@ -146,7 +146,7 @@ fn runner(target: Target) -> Option<Runner> {
 
 /// Whether WSL is installed with a clang to assemble and link.
 fn wsl_has_clang() -> bool {
-    run_native(Command::new("wsl.exe").args(["-e", "sh", "-c", "command -v clang"]))
+    run_wsl(Command::new("wsl.exe").args(["-e", "sh", "-c", "command -v clang"]))
         .is_ok_and(|output| output.status.success())
 }
 
@@ -168,7 +168,7 @@ fn run_assembly(
         | Runner::Wsl => {
             std::fs::write(directory.join(format!("{name}.s")), text)
                 .map_err(|error| error.to_string())?;
-            let build = run_native(
+            let build = run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", "clang", "-o", name, &format!("{name}.s")])
                     .current_dir(directory),
@@ -180,7 +180,7 @@ fn run_assembly(
                     String::from_utf8_lossy(&build.stderr)
                 ));
             }
-            run_native(
+            run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", &format!("./{name}")])
                     .current_dir(directory),
@@ -193,6 +193,53 @@ fn run_assembly(
         status,
         stdout: String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
     })
+}
+
+/// Runs a `wsl.exe` command, retrying it when WSL itself fails.
+///
+/// WSL relays a Linux program's exit status, a byte on Linux (a program a
+/// signal killed reports 128 plus the signal), so a crash under test cannot
+/// reach the retry. A Windows error status (`0xC000xxxx`, such as
+/// `0xC000070A` from the WSL launcher) comes from the host side instead and
+/// says nothing about the program, whose output can be complete. Such a run
+/// is retried, at most `WSL_HOST_RETRIES` times, with a note on stderr; the
+/// last run's result stands, so a failure that repeats is still reported.
+fn run_wsl(command: &mut Command) -> std::io::Result<std::process::Output> {
+    let mut retries = 0;
+    loop {
+        let output = run_native(command)?;
+        match output.status.code() {
+            | Some(status) if is_wsl_host_failure(status) && retries < WSL_HOST_RETRIES => {
+                retries += 1;
+                eprintln!(
+                    "retrying {command:?} ({retries} of {WSL_HOST_RETRIES}): WSL failed on the \
+                     host side with {:#010X}",
+                    status.cast_unsigned()
+                );
+            },
+            | _ => return Ok(output),
+        }
+    }
+}
+
+/// How often `run_wsl` retries a command after a host-side failure.
+const WSL_HOST_RETRIES: u32 = 2;
+
+/// Whether `status` is a Windows NTSTATUS error code with the `0xC000` high
+/// half, which no Linux program's exit status can be.
+fn is_wsl_host_failure(status: i32) -> bool {
+    status.cast_unsigned() & 0xFFFF_0000 == 0xC000_0000
+}
+
+#[test]
+fn only_windows_error_statuses_count_as_wsl_host_failures() {
+    // -1073740022 is the 0xC000070A that CI's WSL launcher returned.
+    assert!(is_wsl_host_failure(-1_073_740_022));
+    assert!(is_wsl_host_failure(0xC000_0005_u32.cast_signed()));
+    // Linux statuses, including a SIGSEGV (128 + 11) and an abort (128 + 6).
+    for status in [0, 1, 134, 139, 255, -1] {
+        assert!(!is_wsl_host_failure(status), "{status}");
+    }
 }
 
 /// One compilation to check: a program, a target, whether the bcc
