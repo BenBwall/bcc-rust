@@ -330,8 +330,9 @@ rules.
 MSVC `__forceinline` (Windows SDK `FORCEINLINE`) is `inline` plus
 `always_inline` on every target, as in Clang: the definition takes the
 inline linkage above (`linkonce_odr`, or `weak_odr` with `extern`, on MSVC;
-a C99 inline definition elsewhere, whose `always_inline` body becomes a
-private copy that direct calls reach), `static __forceinline` stays
+a C99 inline definition elsewhere, whose `always_inline` body reaches LLVM
+as Clang's `available_externally` definition, so a recursive one calls the
+external definition at `-O0` as Clang's does), `static __forceinline` stays
 internal, and `extern __forceinline` defines the external symbol. `noinline`
 still prevails, and `__forceinline` on a redeclaration after the body is
 ignored with Clang's warning.

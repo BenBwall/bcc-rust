@@ -470,4 +470,17 @@ fn private_inline_bodies_do_not_capture_redirected_symbols() {
         .expect("main is defined");
     let main = main.split("\nfunction ").next().unwrap_or(main);
     assert!(main.contains("call @read.always_inline("), "{text}");
+    // The copy names the external function whose `available_externally`
+    // body the LLVM back end makes it (#89), and the text round-trips.
+    let header = private.lines().next().unwrap_or_default();
+    assert!(
+        header.contains("alwaysinline inline_copy_of @read "),
+        "{text}"
+    );
+    let arena = Bump::new();
+    let module = parse_module(&arena, &text).unwrap();
+    let Some(crate::ir::Symbol::Function(copy)) = module.symbol("read.always_inline") else {
+        panic!("{text}");
+    };
+    assert_eq!(module.function(copy).inline_copy_of, Some("read"), "{text}");
 }

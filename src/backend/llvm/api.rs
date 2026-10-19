@@ -230,6 +230,8 @@ pub(super) enum Linkage {
     WeakOdr,
     /// A `WeakOdr` definition that a unit not referencing it may drop.
     LinkOnceOdr,
+    /// A body that only inlining uses; the symbol is defined elsewhere.
+    AvailableExternally,
     /// The special `llvm.global_ctors`, `llvm.global_dtors` and `llvm.used`
     /// arrays.
     Appending,
@@ -514,6 +516,7 @@ impl<'id> Session<'id> {
             | Linkage::ExternWeak => LLVMLinkage::LLVMExternalWeakLinkage,
             | Linkage::WeakOdr => LLVMLinkage::LLVMWeakODRLinkage,
             | Linkage::LinkOnceOdr => LLVMLinkage::LLVMLinkOnceODRLinkage,
+            | Linkage::AvailableExternally => LLVMLinkage::LLVMAvailableExternallyLinkage,
             | Linkage::Appending => LLVMLinkage::LLVMAppendingLinkage,
         };
         // SAFETY: The type system ties handles to this live session; every

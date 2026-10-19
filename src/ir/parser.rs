@@ -139,6 +139,9 @@ fn declare_items<'t>(
                     || (header.linkage != Linkage::Internal
                         && crate::builtins::returns_twice(name.text_name(scratch)?));
                 module.function_mut(func).inlining = header.inlining;
+                if let Some(external) = header.inline_copy_of {
+                    module.set_inline_copy_of(func, external.text_name(scratch)?);
+                }
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
                         _ = cursor.next();
@@ -488,7 +491,8 @@ fn parse_relocation_target<'t>(
 }
 
 /// `function @name(params) [-> ty] linkage [align N] [returns_twice]
-/// [noinline | alwaysinline]` and its symbol attributes, up to the body.
+/// [noinline | alwaysinline] [inline_copy_of @name]` and its symbol
+/// attributes, up to the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
@@ -511,6 +515,11 @@ fn parse_function_header<'t, 's>(
                 .is_some_and(|keyword| cursor.eat(TokenKind::Ident(keyword)))
         })
         .unwrap_or_default();
+    let inline_copy_of = if cursor.eat(TokenKind::Ident("inline_copy_of")) {
+        Some(cursor.symbol()?)
+    } else {
+        None
+    };
     let attributes = WrittenAttributes::parse(cursor)?;
     Ok(FunctionHeader {
         name,
@@ -519,18 +528,20 @@ fn parse_function_header<'t, 's>(
         align,
         returns_twice,
         inlining,
+        inline_copy_of,
         attributes,
     })
 }
 
 struct FunctionHeader<'t, 's> {
-    name:          Token<'t>,
-    signature:     Signature<'s>,
-    linkage:       Linkage,
-    align:         Option<Align>,
-    returns_twice: bool,
-    inlining:      InlineControl,
-    attributes:    WrittenAttributes<'t>,
+    name:           Token<'t>,
+    signature:      Signature<'s>,
+    linkage:        Linkage,
+    align:          Option<Align>,
+    returns_twice:  bool,
+    inlining:       InlineControl,
+    inline_copy_of: Option<Token<'t>>,
+    attributes:     WrittenAttributes<'t>,
 }
 
 /// Parses a body after its `{`, through its `}`.

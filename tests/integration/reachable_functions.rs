@@ -541,16 +541,17 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
         std::fs::remove_file(source_path).unwrap();
     }
 
-    /// MSVC `__forceinline` matches the pinned Clang's linkage, symbols and
-    /// inline control before LLVM's passes (#89): `linkonce_odr`, or
-    /// `weak_odr` with `extern`, on MSVC; on GNU targets a C99 inline
-    /// definition, which Clang emits `available_externally` and bcc as an
-    /// external declaration whose direct calls reach a private
-    /// `.always_inline` copy. `noinline` prevails over it. bcc's optimizer
-    /// then expands every direct call of a `__forceinline` function.
+    /// MSVC `__forceinline` matches the pinned Clang's LLVM IR before
+    /// LLVM's passes (#89), so LLVM's always-inliner sees the same module:
+    /// `linkonce_odr`, or `weak_odr` with `extern`, on MSVC; on GNU targets a
+    /// C99 inline definition, an `available_externally` body that direct
+    /// calls, recursive ones included, name by the external symbol. Each
+    /// definition's linkage, inline control and direct callees must agree.
+    /// `noinline` prevails. bcc's optimizer expands every direct call of a
+    /// non-recursive `__forceinline` function.
     #[test]
     fn forceinline_linkage_and_inlining_match_clang() {
-        const SOURCES: [(&str, &str); 2] = [
+        const SOURCES: [(&str, &str); 3] = [
             (
                 "specifiers",
                 "__forceinline int k(int x) { return x; } static __forceinline int s(int x) { \
@@ -568,6 +569,15 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                  __forceinline int d2(int x) { return x; } __forceinline int d3(int x); \
                  __forceinline int d3(int x) { return x; } int u(int x) { return n1(x) + n2(x) + \
                  d1(x) + d2(x) + d3(x); }",
+            ),
+            (
+                "recursion",
+                "__forceinline int f(int x) { return x ? x * f(x - 1) : 1; } __forceinline int \
+                 h(int); __forceinline int g(int x) { return x ? x * h(x - 1) : 1; } \
+                 __forceinline int h(int x) { return x ? x + g(x - 1) : 0; } inline \
+                 __attribute__((always_inline)) int a(int x) { return x ? a(x - 1) : 0; } static \
+                 __forceinline int s(int x) { return x ? x * s(x - 1) : 1; } int u(int x) { \
+                 return f(x) + g(x) + a(x) + s(x); }",
             ),
         ];
         let clang = clang();
@@ -609,11 +619,14 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                     String::from_utf8_lossy(&output.stderr)
                 );
                 assert_eq!(
-                    inline_contract(&output.stdout, false),
-                    inline_contract(&reference.stdout, true),
+                    inline_contract(&output.stdout),
+                    inline_contract(&reference.stdout),
                     "{target} {name}:\n{}",
                     String::from_utf8_lossy(&output.stdout)
                 );
+                if name == "recursion" {
+                    continue;
+                }
                 let optimized = bcc(source, &[&flags[..], &["--opt=bcc"]].concat());
                 let text = String::from_utf8_lossy(&optimized.stdout);
                 assert!(optimized.status.success(), "{target} {name}: {optimized:?}");
@@ -638,13 +651,104 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
         std::fs::remove_file(source_path).unwrap();
     }
 
-    /// Each defined function with its linkage and inline control, and each
-    /// undefined function a global initializer references. A Clang
-    /// `available_externally` body supplies no symbol: it stands for bcc's
-    /// external declaration and, when `always_inline`, for the private copy
-    /// that bcc's direct calls reach. Declarations carry no inline control
-    /// that matters, and an unreferenced one emits no symbol.
-    fn inline_contract(bytes: &[u8], clang: bool) -> BTreeSet<String> {
+    /// A recursive inline-only `__forceinline` function is not inline
+    /// viable for LLVM, so Clang's caller calls the external definition
+    /// another unit supplies; mutual recursion leaves the inner call
+    /// external. bcc must run the same code at its default level, and plain
+    /// `inline` already does (#89 review).
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn recursive_forceinline_calls_match_clang_at_run_time() {
+        const EXTERNAL: &str = "int f(int x) { return 100 + x; } int g(int x) { return 200 + x; } \
+                                int h(int x) { return 300 + x; }";
+        let root = std::env::temp_dir().join(format!("bcc-forceinline-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let external = root.join("external.c");
+        std::fs::write(&external, EXTERNAL).unwrap();
+        for (name, source) in [
+            (
+                "self",
+                "__forceinline int f(int x) { return x ? x * f(x - 1) : 1; } int main(void) { \
+                 return f(4) % 256; }",
+            ),
+            (
+                "always-inline",
+                "inline __attribute__((always_inline)) int f(int x) { return x ? x * f(x - 1) : \
+                 1; } int main(void) { return f(4) % 256; }",
+            ),
+            (
+                "plain",
+                "inline int f(int x) { return x ? x * f(x - 1) : 1; } int main(void) { return \
+                 f(4) % 256; }",
+            ),
+            (
+                "mutual",
+                "__forceinline int h(int); __forceinline int g(int x) { return x ? x * h(x - 1) : \
+                 1; } __forceinline int h(int x) { return x ? x + g(x - 1) : 0; } int main(void) \
+                 { return g(4) % 256; }",
+            ),
+            (
+                "direct",
+                "__forceinline int f(int x) { return x + 1; } int main(void) { return f(4); }",
+            ),
+        ] {
+            let unit = root.join(format!("{name}.c"));
+            std::fs::write(&unit, source).unwrap();
+            let mut statuses = Vec::new();
+            for compiler in ["clang", "bcc"] {
+                let object = root.join(format!("{name}.{compiler}.o"));
+                let compiled = if compiler == "bcc" {
+                    bcc(
+                        source,
+                        &[
+                            "--target=x86_64-unknown-linux-gnu",
+                            "-fms-extensions",
+                            "-std=c99",
+                            "-c",
+                            "-o",
+                            object.to_str().unwrap(),
+                        ],
+                    )
+                } else {
+                    Command::new(clang())
+                        .args([
+                            "--target=x86_64-unknown-linux-gnu",
+                            "-fms-extensions",
+                            "-std=c99",
+                            "-O0",
+                            "-c",
+                            "-o",
+                        ])
+                        .arg(&object)
+                        .arg(&unit)
+                        .output()
+                        .unwrap()
+                };
+                assert!(compiled.status.success(), "{name} {compiler}: {compiled:?}");
+                let program = root.join(format!("{name}.{compiler}"));
+                let linked = Command::new(clang())
+                    .args(["--target=x86_64-unknown-linux-gnu", "-fuse-ld=lld", "-o"])
+                    .arg(&program)
+                    .arg(&object)
+                    .arg(&external)
+                    .output()
+                    .unwrap();
+                assert!(linked.status.success(), "{name} {compiler}: {linked:?}");
+                let ran = run_native(&mut Command::new(&program)).unwrap();
+                statuses.push(ran.status.code());
+            }
+            assert_eq!(statuses[1], statuses[0], "{name}: bcc against clang");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Each defined function with its linkage, inline control and direct
+    /// callees, and each declared function something references. Clang
+    /// also gives a referenced inline-only function without `alwaysinline`
+    /// an `available_externally` body, which LLVM's O0 pipeline never uses;
+    /// it reads as the declaration bcc emits.
+    fn inline_contract(bytes: &[u8]) -> BTreeSet<String> {
         const WORDS: [&str; 5] = [
             "define",
             "internal",
@@ -673,39 +777,50 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                 ""
             }
         };
-        let referenced = |name: &str| {
+        // `@name` followed by something that cannot continue a name.
+        let mentions = |line: &str, name: &str| {
             let symbol = format!("@{name}");
-            text.lines()
-                .filter(|line| line.starts_with('@'))
-                .filter_map(|line| line.split_once(" = "))
-                .any(|(_, value)| {
-                    value.match_indices(&symbol).any(|(at, _)| {
-                        !value[at + symbol.len()..]
-                            .starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.')
-                    })
-                })
+            line.match_indices(&symbol).any(|(at, _)| {
+                !line[at + symbol.len()..]
+                    .starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.')
+            })
         };
         let mut contract = BTreeSet::new();
-        for line in text
-            .lines()
-            .filter(|line| line.starts_with("define ") || line.starts_with("declare "))
-        {
-            let name = line.split_once('@').unwrap().1.split('(').next().unwrap();
-            let words: Vec<_> = line
-                .split([' ', '('])
-                .filter(|word| WORDS.contains(word))
-                .collect();
-            let control = control(line);
-            let undefined = !words.contains(&"define") || words.contains(&"available_externally");
-            if undefined {
-                if referenced(name) {
-                    _ = contract.insert(format!("{name}: undefined"));
+        let mut current = None;
+        let mut callees = BTreeSet::new();
+        for line in text.lines() {
+            if line.starts_with("define ") || line.starts_with("declare ") {
+                let name = line.split_once('@').unwrap().1.split('(').next().unwrap();
+                if line.starts_with("declare ") {
+                    if text
+                        .lines()
+                        .any(|other| other != line && mentions(other, name))
+                    {
+                        _ = contract.insert(format!("{name}: declare"));
+                    }
+                    continue;
                 }
-                if clang && words.contains(&"available_externally") && control == "alwaysinline" {
-                    _ = contract.insert(format!("{name}.always_inline: define internal {control}"));
+                let words: Vec<_> = line
+                    .split([' ', '('])
+                    .filter(|word| WORDS.contains(word))
+                    .collect();
+                let control = control(line);
+                if words.contains(&"available_externally") && control != "alwaysinline" {
+                    _ = contract.insert(format!("{name}: declare"));
+                    continue;
                 }
-            } else {
-                _ = contract.insert(format!("{name}: {} {control}", words.join(" ")));
+                current = Some(format!("{name}: {} {control}", words.join(" ")));
+                callees.clear();
+            } else if line == "}" {
+                if let Some(definition) = current.take() {
+                    let callees: Vec<_> = callees.iter().map(String::as_str).collect();
+                    _ = contract.insert(format!("{definition} calls [{}]", callees.join(" ")));
+                }
+            } else if current.is_some()
+                && let Some((_, callee)) = line.split_once(" call ")
+                && let Some((_, callee)) = callee.split_once('@')
+            {
+                _ = callees.insert(callee.split('(').next().unwrap().to_owned());
             }
         }
         contract
