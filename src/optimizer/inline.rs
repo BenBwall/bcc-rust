@@ -140,7 +140,13 @@ fn live_size(draft: &Draft<'_, '_>) -> usize {
 
 /// Splits the call's block, reserves all copied definitions before remapping
 /// operands (layout need not be dominance order), and joins every return.
-fn expand(draft: &mut Draft<'_, '_>, body: &Body<'_>, block: Block, position: usize, call: Inst) {
+pub(super) fn expand(
+    draft: &mut Draft<'_, '_>,
+    body: &Body<'_>,
+    block: Block,
+    position: usize,
+    call: Inst,
+) {
     let scratch = draft.scratch;
     let InstData::Call { args, .. } = *draft.inst(call) else {
         unreachable!()

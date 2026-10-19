@@ -680,6 +680,67 @@ void call(void) { f(); }
     assert!(text.contains("call @f.always_inline("), "{text}");
 }
 
+/// A plain inline-only body is lowered as a copy that names its external
+/// function and that nothing calls: calls keep naming the external
+/// function, and the LLVM back end makes the copy its
+/// `available_externally` body, as Clang emits it when optimizing (#109).
+/// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+#[test]
+fn plain_inline_only_bodies_are_unreferenced_copies() {
+    let text = lowered(
+        "inline int f(int x) { return x ? x * f(x - 1) : 1; } int u(int x) { return f(x); }",
+    );
+    let copy = text
+        .split("function @f.inline(")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the copy is defined\n{text}"));
+    assert!(
+        copy.lines()
+            .next()
+            .is_some_and(|header| header.ends_with("internal inline_copy_of @f {")),
+        "{text}"
+    );
+    // Its own recursive call names the external function too.
+    assert!(!text.contains("call @f.inline("), "{text}");
+    assert!(text.contains("call @f("), "{text}");
+    assert!(
+        text.contains("function @f(i32 noundef) -> i32 external\n"),
+        "{text}"
+    );
+}
+
+/// No copy where Clang emits no `available_externally` body: an unused,
+/// `noinline` or assembly body, or one that calls its own symbol through
+/// another entity (an assembler label or a builtin's library name).
+#[test]
+fn plain_inline_copies_follow_clang_emission() {
+    for source in [
+        "inline int f(int x) { return x + 1; } int u(int x) { return x; }",
+        "inline __attribute__((noinline)) int f(int x) { return x + 1; } int u(int x) { return \
+         f(x); }",
+        "inline int f(int x) { __asm__(\"\"); return x + 1; } int u(int x) { return f(x); }",
+        "extern int real(int) __asm__(\"f\"); inline int f(int x) { return real(x); } int u(int \
+         x) { return f(x); }",
+        "inline int abs(int x) { return __builtin_abs(x); } int u(int x) { return abs(x); }",
+    ] {
+        let text = lowered(source);
+        assert!(!text.contains(".inline("), "{source}\n{text}");
+    }
+}
+
+/// Plain inline-only bodies were not lowered before #109: a construct that
+/// lowering refuses in one keeps calling the external definition instead
+/// of refusing the unit.
+#[test]
+fn a_refused_plain_inline_body_keeps_the_external_call() {
+    let text = lowered(
+        "extern inline __attribute__((gnu_inline)) int readgs(void) { return *(int \
+         __attribute__((address_space(256))) *)0; } int main(void) { return readgs(); }",
+    );
+    assert!(!text.contains("readgs.inline"), "{text}");
+    assert!(text.contains("call @readgs("), "{text}");
+}
+
 /// A weak inline definition is a weak definition, emitted where it is
 /// referenced, as Clang emits it; a strong definition elsewhere wins. A
 /// GNU89 plain inline definition is an external definition anyway.

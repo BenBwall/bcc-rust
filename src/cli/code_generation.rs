@@ -60,6 +60,7 @@ use crate::{
         parse_pass_list,
     },
     pipeline::{
+        InlineCopies,
         MiddleEndError,
         analyze_translation_unit,
         lower_translation_unit_diagnosed,
@@ -121,8 +122,16 @@ pub(super) fn generate_code<'tu>(
     } else {
         Profile::PostAbi
     };
-    let lowered =
-        lower_translation_unit_diagnosed(context, &unit, &sema, &ir, optimizer.as_ref(), profile);
+    let copies = options.inline_copies();
+    let lowered = lower_translation_unit_diagnosed(
+        context,
+        &unit,
+        &sema,
+        &ir,
+        optimizer.as_ref(),
+        profile,
+        copies,
+    );
     let llvm_output =
         options.emit.is_none() && options.output_path.is_some() && options.backend == BackEnd::Llvm;
     let diagnosed = match lowered {
@@ -481,6 +490,22 @@ impl CodeGeneration {
             OutputKind::PositionDependentExecutable
         } else {
             OutputKind::Executable
+        }
+    }
+
+    /// What the middle end does with inline copies: the interpreter and the
+    /// native back end make LLVM's inlining choices themselves, and LLVM
+    /// gets the copies as `available_externally` bodies, the plain ones only
+    /// when its IR pipeline optimizes, as Clang emits them.
+    fn inline_copies(&self) -> InlineCopies {
+        if self.backend == BackEnd::Native || (self.emit.is_none() && self.output_path.is_none()) {
+            InlineCopies::Resolve
+        } else if !self.llvm_codegen_only
+            && matches!(self.llvm_opt, LlvmOpt::O1 | LlvmOpt::O2 | LlvmOpt::O3)
+        {
+            InlineCopies::Keep
+        } else {
+            InlineCopies::KeepAlwaysInline
         }
     }
 
