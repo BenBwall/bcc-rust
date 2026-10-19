@@ -13,7 +13,10 @@ TRIPLES = ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-w64-
 
 
 def exclusion(name):
-    if name.startswith(("__clang", "__GNUC")) or name in {"__VERSION__", "__llvm__", "_MSC_VER", "_MSC_FULL_VER", "_MSC_BUILD", "_MSC_EXTENSIONS", "__STDC_HOSTED__"}:
+    # Clang's own identity (__clang__ and its version, __llvm__, __VERSION__
+    # and the literal encodings) is frozen with the target; the GNU claim
+    # follows the inline mode and the MSVC claim follows -fms-extensions.
+    if name.startswith("__GNUC") or name in {"_MSC_VER", "_MSC_FULL_VER", "_MSC_BUILD", "_MSC_EXTENSIONS", "__STDC_HOSTED__"}:
         return "Compiler identity/version or hosted-mode contract owned separately."
     if name in {"__STDC__", "__STDC_VERSION__", "__STRICT_ANSI__"} or name.startswith("__STDC_EMBED_"):
         return "Existing language-mode preprocessor builtin; not a target definition."
@@ -33,7 +36,9 @@ def exclusion(name):
         return "Extended integer syntax exists but these widths lack semantic types."
     if name in {"__FXSR__", "__GCC_ASM_FLAG_OUTPUTS__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:
         return "Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented."
-    if name in {"__PIC__", "__pic__", "__PIE__", "__pie__", "__code_model_small__", "__NO_INLINE__", "__NO_MATH_ERRNO__", "__tune_k8__"}:
+    if name in {"__PIC__", "__pic__", "__PIE__", "__pie__"}:
+        return "Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros."
+    if name in {"__code_model_small__", "__NO_INLINE__", "__NO_MATH_ERRNO__", "__tune_k8__"}:
         return "Code generation, relocation and optimization policy are not implemented."
     if name in {"__CONSTANT_CFSTRINGS__", "__OBJC_BOOL_IS_BOOL"}:
         return "Objective-C and CoreFoundation string intrinsics are not implemented."

@@ -1,0 +1,118 @@
+warning: unknown attribute ignored: `frobnicate` [-Wunknown-attributes]
+ --> sema-gnu-attributes.c:2:16
+  |
+2 | __attribute__((frobnicate)) int unknown;
+  |                ^^^^^^^^^^ unknown attribute
+  |
+  = note: Clang -Wunknown-attributes: bcc does not know this attribute and ignores it
+
+error: weak declaration cannot have internal linkage
+ --> sema-gnu-attributes.c:3:36
+  |
+3 | static int internal __attribute__((weak));
+  |                                    ^^^^ weak declaration without external linkage
+  |
+  = note: GCC Common Function Attributes: weak makes an external symbol overridable; internal and automatic identifiers have no external symbol
+
+warning: attribute ignored: `weak` [-Wignored-attributes]
+ --> sema-gnu-attributes.c:4:38
+  |
+4 | typedef int weak_type __attribute__((weak));
+  |                                      ^^^^ attribute ignored here
+  |
+  = note: Clang -Wignored-attributes: the attribute does not apply to this declaration, or bcc drops its effect (see language-standards.md, "Attribute status")
+
+error: definition cannot also be an alias: `defined`
+ --> sema-gnu-attributes.c:6:28
+  |
+6 | int defined __attribute__((alias("target")));
+  |                            ^^^^^ definition with an alias attribute
+  |
+  = note: GCC Common Function Attributes: an alias declaration takes its definition from its target; tentative definitions are definitions
+
+warning: constructor and destructor priorities from 0 to 100 are reserved for the implementation: `constructor`
+  --> sema-gnu-attributes.c:13:16
+   |
+13 | __attribute__((constructor(50))) void reserved(void) {}
+   |                ^^^^^^^^^^^ reserved priority
+   |
+   = note: GCC -Wprio-ctor-dtor: priorities 0 to 100 are reserved; bundled Clang accepts them silently
+
+error: constructor and destructor priorities must be integers from 0 to 65535: `destructor`
+  --> sema-gnu-attributes.c:14:16
+   |
+14 | __attribute__((destructor(70000))) void too_large(void) {}
+   |                ^^^^^^^^^^ priority outside 0 to 65535
+   |
+   = note: GCC Common Function Attributes: priorities are integers from 0 to 65535 inclusive
+
+warning: attribute ignored: `constructor` [-Wignored-attributes]
+  --> sema-gnu-attributes.c:15:16
+   |
+15 | __attribute__((constructor)) int not_a_function;
+   |                ^^^^^^^^^^^ attribute ignored here
+   |
+   = note: Clang -Wignored-attributes: the attribute does not apply to this declaration, or bcc drops its effect (see language-standards.md, "Attribute status")
+
+warning: calling convention is not supported for this target: `stdcall`
+  --> sema-gnu-attributes.c:16:40
+   |
+16 | void stdcall_here(void) __attribute__((stdcall));
+   |                                        ^^^^^^^ convention ignored on this target
+   |
+   = note: Clang -Wignored-attributes: x86-64 outside Windows uses one C calling convention
+
+error: attribute only applies to functions and global variables: `section`
+  --> sema-gnu-attributes.c:18:34
+   |
+18 |     int automatic __attribute__((section(".data")));
+   |                                  ^^^^^^^ not a function or global variable
+   |
+   = note: Clang: alias and section name a symbol, which automatic variables do not have
+
+error: alias must point to a defined variable or function
+ --> sema-gnu-attributes.c:7:36
+  |
+7 | extern int dangling __attribute__((alias("missing")));
+  |                                    ^^^^^ alias target is not defined here
+  |
+  = note: GCC Common Function Attributes: the target names a definition in the same translation unit, by its emitted symbol name
+
+error: alias and target must both be functions or both be variables
+  --> sema-gnu-attributes.c:9:35
+   |
+ 8 | void function(void) {}
+   |      -------- aliasee is declared here
+ 9 | extern int crossed __attribute__((alias("function")));
+   |                                   ^^^^^ alias and target differ in kind
+   |
+   = note: Clang: a function cannot alias a variable, nor a variable a function
+
+error: alias definition is part of a cycle
+  --> sema-gnu-attributes.c:10:34
+   |
+10 | extern int loop_a __attribute__((alias("loop_b")));
+   |                                  ^^^^^ alias is part of a cycle
+   |
+   = note: Clang: following alias targets must reach a definition
+
+error: alias definition is part of a cycle
+  --> sema-gnu-attributes.c:11:34
+   |
+11 | extern int loop_b __attribute__((alias("loop_a")));
+   |                                  ^^^^^ alias is part of a cycle
+   |
+   = note: Clang: following alias targets must reach a definition
+
+warning: alias and aliasee have different types
+  --> sema-gnu-attributes.c:12:34
+   |
+ 8 | void function(void) {}
+   |      -------- aliasee is declared here
+...
+12 | void retyped(int) __attribute__((alias("function")));
+   |                                  ^^^^^ alias type differs from its target's
+   |
+   = note: Clang -Wattribute-alias: calls through the alias use the alias's type
+
+8 errors and 6 warnings generated.

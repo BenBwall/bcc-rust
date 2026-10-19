@@ -10,44 +10,34 @@
 use std::fmt::Write as _;
 
 use super::{
-    ArenaVec,
-    ArrayBound,
     BindingKind,
-    Bump,
-    Context,
     Duration,
     Linkage,
     ScopeKind,
     SemanticTranslationUnit,
-    TagKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
     expressions::{
         ConstantClass,
         ConversionKind,
         ValueCategory,
     },
+    types::{
+        ArrayBound,
+        TagKind,
+        TypeId,
+        TypeKind,
+    },
 };
-use crate::util::bump::ArenaString;
-
-#[derive(Clone, Copy)]
-enum Part<'tu> {
-    Text(&'tu str),
-    Type(TypeId),
-    Function(&'tu [TypeId], bool, bool),
-}
-
-/// One inspected item of a scope, in discovery order within its table.
-#[derive(Clone, Copy)]
-enum Item {
-    Tag(usize),
-    Binding(usize),
-}
-
-/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
-/// as in syntax inspection, so output stays linear in the item count.
-const MAXIMUM_INDENT: usize = 32;
+use crate::{
+    translation_phases::{
+        Context,
+        parsing::declaration_syntax::TypeQualifiers,
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
+};
 
 impl<'tu> SemanticTranslationUnit<'tu> {
     pub(crate) fn inspect<'d>(&self, context: &Context<'tu>, arena: &'d Bump) -> &'d str {
@@ -79,16 +69,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         for (index, binding) in self.bindings.iter().enumerate() {
             items[binding.scope].push(Item::Binding(index));
         }
-        let mut minimums = super::ArenaMap::with_hasher_in(super::FxBuildHasher, arena);
-        for (_, parameters) in self.parameters {
-            for parameter in *parameters {
-                if let (Some(name), Some(ArrayBound::Constant(minimum))) =
-                    (parameter.name, parameter.array_minimum)
-                {
-                    _ = minimums.insert(name.source_vectors, minimum);
-                }
-            }
-        }
         let mut depths = ArenaVec::new_in(arena);
         for scope in self.scopes {
             let depth = scope.parent.map_or(0, |parent: usize| depths[parent] + 1);
@@ -116,21 +96,20 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     },
                     | Item::Binding(binding) => {
                         indent(&mut out, depth + 1);
-                        self.write_binding(binding, &minimums, context, arena, &mut out);
+                        self.write_binding(binding, context, arena, &mut out);
                     },
                 }
             }
         }
-        for &(_, ty) in self.type_names {
+        for fact in self.type_names {
+            let ty = fact.resolved;
             let _ = writeln!(
                 out,
                 "type-name type={}",
                 self.type_value(ty, context, arena)
             );
         }
-        let mut identities = super::ArenaMap::with_hasher_in(super::FxBuildHasher, arena);
         for (index, info) in self.expressions.iter().enumerate() {
-            _ = identities.insert(std::ptr::from_ref(info.expression).addr(), index);
             let _ = write!(
                 out,
                 "expression {index} type={} category={}",
@@ -171,14 +150,18 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 | ConstantClass::None => {},
                 | ConstantClass::Arithmetic => out.push_str(" constant=arithmetic"),
                 | ConstantClass::Address => out.push_str(" constant=address"),
+                | ConstantClass::LabelDifference => out.push_str(" constant=label-difference"),
             }
             out.push('\n');
         }
-        for conversion in self.conversions {
-            let index = identities
-                .get(&std::ptr::from_ref(conversion.expression).addr())
-                .copied()
-                .unwrap_or(usize::MAX);
+        // Each expression's run, in application order, then the records whose
+        // operand has no retained result.
+        let runs = (0..self.expressions.len())
+            .flat_map(|index| self.conversions_of(index).iter().map(move |c| (index, c)));
+        let unowned = self.conversions[self.conversion_starts[self.expressions.len()]..]
+            .iter()
+            .map(|c| (self.expression_index(c.expression).unwrap_or(usize::MAX), c));
+        for (index, conversion) in runs.chain(unowned) {
             let _ = writeln!(
                 out,
                 "convert expression {index} kind={} type={}",
@@ -189,6 +172,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     | ConversionKind::Arithmetic => "arithmetic",
                     | ConversionKind::Assignment => "assignment",
                     | ConversionKind::DefaultArgument => "default-argument",
+                    | ConversionKind::TransparentUnion => "transparent-union",
                 },
                 self.type_value(conversion.ty, context, arena)
             );
@@ -278,7 +262,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     fn write_binding<'d>(
         &self,
         index: usize,
-        minimums: &super::ArenaMap<'d, super::SourceVectors, u64>,
         context: &Context<'tu>,
         arena: &'d Bump,
         out: &mut ArenaString<'d>,
@@ -299,7 +282,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         );
         if let TypeKind::Function {
             prototype: true, ..
-        } = self.types.nodes[binding.ty.index]
+        } = self.types.kind(binding.ty)
             && binding.kind == BindingKind::Function
         {
             out.push_str(" prototype");
@@ -307,7 +290,9 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         if let Some(value) = binding.value {
             let _ = write!(out, " value={value}");
         }
-        if let Some(minimum) = minimums.get(&binding.name.source_vectors) {
+        if let Some(ArrayBound::Constant(minimum)) =
+            self.correspondence.parameter_minimums.get(&index)
+        {
             let _ = write!(out, " static-minimum={minimum}");
         }
         match binding.linkage {
@@ -320,6 +305,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 | Duration::None => {},
                 | Duration::Automatic => out.push_str(" duration=automatic"),
                 | Duration::Static => out.push_str(" duration=static"),
+                | Duration::Thread => out.push_str(" duration=thread"),
             }
         }
         if matches!(binding.kind, BindingKind::Object | BindingKind::Parameter)
@@ -377,7 +363,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     let mut right = ArenaVec::new_in(arena);
                     let mut pointer = false;
                     let base = loop {
-                        match self.types.nodes[ty.index] {
+                        match self.types.kind(ty) {
                             | TypeKind::Pointer(next) => {
                                 let words = qualifiers(ty.qualifiers);
                                 if !words.is_empty() {
@@ -398,7 +384,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                                 }
                                 let text = match bound {
                                     | ArrayBound::Incomplete => "[]",
-                                    | ArrayBound::Variable => "[*runtime*]",
+                                    | ArrayBound::Variable(_) => "[*runtime*]",
                                     | ArrayBound::Star => "[*]",
                                     | ArrayBound::Constant(n) =>
                                         crate::diagnostics::format_in!(arena, "[{n}]"),
@@ -433,7 +419,8 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                                 )));
                                 ty = element;
                             },
-                            | TypeKind::Unknown => break "<unanalyzed>",
+                            | TypeKind::Nullptr => break "nullptr_t",
+                            | TypeKind::Unknown | TypeKind::Unmodeled(_) => break "<unanalyzed>",
                             | TypeKind::Atomic(value) => {
                                 left.push(Part::Text("_Atomic("));
                                 right.push(Part::Text(")"));
@@ -474,6 +461,24 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         }
     }
 }
+
+/// One inspected item of a scope, in discovery order within its table.
+#[derive(Clone, Copy)]
+enum Item {
+    Tag(usize),
+    Binding(usize),
+}
+
+#[derive(Clone, Copy)]
+enum Part<'tu> {
+    Text(&'tu str),
+    Type(TypeId),
+    Function(&'tu [TypeId], bool, bool),
+}
+
+/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
+/// as in syntax inspection, so output stays linear in the item count.
+const MAXIMUM_INDENT: usize = 32;
 
 fn indent(out: &mut ArenaString<'_>, depth: usize) {
     for _ in 0..depth.min(MAXIMUM_INDENT) {

@@ -7,15 +7,6 @@ use std::path::{
     PathBuf,
 };
 
-use super::{
-    Context,
-    Preprocessor,
-    PreprocessorError,
-    PreprocessorErrorType,
-    SharedVec,
-    TokenType,
-    TranslationError,
-};
 use crate::{
     configuration::{
         CStandard,
@@ -24,11 +15,22 @@ use crate::{
     },
     test_support::TempDir,
     translation_phases::{
+        Context,
         ErrorSeverity,
         GetSeverity,
         GetSourceVectors,
         SourceVector,
+        TranslationError,
+        preprocessing::{
+            Preprocessor,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            token::TokenType,
+        },
     },
+    util::shared::SharedVec,
 };
 
 /// The header `"dir\file.h"` names: a file in `dir` where backslash separates

@@ -54,12 +54,8 @@ use crate::translation_phases::{
 
 #[test]
 fn varargs_builtin_missing_open_preserves_statement_and_typedef_boundaries() {
-    for (name, keyword) in [
-        ("__builtin_va_start", KeywordTokenType::BuiltinVaStart),
-        ("__builtin_va_end", KeywordTokenType::BuiltinVaEnd),
-        ("__builtin_va_copy", KeywordTokenType::BuiltinVaCopy),
-        ("__builtin_va_arg", KeywordTokenType::BuiltinVaArg),
-    ] {
+    {
+        let (name, keyword) = ("__builtin_va_arg", KeywordTokenType::BuiltinVaArg);
         let source = format!("void f(void) {{ {name}; typedef int T; T x; }} int after;\n");
         with_parse(&source, |parsed| {
             let errors = parser_errors(parsed).collect::<Vec<_>>();
@@ -106,6 +102,32 @@ fn varargs_builtin_missing_open_preserves_statement_and_typedef_boundaries() {
                 .as_deref(),
                 Some("after")
             );
+        });
+    }
+}
+
+#[test]
+fn expression_only_varargs_spellings_accept_ordinary_declarators_and_calls() {
+    for name in [
+        "__builtin_va_start",
+        "__builtin_va_end",
+        "__builtin_va_copy",
+    ] {
+        let source =
+            format!("void f(void){{int (*{name})(int);{name}(1);typedef int T;T x;}} int after;\n");
+        with_parse(&source, |parsed| {
+            assert_eq!(parser_errors(parsed).count(), 0);
+            let items = block_items(function_definition(parsed, 0).body);
+            let BlockItem::Statement(statement) = items[1] else {
+                panic!("call statement");
+            };
+            let StatementType::Expression(ExpressionSlot::Parsed(expression)) = statement.kind
+            else {
+                panic!("call expression");
+            };
+            assert!(matches!(expression.kind, ExpressionType::Call { .. }));
+            assert_eq!(items.len(), 4);
+            assert_eq!(parsed.items.len(), 2);
         });
     }
 }

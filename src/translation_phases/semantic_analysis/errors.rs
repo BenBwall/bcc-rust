@@ -26,10 +26,32 @@ use crate::{
     },
 };
 
+/// Semantic error with primary and optional prior-declaration provenance.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SemanticError {
+    pub(crate) extension_severity: Option<ErrorSeverity>,
+    pub(crate) kind:               SemanticErrorKind,
+    pub(crate) source_vectors:     SourceVectors,
+    pub(crate) name:               Option<StringCacheId>,
+    pub(crate) previous:           Option<SourceVectors>,
+}
+
 /// Symbolic semantic diagnostic, independent of rendered text.
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SemanticErrorKind {
+    /// Pointer constraints diagnosed with Clang's group/default severity.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.5.9p2, p. 86; PDF p. 98;
+    /// §6.5.8p2, p. 85; PDF p. 97; §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84;
+    /// §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126; PDF p. 138.
+    PointerConstraint(crate::configuration::DiagnosticGroup),
+    /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC pragma extension.
+    PragmaPackMalformed,
+    PragmaPackPopEmpty,
+    PragmaPackPopNameAlignment,
+    PragmaPackUnterminated,
+    PragmaPackShow(u32),
     /// C99: §7.15p3, p. 249; PDF p. 261.
     InvalidVaList,
     /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
@@ -100,10 +122,38 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Local Labels".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     UndefinedLocalLabel,
+    /// GNU extension: GCC "Statement Exprs" forbids jumping into expressions.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended goto constraint).
+    JumpIntoStatementExpression,
+    /// GNU extension to switch dispatch, C99 §6.8.4.2p5, p. 134; PDF p. 146.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    SwitchIntoStatementExpression,
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     JumpIntoVariableScope,
     /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
     SwitchIntoVariableScope,
+    /// GNU extension: a computed goto may reach every address-taken label,
+    /// so one inside a variably modified scope the goto is outside of is an
+    /// error, as in Clang. C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectJumpIntoVariableScope,
+    /// GNU extension: GCC "Statement Exprs" makes a computed goto into a
+    /// statement expression undefined; Clang rejects a possible one.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    IndirectJumpIntoStatementExpression,
+    /// GNU extension: a computed goto can only reach labels whose address
+    /// is taken in its function, so without one it has no target; Clang
+    /// rejects it. <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectGotoWithoutLabels,
+    /// GNU extension: a computed goto's operand converts to `const void *`
+    /// as by simple assignment. C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    InvalidComputedGoto,
+    /// GNU extension: `&&label` names a label of the enclosing function, so
+    /// it cannot appear outside a function body.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    LabelAddressOutsideFunction,
     /// C99: §6.8.1p2, p. 131; PDF p. 143.
     CaseOutsideSwitch,
     /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
@@ -121,8 +171,42 @@ pub(crate) enum SemanticErrorKind {
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
     UndeclaredIdentifier,
+    /// Clang-compatible extension, `-Wpredefined-identifier-outside-function`;
+    /// C99: §6.4.2.2p1, p. 52; PDF p. 64.
+    PredefinedOutsideFunction,
+    /// Clang-compatible extension; C99: §6.5.2.2p6,p9, pp. 71-72;
+    /// PDF pp. 83-84; §7.1.4p2, p. 167; PDF p. 179.
+    ImplicitLibraryFunction(StringCacheId),
     /// C99: §6.5.3.2p1, p. 78; PDF p. 90.
     InvalidAddressOperand,
+    /// Intrinsic-only GNU builtins have no addressable external function.
+    /// GNU extension: GCC manual, "Built-in Functions Provided by GCC".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html>
+    BuiltinRequiresCall,
+    /// A checked library builtin whose prototype names `FILE` before the
+    /// program declares it, as Clang requires `<stdio.h>`.
+    /// GNU extension: GCC "Object Size Checking"; C99: §7.19.1p2, p. 262;
+    /// PDF p. 274.
+    BuiltinRequiresHeader,
+    /// GNU extension: GCC "Object Size Checking" mode constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
+    InvalidObjectSizeMode,
+    /// GNU extension: GCC "Getting the Return or Frame Address of a Function"
+    /// level constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+    InvalidFrameLevel,
+    /// GNU extension: GCC "Other Builtins" probability constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidBuiltinProbability,
+    /// GNU extension: GCC "Other Builtins" alignment constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidBuiltinAlignment,
+    /// GNU extension: GCC "Other Builtins" prefetch read/write constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidPrefetchReadWrite,
+    /// GNU extension: GCC "Other Builtins" prefetch locality constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidPrefetchLocality,
     /// C99: §6.5.3p1, p. 78; PDF p. 90.
     InvalidUnaryOperand,
     /// C99: §6.5.16p2, p. 91; PDF p. 103.
@@ -155,6 +239,12 @@ pub(crate) enum SemanticErrorKind {
     InvalidArgumentCount,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentType,
+    /// Clang: Microsoft's `selectany` applies to data with external linkage.
+    /// MSVC extension: Microsoft Learn, "selectany".
+    SelectAnySubject,
+    /// Clang: Microsoft's `__annotation` takes wide string literals only.
+    /// MSVC extension: Microsoft Learn, "__annotation".
+    AnnotationArgument,
     /// C99: §6.5.2.5p1, p. 75; PDF p. 87.
     InvalidCompoundLiteral,
     /// C99: §6.8.4.1p1, p. 133; PDF p. 145.
@@ -168,6 +258,27 @@ pub(crate) enum SemanticErrorKind {
     InvalidInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
+    /// A flexible array member given elements outside a static object's own
+    /// structure; GNU C allows only that case, and Clang an empty list too.
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
+    FlexibleArrayInitializer,
+    /// A designator naming a flexible array member with an initializer that
+    /// is neither a brace-enclosed list nor a string literal, an error in
+    /// GCC and Clang. GNU extension: GCC manual, "Arrays of Length Zero".
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p16, p. 126; PDF p. 138.
+    FlexibleArrayBraces,
+    /// A designator into an element of a flexible array member, which GCC
+    /// and Clang reject. GNU extension: GCC manual, "Arrays of Length Zero".
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p6-7, p. 125; PDF p. 137.
+    FlexibleArrayDesignator,
+    /// Clang's `-Winitializer-overrides`: a later initializer replaces all
+    /// of a subobject an earlier one initialized.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139.
+    InitializerOverride,
+    /// Clang's `-Winitializer-overrides`: a later initializer replaces part
+    /// of a subobject an earlier expression initialized as a whole.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139.
+    PartialInitializerOverride,
     /// C99: §6.7.8p6-7, p. 125; PDF p. 137.
     InvalidDesignator,
     /// C99: §6.7.8p4, p. 125; PDF p. 137.
@@ -176,6 +287,14 @@ pub(crate) enum SemanticErrorKind {
     InvalidStorage,
     /// C99: §6.7.1p5, p. 98; PDF p. 110.
     InvalidFunctionStorage,
+    /// C11: §6.7.1p4, p. 109; PDF p. 127.
+    ThreadLocalFunction,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalBlockScope,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalAfterNonThreadLocal,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    NonThreadLocalAfterThreadLocal,
     /// C99: §6.7.8p5, p. 125; PDF p. 137.
     LinkedBlockInitializer,
     /// C99: §6.7.3p2, p. 108; PDF p. 120.
@@ -210,8 +329,6 @@ pub(crate) enum SemanticErrorKind {
     TagKindMismatch,
     /// C99: §6.7.2.3p1, p. 106; PDF p. 118.
     TagRedefinition,
-    /// C99: §6.7.2.3p3, p. 106; PDF p. 118.
-    IncompleteEnum,
     /// C99: §6.6p3-6, p. 95; PDF p. 107.
     InvalidConstant,
     /// C99: §6.6p4; 6.5p5, p. 95; 67; PDF p. 107; 79.
@@ -267,6 +384,18 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Other Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     InvalidChooseCondition,
+    /// Clang extension: a selected `diagnose_if` or `unavailable` contract.
+    /// <https://clang.llvm.org/docs/AttributeReference.html#diagnose-if>
+    CallAttribute,
+    /// GNU function `warning` attribute on an emitted direct call.
+    CallAttributeWarning,
+    /// Clang extension: overload candidates require viable conversions and
+    /// satisfied `enable_if` predicates.
+    /// <https://clang.llvm.org/docs/AttributeReference.html#overloadable>
+    NoViableOverload,
+    /// Clang extension: overload selection requires a unique best candidate.
+    /// <https://clang.llvm.org/docs/AttributeReference.html#overloadable>
+    AmbiguousOverload,
     /// GCC Vector Extensions and Clang Vectors and Extended Vectors.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -274,6 +403,32 @@ pub(crate) enum SemanticErrorKind {
     /// Vectors".
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#vectors-and-extended-vectors>
     InvalidVectorAttribute,
+    InvalidAlignmentAttribute,
+    InvalidStandardAlignment,
+    InvalidModeAttribute,
+    /// A `transparent_union` attribute ignored, as Clang warns: it names no
+    /// union definition, or the union has no member, a floating or vector
+    /// first member, or a member whose size differs from the first's or
+    /// whose alignment exceeds it.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    IgnoredTransparentUnion,
+    /// `transparent_union` written on a declaration of something other than
+    /// a union type: an object, function, parameter, member, structure or
+    /// non-union typedef, which Clang ignores with a warning.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    TransparentUnionNotUnion,
+    /// `transparent_union` on a union specifier that does not define the
+    /// union, which Clang ignores with a warning.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    TransparentUnionNotDefinition,
+    /// `transparent_union` in the specifiers of a declaration that declares
+    /// only a tag of this kind, outside the tag's specifier, which Clang
+    /// ignores with a warning that the attribute belongs after the keyword.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+    TransparentUnionPlacement(super::types::TagKind),
     /// GCC Vector Extensions: compatible lanes and safe scalar splats.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -286,20 +441,209 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "x86 Built-in Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     InvalidImmediate,
+    /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
+    /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
+    /// ignored). GNU extension: GCC manual, "Attribute Syntax".
+    UnknownAttribute,
+    /// Clang `-Wignored-attributes`: an attribute that does not apply to
+    /// this declaration, or whose effect bcc drops.
+    /// Clang extension: Clang Attributes Reference.
+    IgnoredAttribute,
+    /// Clang `-Wignored-attributes`: a 32-bit x86 calling convention that
+    /// x86-64 targets other than Windows do not support.
+    IgnoredConvention,
+    /// Clang: an attribute's arguments have the wrong number or kind.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    AttributeArguments,
+    /// Clang: an attribute argument must be an integer constant.
+    /// C99: §6.6p6, p. 95; PDF p. 107.
+    AttributeRequiresConstant,
+    /// GCC: constructor and destructor priorities are 0 to 65535.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    InvalidPriority,
+    /// GCC `-Wprio-ctor-dtor`: priorities 0 to 100 are reserved.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    ReservedPriority,
+    /// Clang: `alias` and `section` apply to functions and global variables.
+    /// GNU extension: GCC manual, "Common Variable Attributes".
+    AttributeSubject,
+    /// Clang: a weak declaration needs external linkage.
+    /// GNU extension: GCC manual, "Common Function Attributes", weak.
+    WeakInternal,
+    /// Clang: a definition cannot also be an alias.
+    /// GNU extension: GCC manual, "Common Function Attributes", alias.
+    AliasDefinition,
+    /// Clang: an alias names a definition of this translation unit.
+    /// GNU extension: GCC manual, "Common Function Attributes", alias.
+    AliasTarget,
+    /// Clang: a function aliases a function and a variable a variable.
+    AliasKind,
+    /// Clang: aliases that name each other in a cycle.
+    AliasCycle,
+    /// Clang `-Wattribute-alias`: alias and target have different types.
+    AliasTypeMismatch,
+    /// Clang `-Wsection`: a redeclaration names another section.
+    SectionMismatch,
+    /// Clang `-Wignored-attributes`: an unsupported visibility argument.
+    InvalidVisibility,
+    /// Clang: the cleanup argument names no function.
+    /// GNU extension: GCC manual, "Common Variable Attributes", cleanup.
+    CleanupNotFunction,
+    /// Clang: cleanup names one function, not an overload set.
+    CleanupOverloadSet,
+    /// Clang: the cleanup function takes exactly one parameter.
+    CleanupParameterCount,
+    /// Clang: a pointer to the variable converts to the cleanup function's
+    /// parameter type. C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    CleanupParameterType,
+    /// Clang: a goto cannot bypass a cleanup variable's declaration.
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended to cleanup scopes).
+    JumpIntoCleanupScope,
+    /// Clang: switch dispatch cannot bypass a cleanup variable's
+    /// declaration. C99: §6.8.4.2p2, p. 134; PDF p. 146 (extended).
+    SwitchIntoCleanupScope,
+    /// Clang: an indirect goto cannot enter or leave a cleanup variable's
+    /// scope. GNU extension: GCC manual, "Labels as Values".
+    IndirectJumpCleanupScope,
+    /// Clang `-Wignored-attributes`: an attribute a redeclaration adds after
+    /// the entity's definition is ignored.
+    /// Clang extension: Clang `SemaDecl.cpp`, `checkNewAttributesAfterDef`.
+    AttributeAfterDefinition,
+    /// Clang `-Winvalid-unevaluated-string`: an attribute's string names
+    /// text, so an encoding prefix has no effect.
+    /// C23: §6.4.5p1, p. 67; PDF p. 80 (encoding prefixes).
+    UnevaluatedStringPrefix,
+    /// Clang `-Wignored-attributes`: `__declspec` takes only the names
+    /// Clang lists in that spelling, without GNU underscore wrapping.
+    /// MSVC extension: Microsoft Learn, "`__declspec`".
+    UnsupportedDeclspec,
+    /// Clang `-Wignored-attributes`: MinGW does not import an inline
+    /// function. MSVC extension: Microsoft Learn, "dllexport, dllimport".
+    DllImportOnInline,
+    /// Clang `-Wignored-attributes`: on MinGW, an inline redeclaration
+    /// drops an earlier `dllimport`.
+    DllImportRedeclaredInline,
+    /// Clang `-Wdll-attribute-on-redeclaration`: a redeclaration adds
+    /// `dllimport` or `dllexport` to an entity declared without it.
+    DllAttributeOnRedeclaration,
+    /// Clang: once a variable is used, or a function is used and the new
+    /// attribute is `dllexport`, a redeclaration cannot add DLL storage.
+    DllAttributeAfterUse,
+    /// Clang `-Winconsistent-dllimport`: a redeclaration without
+    /// `dllimport` drops the earlier one.
+    DllImportDropped,
+    /// Clang `-Winconsistent-dllimport`: on the Microsoft ABI, a definition
+    /// without `dllimport` after an imported declaration is exported.
+    DllExportAdded,
+    /// Clang: DLL storage needs external linkage.
+    DllInternal,
+    /// Clang: thread-local data crosses no DLL boundary.
+    DllThreadLocal,
+    /// Clang: an imported function has only inline definitions here.
+    DllImportFunctionDefinition,
+    /// Clang: imported data is defined in another image.
+    DllImportDataDefinition,
+    /// Clang: an exported symbol cannot be hidden.
+    DllExportHidden,
+    /// Clang: an imported symbol has default visibility.
+    DllImportVisibility,
 }
 
 impl SemanticErrorKind {
+    /// Attribute-name policy warnings use Clang's independent suppression
+    /// and severity groups. C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) const fn attribute_group(self) -> Option<crate::configuration::DiagnosticGroup> {
+        use crate::configuration::DiagnosticGroup;
+        match self {
+            | Self::UnknownAttribute => Some(DiagnosticGroup::UnknownAttributes),
+            | Self::IgnoredAttribute
+            | Self::AttributeAfterDefinition
+            | Self::UnsupportedDeclspec
+            | Self::DllImportOnInline
+            | Self::DllImportRedeclaredInline => Some(DiagnosticGroup::IgnoredAttributes),
+            | Self::DllAttributeOnRedeclaration =>
+                Some(DiagnosticGroup::DllAttributeOnRedeclaration),
+            | Self::DllImportDropped | Self::DllExportAdded =>
+                Some(DiagnosticGroup::InconsistentDllimport),
+            | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
+            | _ => None,
+        }
+    }
+
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::PointerConstraint(_) => "pointer constraint violation",
+            | Self::PragmaPackMalformed
+            | Self::PragmaPackPopEmpty
+            | Self::PragmaPackPopNameAlignment
+            | Self::PragmaPackUnterminated
+            | Self::PragmaPackShow(_) => "packing directive",
             | Self::UnsupportedFloat128 => "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
+            | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
+            | Self::InvalidStandardAlignment => "invalid alignment specifier",
+            | Self::InvalidModeAttribute => "invalid scalar machine mode",
+            | Self::IgnoredTransparentUnion => "this union cannot be made transparent",
+            | Self::TransparentUnionNotUnion => "not a union type",
+            | Self::TransparentUnionNotDefinition => "not a union definition",
+            | Self::TransparentUnionPlacement(_) => "applies to no type here",
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
+            | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
+            | Self::NoViableOverload => "no viable overload",
+            | Self::AmbiguousOverload => "ambiguous overload",
+            | Self::UnknownAttribute => "unknown attribute",
+            | Self::IgnoredAttribute => "attribute ignored here",
+            | Self::IgnoredConvention => "convention ignored on this target",
+            | Self::AttributeArguments => "invalid attribute arguments",
+            | Self::AttributeRequiresConstant => "priority is not an integer constant",
+            | Self::InvalidPriority => "priority outside 0 to 65535",
+            | Self::ReservedPriority => "reserved priority",
+            | Self::AttributeSubject => "not a function or global variable",
+            | Self::WeakInternal => "weak declaration without external linkage",
+            | Self::AliasDefinition => "definition with an alias attribute",
+            | Self::AliasTarget => "alias target is not defined here",
+            | Self::AliasKind => "alias and target differ in kind",
+            | Self::AliasCycle => "alias is part of a cycle",
+            | Self::AliasTypeMismatch => "alias type differs from its target's",
+            | Self::SectionMismatch => "different section",
+            | Self::InvalidVisibility => "unsupported visibility",
+            | Self::CleanupNotFunction => "not a function",
+            | Self::CleanupOverloadSet => "not a single function",
+            | Self::CleanupParameterCount => "cleanup function must take one parameter",
+            | Self::CleanupParameterType => "parameter type is incompatible with the variable",
+            | Self::JumpIntoCleanupScope | Self::SwitchIntoCleanupScope =>
+                "jump bypasses a cleanup variable's initialization",
+            | Self::IndirectJumpCleanupScope => "indirect jump crosses a cleanup scope",
+            | Self::AttributeAfterDefinition => "ignored after the definition",
+            | Self::UnevaluatedStringPrefix => "prefix ignored",
+            | Self::UnsupportedDeclspec => "not a __declspec attribute",
+            | Self::DllImportOnInline | Self::DllImportRedeclaredInline =>
+                "inline function not imported",
+            | Self::DllAttributeOnRedeclaration | Self::DllAttributeAfterUse =>
+                "DLL storage added on a redeclaration",
+            | Self::DllImportDropped => "dllimport dropped",
+            | Self::DllExportAdded => "dllexport added",
+            | Self::DllInternal => "no external linkage",
+            | Self::DllThreadLocal => "thread-local",
+            | Self::DllImportFunctionDefinition => "imported function defined here",
+            | Self::DllImportDataDefinition => "imported data defined here",
+            | Self::DllExportHidden | Self::DllImportVisibility => "visibility conflicts",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
+            | Self::PredefinedOutsideFunction => "used outside a function",
+            | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
+            | Self::BuiltinRequiresCall => "builtin must be directly called",
+            | Self::BuiltinRequiresHeader => "use of a builtin whose library type is undeclared",
+            | Self::InvalidObjectSizeMode | Self::InvalidPrefetchLocality =>
+                "expected an integer constant from 0 to 3",
+            | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
+            | Self::InvalidFrameLevel => "expected an integer constant frame level",
+            | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
+            | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
                 "operand type is not allowed here",
             | Self::ExpectedModifiableLvalue => "not a modifiable lvalue",
@@ -315,6 +659,8 @@ impl SemanticErrorKind {
             | Self::InvalidMemberAccess => "no such member",
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
+            | Self::AnnotationArgument => "not a wide string literal",
+            | Self::SelectAnySubject => "not a data item with external linkage",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
             | Self::InvalidCondition => "condition is not scalar",
@@ -322,10 +668,19 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
             | Self::ExcessInitializer => "no subobject is left to initialize",
+            | Self::FlexibleArrayInitializer => "initializes a flexible array member",
+            | Self::FlexibleArrayBraces => "not a brace-enclosed list",
+            | Self::FlexibleArrayDesignator => "designates inside a flexible array member",
+            | Self::InitializerOverride | Self::PartialInitializerOverride =>
+                "overrides an earlier initializer",
             | Self::InvalidDesignator => "no such subobject",
             | Self::NonConstantInitializer => "not a constant expression",
             | Self::InvalidStorage => "external declaration",
             | Self::InvalidFunctionStorage => "function declared in a block",
+            | Self::ThreadLocalFunction => "declared as a function",
+            | Self::ThreadLocalBlockScope => "automatic object at block scope",
+            | Self::ThreadLocalAfterNonThreadLocal => "declared thread-local here",
+            | Self::NonThreadLocalAfterThreadLocal => "declared without thread storage here",
             | Self::LinkedBlockInitializer => "initializer is not allowed here",
             | Self::InvalidRestrict => "restrict on a non-object pointer",
             | Self::QualifiedFunction => "function type qualifiers are ignored",
@@ -341,7 +696,6 @@ impl SemanticErrorKind {
             | Self::ConflictingLinkage => "linkage conflicts with the previous declaration",
             | Self::TagKindMismatch => "different tag kind",
             | Self::TagRedefinition | Self::DuplicateDefinition => "defined again here",
-            | Self::IncompleteEnum => "enum is not yet complete",
             | Self::InvalidConstant | Self::InvalidChooseCondition =>
                 "not an integer constant expression",
             | Self::ConstantOverflow => "overflow or invalid operation",
@@ -379,6 +733,13 @@ impl SemanticErrorKind {
             | Self::UndefinedLocalLabel => "local label is never defined",
             | Self::JumpIntoVariableScope | Self::SwitchIntoVariableScope =>
                 "jumps into a variably modified scope",
+            | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression =>
+                "jumps into a statement expression",
+            | Self::IndirectJumpIntoVariableScope => "may jump into a variably modified scope",
+            | Self::IndirectJumpIntoStatementExpression => "may jump into a statement expression",
+            | Self::InvalidComputedGoto => "not convertible to `const void *`",
+            | Self::IndirectGotoWithoutLabels => "no label of this function has its address taken",
+            | Self::LabelAddressOutsideFunction => "label address outside a function",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
             | Self::BreakOutsideLoopOrSwitch => "not in a loop or switch",
@@ -397,8 +758,133 @@ impl SemanticErrorKind {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep semantic diagnostic headlines and their standard notes in one exhaustive \
+                  table."
+    )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::CallAttribute
+            | Self::CallAttributeWarning
+            | Self::NoViableOverload
+            | Self::AmbiguousOverload
+            | Self::UnknownAttribute
+            | Self::IgnoredAttribute
+            | Self::IgnoredConvention
+            | Self::AttributeArguments
+            | Self::AttributeRequiresConstant
+            | Self::InvalidPriority
+            | Self::ReservedPriority
+            | Self::AttributeSubject
+            | Self::WeakInternal
+            | Self::AliasDefinition
+            | Self::AliasTarget
+            | Self::AliasKind
+            | Self::AliasCycle
+            | Self::AliasTypeMismatch
+            | Self::SectionMismatch
+            | Self::InvalidVisibility
+            | Self::CleanupNotFunction
+            | Self::CleanupOverloadSet
+            | Self::CleanupParameterCount
+            | Self::CleanupParameterType
+            | Self::JumpIntoCleanupScope
+            | Self::SwitchIntoCleanupScope
+            | Self::IndirectJumpCleanupScope
+            | Self::AttributeAfterDefinition
+            | Self::UnevaluatedStringPrefix
+            | Self::UnsupportedDeclspec
+            | Self::DllImportOnInline
+            | Self::DllImportRedeclaredInline
+            | Self::DllAttributeOnRedeclaration
+            | Self::DllAttributeAfterUse
+            | Self::DllImportDropped
+            | Self::DllExportAdded
+            | Self::DllInternal
+            | Self::DllThreadLocal
+            | Self::DllImportFunctionDefinition
+            | Self::DllImportDataDefinition
+            | Self::DllExportHidden
+            | Self::DllImportVisibility => self.attribute_explanation(),
+            | Self::PointerConstraint(group) => (
+                match group {
+                    | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
+                    | crate::configuration::DiagnosticGroup::IncompatiblePointerTypes => "incompatible pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::NonLiteralNullConversion => "expression which evaluates to zero treated as a null pointer constant",
+                    | crate::configuration::DiagnosticGroup::PointerCompare => "comparison between pointer and zero character constant",
+                    | crate::configuration::DiagnosticGroup::NullConversion => "implicit conversion of nullptr constant to bool",
+                    | crate::configuration::DiagnosticGroup::PointerBoolConversion => "address always evaluates to true in a boolean context",
+                    | crate::configuration::DiagnosticGroup::PointerToIntCast => "cast to smaller integer type from pointer",
+                    | crate::configuration::DiagnosticGroup::VoidPtrDereference => "dereferencing void pointer",
+                    | crate::configuration::DiagnosticGroup::Nonnull => "null passed to a callee that requires a non-null argument",
+                    | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
+                    | crate::configuration::DiagnosticGroup::PointerQualifiers => "pointer conversion discards qualifiers, including nested pointer qualifiers",
+                    | crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes => "incompatible function pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::IntConversion => "incompatible integer and pointer conversion",
+                    | crate::configuration::DiagnosticGroup::PointerIntegerCompare => "comparison between pointer and integer",
+                    | crate::configuration::DiagnosticGroup::OrderedCompareFunctionPointers => "ordered comparison of function pointers",
+                    | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
+                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch => "pointer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::NewlineEof
+                    | crate::configuration::DiagnosticGroup::Undef
+                    | crate::configuration::DiagnosticGroup::PredefinedOutsideFunction
+                    | crate::configuration::DiagnosticGroup::UnknownWarningOption
+                    | crate::configuration::DiagnosticGroup::UnknownAttributes
+                    | crate::configuration::DiagnosticGroup::IgnoredAttributes
+                    | crate::configuration::DiagnosticGroup::AttributeWarning
+                    | crate::configuration::DiagnosticGroup::DllAttributeOnRedeclaration
+                    | crate::configuration::DiagnosticGroup::InconsistentDllimport
+                    | crate::configuration::DiagnosticGroup::UnknownStdcPragma
+                    | crate::configuration::DiagnosticGroup::UnknownPragmas
+                    | crate::configuration::DiagnosticGroup::UnusedFunction
+                    | crate::configuration::DiagnosticGroup::InitializerOverrides
+                    | crate::configuration::DiagnosticGroup::ConstantPromotion => "warning-group diagnostic",
+                },
+                "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
+            ),
+            | Self::PragmaPackMalformed => ("malformed #pragma pack ignored", "C99 §6.10.6p1: implementation-defined GCC/MSVC packing pragma"),
+            | Self::PragmaPackPopEmpty => ("#pragma pack(pop, ...) failed: stack empty", "GCC/MSVC pack restores a saved alignment from its stack"),
+            | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
+            | Self::PragmaPackUnterminated => ("unterminated '#pragma pack(push, ...)' at end of file", "restore the saved packing state with #pragma pack(pop)"),
+            | Self::PragmaPackShow(_) => ("current #pragma pack alignment value", "GCC/MSVC packing state at this directive"),
+            | Self::BuiltinRequiresHeader => (
+                "this builtin's prototype needs the FILE type of <stdio.h>",
+                "GNU extension: the checked stream builtin takes a FILE pointer; Clang rejects its use until FILE is declared",
+            ),
+            | Self::BuiltinRequiresCall => (
+                "builtin functions must be directly called",
+                "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
+            ),
+            | Self::InvalidObjectSizeMode => (
+                "the mode argument must be an integer constant from 0 to 3",
+                "GNU extension: GCC Object Size Checking requires a constant mode after conversion to int",
+            ),
+            | Self::InvalidFrameLevel => (
+                "the frame level must be an integer constant",
+                "GNU extension: GCC requires the level of __builtin_frame_address and __builtin_return_address to be a constant unsigned integer",
+            ),
+            | Self::InvalidBuiltinProbability => (
+                "the probability argument must be a constant from 0 to 1",
+                "GNU extension: GCC Other Builtins requires a constant probability in the inclusive range [0, 1] after conversion to double",
+            ),
+            | Self::InvalidBuiltinAlignment => (
+                "the alignment argument must be a positive power-of-two integer constant",
+                "GNU extension: GCC Other Builtins requires a constant power-of-two alignment after conversion to size_t; the optional offset may be nonconstant",
+            ),
+            | Self::InvalidPrefetchReadWrite => (
+                "the read/write argument must be an integer constant of 0 or 1",
+                "GNU extension: GCC Other Builtins uses 0 for read prefetch and 1 for write prefetch",
+            ),
+            | Self::InvalidPrefetchLocality => (
+                "the locality argument must be an integer constant from 0 to 3",
+                "GNU extension: GCC Other Builtins uses locality 0 for no temporal locality through 3 for high temporal locality",
+            ),
+            | Self::ImplicitLibraryFunction(_) => (
+                "implicitly declaring library function",
+                "C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers",
+            ),
             | Self::AtomicBufferQualifiers => (
                 "atomic buffer argument discards pointer target qualifiers",
                 "Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type",
@@ -433,6 +919,50 @@ impl SemanticErrorKind {
                 "invalid vector attribute",
                 "GCC Vector Extensions: vector_size requires an integer or real floating element \
                  and a positive multiple of its size",
+            ),
+            | Self::InvalidAlignmentAttribute => (
+                "invalid alignment attribute",
+                "GCC aligned requires a positive integer constant power of two representable by the target",
+            ),
+            | Self::InvalidStandardAlignment => (
+                "invalid alignment specifier",
+                "C11 §6.7.5p2-6: alignment requires an eligible object declaration and must be zero or a valid alignment that does not weaken its natural alignment",
+            ),
+            | Self::InvalidModeAttribute => (
+                "invalid mode attribute",
+                "GCC mode requires an eligible scalar type and a supported scalar machine mode",
+            ),
+            | Self::IgnoredTransparentUnion => (
+                "transparent_union attribute ignored",
+                "GNU transparent_union applies to a union definition with at least one member, a \
+                 first member of neither floating nor vector type, and every member of the first \
+                 member's size and at most its alignment",
+            ),
+            | Self::TransparentUnionNotUnion => (
+                "'transparent_union' attribute only applies to unions",
+                "GNU transparent_union is a type attribute of a union; it is ignored on objects, \
+                 functions, parameters, members, structures and other types",
+            ),
+            | Self::TransparentUnionNotDefinition => (
+                "transparent_union attribute can only be applied to a union definition; \
+                 attribute ignored",
+                "GNU transparent_union applies to a union where its members are defined",
+            ),
+            | Self::TransparentUnionPlacement(kind) => (
+                match kind {
+                    | super::types::TagKind::Struct =>
+                        "attribute 'transparent_union' is ignored, place it after \"struct\" to \
+                         apply attribute to type declaration",
+                    | super::types::TagKind::Union =>
+                        "attribute 'transparent_union' is ignored, place it after \"union\" to \
+                         apply attribute to type declaration",
+                    | super::types::TagKind::Enum =>
+                        "attribute 'transparent_union' is ignored, place it after \"enum\" to \
+                         apply attribute to type declaration",
+                },
+                "GNU attribute syntax: in a declaration that declares only a tag, an attribute \
+                 among its declaration specifiers applies to no declarator; write it after the \
+                 keyword or after the closing brace of the definition",
             ),
             | Self::InvalidVectorOperand => (
                 "invalid vector operation",
@@ -579,10 +1109,38 @@ impl SemanticErrorKind {
                 "GNU local-label declarations require a definition even without a goto; C99 \
                  §6.2.1p3 declares ordinary labels by their definitions",
             ),
+            | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression => Self::statement_expression_explanation(self == Self::JumpIntoStatementExpression),
             | Self::JumpIntoVariableScope => (
                 "goto enters the scope of a variably modified identifier",
                 "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
                  identifier to inside that scope",
+            ),
+            | Self::IndirectJumpIntoVariableScope => (
+                "computed goto can enter the scope of a variably modified identifier at its \
+                 possible target",
+                "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
+                 identifier to inside that scope; GCC Labels as Values: a computed goto may reach \
+                 every label whose address is taken",
+            ),
+            | Self::IndirectJumpIntoStatementExpression => (
+                "computed goto can enter a statement expression at its possible target",
+                "GCC Statement Exprs: jumping into a statement expression with a computed goto is \
+                 undefined; GCC Labels as Values: a computed goto may reach every label whose \
+                 address is taken",
+            ),
+            | Self::IndirectGotoWithoutLabels => (
+                "computed goto in a function without label addresses",
+                "GCC Labels as Values: a computed goto may only jump to a label of its own \
+                 function whose address is taken with `&&`",
+            ),
+            | Self::InvalidComputedGoto => (
+                "computed goto operand is not a pointer",
+                "GCC Labels as Values: `goto *expression` converts the operand to `const void *` \
+                 as C99 §6.5.16.1p1 simple assignment does",
+            ),
+            | Self::LabelAddressOutsideFunction => (
+                "label address outside a function body",
+                "GCC Labels as Values: `&&label` names a label of the function that contains it",
             ),
             | Self::SwitchIntoVariableScope => (
                 "switch dispatch enters the scope of a variably modified identifier",
@@ -615,6 +1173,12 @@ impl SemanticErrorKind {
                 "identifier has no visible declaration",
                 "C99 §6.5.1p2: an identifier expression designates a declared object, function or \
                  enumeration constant",
+            ),
+            | Self::PredefinedOutsideFunction => (
+                "predefined identifier is only valid inside function",
+                "C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this \
+                 to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string \
+                 outside one",
             ),
             | Self::InvalidAddressOperand => (
                 "address operator requires an addressable object or function",
@@ -688,6 +1252,16 @@ impl SemanticErrorKind {
                 "C99 §6.5.2.2p1: the called expression points to a function with a valid return \
                  type",
             ),
+            | Self::SelectAnySubject => (
+                "'selectany' can only be applied to data items with external linkage",
+                "Clang: Microsoft's `selectany` lets several translation units define one \
+                 external object",
+            ),
+            | Self::AnnotationArgument => (
+                "argument to `__annotation` must be a wide string literal",
+                "Clang: Microsoft's `__annotation` records wide strings in the debug \
+                 information",
+            ),
             | Self::InvalidArgumentCount => (
                 "function call has the wrong number of arguments",
                 "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
@@ -724,6 +1298,33 @@ impl SemanticErrorKind {
                 "excess initializer for the current object",
                 "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
                  initialized entity",
+            ),
+            | Self::FlexibleArrayInitializer => (
+                "initialization of flexible array member is not allowed",
+                "C99 §6.7.2.1p16, §6.7.8p2: a flexible array member has no elements; as a GNU \
+                 extension only an object with static storage duration may give the flexible \
+                 array member of its own structure elements",
+            ),
+            | Self::FlexibleArrayBraces => (
+                "flexible array requires brace-enclosed initializer",
+                "C99 §6.7.8p16: an array is initialized by a brace-enclosed list; as in GCC and \
+                 Clang, a designated flexible array member takes a list or a string literal, \
+                 never a brace-elided element",
+            ),
+            | Self::FlexibleArrayDesignator => (
+                "designator into flexible array member subobject",
+                "GNU flexible array member initialization: as in GCC and Clang, a designator may \
+                 name the flexible array member but not an element or member inside it",
+            ),
+            | Self::InitializerOverride => (
+                "initializer overrides prior initialization of this subobject",
+                "C99 §6.7.8p19: each initializer for a subobject overrides any previously listed \
+                 initializer for the same subobject",
+            ),
+            | Self::PartialInitializerOverride => (
+                "initializer partially overrides prior initialization of this subobject",
+                "C99 §6.7.8p19: each initializer for a subobject overrides any previously listed \
+                 initializer for the same subobject, here part of one an expression initialized",
             ),
             | Self::InvalidDesignator => (
                 "designator does not identify an available subobject",
@@ -773,6 +1374,26 @@ impl SemanticErrorKind {
                 "block-scope function declaration has a storage class other than extern",
                 "C99 §6.7.1p5: a function declared in a block has no explicit storage class other \
                  than extern",
+            ),
+            | Self::ThreadLocalFunction => (
+                "thread storage duration applies only to objects",
+                "C11 §6.7.1p4: `_Thread_local` does not appear in the declaration specifiers of \
+                 a function declaration",
+            ),
+            | Self::ThreadLocalBlockScope => (
+                "thread-local object at block scope must be static or extern",
+                "C11 §6.7.1p3: a block-scope declaration with `_Thread_local` also has `static` \
+                 or `extern`",
+            ),
+            | Self::ThreadLocalAfterNonThreadLocal => (
+                "thread-local declaration follows a non-thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
+            ),
+            | Self::NonThreadLocalAfterThreadLocal => (
+                "non-thread-local declaration follows a thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
             ),
             | Self::LinkedBlockInitializer => (
                 "block-scope declaration with linkage cannot have an initializer",
@@ -839,11 +1460,6 @@ impl SemanticErrorKind {
                 "tag is already defined",
                 "C99 §6.7.2.3p1: a specific type has its contents defined at most once",
             ),
-            | Self::IncompleteEnum => (
-                "enum tag has no preceding complete declaration",
-                "C99 §6.7.2.3p3: an enum specifier without an enumerator list follows a complete \
-                 declaration",
-            ),
             | Self::InvalidConstant => (
                 "an integer constant expression is required",
                 "C99 §6.6p3 and p6: integer constant expressions restrict operators and operands",
@@ -890,58 +1506,219 @@ impl SemanticErrorKind {
             ),
         }
     }
-}
 
-/// Semantic error with primary and optional prior-declaration provenance.
-/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SemanticError {
-    pub(crate) extension_severity: Option<ErrorSeverity>,
-    pub(crate) kind:               SemanticErrorKind,
-    pub(crate) source_vectors:     SourceVectors,
-    pub(crate) name:               Option<StringCacheId>,
-    pub(crate) previous:           Option<SourceVectors>,
-}
-
-impl fmt::Display for SemanticError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.kind.explanation().0)
-    }
-}
-impl std::error::Error for SemanticError {}
-impl GetSeverity for SemanticError {
-    fn severity(&self) -> ErrorSeverity {
-        if let Some(severity) = self.extension_severity {
-            return severity;
+    fn attribute_explanation(self) -> (&'static str, &'static str) {
+        match self {
+            | Self::CallAttribute | Self::CallAttributeWarning => (
+                "function attribute diagnostic",
+                "GNU error/warning and Clang diagnose_if/unavailable attach a diagnostic to calls",
+            ),
+            | Self::NoViableOverload => (
+                "no matching function for call",
+                "Clang overloadable/enable_if: a candidate needs viable argument conversions and \
+                 constant true enable_if predicates",
+            ),
+            | Self::AmbiguousOverload => (
+                "call to overloaded function is ambiguous",
+                "Clang overloadable: no unique best viable candidate",
+            ),
+            | Self::UnknownAttribute => (
+                "unknown attribute ignored",
+                "Clang -Wunknown-attributes: bcc does not know this attribute and ignores it",
+            ),
+            | Self::IgnoredAttribute => (
+                "attribute ignored",
+                "Clang -Wignored-attributes: the attribute does not apply to this declaration, or \
+                 bcc drops its effect (see language-standards.md, \"Attribute status\")",
+            ),
+            | Self::IgnoredConvention => (
+                "calling convention is not supported for this target",
+                "Clang -Wignored-attributes: x86-64 outside Windows uses one C calling convention",
+            ),
+            | Self::AttributeArguments => (
+                "wrong number or kind of attribute arguments",
+                "GCC Attribute Syntax: cleanup takes one identifier; alias, section and \
+                 visibility one string literal; constructor and destructor at most one priority; \
+                 weak and used none",
+            ),
+            | Self::AttributeRequiresConstant => (
+                "attribute requires an integer constant",
+                "GCC Common Function Attributes: a constructor or destructor priority is an \
+                 integer constant expression",
+            ),
+            | Self::InvalidPriority => (
+                "constructor and destructor priorities must be integers from 0 to 65535",
+                "GCC Common Function Attributes: priorities are integers from 0 to 65535 inclusive",
+            ),
+            | Self::ReservedPriority => (
+                "constructor and destructor priorities from 0 to 100 are reserved for the \
+                 implementation",
+                "GCC -Wprio-ctor-dtor: priorities 0 to 100 are reserved; bundled Clang accepts \
+                 them silently",
+            ),
+            | Self::AttributeSubject => (
+                "attribute only applies to functions and global variables",
+                "Clang: alias and section name a symbol, which automatic variables do not have",
+            ),
+            | Self::WeakInternal => (
+                "weak declaration cannot have internal linkage",
+                "GCC Common Function Attributes: weak makes an external symbol overridable; \
+                 internal and automatic identifiers have no external symbol",
+            ),
+            | Self::AliasDefinition => (
+                "definition cannot also be an alias",
+                "GCC Common Function Attributes: an alias declaration takes its definition from \
+                 its target; tentative definitions are definitions",
+            ),
+            | Self::AliasTarget => (
+                "alias must point to a defined variable or function",
+                "GCC Common Function Attributes: the target names a definition in the same \
+                 translation unit, by its emitted symbol name",
+            ),
+            | Self::AliasKind => (
+                "alias and target must both be functions or both be variables",
+                "Clang: a function cannot alias a variable, nor a variable a function",
+            ),
+            | Self::AliasCycle => (
+                "alias definition is part of a cycle",
+                "Clang: following alias targets must reach a definition",
+            ),
+            | Self::AliasTypeMismatch => (
+                "alias and aliasee have different types",
+                "Clang -Wattribute-alias: calls through the alias use the alias's type",
+            ),
+            | Self::SectionMismatch => (
+                "section does not match previous declaration",
+                "Clang -Wsection: the latest section request applies",
+            ),
+            | Self::InvalidVisibility => (
+                "visibility argument not supported",
+                "GCC Common Function Attributes: visibility is default, hidden, internal or \
+                 protected",
+            ),
+            | Self::CleanupNotFunction => (
+                "cleanup argument is not a function",
+                "GCC Common Variable Attributes: cleanup names a function to call with the \
+                 variable's address",
+            ),
+            | Self::CleanupOverloadSet => (
+                "cleanup argument is not a single function",
+                "Clang Attributes Reference: cleanup requires one function, rather than an \
+                 overload set",
+            ),
+            | Self::CleanupParameterCount => (
+                "cleanup function must take one parameter",
+                "Clang: the cleanup function receives only a pointer to the variable",
+            ),
+            | Self::CleanupParameterType => (
+                "cleanup function parameter is incompatible with a pointer to the variable",
+                "Clang: a pointer to the variable must convert to the parameter type; GCC calls \
+                 the function as if by assignment (C99 §6.5.16.1p1)",
+            ),
+            | Self::JumpIntoCleanupScope => (
+                "cannot jump from this goto statement to its label",
+                "Clang: a jump into the scope of a cleanup variable would bypass its \
+                 initialization; jumps out of it run the cleanup",
+            ),
+            | Self::SwitchIntoCleanupScope => (
+                "cannot jump from switch statement to this case label",
+                "Clang: switch dispatch into the scope of a cleanup variable would bypass its \
+                 initialization",
+            ),
+            | Self::IndirectJumpCleanupScope => (
+                "cannot jump from this indirect goto statement to one of its possible targets",
+                "Clang: an indirect goto cannot enter or leave the scope of a cleanup variable",
+            ),
+            | Self::AttributeAfterDefinition => (
+                "attribute declaration must precede definition",
+                "Clang -Wignored-attributes: an attribute that a declaration adds after the \
+                 definition is ignored",
+            ),
+            | Self::UnevaluatedStringPrefix => (
+                "encoding prefix on an unevaluated string literal has no effect",
+                "Clang -Winvalid-unevaluated-string: the attribute reads the string's characters",
+            ),
+            | Self::UnsupportedDeclspec => (
+                "__declspec attribute is not supported",
+                "Clang -Wignored-attributes: __declspec takes the names Clang lists for it, \
+                 spelled exactly",
+            ),
+            | Self::DllImportOnInline => (
+                "'dllimport' attribute ignored on inline function",
+                "Clang -Wignored-attributes: MinGW defines inline functions in each image that \
+                 uses them",
+            ),
+            | Self::DllImportRedeclaredInline => (
+                "redeclared inline; 'dllimport' attribute ignored",
+                "Clang -Wignored-attributes: MinGW defines inline functions in each image that \
+                 uses them",
+            ),
+            | Self::DllAttributeOnRedeclaration => (
+                "redeclaration should not add a DLL attribute",
+                "Clang -Wdll-attribute-on-redeclaration: declare dllimport or dllexport on the \
+                 first declaration",
+            ),
+            | Self::DllAttributeAfterUse => (
+                "redeclaration cannot add a DLL attribute",
+                "Clang: code before this redeclaration already reached the entity without it",
+            ),
+            | Self::DllImportDropped => (
+                "redeclared without 'dllimport' attribute: previous 'dllimport' ignored",
+                "Clang -Winconsistent-dllimport: every declaration of an imported entity must say \
+                 dllimport",
+            ),
+            | Self::DllExportAdded => (
+                "redeclared without 'dllimport' attribute: 'dllexport' attribute added",
+                "Clang -Winconsistent-dllimport: on the Microsoft ABI a definition of an imported \
+                 entity exports it",
+            ),
+            | Self::DllInternal => (
+                "must have external linkage when declared dllimport or dllexport",
+                "Microsoft Learn, dllexport, dllimport: only external symbols cross a DLL boundary",
+            ),
+            | Self::DllThreadLocal => (
+                "cannot be thread local when declared dllimport or dllexport",
+                "Microsoft Learn, dllexport, dllimport: each image has its own thread-local \
+                 storage",
+            ),
+            | Self::DllImportFunctionDefinition => (
+                "dllimport cannot be applied to non-inline function definition",
+                "Microsoft Learn, dllexport, dllimport: an imported function is defined in \
+                 another image",
+            ),
+            | Self::DllImportDataDefinition => (
+                "definition of dllimport data",
+                "Microsoft Learn, dllexport, dllimport: imported data is defined in another image",
+            ),
+            | Self::DllExportHidden => (
+                "hidden visibility cannot be applied to 'dllexport' declaration",
+                "Clang: an exported symbol is visible to other images",
+            ),
+            | Self::DllImportVisibility => (
+                "non-default visibility cannot be applied to 'dllimport' declaration",
+                "Clang: an imported symbol comes from another image",
+            ),
+            | _ => ("invalid attribute", "GCC Attribute Syntax"),
         }
-        if matches!(
-            self.kind,
-            SemanticErrorKind::QualifiedFunction
-                | SemanticErrorKind::MainSignature
-                | SemanticErrorKind::TentativeArrayAssumedOne
-                | SemanticErrorKind::UnusedStaticFunction
-                | SemanticErrorKind::EmptyCaseRange
-                | SemanticErrorKind::MissingReturnValueWarning
-                | SemanticErrorKind::InvalidAtomicOrder
-                | SemanticErrorKind::InvalidAtomicFailureOrder
-                | SemanticErrorKind::AtomicBufferQualifiers
-        ) {
-            ErrorSeverity::Warning
+    }
+
+    fn statement_expression_explanation(goto: bool) -> (&'static str, &'static str) {
+        if goto {
+            (
+                "goto jumps into a statement expression",
+                "GCC Statement Exprs: jumping into a statement expression is not permitted; jumps \
+                 within or out of one are permitted",
+            )
         } else {
-            ErrorSeverity::Error
+            (
+                "switch dispatch jumps into a statement expression",
+                "GCC Statement Exprs: an outer switch cannot dispatch to a case or default label \
+                 inside a statement expression",
+            )
         }
     }
 }
-impl GetPosition for SemanticError {
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.source_vectors.position(context)
-    }
-}
-impl GetSourceVectors for SemanticError {
-    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
-        self.source_vectors
-    }
-}
+
 impl ToDiagnostic for SemanticError {
     fn diagnostic_in<'d>(
         &self,
@@ -950,7 +1727,23 @@ impl ToDiagnostic for SemanticError {
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
         let (message, note) = self.kind.explanation();
-        let message = if let Some(name) = self.name {
+        let message = if let SemanticErrorKind::ImplicitLibraryFunction(ty) = self.kind {
+            format_in!(
+                arena,
+                "implicitly declaring library function {} with type `{}`",
+                quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
+                context.string_cache.at(ty)
+            )
+        } else if matches!(
+            self.kind,
+            SemanticErrorKind::CallAttribute | SemanticErrorKind::CallAttributeWarning
+        ) {
+            self.name.map_or(message, |name| {
+                arena.alloc_str(context.string_cache.at(name))
+            })
+        } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
+            format_in!(arena, "value of #pragma pack(show) == {value}")
+        } else if let Some(name) = self.name {
             format_in!(
                 arena,
                 "{message}: {}",
@@ -959,6 +1752,24 @@ impl ToDiagnostic for SemanticError {
         } else {
             message
         };
+        let message = if self.kind == SemanticErrorKind::PredefinedOutsideFunction {
+            format_in!(
+                arena,
+                "{message} [-Wpredefined-identifier-outside-function]"
+            )
+        } else {
+            message
+        };
+        let group = match self.kind {
+            | SemanticErrorKind::PointerConstraint(group) => Some(group),
+            | _ => self.kind.attribute_group(),
+        };
+        let message =
+            if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
+                format_in!(arena, "{message} [-W{group}]")
+            } else {
+                message
+            };
         let mut diagnostic = Explanation::new(arena, message)
             .label(self.kind.label())
             .note(note)
@@ -968,12 +1779,102 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>
                     "previous label is here",
                 | SemanticErrorKind::JumpIntoVariableScope
-                | SemanticErrorKind::SwitchIntoVariableScope =>
+                | SemanticErrorKind::SwitchIntoVariableScope
+                | SemanticErrorKind::IndirectJumpIntoVariableScope =>
                     "variably modified identifier is declared here",
+                | SemanticErrorKind::JumpIntoStatementExpression
+                | SemanticErrorKind::SwitchIntoStatementExpression
+                | SemanticErrorKind::IndirectJumpIntoStatementExpression =>
+                    "statement expression begins here",
+                | SemanticErrorKind::JumpIntoCleanupScope
+                | SemanticErrorKind::SwitchIntoCleanupScope => "cleanup variable is declared here",
+                | SemanticErrorKind::IndirectJumpCleanupScope => "possible target is here",
+                | SemanticErrorKind::AliasKind | SemanticErrorKind::AliasTypeMismatch =>
+                    "aliasee is declared here",
+                | SemanticErrorKind::SectionMismatch => "previous attribute is here",
+                | SemanticErrorKind::InitializerOverride
+                | SemanticErrorKind::PartialInitializerOverride =>
+                    "previous initialization is here",
+                | SemanticErrorKind::FlexibleArrayBraces
+                | SemanticErrorKind::FlexibleArrayDesignator =>
+                    "initialized flexible array member is here",
+                | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
         }
         diagnostic
+    }
+}
+
+impl fmt::Display for SemanticError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.kind.explanation().0)
+    }
+}
+
+impl std::error::Error for SemanticError {}
+
+impl GetSeverity for SemanticError {
+    fn severity(&self) -> ErrorSeverity {
+        if let Some(severity) = self.extension_severity {
+            return severity;
+        }
+        if matches!(
+            self.kind,
+            SemanticErrorKind::ImplicitLibraryFunction(_)
+                | SemanticErrorKind::QualifiedFunction
+                | SemanticErrorKind::MainSignature
+                | SemanticErrorKind::TentativeArrayAssumedOne
+                | SemanticErrorKind::UnusedStaticFunction
+                | SemanticErrorKind::PragmaPackMalformed
+                | SemanticErrorKind::PragmaPackPopEmpty
+                | SemanticErrorKind::PragmaPackPopNameAlignment
+                | SemanticErrorKind::PragmaPackUnterminated
+                | SemanticErrorKind::PragmaPackShow(_)
+                | SemanticErrorKind::EmptyCaseRange
+                | SemanticErrorKind::MissingReturnValueWarning
+                | SemanticErrorKind::PredefinedOutsideFunction
+                | SemanticErrorKind::InvalidAtomicOrder
+                | SemanticErrorKind::InvalidAtomicFailureOrder
+                | SemanticErrorKind::AtomicBufferQualifiers
+                | SemanticErrorKind::UnknownAttribute
+                | SemanticErrorKind::IgnoredAttribute
+                | SemanticErrorKind::IgnoredConvention
+                | SemanticErrorKind::ReservedPriority
+                | SemanticErrorKind::AliasTypeMismatch
+                | SemanticErrorKind::SectionMismatch
+                | SemanticErrorKind::InvalidVisibility
+                | SemanticErrorKind::IgnoredTransparentUnion
+                | SemanticErrorKind::TransparentUnionNotUnion
+                | SemanticErrorKind::TransparentUnionNotDefinition
+                | SemanticErrorKind::TransparentUnionPlacement(_)
+                | SemanticErrorKind::InitializerOverride
+                | SemanticErrorKind::PartialInitializerOverride
+                | SemanticErrorKind::AttributeAfterDefinition
+                | SemanticErrorKind::UnevaluatedStringPrefix
+                | SemanticErrorKind::UnsupportedDeclspec
+                | SemanticErrorKind::DllImportOnInline
+                | SemanticErrorKind::DllImportRedeclaredInline
+                | SemanticErrorKind::DllAttributeOnRedeclaration
+                | SemanticErrorKind::DllImportDropped
+                | SemanticErrorKind::DllExportAdded
+        ) {
+            ErrorSeverity::Warning
+        } else {
+            ErrorSeverity::Error
+        }
+    }
+}
+
+impl GetPosition for SemanticError {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for SemanticError {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
+        self.source_vectors
     }
 }

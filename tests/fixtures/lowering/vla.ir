@@ -1,0 +1,38 @@
+; int f(int n) { typedef int Row[n++]; int result=0; { Row a; a[n-2]=7; result=sizeof a+a[n-2]; } return result; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @f(i32 noundef) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 1
+    v2 = iadd.i32 nsw v0, v1
+    v3 = sext.i64 v0
+    v4 = iconst.i32 0
+    v5 = iconst.i64 4
+    v6 = imul.i64 v5, v3
+    v7 = stack_save
+    v8 = dyn_alloca.i64 v6, align 16
+    v9 = iconst.i32 2
+    v10 = isub.i32 nsw v2, v9
+    v11 = sext.i64 v10
+    v12 = iconst.i64 4
+    v13 = imul.i64 nsw v11, v12
+    v14 = ptr_add inbounds v8, v13
+    v15 = iconst.i32 7
+    store.i32 v15, v14, align 4
+    v16 = iconst.i64 4
+    v17 = imul.i64 v16, v3
+    v18 = iconst.i32 2
+    v19 = isub.i32 nsw v2, v18
+    v20 = sext.i64 v19
+    v21 = iconst.i64 4
+    v22 = imul.i64 nsw v20, v21
+    v23 = ptr_add inbounds v8, v22
+    v24 = load.i32 v23, align 4
+    v25 = sext.i64 v24
+    v26 = iadd.i64 v17, v25
+    v27 = trunc.i32 v26
+    stack_restore v7
+    return v27
+}

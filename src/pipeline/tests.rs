@@ -1,5 +1,8 @@
 //! Pipeline regressions: `--tokens` reporting order, and crate-level
-//! syntax-tree consumption.
+//! syntax-tree consumption. `middle_end.rs` runs whole programs through the
+//! middle end, the interpreter and LLVM.
+
+mod middle_end;
 
 use std::path::PathBuf;
 
@@ -211,10 +214,7 @@ fn adjacent_string_lookahead_keeps_current_token_before_later_diagnostics() {
             iterator.next().unwrap().unwrap().kind,
             TokenType::String(_)
         ));
-        assert!(matches!(
-            iterator.next().unwrap().unwrap_err(),
-            TranslationError::InitialProcessing(_)
-        ));
+        // The missing final newline is reported only under -Wnewline-eof.
         assert!(matches!(
             iterator.next().unwrap().unwrap_err(),
             TranslationError::Preprocessing(PreprocessorError {
@@ -628,4 +628,605 @@ fn parse_arena_use_does_not_grow_with_distinct_file_scope_names() {
     assert_eq!(once_errors, 0);
     assert!(once > 0, "declarations use the parse arena");
     assert_eq!(twice, once, "file-scope names grow the parse arena");
+}
+
+/// Runs phases 1-7 on `source` and hands the result to a caller outside the
+/// semantic analyzer, as lowering will be.
+fn with_semantics<R>(
+    source: &str,
+    inspect: impl for<'tu> FnOnce(
+        &mut Context<'tu>,
+        &ParsedTranslationUnit<'tu>,
+        &crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'tu>,
+    ) -> R,
+) -> R {
+    let tu = Bump::new();
+    let source = tu.alloc_str(&format!("{source}\n"));
+    let mut context = Context::new(&tu);
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        source,
+        HeaderSearch::default(),
+    );
+    let semantics = analyze_translation_unit(&mut context, &unit);
+    inspect(&mut context, &unit, &semantics)
+}
+
+#[test]
+fn lowering_names_the_retained_semantic_vocabulary() {
+    use crate::translation_phases::semantic_analysis::{
+        ArrayBound,
+        Binding,
+        BindingKind,
+        Duration,
+        Field,
+        Layout,
+        Linkage,
+        Scalar,
+        Tag,
+        TagKind,
+        TypeId,
+        TypeKind,
+    };
+    with_semantics(
+        "struct S { int a; _Atomic long b; } s; int g[3]; unsigned char *p;",
+        |context, _, sema| {
+            assert_eq!(context.pending_error_count(), 0);
+            let binding = |name: &str| -> Binding {
+                *sema
+                    .bindings
+                    .iter()
+                    .find(|b| context.string_cache.at(b.name.name) == name)
+                    .expect("binding is retained")
+            };
+            let s = binding("s");
+            assert_eq!(s.kind, BindingKind::Object);
+            assert_eq!(s.linkage, Linkage::External);
+            assert_eq!(s.duration, Duration::Static);
+            let tag: &Tag<'_> = sema.types.tag(s.ty).expect("s has a structure type");
+            assert_eq!(tag.kind, TagKind::Struct);
+            let fields: &[Field<'_>] = tag.fields.get();
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[1].offset, 8);
+            let atomic: TypeId = fields[1].ty;
+            assert!(matches!(sema.types.kind(atomic), TypeKind::Atomic(_)));
+            assert_eq!(
+                sema.types.kind(sema.types.non_atomic(atomic)),
+                TypeKind::Scalar(Scalar::Long)
+            );
+            assert_eq!(
+                sema.types.layout(s.ty),
+                Some(Layout {
+                    size:  16,
+                    align: 8,
+                })
+            );
+            let g = binding("g");
+            assert!(matches!(
+                sema.types.kind(g.ty),
+                TypeKind::Array(_, ArrayBound::Constant(3))
+            ));
+            assert!(!sema.types.unanalyzed(g.ty));
+            let TypeKind::Pointer(target) = sema.types.kind(binding("p").ty) else {
+                panic!("p is a pointer");
+            };
+            assert_eq!(
+                sema.types.kind(target),
+                TypeKind::Scalar(Scalar::UnsignedChar)
+            );
+            assert!(sema.types.tag(target).is_none());
+        },
+    );
+}
+
+#[test]
+fn retained_types_report_unanalyzed_array_elements() {
+    use crate::translation_phases::semantic_analysis::TypeKind;
+    // GNU `__typeof__` of an unmodeled builtin call has no modeled type.
+    with_semantics(
+        "__typeof__(__builtin_apply_args()) a[2];",
+        |context, _, sema| {
+            let a = sema
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "a")
+                .expect("a is bound");
+            assert!(matches!(sema.types.kind(a.ty), TypeKind::Array(..)));
+            assert!(sema.types.unanalyzed(a.ty));
+        },
+    );
+}
+
+#[test]
+fn lowering_refuses_a_unit_with_a_semantic_error() {
+    with_semantics("int f(void) { return undeclared; }", |context, _, sema| {
+        assert_eq!(sema.errors, 1);
+        assert_eq!(context.error_count(), 1);
+        assert!(!sema.lowerable(context));
+    });
+}
+
+#[test]
+fn lowering_accepts_a_unit_with_only_warnings() {
+    // An incomplete external tentative array is completed with one element
+    // and a warning (C99 §6.9.2p2), and `#warning` is a GNU warning.
+    with_semantics(
+        "#warning check\nint a[];\nint f(void) { return a[0]; }",
+        |context, _, sema| {
+            assert_eq!(context.pending_error_count(), 2, "two warnings are queued");
+            assert_eq!(sema.errors, 0);
+            assert_eq!(context.error_count(), 0);
+            assert!(sema.lowerable(context));
+        },
+    );
+}
+
+#[test]
+fn lowering_accepts_a_clean_unit() {
+    with_semantics("int f(int x) { return x + 1; }", |context, _, sema| {
+        assert_eq!(context.pending_error_count(), 0);
+        assert_eq!(sema.errors, 0);
+        assert!(sema.lowerable(context));
+    });
+}
+
+#[test]
+fn lowering_refuses_a_unit_whose_error_came_from_an_earlier_phase() {
+    with_semantics("int x = ;\nint y;", |context, _, sema| {
+        assert_eq!(sema.errors, 0, "the parse error is not semantic");
+        assert!(context.error_count() > 0);
+        assert!(!sema.lowerable(context));
+        // A reporter that drains the queue does not clear the gate.
+        while context.pop_pending_error().is_some() {}
+        assert_eq!(context.pending_error_count(), 0);
+        assert!(context.error_count() > 0);
+        assert!(!sema.lowerable(context));
+    });
+}
+
+/// The expression that `return` statement `index` of the first function
+/// definition returns.
+fn returned_expression<'tu>(
+    unit: &ParsedTranslationUnit<'tu>,
+    index: usize,
+) -> &'tu crate::translation_phases::parsing::syntax::Expression<'tu> {
+    use crate::translation_phases::parsing::syntax::{
+        BlockItem,
+        ExpressionSlot,
+        StatementType,
+    };
+    let f = unit
+        .external_declarations()
+        .iter()
+        .find_map(|root| match root {
+            | ExternalDeclaration::FunctionDefinition(f) => Some(f),
+            | _ => None,
+        })
+        .expect("the unit defines a function");
+    let StatementType::Compound { items } = f.body.kind else {
+        panic!("a function body is a compound statement");
+    };
+    let returns = items.iter().filter_map(|item| match item {
+        | BlockItem::Statement(s) => match s.kind {
+            | StatementType::Return(Some(ExpressionSlot::Parsed(e))) => Some(e),
+            | _ => None,
+        },
+        | _ => None,
+    });
+    returns
+        .into_iter()
+        .nth(index)
+        .expect("the return statement exists")
+}
+
+#[test]
+fn lowering_finds_an_expression_record_and_its_conversions_from_syntax() {
+    use crate::translation_phases::{
+        parsing::syntax::{
+            BinaryOperator,
+            ExpressionType,
+        },
+        semantic_analysis::{
+            ConversionKind,
+            Scalar,
+            TypeKind,
+            ValueCategory,
+        },
+    };
+    with_semantics(
+        "int f(char c, int *p) { return c + p[1]; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            let scalar = |ty| match sema.types.kind(ty) {
+                | TypeKind::Scalar(scalar) => Some(scalar),
+                | _ => None,
+            };
+            let sum = returned_expression(unit, 0);
+            let ExpressionType::Binary {
+                operator: BinaryOperator::Addition,
+                left_expression: c,
+                right_expression: element,
+            } = sum.kind
+            else {
+                panic!("the function returns a sum");
+            };
+            let ExpressionType::Binary {
+                operator: BinaryOperator::Subscript,
+                left_expression: p,
+                right_expression: one,
+            } = element.kind
+            else {
+                panic!("the right operand is a subscript");
+            };
+            let conversions = |e| {
+                sema.expression_conversions(e)
+                    .iter()
+                    .map(|c| (c.kind, scalar(c.ty)))
+                    .collect::<Vec<_>>()
+            };
+
+            let info = sema.expression_info(c).expect("c is typed");
+            assert!(std::ptr::eq(info.expression, c));
+            assert_eq!(scalar(info.ty), Some(Scalar::Char));
+            assert_eq!(info.category, ValueCategory::ModifiableLvalue);
+            assert_eq!(
+                conversions(c),
+                [
+                    (ConversionKind::Lvalue, Some(Scalar::Char)),
+                    (ConversionKind::Arithmetic, Some(Scalar::Int)),
+                ]
+            );
+
+            let p_info = sema.expression_info(p).expect("p is typed");
+            assert!(matches!(sema.types.kind(p_info.ty), TypeKind::Pointer(_)));
+            let p_conversions = sema.expression_conversions(p);
+            assert_eq!(p_conversions.len(), 1);
+            assert_eq!(p_conversions[0].kind, ConversionKind::Lvalue);
+            assert_eq!(p_conversions[0].ty, p_info.ty);
+
+            assert_eq!(
+                scalar(sema.expression_info(one).expect("1 is typed").ty),
+                Some(Scalar::Int)
+            );
+            assert!(conversions(one).is_empty(), "an index is not converted");
+
+            let element_info = sema.expression_info(element).expect("p[1] is typed");
+            assert_eq!(scalar(element_info.ty), Some(Scalar::Int));
+            assert_eq!(element_info.category, ValueCategory::ModifiableLvalue);
+            assert_eq!(
+                conversions(element),
+                [
+                    (ConversionKind::Lvalue, Some(Scalar::Int)),
+                    (ConversionKind::Arithmetic, Some(Scalar::Int)),
+                ]
+            );
+
+            let sum_index = sema.expression_index(sum).expect("the sum is typed");
+            assert_eq!(sema.expressions[sum_index].category, ValueCategory::Rvalue);
+            assert_eq!(
+                conversions(sum),
+                [(ConversionKind::Assignment, Some(Scalar::Int))],
+                "the return converts the sum to the result type"
+            );
+            assert!(
+                sema.expression_index(c).unwrap() < sum_index,
+                "operands precede their parent"
+            );
+        },
+    );
+}
+
+#[test]
+fn conversion_runs_cover_every_record_and_belong_to_their_expression() {
+    use crate::translation_phases::{
+        parsing::syntax::ExpressionType,
+        semantic_analysis::ConversionKind,
+    };
+    with_semantics(
+        "struct S { int a[2]; } s; double g(float, ...);\nlong f(short x, struct S *q) { long r = \
+         (x) + 1L; r += q->a[0];\ng(x, x, 1.0f, s.a); return r ? r : !x; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            let mut covered = 0;
+            for (index, info) in sema.expressions.iter().enumerate() {
+                assert_eq!(sema.expression_index(info.expression), Some(index));
+                for conversion in sema.conversions_of(index) {
+                    assert!(std::ptr::eq(conversion.expression, info.expression));
+                }
+                covered += sema.conversions_of(index).len();
+            }
+            assert_eq!(covered, sema.conversions.len(), "every record has an owner");
+            // A parenthesized operand's run belongs to the parentheses.
+            let parenthesized = sema
+                .expressions
+                .iter()
+                .find_map(|info| match info.expression.kind {
+                    | ExpressionType::Parenthesized { expression } => Some((info, expression)),
+                    | _ => None,
+                })
+                .expect("(x) is typed");
+            assert_eq!(
+                sema.expression_conversions(parenthesized.0.expression)
+                    .iter()
+                    .map(|c| c.kind)
+                    .collect::<Vec<_>>(),
+                [ConversionKind::Lvalue, ConversionKind::Arithmetic]
+            );
+            assert!(sema.expression_conversions(parenthesized.1).is_empty());
+            let returned = returned_expression(unit, 0);
+            assert!(matches!(returned.kind, ExpressionType::Conditional(_)));
+            assert_eq!(
+                sema.expression_conversions(returned)
+                    .iter()
+                    .map(|c| c.kind)
+                    .collect::<Vec<_>>(),
+                [ConversionKind::Assignment]
+            );
+            let kinds = sema.conversions.iter().map(|c| c.kind).collect::<Vec<_>>();
+            assert!(kinds.contains(&ConversionKind::DefaultArgument));
+            assert!(kinds.contains(&ConversionKind::ArrayDecay));
+        },
+    );
+}
+
+/// The function record of the definition named `name`, with its binding.
+fn function_record<'s, 'tu>(
+    context: &Context<'tu>,
+    sema: &'s crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'tu>,
+    name: &str,
+) -> &'s crate::translation_phases::semantic_analysis::FunctionRecord<'tu> {
+    sema.functions
+        .iter()
+        .find(|f| {
+            f.binding
+                .is_some_and(|b| context.string_cache.at(sema.bindings[b].name.name) == name)
+        })
+        .expect("the function has a record")
+}
+
+/// Names and types of a record's parameter bindings.
+fn parameter_names(
+    context: &Context<'_>,
+    sema: &crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'_>,
+    record: &crate::translation_phases::semantic_analysis::FunctionRecord<'_>,
+) -> Vec<Option<String>> {
+    use crate::translation_phases::semantic_analysis::{
+        BindingKind,
+        Duration,
+    };
+    record
+        .parameter_facts
+        .iter()
+        .map(|parameter| {
+            parameter.body_binding.map(|b| {
+                let binding = sema.bindings[b];
+                assert_eq!(binding.kind, BindingKind::Parameter);
+                assert_eq!(binding.duration, Duration::Automatic);
+                assert_eq!(
+                    binding.scope, record.scope,
+                    "parameters live in the function scope"
+                );
+                String::from(context.string_cache.at(binding.name.name))
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn function_records_link_a_prototype_definition_to_its_bindings() {
+    use crate::translation_phases::semantic_analysis::{
+        BindingKind,
+        Scalar,
+        ScopeKind,
+        TypeKind,
+    };
+    with_semantics(
+        "int helper(void) { return 0; }\nlong add(int a, long b) { int a2 = a; return a2 + b; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            assert_eq!(sema.functions.len(), 2);
+            let helper = function_record(context, sema, "helper");
+            assert!(
+                helper.parameter_facts.is_empty(),
+                "a lone void declares nothing"
+            );
+            let add = function_record(context, sema, "add");
+            let ExternalDeclaration::FunctionDefinition(syntax) = unit.external_declarations()[1]
+            else {
+                panic!("add is a function definition");
+            };
+            assert!(std::ptr::eq(add.syntax, syntax));
+            let binding = sema.bindings[add.binding.expect("add is bound")];
+            assert_eq!(binding.kind, BindingKind::Function);
+            assert!(matches!(
+                sema.types.kind(binding.ty),
+                TypeKind::Function { .. }
+            ));
+            assert_eq!(sema.types.kind(add.result), TypeKind::Scalar(Scalar::Long));
+            assert_eq!(sema.scopes[add.scope].kind, ScopeKind::Function);
+            assert_eq!(
+                parameter_names(context, sema, add),
+                [Some(String::from("a")), Some(String::from("b"))]
+            );
+            let b = sema.bindings[add.parameter_facts[1].body_binding.unwrap()];
+            assert_eq!(sema.types.kind(b.ty), TypeKind::Scalar(Scalar::Long));
+            // A use of the parameter in the body resolves to the same binding.
+            assert!(
+                sema.expressions
+                    .iter()
+                    .any(|info| info.binding == add.parameter_facts[1].body_binding)
+            );
+        },
+    );
+}
+
+#[test]
+fn function_records_list_old_style_parameters_in_identifier_order() {
+    use crate::translation_phases::semantic_analysis::{
+        Scalar,
+        TypeKind,
+    };
+    with_semantics(
+        "int old(a, b, c) float b; int a; char *c; { return a + (int)b + *c; }",
+        |context, _, sema| {
+            assert!(sema.lowerable(context));
+            let old = function_record(context, sema, "old");
+            assert_eq!(
+                parameter_names(context, sema, old),
+                [
+                    Some(String::from("a")),
+                    Some(String::from("b")),
+                    Some(String::from("c")),
+                ]
+            );
+            // The body sees the declared float; callers pass the promoted
+            // double that the composite function type lists (C99 §6.9.1p10).
+            let b = sema.bindings[old.parameter_facts[1].body_binding.unwrap()];
+            assert_eq!(sema.types.kind(b.ty), TypeKind::Scalar(Scalar::Float));
+            let function = sema.bindings[old.binding.unwrap()];
+            let TypeKind::Function {
+                parameters,
+                prototype,
+                ..
+            } = sema.types.kind(function.ty)
+            else {
+                panic!("old has a function type");
+            };
+            assert!(!prototype);
+            assert_eq!(
+                sema.types.kind(parameters[1]),
+                TypeKind::Scalar(Scalar::Double)
+            );
+        },
+    );
+}
+
+#[test]
+fn function_records_keep_implicit_int_parameters() {
+    let tu = Bump::new();
+    let mut context = Context::with_configuration(
+        &tu,
+        CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Allow),
+    );
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        "int old(x, y) double y; { return x; }\n",
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    assert!(sema.lowerable(&context));
+    let old = function_record(&context, &sema, "old");
+    assert_eq!(
+        parameter_names(&context, &sema, old),
+        [Some(String::from("x")), Some(String::from("y"))]
+    );
+}
+
+#[test]
+fn function_records_mark_unnamed_prototype_parameters() {
+    let tu = Bump::new();
+    let mut context = Context::with_configuration(
+        &tu,
+        CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow),
+    );
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        "int pick(int, int b) { return b; }\n",
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    assert!(sema.lowerable(&context), "C23 permits unnamed parameters");
+    let pick = function_record(&context, &sema, "pick");
+    assert_eq!(
+        parameter_names(&context, &sema, pick),
+        [None, Some(String::from("b"))]
+    );
+}
+
+#[test]
+fn member_access_retains_the_selected_field() {
+    use crate::translation_phases::parsing::syntax::ExpressionType;
+    with_semantics(
+        "struct In { int x; };\nstruct S { char c; union { int u; float f; }; struct In in; int \
+         bits : 3; } s;\nstruct S *p = &s;\nint f(void) { return s.u + p->bits + (s).c + \
+         (p->in.x) + p->f; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            let mut seen = Vec::new();
+            for info in sema.expressions {
+                let (ExpressionType::DirectMember { member, .. }
+                | ExpressionType::IndirectMember { member, .. }) = info.expression.kind
+                else {
+                    continue;
+                };
+                let name = context.string_cache.at(member.name);
+                let field = sema
+                    .selected_field(info.expression)
+                    .expect("member access selects a field");
+                assert_eq!(context.string_cache.at(field.name.name), name);
+                seen.push((name, field.offset, field.bit_offset, field.path.len()));
+            }
+            seen.sort_unstable();
+            assert_eq!(
+                seen,
+                [
+                    ("bits", 12, 0, 1),
+                    ("c", 0, 0, 1),
+                    ("f", 4, 0, 2),
+                    ("in", 8, 0, 1),
+                    ("u", 4, 0, 2),
+                    ("x", 0, 0, 1),
+                ]
+            );
+            // A parenthesized member access keeps the selection.
+            let returned = returned_expression(unit, 0);
+            let parenthesized = sema
+                .expressions
+                .iter()
+                .find(|info| {
+                    matches!(info.expression.kind, ExpressionType::Parenthesized { expression }
+                        if matches!(expression.kind, ExpressionType::DirectMember { .. }))
+                })
+                .expect("(p->in.x) is typed");
+            let field = sema.selected_field(parenthesized.expression).unwrap();
+            assert_eq!(context.string_cache.at(field.name.name), "x");
+            assert_eq!(
+                sema.member_facts(parenthesized.expression).unwrap().field,
+                0
+            );
+            assert!(
+                sema.selected_field(returned).is_none(),
+                "a sum selects nothing"
+            );
+        },
+    );
+}
+
+#[test]
+fn selected_fields_survive_extension_and_generic_selection() {
+    use crate::translation_phases::parsing::syntax::ExpressionType;
+    with_semantics(
+        "struct S { int a; long b; } s;
+         long f(void) { return __extension__ s.b + _Generic(0, int: s.b, default: s.a); }",
+        |context, _, sema| {
+            let wrappers = sema
+                .expressions
+                .iter()
+                .filter(|info| {
+                    matches!(
+                        info.expression.kind,
+                        ExpressionType::Unary { .. } | ExpressionType::Generic(_)
+                    )
+                })
+                .map(|info| {
+                    let field = sema.selected_field(info.expression).expect("a member");
+                    context.string_cache.at(field.name.name)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(wrappers, ["b", "b"]);
+        },
+    );
 }

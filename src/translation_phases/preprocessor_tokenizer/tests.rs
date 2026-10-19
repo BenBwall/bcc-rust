@@ -67,7 +67,10 @@ enum Step {
 /// effect.
 fn walk(source: &str, steps: &[Step]) -> Vec<String> {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let file = context.intern_source_file(Path::new("<test>"));
     let source = SharedString::from(source.to_owned());
     context.record_source_text(file, &source);
@@ -365,7 +368,10 @@ proptest! {
 /// diagnostic.
 fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Vec<String> {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let directories: SharedVec<PathBuf> = include_directory
         .map(|directory| vec![directory.to_owned()])
         .unwrap_or_default()
@@ -505,7 +511,10 @@ proptest! {
 fn physically_empty_source_has_no_missing_final_newline() {
     let mut snapshot = Snapshot::new("physically_empty_source_has_no_missing_final_newline");
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let file = context.intern_source_file(Path::new("<test>"));
     let source = SharedString::from(String::new());
     context.record_source_text(file, &source);
@@ -548,7 +557,10 @@ fn unterminated_block_comments_report_the_actual_opener() {
         ("/*", 0, 1, 1),
     ] {
         let tu = crate::util::bump::Bump::new();
-        let mut context = Context::new(&tu);
+        let mut context = Context::with_configuration(
+            &tu,
+            crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+        );
         let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
@@ -603,7 +615,10 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
         ("é\\\n", 2, 1, 2, 2),
     ] {
         let tu = crate::util::bump::Bump::new();
-        let mut context = Context::new(&tu);
+        let mut context = Context::with_configuration(
+            &tu,
+            crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+        );
         let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
@@ -654,7 +669,10 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
 fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
     // '\n' is already a complete token; batch construction must stay silent.
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let file = context.intern_source_file(Path::new("<test>"));
     let text = SharedString::from("\n\\\n".to_owned());
     context.record_source_text(file, &text);
@@ -673,7 +691,10 @@ fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
 fn cloned_terminal_splice_cursors_keep_independent_warning_state() {
     for source in ["\n\\\n", "word\\\n"] {
         let tu = crate::util::bump::Bump::new();
-        let mut context = Context::new(&tu);
+        let mut context = Context::with_configuration(
+            &tu,
+            crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+        );
         let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
@@ -700,7 +721,10 @@ fn persisted_sources_resume_where_their_cursor_stood() {
         spellings
     };
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let file = context.intern_source_file(Path::new("<test>"));
     let text = "a b\nc\n";
     context.record_source_text(file, text);
@@ -727,12 +751,15 @@ fn persisted_sources_resume_where_their_cursor_stood() {
 #[test]
 fn lexed_files_grow_in_place_and_keep_exact_storage() {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let file = context.intern_source_file(Path::new("<test>"));
     // One entry per byte, three times the up-front estimate.
     let text = "a+b;\n".repeat(4096);
     let pp = crate::util::bump::Bump::new();
-    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    let lexed = super::LexedFile::lex(&mut context, &pp, file, &text);
     assert_eq!(lexed.len(), text.len());
     // Exactly the 16-byte aligned entries: growing left no copies behind,
     // and the unused capacity went back to the arena.
@@ -744,12 +771,15 @@ fn lexed_files_grow_in_place_and_keep_exact_storage() {
 fn lexing_commits_the_entries_written_not_a_capacity() {
     use crate::util::vm::MAX_COMMIT_STEP;
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let file = context.intern_source_file(Path::new("<test>"));
     // Over five mebibytes of entries, far past any one commit step.
     let text = "a+b;\n".repeat(64 * 1024);
     let pp = crate::util::bump::Bump::new();
-    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    let lexed = super::LexedFile::lex(&mut context, &pp, file, &text);
     assert_eq!(lexed.len(), text.len());
     assert_eq!(pp.used(), 16 * text.len());
     assert_eq!(pp.high_water(), pp.used());

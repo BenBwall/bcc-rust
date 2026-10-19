@@ -7,15 +7,20 @@
     reason = "We have a bunch of dependencies that are not used in our main module."
 )]
 #[cfg(not(feature = "benchmarking-internals"))]
+use std::io::Write as _;
+#[cfg(not(feature = "benchmarking-internals"))]
 use std::process::ExitCode;
 
 #[cfg(not(feature = "benchmarking-internals"))]
 fn main() -> ExitCode {
     match bcc_rust::run() {
-        | Ok(()) => ExitCode::SUCCESS,
+        | Ok(0) => ExitCode::SUCCESS,
+        // `ExitCode` holds only a byte; an interpreted program's status is
+        // an `int`.
+        | Ok(status) => std::process::exit(status),
         | Err(bcc_rust::MainError::ParseArgumentsError(error)) => error.exit(),
         | Err(error) => {
-            eprintln!("{error}");
+            drop(writeln!(std::io::stderr().lock(), "{error}"));
             ExitCode::FAILURE
         },
     }

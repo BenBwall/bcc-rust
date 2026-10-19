@@ -15,11 +15,11 @@ use std::{
 
 use super::{
     Expander,
-    driver::TokenizerFrameType,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
     },
+    runtime::TokenizerFrameType,
 };
 use crate::{
     configuration::Feature,
@@ -35,62 +35,74 @@ use crate::{
     util::bump::Bump,
 };
 
-/// One source-file-local conditional, including whether its final arm began.
-///
-/// C99: `if-section`, §6.10 paragraph 1, p. 145; PDF p. 157: an `if-group`,
-/// any `elif-groups`, at most one `else-group`, and an `endif-line`.
-#[derive(Debug)]
-pub(super) struct ConditionalGroup<'pp> {
-    pub(super) source: &'pp [SourceVector],
-    saw_else:          bool,
-}
-
-impl<'pp> ConditionalGroup<'pp> {
-    fn new(pp: &'pp Bump, context: &Context<'_>, directive: PreprocessorToken) -> Self {
-        Self {
-            source:   context.copy_source_vectors_in(directive.source_vectors, pp),
-            saw_else: false,
+impl Expander<'_, '_, '_, '_> {
+    /// Opens a conditional and processes its group when the controlling
+    /// expression is nonzero.
+    ///
+    /// C99: §6.10.1 paragraph 3, p. 148; PDF p. 160.
+    pub(super) fn parse_if_directive(&mut self, directive: PreprocessorToken) {
+        self.state.open_conditionals.push(ConditionalGroup::new(
+            self.state.arena,
+            self.context,
+            directive,
+        ));
+        if self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective) {
+            self.resume_at_line_start();
+        } else {
+            self.skip_over_dead_code(true, SkipMode::FalseGroup);
         }
     }
-}
 
-/// The spelling of a conditional directive's name, for its diagnostics.
-fn conditional_directive_name(context: &Context<'_>, directive: PreprocessorToken) -> &'static str {
-    match context.string_cache.at(directive.contents) {
-        | "else" => "else",
-        | "elifdef" => "elifdef",
-        | "elifndef" => "elifndef",
-        | _ => "elif",
+    /// `#elif` and `#else` reached while translating a group end that group:
+    /// the rest of the conditional is skipped through its `#endif`.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161. The skipped `#elif`'s
+    /// expression is not evaluated.
+    pub(super) fn parse_elif_directive(&mut self, directive: PreprocessorToken) {
+        let name = conditional_directive_name(self.context, directive);
+        self.skip_remaining_groups(
+            directive,
+            PreprocessorErrorType::ElifDirectiveWithoutIfDirective(name),
+        );
     }
-}
 
-/// How far [`Expander::skip_over_dead_code`] skips.
-///
-/// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161: only the first group whose
-/// condition is true is processed, else the `#else` group if any.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SkipMode {
-    /// A group whose condition was false: stop at the matching `#elif` whose
-    /// condition holds, at `#else`, or at `#endif`.
-    FalseGroup,
-    /// The groups after a translated one: skip through the matching `#endif`.
-    ToEndif,
-}
+    /// Handles `#else`: the group it controls is processed only when no
+    /// earlier condition held, which reaching it here rules out.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
+    pub(super) fn parse_else_directive(&mut self, directive: PreprocessorToken) {
+        self.skip_remaining_groups(
+            directive,
+            PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
+        );
+    }
 
-impl<'tu> Expander<'_, 'tu, '_, '_> {
-    /// Physical source frames own conditional groups. Presumed filenames
-    /// changed by #line do not change the frame's boundary.
-    fn current_file_conditional_base(&self) -> usize {
-        self.tokenizer_stack
-            .iter()
-            .rev()
-            .find_map(|frame| match &frame.frame_type {
-                | TokenizerFrameType::SourceFile {
-                    conditional_base, ..
-                } => Some(*conditional_base),
-                | _ => None,
-            })
-            .unwrap_or(0)
+    /// Handles `#endif`, which closes the innermost open conditional of the
+    /// current file.
+    ///
+    /// C99: `endif-line`, §6.10 paragraph 1, p. 145; PDF p. 157.
+    pub(super) fn parse_endif_directive(&mut self, directive: PreprocessorToken) {
+        if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
+                source_vectors: directive.source_vectors,
+            });
+        } else {
+            let _ = self.state.open_conditionals.pop();
+        }
+        self.finish_conditional_directive("endif");
+    }
+
+    /// C99: `# ifdef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
+    /// PDF pp. 160-161.
+    pub(super) fn parse_ifdef_directive(&mut self, directive: PreprocessorToken) {
+        self.parse_macro_test_directive(directive, "ifdef");
+    }
+
+    /// C99: `# ifndef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
+    /// PDF pp. 160-161.
+    pub(super) fn parse_ifndef_directive(&mut self, directive: PreprocessorToken) {
+        self.parse_macro_test_directive(directive, "ifndef");
     }
 
     /// Skips the lines of a conditional group that is not being translated
@@ -214,46 +226,45 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         }
         self.resume_at_line_start();
     }
+}
 
-    /// Opens a conditional and processes its group when the controlling
-    /// expression is nonzero.
-    ///
-    /// C99: §6.10.1 paragraph 3, p. 148; PDF p. 160.
-    pub(super) fn parse_if_directive(&mut self, directive: PreprocessorToken) {
-        self.state.open_conditionals.push(ConditionalGroup::new(
-            self.state.arena,
-            self.context,
-            directive,
-        ));
-        if self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective) {
-            self.resume_at_line_start();
-        } else {
-            self.skip_over_dead_code(true, SkipMode::FalseGroup);
-        }
-    }
+/// One source-file-local conditional, including whether its final arm began.
+///
+/// C99: `if-section`, §6.10 paragraph 1, p. 145; PDF p. 157: an `if-group`,
+/// any `elif-groups`, at most one `else-group`, and an `endif-line`.
+#[derive(Debug)]
+pub(super) struct ConditionalGroup<'pp> {
+    pub(super) source: &'pp [SourceVector],
+    saw_else:          bool,
+}
 
-    /// `#elif` and `#else` reached while translating a group end that group:
-    /// the rest of the conditional is skipped through its `#endif`.
-    ///
-    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161. The skipped `#elif`'s
-    /// expression is not evaluated.
-    pub(super) fn parse_elif_directive(&mut self, directive: PreprocessorToken) {
-        let name = conditional_directive_name(self.context, directive);
-        self.skip_remaining_groups(
-            directive,
-            PreprocessorErrorType::ElifDirectiveWithoutIfDirective(name),
-        );
-    }
+/// How far [`Expander::skip_over_dead_code`] skips.
+///
+/// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161: only the first group whose
+/// condition is true is processed, else the `#else` group if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkipMode {
+    /// A group whose condition was false: stop at the matching `#elif` whose
+    /// condition holds, at `#else`, or at `#endif`.
+    FalseGroup,
+    /// The groups after a translated one: skip through the matching `#endif`.
+    ToEndif,
+}
 
-    /// Handles `#else`: the group it controls is processed only when no
-    /// earlier condition held, which reaching it here rules out.
-    ///
-    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
-    pub(super) fn parse_else_directive(&mut self, directive: PreprocessorToken) {
-        self.skip_remaining_groups(
-            directive,
-            PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
-        );
+impl<'tu> Expander<'_, 'tu, '_, '_> {
+    /// Physical source frames own conditional groups. Presumed filenames
+    /// changed by #line do not change the frame's boundary.
+    fn current_file_conditional_base(&self) -> usize {
+        self.tokenizer_stack
+            .iter()
+            .rev()
+            .find_map(|frame| match &frame.frame_type {
+                | TokenizerFrameType::SourceFile {
+                    conditional_base, ..
+                } => Some(*conditional_base),
+                | _ => None,
+            })
+            .unwrap_or(0)
     }
 
     /// Skips the remaining `#elif` and `#else` groups of a conditional whose
@@ -319,34 +330,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             self.skip_until_newline();
         }
         self.resume_at_line_start();
-    }
-
-    /// Handles `#endif`, which closes the innermost open conditional of the
-    /// current file.
-    ///
-    /// C99: `endif-line`, §6.10 paragraph 1, p. 145; PDF p. 157.
-    pub(super) fn parse_endif_directive(&mut self, directive: PreprocessorToken) {
-        if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
-            self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
-                source_vectors: directive.source_vectors,
-            });
-        } else {
-            let _ = self.state.open_conditionals.pop();
-        }
-        self.finish_conditional_directive("endif");
-    }
-
-    /// C99: `# ifdef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
-    /// PDF pp. 160-161.
-    pub(super) fn parse_ifdef_directive(&mut self, directive: PreprocessorToken) {
-        self.parse_macro_test_directive(directive, "ifdef");
-    }
-
-    /// C99: `# ifndef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
-    /// PDF pp. 160-161.
-    pub(super) fn parse_ifndef_directive(&mut self, directive: PreprocessorToken) {
-        self.parse_macro_test_directive(directive, "ifndef");
     }
 
     /// Handles `#ifdef` and `#ifndef`, as `name` says. A missing macro name
@@ -428,5 +411,24 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             .macro_definitions
             .contains_key(&name.identifier_id(self.context))
             == wants_defined
+    }
+}
+
+impl<'pp> ConditionalGroup<'pp> {
+    fn new(pp: &'pp Bump, context: &Context<'_>, directive: PreprocessorToken) -> Self {
+        Self {
+            source:   context.copy_source_vectors_in(directive.source_vectors, pp),
+            saw_else: false,
+        }
+    }
+}
+
+/// The spelling of a conditional directive's name, for its diagnostics.
+fn conditional_directive_name(context: &Context<'_>, directive: PreprocessorToken) -> &'static str {
+    match context.string_cache.at(directive.contents) {
+        | "else" => "else",
+        | "elifdef" => "elifdef",
+        | "elifndef" => "elifndef",
+        | _ => "elif",
     }
 }

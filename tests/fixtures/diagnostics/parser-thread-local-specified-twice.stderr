@@ -1,0 +1,19 @@
+warning: duplicate `__thread`
+ --> parser-thread-local-specified-twice.c:1:10
+  |
+1 | __thread __thread int a;
+  |          ^^^^^^^^ `__thread` was already specified
+  |
+  = note: repeating the thread storage-class specifier has no effect
+  = note: `repeated-specifiers` warnings are on by default; pass `--no-repeated-specifier-warnings` to silence them
+
+warning: duplicate `thread_local`
+ --> parser-thread-local-specified-twice.c:2:15
+  |
+2 | _Thread_local thread_local int b;
+  |               ^^^^^^^^^^^^ `thread_local` was already specified
+  |
+  = note: repeating the thread storage-class specifier has no effect
+  = note: `repeated-specifiers` warnings are on by default; pass `--no-repeated-specifier-warnings` to silence them
+
+2 warnings generated.

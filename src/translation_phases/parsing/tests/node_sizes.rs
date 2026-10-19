@@ -5,8 +5,6 @@
 //! deliberate one.
 
 use super::super::{
-    ParseFrame,
-    ParseValue,
     declaration_syntax::{
         Declaration,
         DeclarationSpecifiers,
@@ -28,25 +26,32 @@ use super::super::{
         StructOrUnionSpecifier,
         TypeName,
     },
-    gnu::{
-        Asm,
-        AsmOperand,
-        AsmQualifiers,
-        Builtin,
-        OffsetMember,
+    extensions::{
+        gnu::{
+            Asm,
+            AsmOperand,
+            AsmQualifiers,
+            Builtin,
+            OffsetMember,
+        },
+        modern::{
+            AttributeArgument,
+            AttributeSpecifier,
+            ExtendedType,
+            GenericAssociation,
+            GenericSelection,
+            SpecifierExtension,
+            StaticAssertion,
+            SyntaxOperand,
+        },
+        msvc::{
+            MsAsm,
+            Seh,
+        },
     },
-    modern::{
-        AttributeSpecifier,
-        ExtendedType,
-        GenericAssociation,
-        GenericSelection,
-        SpecifierExtension,
-        StaticAssertion,
-        SyntaxOperand,
-    },
-    msvc::{
-        MsAsm,
-        Seh,
+    machine::{
+        ParseFrame,
+        ParseValue,
     },
     syntax::{
         AttributedStatement,
@@ -84,7 +89,8 @@ fn syntax_nodes_keep_their_sizes() {
         SyntaxOperand<'_> => 16,
         ExtendedType<'_> => 24,
         SpecifierExtension<'_> => 32,
-        AttributeSpecifier<'_> => 24,
+        AttributeSpecifier<'_> => 40,
+        AttributeArgument<'_> => 16,
         GenericSelection<'_> => 40,
         GenericAssociation<'_> => 16,
         StaticAssertion<'_> => 56,
@@ -109,7 +115,7 @@ fn syntax_nodes_keep_their_sizes() {
         ParameterDeclaration<'_> => 72,
         StructDeclaration<'_> => 56,
         StructDeclarator<'_> => 48,
-        StructOrUnionSpecifier<'_> => 40,
+        StructOrUnionSpecifier<'_> => 48,
         EnumSpecifier<'_> => 48,
         Enumerator<'_> => 40,
         DeclarationSpecifiers<'_> => 40,

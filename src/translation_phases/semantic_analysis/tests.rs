@@ -2,13 +2,41 @@
 
 use std::path::Path;
 
-use super::*;
+use super::{
+    types::{
+        Layout,
+        TagKind,
+    },
+    *,
+};
+use crate::translation_phases::TranslationError;
 
 mod atomics;
+mod attributes;
+mod bit_field_alignment;
+mod bit_field_results;
+mod checked_builtins;
+mod control_facts;
+mod correspondence;
+mod diagnostic_parity;
+mod effects;
 mod float128;
+mod fortify;
 mod int128;
+mod labels_as_values;
+mod library_modes;
+mod math_builtins;
 mod mingw_inline;
+mod pointers;
+mod pragma_pack;
+mod predefined_identifiers;
+mod record_layout;
+mod registry;
+mod resolved;
+mod scalar_builtins;
+mod statement_expressions;
 mod targets;
+mod transparent_unions;
 mod type_generic;
 mod vectors;
 
@@ -553,7 +581,7 @@ fn unsigned_constant_multiplication_wraps_at_target_width() {
 }
 
 #[test]
-fn aggregate_attributes_do_not_fabricate_compatibility_or_layout() {
+fn packed_enum_attributes_retain_the_selected_compatible_type() {
     with_source(
         "enum __attribute__((packed)) E {A}; extern enum E x; extern unsigned char x;",
         |context, s| {
@@ -563,7 +591,11 @@ fn aggregate_attributes_do_not_fabricate_compatibility_or_layout() {
                     .iter()
                     .any(|e| matches!(e, TranslationError::Semantic(_)))
             );
-            assert!(s.types.tags[0].layout.get().is_none());
+            assert_eq!(s.types.tags[0].compatible.get(), Scalar::UnsignedChar);
+            assert_eq!(
+                s.types.tags[0].layout.get(),
+                Some(Layout { size: 1, align: 1 })
+            );
         },
     );
 }
@@ -687,8 +719,13 @@ fn gnu_void_and_function_size_constants_remain_accepted() {
 
 mod declaration_regressions;
 mod declarations;
+mod dll_storage;
+mod encoded_literals;
+mod entity_attributes;
 mod expression_regressions;
 mod expressions;
+mod flexible_initializers;
 mod function_regressions;
+mod initializer_overrides;
 mod operand_regressions;
 mod statements;

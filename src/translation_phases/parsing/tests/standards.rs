@@ -21,9 +21,10 @@ use crate::{
                 DirectDeclarator,
                 TypeSpecifiers,
             },
-            modern::{
+            extensions::modern::{
                 ExtendedType,
                 SyntaxOperand,
+                ThreadSpelling,
             },
             syntax::{
                 BlockItem,
@@ -483,6 +484,100 @@ fn inspection_shows_every_iso_child_without_semantic_evaluation() {
             }
             assert!(!output.contains("missing"), "{output}");
             assert!(context.pop_pending_error().is_none());
+        },
+    );
+}
+
+/// GNU `__thread` is a reserved spelling of `_Thread_local` in every mode.
+/// It does not combine with the standard spellings, nor any of them with a
+/// storage class other than `static` or `extern`.
+/// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127.
+/// GNU extension: GCC manual, "Thread-Local Storage".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html>
+#[test]
+fn thread_storage_spellings_and_combinations() {
+    for standard in [
+        CStandard::C89,
+        CStandard::C99,
+        CStandard::C11,
+        CStandard::C23,
+    ] {
+        with_parse_configuration(
+            "static __thread int t; int extern _Thread_local u; int following;",
+            mode(standard, ExtensionPolicy::Allow),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                for (index, spelling) in [(0, ThreadSpelling::Gnu), (1, ThreadSpelling::Reserved)] {
+                    assert_eq!(
+                        declaration(p, index)
+                            .declaration_specifiers
+                            .extensions
+                            .map(|extension| extension.kind),
+                        Some(super::super::modern::SpecifierExtensionKind::ThreadLocal(
+                            spelling
+                        ))
+                    );
+                }
+            },
+        );
+    }
+    for (source, previous, conflicting) in [
+        ("register __thread int a;", "register", "__thread"),
+        ("_Thread_local typedef int T;", "_Thread_local", "typedef"),
+        ("_Thread_local __thread int b;", "_Thread_local", "__thread"),
+        ("__thread thread_local int c;", "__thread", "thread_local"),
+        (
+            "constexpr thread_local int d = 1;",
+            "constexpr",
+            "thread_local",
+        ),
+        (
+            "thread_local constexpr int e = 1;",
+            "thread_local",
+            "constexpr",
+        ),
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Allow), |p| {
+            let errors: Vec<_> = parser_errors(p).collect();
+            assert_eq!(
+                errors,
+                [
+                    &super::super::errors::ParserErrorType::ThreadStorageConflict {
+                        previous,
+                        conflicting,
+                    }
+                ],
+                "{source}"
+            );
+        });
+    }
+    with_parse_configuration(
+        "__thread __thread int a; _Thread_local thread_local int b; auto thread_local int c = 1;",
+        mode(CStandard::C23, ExtensionPolicy::Allow),
+        |p| {
+            let errors: Vec<_> = parser_errors(p).collect();
+            assert_eq!(
+                errors,
+                [
+                    &super::super::errors::ParserErrorType::ThreadLocalSpecifiedTwice("__thread"),
+                    &super::super::errors::ParserErrorType::ThreadLocalSpecifiedTwice(
+                        "thread_local"
+                    ),
+                ]
+            );
+        },
+    );
+    with_parse_configuration(
+        "void f(void) { auto _Thread_local int c; }",
+        mode(CStandard::C17, ExtensionPolicy::Allow),
+        |p| {
+            assert!(parser_errors(p).any(|error| matches!(
+                error,
+                super::super::errors::ParserErrorType::ThreadStorageConflict {
+                    previous:    "auto",
+                    conflicting: "_Thread_local",
+                }
+            )));
         },
     );
 }

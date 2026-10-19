@@ -1,0 +1,55 @@
+warning: 'label address' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:2:42
+  |
+2 |     static const void *const table[] = { &&a, &&b };
+  |                                          ^^
+
+warning: 'label address' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:2:47
+  |
+2 |     static const void *const table[] = { &&a, &&b };
+  |                                               ^^
+
+warning: 'label address' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:3:36
+  |
+3 |     static const int offsets[] = { &&b - &&a };
+  |                                    ^^
+
+warning: 'arithmetic on a pointer to void' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:3:36
+  |
+3 |     static const int offsets[] = { &&b - &&a };
+  |                                    ^^^^^^^^^
+
+warning: 'label address' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:3:42
+  |
+3 |     static const int offsets[] = { &&b - &&a };
+  |                                          ^^
+
+warning: 'label address' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:4:18
+  |
+4 |     void *next = &&a + offsets[0];
+  |                  ^^
+
+warning: 'arithmetic on a pointer to void' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:4:18
+  |
+4 |     void *next = &&a + offsets[0];
+  |                  ^^^^^^^^^^^^^^^^
+
+warning: 'computed goto' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:6:14
+  |
+6 |         goto *next;
+  |              ^
+
+warning: 'computed goto' is a GNU extension [-Wpedantic]
+ --> language-labels-as-values-pedantic.c:7:10
+  |
+7 |     goto *table[k];
+  |          ^
+
+9 warnings generated.

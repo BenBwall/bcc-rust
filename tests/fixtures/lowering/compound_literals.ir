@@ -1,0 +1,71 @@
+; struct point { int x, y; };
+; int f(int a) {
+;   int *p = (int[]){ 1, a, 3 };
+;   struct point q = (struct point){ .y = a };
+;   return p[1] + q.y + ((struct point){ a, 2 }).y + (int){ 4 };
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @f(i32 noundef) -> i32 external {
+    slot0 = stack_slot 12, align 4
+    slot1 = stack_slot 8, align 4
+    slot2 = stack_slot 8, align 4
+    slot3 = stack_slot 8, align 4
+    slot4 = stack_slot 4, align 4
+block0(v0: i32):
+    v1 = iconst.i32 1
+    v2 = stack_addr slot0
+    store.i32 v1, v2, align 4
+    v3 = stack_addr slot0
+    v4 = iconst.i64 4
+    v5 = ptr_add inbounds v3, v4
+    store.i32 v0, v5, align 4
+    v6 = iconst.i32 3
+    v7 = stack_addr slot0
+    v8 = iconst.i64 8
+    v9 = ptr_add inbounds v7, v8
+    store.i32 v6, v9, align 4
+    v10 = stack_addr slot0
+    v11 = stack_addr slot2
+    v12 = iconst.i8 0
+    v13 = iconst.i64 4
+    fill v11, v12, v13, align 4
+    v14 = stack_addr slot2
+    v15 = iconst.i64 4
+    v16 = ptr_add inbounds v14, v15
+    store.i32 v0, v16, align 4
+    v17 = stack_addr slot2
+    v18 = stack_addr slot1
+    v19 = iconst.i64 8
+    copy may_overlap v18, v17, v19, align 4
+    v20 = iconst.i32 1
+    v21 = iconst.i64 4
+    v22 = ptr_add inbounds v10, v21
+    v23 = load.i32 v22, align 4
+    v24 = stack_addr slot1
+    v25 = iconst.i64 4
+    v26 = ptr_add inbounds v24, v25
+    v27 = load.i32 v26, align 4
+    v28 = iadd.i32 nsw v23, v27
+    v29 = stack_addr slot3
+    store.i32 v0, v29, align 4
+    v30 = iconst.i32 2
+    v31 = stack_addr slot3
+    v32 = iconst.i64 4
+    v33 = ptr_add inbounds v31, v32
+    store.i32 v30, v33, align 4
+    v34 = stack_addr slot3
+    v35 = iconst.i64 4
+    v36 = ptr_add inbounds v34, v35
+    v37 = load.i32 v36, align 4
+    v38 = iadd.i32 nsw v28, v37
+    v39 = iconst.i32 4
+    v40 = stack_addr slot4
+    store.i32 v39, v40, align 4
+    v41 = stack_addr slot4
+    v42 = load.i32 v41, align 4
+    v43 = iadd.i32 nsw v38, v42
+    return v43
+}

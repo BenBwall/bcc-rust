@@ -1,4 +1,4 @@
-warning: '__int128' is a GNU extension
+warning: '__int128' is a GNU extension [-Wpedantic]
  --> language-extension-suppression.c:1:14
   |
 1 | #define WIDE __int128

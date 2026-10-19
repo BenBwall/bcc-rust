@@ -1,0 +1,33 @@
+error: builtin functions must be directly called: `__builtin_clz`
+ --> sema-builtin-designators.c:2:6
+  |
+2 |     &__builtin_clz;
+  |      ^^^^^^^^^^^^^ builtin must be directly called
+  |
+  = note: GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation
+
+error: builtin functions must be directly called: `__builtin_ctz`
+ --> sema-builtin-designators.c:3:5
+  |
+3 |     __builtin_ctz;
+  |     ^^^^^^^^^^^^^ builtin must be directly called
+  |
+  = note: GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation
+
+error: builtin functions must be directly called: `__builtin_popcount`
+ --> sema-builtin-designators.c:4:6
+  |
+4 |     &(__builtin_choose_expr(1, __builtin_popcount, __builtin_clz));
+  |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ builtin must be directly called
+  |
+  = note: GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation
+
+error: builtin functions must be directly called: `__builtin_clz`
+ --> sema-builtin-designators.c:5:5
+  |
+5 |     _Generic(1, int: __builtin_clz, default: __builtin_ctz);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ builtin must be directly called
+  |
+  = note: GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation
+
+4 errors generated.

@@ -39,7 +39,7 @@ fn find_tool(directory: &Path, name: &str, version: &str) -> PathBuf {
     path
 }
 
-fn mingw_root() -> PathBuf {
+pub(super) fn mingw_root() -> PathBuf {
     if let Some(root) = var_os("MINGW_ROOT") {
         return PathBuf::from(root);
     }
@@ -84,6 +84,7 @@ pub(super) fn compile(out_dir: &str) {
         .find_map(|line| line.strip_prefix("LLVM version: "))
         .unwrap();
     let prefix = super::llvm::build(version);
+    let libraries = super::llvm::link_libraries(version, &prefix);
     let directory = prefix.join("bin");
     let clang = find_tool(
         &directory,
@@ -138,6 +139,37 @@ pub(super) fn compile(out_dir: &str) {
         _ = native.flags(&clang_args).flag("-flto=full");
     }
     native.compile("float_parsing");
+    let mut target_options = cc::Build::new();
+    // LLVM's headers are external code; keep warnings on the bridge itself.
+    // The bridge is linked with the static LLVM libraries, so it must see
+    // their headers: on windows-gnu those are a separate installation from
+    // the tools, whose headers can differ in configuration.
+    let llvm_headers = format!("-isystem{}", libraries.join("include").display());
+    _ = target_options
+        .compiler(&clang)
+        .archiver(&archiver)
+        .cpp(true)
+        .cpp_link_stdlib(None)
+        .file("build_support/llvm_target_options.cpp")
+        .opt_level(3)
+        .debug(true)
+        .inherit_rustflags(false)
+        .static_crt(true)
+        .out_dir(out_dir);
+    if windows_msvc {
+        _ = target_options
+            .flags(clang_args.iter().map(|arg| format!("/clang:{arg}")))
+            .flag(format!("/clang:{llvm_headers}"))
+            .flag("/std:c++17")
+            .flag("/clang:-flto=full");
+    } else {
+        _ = target_options
+            .flags(&clang_args)
+            .flag(llvm_headers)
+            .flag("-std=c++17")
+            .flag("-flto=full");
+    }
+    target_options.compile("llvm_target_options");
     bindgen::Builder::default()
         .header("build_support/float_parsing.h")
         .clang_args(&clang_args)

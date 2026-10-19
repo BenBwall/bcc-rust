@@ -208,3 +208,56 @@ size_t long_double_to_hex(long_double_t const value, char *const buffer,
   buffer[length] = '\0';
   return length;
 }
+
+/* Use Clang's C complex implementation and its compiler-runtime recovery,
+   with scalar/out-pointer interfaces so Rust never guesses complex ABI. */
+#define COMPLEX_ARITHMETIC(T, NAME) \
+void NAME(T ar, T ai, T br, T bi, int operation, T *real, T *imag) \
+{ \
+  T _Complex a = __builtin_complex(ar, ai); \
+  T _Complex b = __builtin_complex(br, bi); \
+  T _Complex result; \
+  switch (operation) { \
+  case 0: result = a + b; break; \
+  case 1: result = a - b; break; \
+  case 2: result = a * b; break; \
+  default: result = a / b; break; \
+  } \
+  *real = __real__ result; \
+  *imag = __imag__ result; \
+}
+COMPLEX_ARITHMETIC(float, bcc_complex_float)
+COMPLEX_ARITHMETIC(double, bcc_complex_double)
+COMPLEX_ARITHMETIC(long double, bcc_complex_extended)
+
+void long_double_complex_arithmetic(long_double_t ar, long_double_t ai,
+                                    long_double_t br, long_double_t bi,
+                                    int operation, int precision,
+                                    long_double_t *real, long_double_t *imag)
+{
+  long double a = load_long_double(ar), b = load_long_double(ai);
+  long double c = load_long_double(br), d = load_long_double(bi);
+  long double re, im;
+#if LDBL_MANT_DIG == 64 && (defined(__i386__) || defined(__x86_64__))
+  unsigned short saved_control, extended_control;
+  __asm__ volatile("fnstcw %0" : "=m"(saved_control));
+  extended_control = (unsigned short)((saved_control & ~0x0300u) | 0x0300u);
+  __asm__ volatile("fldcw %0" : : "m"(extended_control));
+#endif
+  if (precision == 1) {
+    float r, i;
+    bcc_complex_float((float)a, (float)b, (float)c, (float)d, operation, &r, &i);
+    re = r; im = i;
+  } else if (precision == 2) {
+    double r, i;
+    bcc_complex_double((double)a, (double)b, (double)c, (double)d, operation, &r, &i);
+    re = r; im = i;
+  } else {
+    bcc_complex_extended(a, b, c, d, operation, &re, &im);
+  }
+  *real = store_long_double(re);
+  *imag = store_long_double(im);
+#if LDBL_MANT_DIG == 64 && (defined(__i386__) || defined(__x86_64__))
+  __asm__ volatile("fldcw %0" : : "m"(saved_control));
+#endif
+}

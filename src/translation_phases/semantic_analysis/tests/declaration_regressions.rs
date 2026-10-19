@@ -23,7 +23,7 @@ fn sizeof_arrays_with_inner_variable_dimensions_is_not_an_ice() {
                     .unwrap();
                 assert!(matches!(
                     s.types.nodes[binding.ty.index],
-                    TypeKind::Array(_, ArrayBound::Variable)
+                    TypeKind::Array(_, ArrayBound::Variable(_))
                 ));
             }
         },

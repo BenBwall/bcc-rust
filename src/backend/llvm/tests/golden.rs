@@ -1,0 +1,1143 @@
+//! Golden tests: textual bcc IR in, LLVM IR text out. Each module also goes
+//! through LLVM verification and object emission (see `clang.rs`).
+
+use super::*;
+
+/// One golden module: its name, its bcc IR, the profile it verifies in, and
+/// the LLVM IR it prints for x86-64 Linux.
+pub(super) struct Golden {
+    pub(super) name:     &'static str,
+    pub(super) input:    &'static str,
+    pub(super) profile:  Profile,
+    pub(super) expected: &'static str,
+}
+
+impl Golden {
+    pub(super) fn emit(&self) -> String {
+        emit(self.input, self.profile, Target::LinuxGnu)
+    }
+}
+
+pub(super) const GOLDENS: &[Golden] = &[
+    ARITHMETIC,
+    LOOP,
+    MEMORY,
+    CALLS,
+    SWITCH,
+    GLOBALS,
+    VARARGS,
+    AGGREGATES,
+    POISON_REGISTER_RETURN,
+    NOUNDEF_PAIR_RETURN,
+    EXTENSIONS,
+    LABELS,
+];
+
+#[test]
+fn noundef_register_return_emits_the_contract_without_freezing_bytes() {
+    let text = "abi lowered\nfunction @f(ptr registers(i64, align 8)) -> noundef internal \
+                {\nblock0(v0: ptr):\n    v1 = iconst.i64 7\n    store.i64 v1, v0, align 8\n    \
+                return\n}\nfunction @main() -> i32 external {\n    slot0 = stack_slot 8, align \
+                8\nblock0:\n    v0 = stack_addr slot0\n    call @f(v0)\n    v1 = iconst.i32 0\n    \
+                return v1\n}\n";
+    let llvm = emit(text, Profile::PostAbi, Target::LinuxGnu);
+    assert!(llvm.contains("define internal noundef i64 @f()"), "{llvm}");
+    assert!(llvm.contains("call noundef i64 @f()"), "{llvm}");
+    assert!(!llvm.contains("freeze"), "{llvm}");
+}
+
+#[test]
+fn returns_twice_marks_the_declaration_and_each_direct_call() {
+    let text = "function @setjmp(ptr) -> i32 external\nfunction @main() -> i32 external {\n    \
+                slot0 = stack_slot 200, align 8\nblock0:\n    v0 = stack_addr slot0\n    v1 = \
+                call @setjmp(v0)\n    return v1\n}\n";
+    let llvm = emit(text, Profile::PreAbi, Target::LinuxGnu);
+    let group = |line: &str| {
+        line.rsplit_once('#')
+            .map(|(_, group)| group.trim().to_owned())
+    };
+    let declaration = llvm
+        .lines()
+        .find(|line| line.starts_with("declare i32 @setjmp(ptr)"))
+        .and_then(group)
+        .unwrap_or_else(|| panic!("{llvm}"));
+    let call = llvm
+        .lines()
+        .find(|line| line.contains("call i32 @setjmp("))
+        .and_then(group)
+        .unwrap_or_else(|| panic!("{llvm}"));
+    for group in [declaration, call] {
+        assert!(
+            llvm.lines().any(
+                |line| line.starts_with(&format!("attributes #{group} = {{"))
+                    && line.contains("returns_twice")
+            ),
+            "#{group}: {llvm}"
+        );
+    }
+}
+
+#[test]
+fn aliases_and_escaped_addresses_mark_their_calls_returns_twice() {
+    let marked = |llvm: &str, callee: &str| {
+        let line = llvm
+            .lines()
+            .find(|line| line.contains(&format!("call i32 {callee}(")))
+            .unwrap_or_else(|| panic!("{llvm}"));
+        line.rsplit_once('#').is_some_and(|(_, group)| {
+            llvm.lines().any(|attributes| {
+                attributes.starts_with(&format!("attributes #{} = {{", group.trim()))
+                    && attributes.contains("returns_twice")
+            })
+        })
+    };
+    let alias = "function @real(ptr) -> i32 external returns_twice {\nblock0(v0: ptr):\n    v1 = \
+                 iconst.i32 0\n    return v1\n}\nfunction @save(ptr) -> i32 external alias \
+                 @real\nfunction @main(ptr) -> i32 external {\nblock0(v0: ptr):\n    v1 = call \
+                 @save(v0)\n    return v1\n}\n";
+    assert!(marked(
+        &emit(alias, Profile::PreAbi, Target::LinuxGnu),
+        "@save"
+    ));
+    let indirect = |relocation: &str| {
+        format!(
+            "global @table internal size 8, align 8 = bytes \"0000000000000000\" relocs [0: \
+             {relocation}]\nfunction @_setjmp(ptr) -> i32 external\nfunction @plain(ptr) -> i32 \
+             external\nfunction @main(ptr) -> i32 external {{\nblock0(v0: ptr):\n    v1 = \
+             global_addr @table\n    v2 = load.ptr v1, align 8\n    v3 = call_indirect v2(v0) : \
+             (ptr) -> i32\n    return v3\n}}\n"
+        )
+    };
+    assert!(marked(
+        &emit(&indirect("@_setjmp"), Profile::PreAbi, Target::LinuxGnu),
+        "%v2"
+    ));
+    assert!(!marked(
+        &emit(&indirect("@plain"), Profile::PreAbi, Target::LinuxGnu),
+        "%v2"
+    ));
+}
+
+const ARITHMETIC: Golden = Golden {
+    name:     "arithmetic",
+    input:    "\
+function @arith(i32, i32, i64, f64) -> i32 external {
+block0(v0: i32, v1: i32, v2: i64, v3: f64):
+    v4 = iadd.i32 nsw v0, v1
+    v5 = isub.i32 nuw v4, v1
+    v6 = imul.i32 nsw nuw v5, v0
+    v7 = sdiv.i32 exact v6, v1
+    v8 = udiv.i32 v7, v1
+    v9 = srem.i32 v8, v1
+    v10 = urem.i32 v9, v1
+    v11 = shl.i32 nsw v10, v0
+    v12 = lshr.i32 exact v11, v0
+    v13 = ashr.i32 v12, v0
+    v14 = iconst.i32 -7
+    v15 = and.i32 v13, v14
+    v16 = or.i32 v15, v0
+    v17 = xor.i32 v16, v1
+    v18 = icmp.i32 sle v17, v0
+    v19 = select.i32 v18, v17, v14
+    v20 = freeze.i32 v19
+    v21 = sext.i64 v20
+    v22 = iadd.i64 v21, v2
+    v23 = sitofp.f64 v22
+    v24 = fconst.f64 0x3FF8000000000000
+    v25 = fmul.f64 v23, v24
+    v26 = fneg.f64 v25
+    v27 = fcmp.f64 ult v26, v3
+    v28 = zext.i32 v27
+    v29 = fptosi.i32 v26
+    v30 = iadd.i32 v28, v29
+    return v30
+}
+
+function @convert(i128, f32, ptr) -> f128 internal {
+block0(v0: i128, v1: f32, v2: ptr):
+    v3 = iconst.i128 -170141183460469231731687303715884105728
+    v4 = iadd.i128 v0, v3
+    v5 = trunc.i16 v4
+    v6 = zext.i64 v5
+    v7 = uitofp.f32 v6
+    v8 = fconst.f32 0x3DCCCCCD
+    v9 = fsub.f32 v7, v8
+    v10 = fdiv.f32 v9, v1
+    v11 = frem.f32 v10, v1
+    v12 = fpext.f80 v11
+    v13 = fconst.f80 0x3FFF8000000000000000
+    v14 = fadd.f80 v12, v13
+    v15 = fptrunc.f64 v14
+    v16 = fptoui.i64 v15
+    v17 = bitcast.f64 v16
+    v18 = fcmp.f64 uno v17, v15
+    v19 = ptrtoint.i64 v2
+    v20 = inttoptr.ptr v19
+    v21 = icmp.ptr eq v20, v2
+    v22 = and.i1 v18, v21
+    v23 = fconst.f128 0x3FFF8000000000000000000000000000
+    v24 = poison.f128
+    v25 = select.f128 v22, v23, v24
+    return v25
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @arith(i32 %v0, i32 %v1, i64 %v2, double %v3) {
+block0:
+  %v4 = add nsw i32 %v0, %v1
+  %v5 = sub nuw i32 %v4, %v1
+  %v6 = mul nuw nsw i32 %v5, %v0
+  %v7 = sdiv exact i32 %v6, %v1
+  %v8 = udiv i32 %v7, %v1
+  %v9 = srem i32 %v8, %v1
+  %v10 = urem i32 %v9, %v1
+  %v11 = shl nsw i32 %v10, %v0
+  %v12 = lshr exact i32 %v11, %v0
+  %v13 = ashr i32 %v12, %v0
+  %v15 = and i32 %v13, -7
+  %v16 = or i32 %v15, %v0
+  %v17 = xor i32 %v16, %v1
+  %v18 = icmp sle i32 %v17, %v0
+  %v19 = select i1 %v18, i32 %v17, i32 -7
+  %v20 = freeze i32 %v19
+  %v21 = sext i32 %v20 to i64
+  %v22 = add i64 %v21, %v2
+  %v23 = sitofp i64 %v22 to double
+  %v25 = fmul double %v23, 1.500000e+00
+  %v26 = fneg double %v25
+  %v27 = fcmp ult double %v26, %v3
+  %v28 = zext i1 %v27 to i32
+  %v29 = fptosi double %v26 to i32
+  %v30 = add i32 %v28, %v29
+  ret i32 %v30
+}
+
+define internal fp128 @convert(i128 %v0, float %v1, ptr %v2) {
+block0:
+  %v4 = add i128 %v0, -170141183460469231731687303715884105728
+  %v5 = trunc i128 %v4 to i16
+  %v6 = zext i16 %v5 to i64
+  %v7 = uitofp i64 %v6 to float
+  %v9 = fsub float %v7, 1.000000e-01
+  %v10 = fdiv float %v9, %v1
+  %v11 = frem float %v10, %v1
+  %v12 = fpext float %v11 to x86_fp80
+  %v14 = fadd x86_fp80 %v12, 1.000000e+00
+  %v15 = fptrunc x86_fp80 %v14 to double
+  %v16 = fptoui double %v15 to i64
+  %v17 = bitcast i64 %v16 to double
+  %v18 = fcmp uno double %v17, %v15
+  %v19 = ptrtoint ptr %v2 to i64
+  %v20 = inttoptr i64 %v19 to ptr
+  %v21 = icmp eq ptr %v20, %v2
+  %v22 = and i1 %v18, %v21
+  %v25 = select i1 %v22, fp128 1.500000e+00, fp128 poison
+  ret fp128 %v25
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+const LOOP: Golden = Golden {
+    name:     "loop",
+    input:    "\
+function @count(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 slt v2, v0
+    brif v4, block2, block3
+block2:
+    v5 = iadd.i32 nsw v3, v2
+    v6 = iconst.i32 1
+    v7 = iadd.i32 nsw v2, v6
+    jump block1(v7, v5)
+block3:
+    return v3
+}
+
+function @twice(i1, i32) -> i32 external {
+block0(v0: i1, v1: i32):
+    brif v0, block1(v1), block1(v1)
+block1(v2: i32):
+    return v2
+block2(v3: i32):
+    jump block1(v3)
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @count(i32 %v0) {
+block0:
+  br label %block1
+
+block1:                                           ; preds = %block2, %block0
+  %v2 = phi i32 [ 0, %block0 ], [ %v7, %block2 ]
+  %v3 = phi i32 [ 0, %block0 ], [ %v5, %block2 ]
+  %v4 = icmp slt i32 %v2, %v0
+  br i1 %v4, label %block2, label %block3
+
+block2:                                           ; preds = %block1
+  %v5 = add nsw i32 %v3, %v2
+  %v7 = add nsw i32 %v2, 1
+  br label %block1
+
+block3:                                           ; preds = %block1
+  ret i32 %v3
+}
+
+define i32 @twice(i1 %v0, i32 %v1) {
+block0:
+  br i1 %v0, label %block1, label %block1
+
+block1:                                           ; preds = %block0, %block0
+  %v2 = phi i32 [ %v1, %block0 ], [ %v1, %block0 ]
+  ret i32 %v2
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+const MEMORY: Golden = Golden {
+    name:     "memory",
+    input:    "\
+global @counter internal size 4, align 4 = zero
+
+function @memory(ptr, i64) -> i32 external {
+    slot0 = stack_slot 16, align 8
+    slot1 = stack_slot 4, align 4
+block0(v0: ptr, v1: i64):
+    v2 = stack_addr slot0
+    v3 = stack_addr slot1
+    v4 = global_addr @counter
+    v5 = load.i32 volatile v4, align 4
+    store.i32 v5, v3, align 4
+    v6 = ptr_add inbounds v2, v1
+    v7 = ptr_add v0, v1
+    store.i64 volatile v1, v6, align 8
+    v8 = iconst.i64 16
+    copy v2, v0, v8, align 8
+    copy volatile may_overlap v7, v0, v8, align 1
+    v9 = iconst.i8 0
+    fill v2, v9, v8, align 8
+    v10 = null
+    store.ptr v10, v2, align 8
+    v11 = load.i32 v3, align 4
+    return v11
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@counter = internal global [4 x i8] zeroinitializer, align 4
+
+define i32 @memory(ptr %v0, i64 %v1) {
+block0:
+  %slot0 = alloca [16 x i8], align 8
+  %slot1 = alloca [4 x i8], align 4
+  %v5 = load volatile i32, ptr @counter, align 4
+  store i32 %v5, ptr %slot1, align 4
+  %v6 = getelementptr inbounds i8, ptr %slot0, i64 %v1
+  %v7 = getelementptr i8, ptr %v0, i64 %v1
+  store volatile i64 %v1, ptr %v6, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %slot0, ptr align 8 %v0, i64 16, i1 false)
+  call void @llvm.memmove.p0.p0.i64(ptr align 1 %v7, ptr align 1 %v0, i64 16, i1 true)
+  call void @llvm.memset.p0.i64(ptr align 8 %slot0, i8 0, i64 16, i1 false)
+  store ptr null, ptr %slot0, align 8
+  %v11 = load i32, ptr %slot1, align 4
+  ret i32 %v11
+}
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias writeonly captures(none), ptr noalias readonly captures(none), i64, i1 immarg) #0
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.memmove.p0.p0.i64(ptr writeonly captures(none), ptr readonly captures(none), i64, i1 immarg) #0
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: write)
+declare void @llvm.memset.p0.i64(ptr writeonly captures(none), i8, i64, i1 immarg) #1
+
+attributes #0 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: write) }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+const CALLS: Golden = Golden {
+    name:     "calls",
+    input:    "\
+function @add(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iadd.i32 nsw v0, v1
+    return v2
+}
+
+function @sink(ptr) external
+
+function @calls(i32, ptr) -> i32 internal {
+block0(v0: i32, v1: ptr):
+    v2 = call @add(v0, v0)
+    call @sink(v1)
+    v3 = func_addr @add
+    v4 = call_indirect v3(v2, v0) : (i32, i32) -> i32
+    v5 = call_indirect v1(v4) : (i32) -> i32
+    call_indirect v1() : ()
+    return v5
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @add(i32 %v0, i32 %v1) {
+block0:
+  %v2 = add nsw i32 %v0, %v1
+  ret i32 %v2
+}
+
+declare void @sink(ptr)
+
+define internal i32 @calls(i32 %v0, ptr %v1) {
+block0:
+  %v2 = call i32 @add(i32 %v0, i32 %v0)
+  call void @sink(ptr %v1)
+  %v4 = call i32 @add(i32 %v2, i32 %v0)
+  %v5 = call i32 %v1(i32 %v4)
+  call void %v1()
+  ret i32 %v5
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+const SWITCH: Golden = Golden {
+    name:     "switch",
+    input:    "\
+function @classify(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 10
+    v2 = iconst.i32 20
+    switch v0, block3(v2), [-1: block1, 0: block2(v1), 7: block2(v1), 9: block3(v2)]
+block1:
+    unreachable
+block2(v3: i32):
+    jump block3(v3)
+block3(v4: i32):
+    return v4
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @classify(i32 %v0) {
+block0:
+  switch i32 %v0, label %block3 [
+    i32 -1, label %block1
+    i32 0, label %block2
+    i32 7, label %block2
+    i32 9, label %block3
+  ]
+
+block1:                                           ; preds = %block0
+  unreachable
+
+block2:                                           ; preds = %block0, %block0
+  %v3 = phi i32 [ 10, %block0 ], [ 10, %block0 ]
+  br label %block3
+
+block3:                                           ; preds = %block2, %block0, %block0
+  %v4 = phi i32 [ 20, %block0 ], [ 20, %block0 ], [ %v3, %block2 ]
+  ret i32 %v4
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+const GLOBALS: Golden = Golden {
+    name:     "globals",
+    input:    "\
+global @zeroed internal size 8, align 8 = zero
+global @message external constant size 6, align 1 = bytes \"68692022215c\"
+global @blank internal size 3, align 1 = bytes \"000000\"
+global @table internal constant size 28, align 8 = bytes \
+               \"0102030405060708000000000000000000000000000000000a0b0c0d\" relocs [16: @message \
+               + 2, 8: @answer]
+global @back external size 8, align 8 = bytes \"0000000000000000\" relocs [0: @table - 8]
+global @errno external size 4, align 4
+global @limits external constant size 0, align 1
+
+function @answer() -> i32 external {
+block0:
+    v0 = iconst.i32 42
+    return v0
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@zeroed = internal global [8 x i8] zeroinitializer, align 8
+@message = constant [6 x i8] c"hi \22!\\", align 1
+@blank = internal global [3 x i8] zeroinitializer, align 1
+@table = internal constant <{ [8 x i8], ptr, ptr, [4 x i8] }> <{ [8 x i8] c"\01\02\03\04\05\06\07\08", ptr @answer, ptr getelementptr (i8, ptr @message, i64 2), [4 x i8] c"\0A\0B\0C\0D" }>, align 8
+@back = global <{ ptr }> <{ ptr getelementptr (i8, ptr @table, i64 -8) }>, align 8
+@errno = external global [4 x i8], align 4
+@limits = external constant [0 x i8], align 1
+
+define i32 @answer() {
+block0:
+  ret i32 42
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+const VARARGS: Golden = Golden {
+    name:     "varargs",
+    input:    "\
+global @format internal constant size 4, align 1 = bytes \"25640a00\"
+
+function @printf(ptr, ...) -> i32 external
+
+function @anything(...) external
+
+function @sum(i32, ...) -> i32 external {
+    slot0 = stack_slot 24, align 8
+    slot1 = stack_slot 24, align 8
+block0(v0: i32):
+    v1 = stack_addr slot0
+    v2 = stack_addr slot1
+    va_start v1
+    va_copy v2, v1
+    v3 = va_arg.i32 v1
+    va_end v2
+    va_end v1
+    v4 = iadd.i32 nsw v0, v3
+    v5 = global_addr @format
+    v6 = call @printf(v5, v4)
+    v7 = iconst.i64 3
+    call @anything(v7, v5)
+    return v4
+}
+",
+    profile:  Profile::PreAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@format = internal constant [4 x i8] c"%d\0A\00", align 1
+
+declare i32 @printf(ptr, ...)
+
+declare void @anything(...)
+
+define i32 @sum(i32 %v0, ...) {
+block0:
+  %slot0 = alloca [24 x i8], align 8
+  %slot1 = alloca [24 x i8], align 8
+  call void @llvm.va_start.p0(ptr %slot0)
+  call void @llvm.va_copy.p0(ptr %slot1, ptr %slot0)
+  %v3 = va_arg ptr %slot0, i32
+  call void @llvm.va_end.p0(ptr %slot1)
+  call void @llvm.va_end.p0(ptr %slot0)
+  %v4 = add nsw i32 %v0, %v3
+  %v6 = call i32 (ptr, ...) @printf(ptr @format, i32 %v4)
+  call void (...) @anything(i64 3, ptr @format)
+  ret i32 %v4
+}
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn
+declare void @llvm.va_start.p0(ptr) #0
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn
+declare void @llvm.va_copy.p0(ptr, ptr) #0
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn
+declare void @llvm.va_end.p0(ptr) #0
+
+attributes #0 = { nocallback nofree nosync nounwind willreturn }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+/// The post-ABI forms of aggregates: `sret` and `byval` parameters, and
+/// results in one or two registers, whose return area the callee allocates
+/// and the caller stores to.
+const AGGREGATES: Golden = Golden {
+    name:     "aggregates",
+    input:    "\
+abi lowered
+
+function @memory(ptr sret(size 24, align 8), ptr byval(size 24, align 8), i32) external
+
+function @pair(ptr registers(i64, f64, align 8), i64) external {
+block0(v0: ptr, v1: i64):
+    store.i64 v1, v0, align 8
+    v2 = iconst.i64 8
+    v3 = ptr_add inbounds v0, v2
+    v4 = sitofp.f64 v1
+    store.f64 v4, v3, align 8
+    return
+}
+
+function @small(ptr registers(i32, align 4)) internal {
+block0(v0: ptr):
+    v1 = iconst.i32 7
+    store.i32 v1, v0, align 4
+    return
+}
+
+function @caller() -> i64 external {
+    slot0 = stack_slot 24, align 8
+    slot1 = stack_slot 24, align 8
+    slot2 = stack_slot 16, align 8
+    slot3 = stack_slot 4, align 4
+block0:
+    v0 = stack_addr slot0
+    v1 = stack_addr slot1
+    v2 = iconst.i32 3
+    call @memory(v0, v1, v2)
+    v3 = stack_addr slot2
+    v4 = iconst.i64 5
+    call @pair(v3, v4)
+    v5 = stack_addr slot3
+    v6 = func_addr @small
+    call_indirect v6(v5) : (ptr registers(i32, align 4))
+    v7 = load.i64 v3, align 8
+    return v7
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare void @memory(ptr sret([24 x i8]) align 8, ptr byval([24 x i8]) align 8, i32)
+
+define { i64, double } @pair(i64 %v1) {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i64 %v1, ptr %v0, align 8
+  %v3 = getelementptr inbounds i8, ptr %v0, i64 8
+  %v4 = sitofp i64 %v1 to double
+  store double %v4, ptr %v3, align 8
+  %0 = load <8 x i8>, ptr %v0, align 8
+  %1 = freeze <8 x i8> %0
+  %2 = bitcast <8 x i8> %1 to i64
+  %3 = insertvalue { i64, double } poison, i64 %2, 0
+  %4 = getelementptr inbounds i8, ptr %v0, i64 8
+  %5 = load <8 x i8>, ptr %4, align 8
+  %6 = freeze <8 x i8> %5
+  %7 = bitcast <8 x i8> %6 to double
+  %inst5.ret = insertvalue { i64, double } %3, double %7, 1
+  ret { i64, double } %inst5.ret
+}
+
+define internal i32 @small() {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i32 7, ptr %v0, align 4
+  %0 = load <4 x i8>, ptr %v0, align 8
+  %1 = freeze <4 x i8> %0
+  %inst2.ret = bitcast <4 x i8> %1 to i32
+  ret i32 %inst2.ret
+}
+
+define i64 @caller() {
+block0:
+  %slot0 = alloca [24 x i8], align 8
+  %slot1 = alloca [24 x i8], align 8
+  %slot2 = alloca [16 x i8], align 8
+  %slot3 = alloca [4 x i8], align 4
+  call void @memory(ptr sret([24 x i8]) align 8 %slot0, ptr byval([24 x i8]) align 8 %slot1, i32 3)
+  %inst6.ret = call { i64, double } @pair(i64 5)
+  store { i64, double } %inst6.ret, ptr %slot2, align 8
+  %inst9.ret = call i32 @small()
+  store i32 %inst9.ret, ptr %slot3, align 4
+  %v7 = load i64, ptr %slot2, align 8
+  ret i64 %v7
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+/// Byte poison must be frozen before packing a memory-backed scalar result.
+const POISON_REGISTER_RETURN: Golden = Golden {
+    name:     "poison-register-return",
+    input:    "abi lowered
+function @f(ptr registers(i16, align 1)) internal {
+block0(v0: ptr):
+    v1 = iconst.i8 42
+    store.i8 v1, v0, align 1
+    v2 = iconst.i64 1
+    v3 = ptr_add inbounds v0, v2
+    v4 = poison.i8
+    store.i8 v4, v3, align 1
+    return
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 2, align 1
+block0:
+    v0 = stack_addr slot0
+    call @f(v0)
+    v1 = load.i8 v0, align 1
+    v2 = zext.i32 v1
+    return v2
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define internal i16 @f() {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i8 42, ptr %v0, align 1
+  %v3 = getelementptr inbounds i8, ptr %v0, i64 1
+  store i8 poison, ptr %v3, align 1
+  %0 = load <2 x i8>, ptr %v0, align 8
+  %1 = freeze <2 x i8> %0
+  %inst6.ret = bitcast <2 x i8> %1 to i16
+  ret i16 %inst6.ret
+}
+
+define i32 @main() {
+block0:
+  %slot0 = alloca [2 x i8], align 1
+  %inst1.ret = call i16 @f()
+  store i16 %inst1.ret, ptr %slot0, align 1
+  %v1 = load i8, ptr %slot0, align 1
+  %v2 = zext i8 %v1 to i32
+  ret i32 %v2
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+/// Both return registers carry byte poison without freezing when marked
+/// noundef.
+const NOUNDEF_PAIR_RETURN: Golden = Golden {
+    name:     "noundef-pair-return",
+    input:    "\
+abi lowered
+function @f(ptr registers(i64, i64, align 8)) -> noundef internal {
+block0(v0: ptr):
+    v1 = iconst.i64 7
+    store.i64 v1, v0, align 8
+    v2 = iconst.i64 8
+    v3 = ptr_add inbounds v0, v2
+    store.i64 v1, v3, align 8
+    v4 = iconst.i64 15
+    v5 = ptr_add inbounds v0, v4
+    v6 = poison.i8
+    store.i8 v6, v5, align 1
+    return
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 16, align 8
+block0:
+    v0 = stack_addr slot0
+    call @f(v0)
+    v1 = iconst.i32 0
+    return v1
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define internal noundef { i64, i64 } @f() {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i64 7, ptr %v0, align 8
+  %v3 = getelementptr inbounds i8, ptr %v0, i64 8
+  store i64 7, ptr %v3, align 8
+  %v5 = getelementptr inbounds i8, ptr %v0, i64 15
+  store i8 poison, ptr %v5, align 1
+  %0 = load <8 x i8>, ptr %v0, align 8
+  %1 = bitcast <8 x i8> %0 to i64
+  %2 = insertvalue { i64, i64 } poison, i64 %1, 0
+  %3 = getelementptr inbounds i8, ptr %v0, i64 8
+  %4 = load <8 x i8>, ptr %3, align 8
+  %5 = bitcast <8 x i8> %4 to i64
+  %inst9.ret = insertvalue { i64, i64 } %2, i64 %5, 1
+  ret { i64, i64 } %inst9.ret
+}
+
+define i32 @main() {
+block0:
+  %slot0 = alloca [16 x i8], align 8
+  %inst1.ret = call noundef { i64, i64 } @f()
+  store { i64, i64 } %inst1.ret, ptr %slot0, align 8
+  ret i32 0
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+/// Label tables and label differences in globals, block addresses, an
+/// indirect branch with block arguments, and a labeled block nothing
+/// reaches, which LLVM still needs for its address.
+const LABELS: Golden = Golden {
+    name:     "labels",
+    input:    "global @table internal constant size 16, align 8 = bytes \"00000000000000000000000000000000\"                relocs [0: blockaddress(@select, label0), 8: blockaddress(@select, label1)]
+global @offsets internal constant size 6, align 2 = bytes \"000000000000\" relocs [0:                labeldiff.i32(@select, label1, label0), 4: labeldiff.i16(@select, label0, label1)                + 3]
+
+function @select(ptr) -> i32 external {
+    label0 = block_label block1
+    label1 = block_label block2
+    label2 = block_label block3
+block0(v0: ptr):
+    v1 = iconst.i32 1
+    indirect_br v0, [block1(v1), block2]
+block1(v2: i32):
+    return v2
+block2:
+    v3 = block_addr label2
+    v4 = iconst.i32 2
+    indirect_br v3, [block1(v4)]
+block3:
+    v5 = iconst.i32 3
+    return v5
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@table = internal constant <{ ptr, ptr }> <{ ptr blockaddress(@select, %block1), ptr blockaddress(@select, %block2) }>, align 8
+@offsets = internal constant <{ i32, i16 }> <{ i32 trunc (i64 sub (i64 ptrtoint (ptr blockaddress(@select, %block2) to i64), i64 ptrtoint (ptr blockaddress(@select, %block1) to i64)) to i32), i16 trunc (i64 add (i64 sub (i64 ptrtoint (ptr blockaddress(@select, %block1) to i64), i64 ptrtoint (ptr blockaddress(@select, %block2) to i64)), i64 3) to i16) }>, align 2
+
+define i32 @select(ptr %v0) {
+block0:
+  indirectbr ptr %v0, [label %block1, label %block2]
+
+block1:                                           ; preds = %block2, %block0
+  %v2 = phi i32 [ 1, %block0 ], [ 2, %block2 ]
+  ret i32 %v2
+
+block2:                                           ; preds = %block0
+  indirectbr ptr blockaddress(@select, %block3), [label %block1]
+
+block3:                                           ; No predecessors!
+  unreachable
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+/// Narrow integer extensions on definitions, declarations, results and both
+/// kinds of call, with independent noundef contracts on selected positions.
+const EXTENSIONS: Golden = Golden {
+    name:     "extensions",
+    input:    "\
+abi lowered
+
+function @widen(i8 signext noundef, i16 zeroext, i32) -> i8 signext noundef external
+
+function @truth(i8 zeroext noundef) -> i8 zeroext noundef internal {
+block0(v0: i8):
+    return v0
+}
+
+function @plain(i8, i16) -> i16 external
+
+function @caller(i8) -> i32 external {
+block0(v0: i8):
+    v1 = iconst.i16 300
+    v2 = iconst.i32 7
+    v3 = call @widen(v0, v1, v2)
+    v4 = func_addr @truth
+    v5 = call_indirect v4(v3) : (i8 zeroext noundef) -> i8 zeroext noundef
+    v6 = call @plain(v5, v1)
+    v7 = sext.i32 v6
+    return v7
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare noundef signext i8 @widen(i8 noundef signext, i16 zeroext, i32)
+
+define internal noundef zeroext i8 @truth(i8 noundef zeroext %v0) {
+block0:
+  ret i8 %v0
+}
+
+declare i16 @plain(i8, i16)
+
+define i32 @caller(i8 %v0) {
+block0:
+  %v3 = call noundef signext i8 @widen(i8 noundef signext %v0, i16 zeroext 300, i32 7)
+  %v5 = call noundef zeroext i8 @truth(i8 noundef zeroext %v3)
+  %v6 = call i16 @plain(i8 %v5, i16 300)
+  %v7 = sext i16 %v6 to i32
+  ret i32 %v7
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 8, !"PIC Level", i32 2}
+!1 = !{i32 7, !"PIE Level", i32 2}
+"#,
+};
+
+#[test]
+fn pre_abi_aggregates_and_extensions_are_refused() {
+    let arena = Bump::new();
+    let module = parse_module(
+        &arena,
+        "function @f(ptr aggregate(size 8, align 8, [0: i64])) external\n",
+    )
+    .unwrap();
+    let mut out = String::new();
+    assert_eq!(
+        emit_module(&module, Target::LinuxGnu, &mut out),
+        Err(EmitError::NotAbiLowered)
+    );
+    for text in [
+        "function @f(i8 signed) external\n",
+        "function @f() -> i16 unsigned external\n",
+    ] {
+        let module = parse_module(&arena, text).unwrap();
+        assert_eq!(
+            emit_module(&module, Target::LinuxGnu, &mut out),
+            Err(EmitError::NotAbiLowered),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn modules_print_their_golden_llvm_ir() {
+    for golden in GOLDENS {
+        let actual = golden.emit();
+        if std::env::var_os("BLESS").is_some() {
+            std::fs::create_dir_all("target/llvm-goldens").unwrap();
+            std::fs::write(format!("target/llvm-goldens/{}.ll", golden.name), &actual).unwrap();
+        } else {
+            pretty_assertions::assert_eq!(actual, golden.expected, "{}", golden.name);
+        }
+    }
+}
+
+#[test]
+fn modules_for_another_target_are_refused() {
+    let arena = Bump::new();
+    let module = parse_module(
+        &arena,
+        "target triple = \"x86_64-unknown-linux-gnu\"
+target datalayout = \"\"
+",
+    )
+    .unwrap();
+    let mut out = String::new();
+    assert_eq!(
+        emit_module(&module, Target::WindowsMsvc, &mut out),
+        Err(EmitError::TargetMismatch {
+            module:    "x86_64-unknown-linux-gnu",
+            requested: "x86_64-pc-windows-msvc",
+        })
+    );
+}
+
+#[test]
+fn overlapping_relocations_are_refused() {
+    let arena = Bump::new();
+    let module = parse_module(
+        &arena,
+        "global @g external size 16, align 8 = bytes \"00000000000000000000000000000000\"          relocs [0: @g, 4: @g]
+",
+    )
+    .unwrap();
+    let mut out = String::new();
+    assert_eq!(
+        emit_module(&module, Target::LinuxGnu, &mut out),
+        Err(EmitError::OverlappingRelocations {
+            global: "g",
+            first:  0,
+            second: 4,
+        })
+    );
+}
+
+#[test]
+fn uninterned_function_signatures_are_invalid_ir() {
+    use crate::ir::{
+        Entity,
+        Linkage,
+    };
+    let arena = Bump::new();
+    let mut module = Module::new(&arena);
+    _ = module.declare_function("broken", SigId::new(17), Linkage::External);
+    let mut out = String::new();
+    assert_eq!(
+        emit_module(&module, Target::LinuxGnu, &mut out),
+        Err(EmitError::InvalidIr)
+    );
+    assert!(out.is_empty(), "invalid IR must not produce output");
+}
+
+#[test]
+fn names_and_constants_are_spelled_for_llvm() {
+    let arena = Bump::new();
+    Session::with(&arena, Target::LinuxGnu, |api| {
+        for (name, expected) in [
+            ("main", "@main"),
+            ("$x.y-z", r#"@"$x.y-z""#),
+            ("9lives", "@\"9lives\""),
+            ("a b\"c\\", r#"@"a b\22c\\""#),
+        ] {
+            _ = api.function(api.name(name), api.signature(api.void(), &[], false));
+            assert!(
+                api.print().text().contains(expected),
+                "{name}: {}",
+                api.print()
+            );
+        }
+        for (name, ty, bits, expected) in [
+            ("nan", Type::F32, 0x7FC0_0001, "+nan(0x1)"),
+            ("inf", Type::F32, 0xFF80_0000, "-inf"),
+            ("tiny", Type::F32, 0x8000_0001, "-1.401300e-45"),
+            ("minus", Type::I128, u128::MAX, "i128 -1"),
+        ] {
+            let global = api.global(api.name(name), api.ty(ty));
+            api.initializer(global, api.bits(ty, bits));
+            assert!(api.print().text().contains(expected), "{}", api.print());
+        }
+        api.verify().unwrap();
+    });
+}
+
+/// Weak linkage, aliases, sections, `llvm.compiler.used` (ELF) or
+/// `llvm.used` (COFF), visibility, function
+/// alignment and the constructor/destructor arrays print as bundled Clang
+/// prints them for the same C declarations.
+#[test]
+fn symbol_attributes_match_clang_spellings() {
+    let text = "global @value external size 4, align 4 hidden section \"mine\" used = bytes \
+                \"05000000\"\nglobal @other external size 4, align 4 alias @value\nglobal @maybe \
+                weak size 4, align 4\nglobal @soft weak size 4, align 4 = zero\nconstructor @init \
+                priority 101\ndestructor @fini priority 65535\nfunction @init() internal align 16 \
+                {\nblock0:\n    return\n}\nfunction @fini() weak {\nblock0:\n    \
+                return\n}\nfunction @copy() weak alias @fini\nfunction @missing() -> i32 \
+                weak\nfunction @main() -> i32 external {\nblock0:\n    v0 = call @missing()\n    \
+                return v0\n}\n";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let llvm = emit(text, Profile::PostAbi, target);
+        for expected in [
+            r#"@value = hidden global [4 x i8] c"\05\00\00\00", section "mine", align 4"#,
+            "@maybe = extern_weak global [4 x i8], align 4",
+            "@soft = weak global [4 x i8] zeroinitializer, align 4",
+            "@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { \
+             i32 101, ptr @init, ptr null }]",
+            "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { \
+             i32 65535, ptr @fini, ptr null }]",
+            if target == Target::LinuxGnu {
+                "@llvm.compiler.used = appending global [1 x ptr] [ptr @value], section \
+                 \"llvm.metadata\""
+            } else {
+                "@llvm.used = appending global [1 x ptr] [ptr @value], section \"llvm.metadata\""
+            },
+            "@other = alias [4 x i8], ptr @value",
+            "@copy = weak alias void (), ptr @fini",
+            "define internal void @init() align 16",
+            "define weak void @fini()",
+            "declare extern_weak i32 @missing()",
+        ] {
+            assert!(llvm.contains(expected), "{target:?}: {expected}\n{llvm}");
+        }
+    }
+}
+
+/// A Microsoft `selectany` definition is `weak_odr` in an `any` comdat of
+/// its own name, as bundled Clang emits it on every target, so units that
+/// each define it link to one object.
+#[test]
+fn selectany_definitions_are_weak_odr_comdats() {
+    let text = "global @meta selectany constant size 4, align 4 = bytes \"07000000\"\n";
+    for target in [Target::WindowsMsvc, Target::WindowsGnu, Target::LinuxGnu] {
+        let llvm = emit(text, Profile::PostAbi, target);
+        for expected in [
+            "$meta = comdat any",
+            "@meta = weak_odr constant [4 x i8] c\"\\07\\00\\00\\00\", comdat, align 4",
+        ] {
+            assert!(llvm.contains(expected), "{target:?}: {expected}\n{llvm}");
+        }
+    }
+}

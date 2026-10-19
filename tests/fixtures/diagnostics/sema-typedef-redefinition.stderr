@@ -1,4 +1,4 @@
-error: 'typedef redefinition' is a C11 extension
+error: 'typedef redefinition' is a C11 extension [-Wpedantic]
  --> sema-typedef-redefinition.c:2:28
   |
 2 | typedef unsigned long long size_type;

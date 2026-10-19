@@ -2,15 +2,44 @@
 //!
 //! C99: §6.4.2.1p3, p. 51; PDF p. 63; §6.4.3p1-4, p. 53; PDF p. 65; the
 //! permitted ranges are Annex D, pp. 440-441; PDF pp. 452-453.
-use super::{
-    Context,
-    PreprocessorTokenType,
-    StringCacheId,
+use super::PreprocessorTokenType;
+use crate::{
+    translation_phases::Context,
+    util::{
+        bump::{
+            ArenaString,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
-use crate::util::bump::{
-    ArenaString,
-    Bump,
-};
+
+/// Records the canonical spelling of the identifier spelled `raw`, built in
+/// `scratch`.
+/// C99: identifier UCN identity §6.4.2.1p1-3, p. 51; PDF p. 63; §6.4.3p4,
+/// p. 53; PDF p. 65.
+pub(crate) fn identifier(
+    context: &mut Context<'_>,
+    scratch: &Bump,
+    raw: StringCacheId,
+) -> (PreprocessorTokenType, StringCacheId) {
+    let text = context.string_cache.at(raw);
+    let mut canonical = ArenaString::with_capacity_in(text.len(), scratch);
+    let mut index = 0;
+    while index < text.len() {
+        if let Some((c, length)) = decode(&text[index..], index == 0) {
+            canonical.push(c);
+            index += length;
+        } else {
+            let c = text[index..].chars().next().unwrap();
+            canonical.push(c);
+            index += c.len_utf8();
+        }
+    }
+    let id = context.string_cache.intern(&*canonical);
+    let _ = context.canonical_identifiers.insert(raw, id);
+    (PreprocessorTokenType::UniversalIdentifier, raw)
+}
 
 /// Decodes a `universal-character-name` valid in an identifier.
 /// C99: §6.4.3p1-2, p. 53; PDF p. 65; identifier ranges §6.4.2.1p3, p. 51;
@@ -283,31 +312,4 @@ pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
         return None;
     }
     Some((char::from_u32(code)?, 2 + digits))
-}
-
-/// Records the canonical spelling of the identifier spelled `raw`, built in
-/// `scratch`.
-/// C99: identifier UCN identity §6.4.2.1p1-3, p. 51; PDF p. 63; §6.4.3p4,
-/// p. 53; PDF p. 65.
-pub(crate) fn identifier(
-    context: &mut Context<'_>,
-    scratch: &Bump,
-    raw: StringCacheId,
-) -> (PreprocessorTokenType, StringCacheId) {
-    let text = context.string_cache.at(raw);
-    let mut canonical = ArenaString::with_capacity_in(text.len(), scratch);
-    let mut index = 0;
-    while index < text.len() {
-        if let Some((c, length)) = decode(&text[index..], index == 0) {
-            canonical.push(c);
-            index += length;
-        } else {
-            let c = text[index..].chars().next().unwrap();
-            canonical.push(c);
-            index += c.len_utf8();
-        }
-    }
-    let id = context.string_cache.intern(&*canonical);
-    let _ = context.canonical_identifiers.insert(raw, id);
-    (PreprocessorTokenType::UniversalIdentifier, raw)
 }

@@ -1,0 +1,33 @@
+error: flexible array requires brace-enclosed initializer
+ --> sema-flexible-designators.c:2:33
+  |
+1 | struct F { int n; int v[]; };
+  |                       - initialized flexible array member is here
+2 | static struct F scalar = { .v = 5 };
+  |                                 ^ not a brace-enclosed list
+  |
+  = note: C99 §6.7.8p16: an array is initialized by a brace-enclosed list; as in GCC and Clang, a designated flexible array member takes a list or a string literal, never a brace-elided element
+
+error: designator into flexible array member subobject
+ --> sema-flexible-designators.c:3:31
+  |
+1 | struct F { int n; int v[]; };
+  |                       - initialized flexible array member is here
+2 | static struct F scalar = { .v = 5 };
+3 | static struct F element = { .v[1] = 2 };
+  |                               ^^^ designates inside a flexible array member
+  |
+  = note: GNU flexible array member initialization: as in GCC and Clang, a designator may name the flexible array member but not an element or member inside it
+
+error: flexible array requires brace-enclosed initializer
+ --> sema-flexible-designators.c:3:37
+  |
+1 | struct F { int n; int v[]; };
+  |                       - initialized flexible array member is here
+2 | static struct F scalar = { .v = 5 };
+3 | static struct F element = { .v[1] = 2 };
+  |                                     ^ not a brace-enclosed list
+  |
+  = note: C99 §6.7.8p16: an array is initialized by a brace-enclosed list; as in GCC and Clang, a designated flexible array member takes a list or a string literal, never a brace-elided element
+
+3 errors generated.

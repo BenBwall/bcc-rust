@@ -7,9 +7,15 @@ use std::cell::Cell;
 
 use rustc_hash::FxBuildHasher;
 
+pub(crate) use crate::target::{
+    Layout,
+    Scalar,
+    TargetLayout,
+};
 use crate::{
     translation_phases::parsing::declaration_syntax::TypeQualifiers,
     util::{
+        arena_list::ArenaList,
         bump::{
             ArenaMap,
             ArenaVec,
@@ -19,312 +25,7 @@ use crate::{
     },
 };
 
-/// Canonical unqualified type identity plus its compact qualifier set.
-/// C99: §6.2.5p26, p. 36; PDF p. 48; §6.7.3, pp. 108-109; PDF pp. 120-121.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct TypeId {
-    pub(crate) index:      usize,
-    pub(crate) qualifiers: TypeQualifiers,
-}
-
-impl TypeId {
-    /// C99: §6.7.3p9, p. 109; PDF p. 121.
-    pub(crate) fn unqualified(self) -> Self {
-        Self {
-            qualifiers: TypeQualifiers::empty(),
-            ..self
-        }
-    }
-
-    /// C99: §6.7.3p9, p. 109; PDF p. 121.
-    pub(crate) fn qualified(self, qualifiers: TypeQualifiers) -> Self {
-        Self {
-            qualifiers: self.qualifiers | qualifiers,
-            ..self
-        }
-    }
-}
-
-pub(crate) use crate::target::{
-    Layout,
-    Scalar,
-    TargetLayout,
-};
-
-/// Array completeness and run-time extent; `Star` is prototype-scope `[*]`.
-/// C99: §6.7.5.2, pp. 116-118; PDF pp. 128-130.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ArrayBound {
-    Incomplete,
-    Constant(u64),
-    Variable,
-    Star,
-}
-
-/// Function parameter name and declared (adjusted) type.
-/// C99: §6.7.5.3p7-8, p. 119; PDF p. 131.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Parameter {
-    pub(crate) name:          Option<super::Identifier>,
-    pub(crate) ty:            TypeId,
-    pub(crate) array_minimum: Option<ArrayBound>,
-}
-
-/// Nominal tag kind. Members and labels never share the ordinary namespace.
-/// C99: §6.2.3, p. 31; PDF p. 43; §6.7.2.3, pp. 106-107; PDF pp. 118-119.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TagKind {
-    Struct,
-    Union,
-    Enum,
-}
-
-/// A record member including ABI byte/bit offset and source bit-field width.
-/// An anonymous member is an unnamed structure or union member whose own
-/// members belong to the containing record (C11 §6.7.2.1p13, p. 115; PDF
-/// p. 133; a GNU and MSVC extension before C11).
-/// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Member {
-    pub(crate) name:           Option<super::Identifier>,
-    /// Declarator provenance, including unnamed bit-fields.
-    pub(crate) source_vectors: super::SourceVectors,
-    /// A rejected declarator must not produce dependent completion errors.
-    pub(crate) invalid:        bool,
-    pub(crate) ty:             TypeId,
-    pub(crate) offset:         u64,
-    pub(crate) bit_offset:     u32,
-    pub(crate) width:          Option<u32>,
-    pub(crate) anonymous:      bool,
-}
-
-impl Member {
-    /// Unnamed bit-fields do not participate in initialization; anonymous
-    /// structure/union members contribute their members to the containing
-    /// record.
-    /// C99: §6.7.8 paragraph 9, p. 126; PDF p. 138.
-    /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133.
-    pub(crate) const fn initializable(&self) -> bool {
-        self.name.is_some() || self.anonymous
-    }
-}
-
-/// A shared path from a containing record to a declaring member. Prepending
-/// an anonymous member retains its child's tail without copying the indices.
-/// C11: §6.7.2.1p13, p. 115; PDF p. 133.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FieldPath<'tu> {
-    pub(crate) index: usize,
-    pub(crate) next:  Option<&'tu Self>,
-    length:           usize,
-}
-
-impl<'tu> FieldPath<'tu> {
-    /// C11: §6.7.2.1p13, p. 115; PDF p. 133.
-    pub(crate) fn new(index: usize, next: Option<&'tu Self>) -> Self {
-        Self {
-            index,
-            next,
-            length: next.map_or(1, |path| path.length + 1),
-        }
-    }
-
-    /// C11: §6.7.2.1p13, p. 115; PDF p. 133.
-    pub(crate) const fn len(&self) -> usize {
-        self.length
-    }
-
-    /// Walks the member indices in current-object order without recursion.
-    /// C99: §6.7.8p18, p. 127; PDF p. 139; C11: §6.7.2.1p13,
-    /// p. 115; PDF p. 133.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        std::iter::successors(Some(self), |path| path.next).map(|path| path.index)
-    }
-}
-
-/// One name in a record's member namespace, including the names an anonymous
-/// member contributes, resolved to the member that declares it. A backend
-/// can lower member access from the byte offset without walking `path`.
-/// C11: §6.7.2.1p13, p. 115; PDF p. 133. C99: §6.5.2.3p3, p. 73; PDF p. 85.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Field<'tu> {
-    pub(crate) name:       super::Identifier,
-    /// Member indices from this record through each anonymous member.
-    pub(crate) path:       &'tu FieldPath<'tu>,
-    /// The declaring member's type.
-    pub(crate) ty:         TypeId,
-    /// Qualifiers of the anonymous members on the path.
-    pub(crate) qualifiers: TypeQualifiers,
-    /// Byte offset from the start of this record.
-    pub(crate) offset:     u64,
-    pub(crate) bit_offset: u32,
-    pub(crate) width:      Option<u32>,
-}
-
-/// Retained nominal type; completion mutates only its member/layout cells.
-/// C99: §6.7.2.3p4-8, pp. 106-107; PDF pp. 118-119.
-#[derive(Debug)]
-pub(crate) struct Tag<'tu> {
-    pub(crate) name:              Option<StringCacheId>,
-    pub(crate) kind:              TagKind,
-    pub(crate) members:           Cell<&'tu [Member]>,
-    /// The member namespace in declaration order, set at completion.
-    pub(crate) fields:            Cell<&'tu [Field<'tu>]>,
-    pub(crate) layout:            Cell<Option<Layout>>,
-    pub(crate) complete:          Cell<bool>,
-    pub(crate) tainted:           Cell<bool>,
-    pub(crate) contains_flexible: Cell<bool>,
-    /// The implementation-defined compatible integer type fixed at enum
-    /// completion.
-    /// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
-    pub(crate) compatible:        Cell<Scalar>,
-}
-
-/// Hash-consing key. Child identities keep hashing bounded by immediate arity.
-/// C99: derived types §6.2.5p20, pp. 35-36; PDF pp. 47-48.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum TypeKind<'tu> {
-    Unknown,
-    Scalar(Scalar),
-    Pointer(TypeId),
-    Array(TypeId, ArrayBound),
-    Function {
-        result:     TypeId,
-        parameters: &'tu [TypeId],
-        prototype:  bool,
-        variadic:   bool,
-    },
-    Tag(usize),
-    /// An atomic type is distinct from its corresponding non-atomic type.
-    /// C11: §6.2.5 paragraph 27, p. 43; PDF p. 61.
-    Atomic(TypeId),
-    /// GCC Vector Extensions: arithmetic element, lane count and ABI alignment.
-    /// GNU extension: GCC manual, "Vector Extensions".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
-    Vector {
-        element: TypeId,
-        count:   u64,
-        align:   u64,
-    },
-}
-
-/// Durable type graph, retained after semantic working storage is released.
-#[derive(Debug)]
-pub(crate) struct Types<'tu> {
-    pub(crate) nodes:  &'tu [TypeKind<'tu>],
-    pub(crate) tags:   &'tu [&'tu Tag<'tu>],
-    pub(crate) target: TargetLayout,
-}
-
-impl Types<'_> {
-    /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
-    pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(self.nodes, self.tags, &self.target, ty)
-    }
-}
-
-/// Iteratively strips array derivations and multiplies their extents; the
-/// retained graph and the working interner share this one definition.
-/// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
-fn layout(
-    nodes: &[TypeKind<'_>],
-    tags: &[&Tag<'_>],
-    target: &TargetLayout,
-    mut ty: TypeId,
-) -> Option<Layout> {
-    let mut count = 1_u64;
-    let mut atomic = false;
-    let layout = loop {
-        match nodes[ty.index] {
-            | TypeKind::Scalar(scalar) => break target.scalar(scalar)?,
-            | TypeKind::Vector {
-                element,
-                count,
-                align,
-            } => {
-                let TypeKind::Scalar(scalar) = nodes[element.index] else {
-                    return None;
-                };
-                break Layout {
-                    size: target
-                        .scalar(scalar)?
-                        .size
-                        .checked_mul(count)?
-                        .checked_next_power_of_two()?,
-                    align,
-                };
-            },
-            | TypeKind::Pointer(_) => break target.pointer,
-            | TypeKind::Tag(id) => break tags[id].layout.get()?,
-            | TypeKind::Array(element, ArrayBound::Constant(n)) => {
-                count = count.checked_mul(n)?;
-                ty = element;
-            },
-            | TypeKind::Atomic(value) => {
-                atomic = true;
-                ty = value;
-            },
-            | _ => return None,
-        }
-    };
-    let layout = if atomic && layout.size <= 16 {
-        let size = layout.size.next_power_of_two();
-        Layout {
-            size,
-            align: layout.align.max(size),
-        }
-    } else {
-        layout
-    };
-    Some(Layout {
-        size: layout.size.checked_mul(count)?,
-        ..layout
-    })
-}
-
-/// Immutable array derivations stop at a scalar, pointer, function or tag.
-/// Tag completion and recovery taint are queried live at that terminal node.
-/// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48; §6.2.5p22, p. 36; PDF p. 48.
-#[derive(Clone, Copy)]
-struct ArrayTail {
-    index:      usize,
-    incomplete: bool,
-}
-
-/// Working hash-cons table; only its immutable graph escapes into `'tu`.
-pub(crate) struct TypeInterner<'tu, 's> {
-    /// Type nodes examined by completeness and recovery queries in tests.
-    #[cfg(test)]
-    pub(super) steps:  Cell<usize>,
-    pub(crate) nodes:  ArenaVec<'tu, TypeKind<'tu>>,
-    pub(crate) tags:   ArenaVec<'tu, &'tu Tag<'tu>>,
-    keys:              ArenaMap<'s, TypeKind<'tu>, TypeId>,
-    /// Variably modified nodes, decided once from immediate children.
-    variably_modified: ArenaVec<'s, bool>,
-    array_tails:       ArenaVec<'s, ArrayTail>,
-    pub(crate) target: TargetLayout,
-    pub(crate) tu:     &'tu Bump,
-    scratch:           &'s Bump,
-}
-
 impl<'tu, 's> TypeInterner<'tu, 's> {
-    pub(crate) fn new(tu: &'tu Bump, scratch: &'s Bump, target: &TargetLayout) -> Self {
-        let mut result = Self {
-            #[cfg(test)]
-            steps: Cell::new(0),
-            nodes: ArenaVec::new_in(tu),
-            tags: ArenaVec::new_in(tu),
-            keys: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            variably_modified: ArenaVec::new_in(scratch),
-            array_tails: ArenaVec::new_in(scratch),
-            target: *target,
-            tu,
-            scratch,
-        };
-        _ = result.intern(TypeKind::Unknown);
-        result
-    }
-
     pub(crate) fn intern(&mut self, kind: TypeKind<'tu>) -> TypeId {
         if let Some(&ty) = self.keys.get(&kind) {
             return ty;
@@ -332,9 +33,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         let ty = TypeId {
             index:      self.nodes.len(),
             qualifiers: TypeQualifiers::empty(),
+            alignment:  0,
         };
         let variably_modified = match kind {
-            | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star) => true,
+            | TypeKind::Array(_, ArrayBound::Variable(_) | ArrayBound::Star) => true,
             // C11 §6.7.6p3: derived types retain variably modified state.
             | TypeKind::Array(next, _) | TypeKind::Pointer(next) | TypeKind::Atomic(next) =>
                 self.variably_modified[next.index],
@@ -349,12 +51,18 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             let element_tail = self.array_tails[element.index];
             ArrayTail {
                 incomplete: element_tail.incomplete || bound == ArrayBound::Incomplete,
+                alignment: if element.alignment == 0 {
+                    element_tail.alignment
+                } else {
+                    element.alignment
+                },
                 ..element_tail
             }
         } else {
             ArrayTail {
                 index:      ty.index,
                 incomplete: false,
+                alignment:  0,
             }
         };
         self.array_tails.push(tail);
@@ -364,116 +72,45 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         ty
     }
 
-    pub(crate) fn scalar(&mut self, scalar: Scalar) -> TypeId {
-        self.intern(TypeKind::Scalar(scalar))
-    }
-
-    pub(crate) fn unknown(&self) -> TypeId {
-        self.keys[&TypeKind::Unknown]
-    }
-
-    /// Removes atomicity as required by lvalue value conversion.
-    /// C11: §6.3.2.1 paragraph 2, p. 54; PDF p. 72.
-    pub(crate) fn non_atomic(&self, ty: TypeId) -> TypeId {
-        match self.nodes[ty.index] {
-            | TypeKind::Atomic(value) => value.qualified(ty.qualifiers),
-            | _ => ty,
-        }
-    }
-
-    /// Remove top-level qualification, including qualification carried by
-    /// array elements, without changing pointed-to types or atomic identity.
-    /// C99: §6.7.3p8, p. 109; PDF p. 121.
-    /// C23: §6.7.3.6p5, p. 118; PDF p. 131 (`typeof_unqual` caller).
-    pub(crate) fn unqualified_array(&mut self, mut ty: TypeId) -> TypeId {
-        let mut bounds = ArenaVec::new_in(self.scratch);
-        while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
-            bounds.push(bound);
-            ty = element;
-        }
-        ty = ty.unqualified();
-        while let Some(bound) = bounds.pop() {
-            ty = self.intern(TypeKind::Array(ty, bound));
-        }
-        ty
-    }
-
-    /// A variable or `[*]` array derivation reached through arrays, pointers
-    /// atomic wrappers or function results; constant time for shared typedef
-    /// graphs. C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127; §6.7.5.2p2, p. 116;
-    /// PDF
-    /// p. 128. C11: §6.7.6p3, p. 129; PDF p. 147.
-    pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
-        self.variably_modified[ty.index]
-    }
-
-    /// Unmodeled extension layout suppresses dependent constraints.
-    /// C99: array derivations §6.2.5p20, pp. 35-36; PDF pp. 47-48.
-    pub(crate) fn unanalyzed(&self, ty: TypeId) -> bool {
-        #[cfg(test)]
-        self.classification_step();
-        match self.nodes[self.array_tails[ty.index].index] {
-            | TypeKind::Unknown => true,
-            | TypeKind::Tag(id) => self.tags[id].tainted.get(),
-            | _ => false,
-        }
-    }
-
-    /// Array bounds are immutable, but a terminal tag can complete later.
-    /// C99: §6.2.5p22, p. 36; PDF p. 48; §6.7.5.2p1, p. 116; PDF p. 128.
-    pub(crate) fn complete_object(&self, ty: TypeId) -> bool {
-        #[cfg(test)]
-        self.classification_step();
-        let tail = self.array_tails[ty.index];
-        !tail.incomplete
-            && match self.nodes[tail.index] {
-                | TypeKind::Tag(id) => self.tags[id].complete.get(),
-                | TypeKind::Scalar(Scalar::Void)
-                | TypeKind::Function { .. }
-                | TypeKind::Unknown => false,
-                | _ => true,
-            }
-    }
-
-    #[cfg(test)]
-    pub(super) fn classification_step(&self) {
-        self.steps.set(self.steps.get() + 1);
-    }
-
-    /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
-    pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(&self.nodes, &self.tags, &self.target, ty)
-    }
-
-    /// Array alignment depends on the element, regardless of its extent.
-    /// C11: §6.5.3.4p3, p. 90; PDF p. 108 (an extension in C99).
-    pub(crate) fn alignment(&self, ty: TypeId) -> Option<u64> {
-        let ty = TypeId {
-            index: self.array_tails[ty.index].index,
-            ..ty
-        };
-        self.layout(ty).map(|layout| layout.align)
-    }
-
-    pub(crate) fn finish(self) -> Types<'tu> {
-        Types {
-            nodes:  self.nodes.leak(),
-            tags:   self.tags.leak(),
-            target: self.target,
-        }
+    /// Retains a distinct bound identity for each evaluated array derivation.
+    /// C99: §6.7.5.2p5, p. 117; PDF p. 129.
+    pub(crate) fn variable_bound(
+        &mut self,
+        expression: &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
+    ) -> ArrayBound {
+        let index = self.runtime_bounds.len();
+        self.runtime_bounds.push(expression);
+        ArrayBound::Variable(index)
     }
 
     /// Compatibility and composite construction use an explicit postorder
     /// stack. C99: §6.2.7p1-4, p. 40; PDF p. 52; §6.7.5.1p2, p.
     /// 115; PDF p. 127; §6.7.5.2p6, p. 117; PDF p. 129; §6.7.5.3p15, pp.
     /// 119-120; PDF pp. 131-132.
+    pub(crate) fn composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
+        self.composite_with_alignment(left, right, false)
+    }
+
+    /// A later object declaration supplies its typedef-derived alignment;
+    /// explicit object alignment is inherited separately by declaration typing.
+    /// C99: §6.2.7p4, p. 40; PDF p. 52 (visible composite declarations).
+    pub(crate) fn object_composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
+        self.composite_with_alignment(left, right, true)
+    }
+
     #[expect(
         clippy::many_single_char_names,
         reason = "Paired type derivations use conventional left/right algebra names."
     )]
-    pub(crate) fn composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
+    fn composite_with_alignment(
+        &mut self,
+        left: TypeId,
+        right: TypeId,
+        latest: bool,
+    ) -> Option<TypeId> {
         enum Work<'a> {
             Pair(TypeId, TypeId),
+            Alignment(u32),
             Pointer(TypeQualifiers),
             Array(ArrayBound, TypeQualifiers),
             Function(&'a [TypeId], bool, bool, TypeQualifiers),
@@ -485,18 +122,25 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         while let Some(item) = work.pop() {
             match item {
                 | Work::Pair(a, b) => {
+                    // GCC aligned changes layout, not C type compatibility.
+                    work.push(Work::Alignment(if latest {
+                        b.alignment
+                    } else {
+                        a.alignment.max(b.alignment)
+                    }));
+                    let (a, b) = (a.with_alignment(0), b.with_alignment(0));
                     if a == b {
                         values.push(a);
                         continue;
                     }
                     let (ak, bk) = (self.nodes[a.index], self.nodes[b.index]);
-                    if matches!(ak, TypeKind::Unknown)
+                    if matches!(ak, TypeKind::Unknown | TypeKind::Unmodeled(_))
                         || matches!(ak, TypeKind::Tag(id) if self.tags[id].tainted.get())
                     {
                         values.push(b);
                         continue;
                     }
-                    if matches!(bk, TypeKind::Unknown)
+                    if matches!(bk, TypeKind::Unknown | TypeKind::Unmodeled(_))
                         || matches!(bk, TypeKind::Tag(id) if self.tags[id].tainted.get())
                     {
                         values.push(a);
@@ -602,6 +246,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                         | _ => return None,
                     }
                 },
+                | Work::Alignment(alignment) => {
+                    let ty = values.pop()?;
+                    values.push(ty.with_alignment(alignment));
+                },
                 | Work::Pointer(q) => {
                     let x = values.pop()?;
                     values.push(self.intern(TypeKind::Pointer(x)).qualified(q));
@@ -634,6 +282,170 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         values.pop()
     }
 
+    /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
+    pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
+        layout(&self.nodes, &self.tags, &self.target, ty, false)
+    }
+
+    /// Canonical alignment for Microsoft record placement before storage
+    /// overrides. C99: §6.7.2.1p12, p. 103; PDF p. 115.
+    pub(crate) fn natural_alignment(&self, ty: TypeId) -> Option<u64> {
+        layout(&self.nodes, &self.tags, &self.target, ty, true).map(|layout| layout.align)
+    }
+
+    /// Array alignment depends on the element, regardless of its extent.
+    /// C11: §6.5.3.4p3, p. 90; PDF p. 108 (an extension in C99).
+    pub(crate) fn alignment(&self, ty: TypeId) -> Option<u64> {
+        let tail = self.array_tails[ty.index];
+        let ty = TypeId {
+            index: tail.index,
+            alignment: if ty.alignment == 0 {
+                tail.alignment
+            } else {
+                ty.alignment
+            },
+            ..ty
+        };
+        self.layout(ty).map(|layout| layout.align)
+    }
+
+    /// Remove top-level qualification, including qualification carried by
+    /// array elements, without changing pointed-to types or atomic identity.
+    /// C99: §6.7.3p8, p. 109; PDF p. 121.
+    /// C23: §6.7.3.6p5, p. 118; PDF p. 131 (`typeof_unqual` caller).
+    pub(crate) fn unqualified_array(&mut self, mut ty: TypeId) -> TypeId {
+        let mut bounds = ArenaVec::new_in(self.scratch);
+        while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
+            bounds.push((bound, ty.alignment));
+            ty = element;
+        }
+        ty = ty.unqualified();
+        while let Some((bound, alignment)) = bounds.pop() {
+            ty = self
+                .intern(TypeKind::Array(ty, bound))
+                .with_alignment(alignment);
+        }
+        ty
+    }
+
+    /// The qualifiers of an object type, counting those of an array's
+    /// elements as the array's own. C99 qualifies only the elements; C23
+    /// qualifies both, and Clang applies that in every mode to pointer
+    /// assignment.
+    /// C99: §6.7.3 paragraph 8, p. 109; PDF p. 121.
+    /// C23: §6.7.4.1 paragraph 10, p. 121; PDF p. 134.
+    pub(crate) fn object_qualifiers(&self, mut ty: TypeId) -> TypeQualifiers {
+        let mut qualifiers = ty.qualifiers;
+        while let TypeKind::Array(element, _) = self.nodes[ty.index] {
+            ty = element;
+            qualifiers |= ty.qualifiers;
+        }
+        qualifiers
+    }
+
+    /// Removes atomicity as required by lvalue value conversion.
+    /// C11: §6.3.2.1 paragraph 2, p. 54; PDF p. 72.
+    pub(crate) fn non_atomic(&self, ty: TypeId) -> TypeId {
+        match self.nodes[ty.index] {
+            | TypeKind::Atomic(value) => value.qualified(ty.qualifiers),
+            | _ => ty,
+        }
+    }
+
+    pub(crate) fn new(tu: &'tu Bump, scratch: &'s Bump, target: &TargetLayout) -> Self {
+        let mut result = Self {
+            #[cfg(test)]
+            steps: Cell::new(0),
+            nodes: ArenaVec::new_in(tu),
+            runtime_bounds: ArenaVec::new_in(tu),
+            tags: ArenaVec::new_in(tu),
+            keys: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            variably_modified: ArenaVec::new_in(scratch),
+            array_tails: ArenaVec::new_in(scratch),
+            target: *target,
+            tu,
+            scratch,
+        };
+        _ = result.intern(TypeKind::Unknown);
+        result
+    }
+
+    pub(crate) fn finish(self) -> Types<'tu> {
+        Types {
+            nodes:  self.nodes.leak(),
+            tags:   self.tags.leak(),
+            target: self.target,
+        }
+    }
+
+    pub(crate) fn scalar(&mut self, scalar: Scalar) -> TypeId {
+        self.intern(TypeKind::Scalar(scalar))
+    }
+
+    pub(crate) fn unmodeled_type(&self, ty: TypeId) -> Option<UnmodeledType> {
+        unmodeled_type(&self.nodes, &self.tags, ty)
+    }
+
+    pub(crate) fn unmodeled(&mut self, reason: UnmodeledType) -> TypeId {
+        self.intern(TypeKind::Unmodeled(reason))
+    }
+
+    /// Carry the concrete unsupported construct through dependent expressions.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23 (diagnostic identification).
+    pub(crate) fn recovery_type(&mut self, operands: &[TypeId]) -> TypeId {
+        match operands.iter().find_map(|&ty| self.unmodeled_type(ty)) {
+            | Some(reason) => self.unmodeled(reason),
+            | None => self.unknown(),
+        }
+    }
+
+    pub(crate) fn unknown(&self) -> TypeId {
+        self.keys[&TypeKind::Unknown]
+    }
+
+    /// A variable or `[*]` array derivation reached through arrays, pointers
+    /// atomic wrappers or function results; constant time for shared typedef
+    /// graphs. C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127; §6.7.5.2p2, p. 116;
+    /// PDF
+    /// p. 128. C11: §6.7.6p3, p. 129; PDF p. 147.
+    pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
+        self.variably_modified[ty.index]
+    }
+
+    /// Unmodeled extension layout suppresses dependent constraints.
+    /// C99: array derivations §6.2.5p20, pp. 35-36; PDF pp. 47-48.
+    pub(crate) fn unanalyzed(&self, ty: TypeId) -> bool {
+        #[cfg(test)]
+        self.classification_step();
+        match self.nodes[self.array_tails[ty.index].index] {
+            | TypeKind::Unknown | TypeKind::Unmodeled(_) => true,
+            | TypeKind::Tag(id) => self.tags[id].tainted.get(),
+            | _ => false,
+        }
+    }
+
+    /// Array bounds are immutable, but a terminal tag can complete later.
+    /// C99: §6.2.5p22, p. 36; PDF p. 48; §6.7.5.2p1, p. 116; PDF p. 128.
+    pub(crate) fn complete_object(&self, ty: TypeId) -> bool {
+        #[cfg(test)]
+        self.classification_step();
+        let tail = self.array_tails[ty.index];
+        !tail.incomplete
+            && match self.nodes[tail.index] {
+                | TypeKind::Tag(id) => self.tags[id].complete.get(),
+                | TypeKind::Scalar(Scalar::Void)
+                | TypeKind::Function { .. }
+                | TypeKind::Unknown
+                | TypeKind::Unmodeled(_) => false,
+                | _ => true,
+            }
+    }
+
+    #[cfg(test)]
+    pub(super) fn classification_step(&self) {
+        self.steps.set(self.steps.get() + 1);
+    }
+
     /// C99: §6.7.5.3p15, pp. 119-120; PDF pp. 131-132.
     fn promotion_stable(&self, ty: TypeId) -> bool {
         !matches!(
@@ -651,6 +463,482 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     }
 }
 
+/// Working hash-cons table; only its immutable graph escapes into `'tu`.
+pub(crate) struct TypeInterner<'tu, 's> {
+    /// Type nodes examined by completeness and recovery queries in tests.
+    #[cfg(test)]
+    pub(super) steps: Cell<usize>,
+    pub(super) runtime_bounds:
+        ArenaVec<'tu, &'tu crate::translation_phases::parsing::syntax::Expression<'tu>>,
+    pub(crate) nodes: ArenaVec<'tu, TypeKind<'tu>>,
+    pub(crate) tags: ArenaVec<'tu, &'tu Tag<'tu>>,
+    keys: ArenaMap<'s, TypeKind<'tu>, TypeId>,
+    /// Variably modified nodes, decided once from immediate children.
+    variably_modified: ArenaVec<'s, bool>,
+    array_tails: ArenaVec<'s, ArrayTail>,
+    pub(crate) target: TargetLayout,
+    pub(crate) tu: &'tu Bump,
+    scratch: &'s Bump,
+}
+
+/// The particular type-forming construct semantic analysis cannot model.
+/// C99: §4p6, p. 7; PDF p. 19 (extensions must be identified accurately).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum UnmodeledType {
+    BitInt,
+    Constexpr,
+    Decimal32,
+    Decimal64,
+    Decimal128,
+    Inferred,
+    FixedEnum,
+    PointerModifier,
+    ExtendedVector,
+}
+
+impl UnmodeledType {
+    pub(crate) const fn description(self) -> &'static str {
+        match self {
+            | Self::BitInt => "_BitInt types",
+            | Self::Constexpr => "constexpr objects",
+            | Self::Decimal32 => "_Decimal32 types",
+            | Self::Decimal64 => "_Decimal64 types",
+            | Self::Decimal128 => "_Decimal128 types",
+            | Self::Inferred => "inferred declaration types",
+            | Self::FixedEnum => "fixed-underlying enum types",
+            | Self::PointerModifier => "MSVC pointer modifiers",
+            | Self::ExtendedVector => "ext_vector_type types",
+        }
+    }
+}
+
+/// Canonical unqualified type identity plus its compact qualifier set.
+/// C99: §6.2.5p26, p. 36; PDF p. 48; §6.7.3, pp. 108-109; PDF pp. 120-121.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TypeId {
+    pub(crate) index:      usize,
+    pub(crate) qualifiers: TypeQualifiers,
+    /// A GNU aligned typedef or a declaration's storage alignment, in the
+    /// existing padding of this handle. Zero uses the natural type alignment.
+    /// GNU extension: GCC Common Attributes, aligned.
+    pub(crate) alignment:  u32,
+}
+
+/// Hash-consing key. Child identities keep hashing bounded by immediate arity.
+/// C99: derived types §6.2.5p20, pp. 35-36; PDF pp. 47-48.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TypeKind<'tu> {
+    Unknown,
+    /// Parsed extension with a retained, specific missing semantic capability.
+    Unmodeled(UnmodeledType),
+    /// C23: §7.21.2p2, p. 316; PDF p. 329: the distinct null pointer type.
+    Nullptr,
+    Scalar(Scalar),
+    Pointer(TypeId),
+    Array(TypeId, ArrayBound),
+    Function {
+        result:     TypeId,
+        parameters: &'tu [TypeId],
+        prototype:  bool,
+        variadic:   bool,
+    },
+    Tag(usize),
+    /// An atomic type is distinct from its corresponding non-atomic type.
+    /// C11: §6.2.5 paragraph 27, p. 43; PDF p. 61.
+    Atomic(TypeId),
+    /// GCC Vector Extensions: arithmetic element, lane count and ABI alignment.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+    Vector {
+        element: TypeId,
+        count:   u64,
+        align:   u64,
+    },
+}
+
+/// Durable type graph, retained after semantic working storage is released.
+#[derive(Debug)]
+pub(crate) struct Types<'tu> {
+    pub(crate) nodes:  &'tu [TypeKind<'tu>],
+    pub(crate) tags:   &'tu [&'tu Tag<'tu>],
+    pub(crate) target: TargetLayout,
+}
+
+/// Retained nominal type; completion mutates only its member/layout cells.
+/// C99: §6.7.2.3p4-8, pp. 106-107; PDF pp. 118-119.
+#[derive(Debug)]
+pub(crate) struct Tag<'tu> {
+    pub(crate) name:                 Option<StringCacheId>,
+    pub(crate) kind:                 TagKind,
+    pub(crate) members:              Cell<&'tu [Member]>,
+    /// The member namespace in declaration order, set at completion.
+    pub(crate) fields:               Cell<&'tu [Field<'tu>]>,
+    pub(crate) layout:               Cell<Option<Layout>>,
+    pub(crate) complete:             Cell<bool>,
+    pub(crate) tainted:              Cell<bool>,
+    /// Specific unsupported type responsible for taint, when known.
+    pub(crate) unmodeled:            Cell<Option<UnmodeledType>>,
+    pub(crate) contains_flexible:    Cell<bool>,
+    /// The implementation-defined compatible integer type fixed at enum
+    /// completion.
+    /// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
+    pub(crate) compatible:           Cell<Scalar>,
+    /// GNU packed and aligned on the record definition.
+    pub(crate) packed:               Cell<bool>,
+    /// GNU `transparent_union` on a union that qualifies for it: a
+    /// prototyped call converts an argument of a member's type to the union.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    pub(crate) transparent:          Cell<bool>,
+    /// Pragma maximum member alignment retained by sema; 0 selects default.
+    /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC extension.
+    pub(crate) max_member_alignment: Cell<u32>,
+    pub(crate) alignment:            Cell<u32>,
+    /// Microsoft layout: the alignment `_Alignas`, `aligned` or a nested
+    /// record requires of this record, which `#pragma pack` cannot lower in
+    /// a containing record. Set at completion; 0 elsewhere.
+    /// C11: §6.7.5 paragraph 6, p. 127; PDF p. 145; MSVC extension.
+    pub(crate) required_alignment:   Cell<u32>,
+}
+
+/// A record member including ABI byte/bit offset and source bit-field width.
+/// An anonymous member is an unnamed structure or union member whose own
+/// members belong to the containing record (C11 §6.7.2.1p13, p. 115; PDF
+/// p. 133; a GNU and MSVC extension before C11).
+/// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Member {
+    pub(crate) name:               Option<super::Identifier>,
+    /// Declarator provenance, including unnamed bit-fields.
+    pub(crate) source_vectors:     super::SourceVectors,
+    /// A rejected declarator must not produce dependent completion errors.
+    pub(crate) invalid:            bool,
+    pub(crate) ty:                 TypeId,
+    pub(crate) offset:             u64,
+    pub(crate) bit_offset:         u32,
+    pub(crate) width:              Option<u32>,
+    pub(crate) anonymous:          bool,
+    /// GNU packed applies to this member without changing its C type.
+    pub(crate) packed:             bool,
+    /// Alignment requested by this member's own attributes or _Alignas.
+    /// Typedef alignment remains on `ty`; GCC packing only honors this fact.
+    pub(crate) explicit_alignment: u32,
+}
+
+/// One name in a record's member namespace, including the names an anonymous
+/// member contributes, resolved to the member that declares it. A backend
+/// can lower member access from the byte offset without walking `path`.
+/// C11: §6.7.2.1p13, p. 115; PDF p. 133. C99: §6.5.2.3p3, p. 73; PDF p. 85.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Field<'tu> {
+    pub(crate) name:       super::Identifier,
+    /// Member indices from this record through each anonymous member.
+    pub(crate) path:       &'tu FieldPath<'tu>,
+    /// The declaring member's type.
+    pub(crate) ty:         TypeId,
+    /// Qualifiers of the anonymous members on the path.
+    pub(crate) qualifiers: TypeQualifiers,
+    /// Byte offset from the start of this record.
+    pub(crate) offset:     u64,
+    pub(crate) bit_offset: u32,
+    pub(crate) width:      Option<u32>,
+}
+
+/// A shared path from a containing record to a declaring member. Prepending
+/// an anonymous member retains its child's tail without copying the indices.
+/// C11: §6.7.2.1p13, p. 115; PDF p. 133.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FieldPath<'tu> {
+    pub(crate) index: usize,
+    pub(crate) next:  Option<&'tu Self>,
+    length:           usize,
+}
+
+/// Function parameter name and declared (adjusted) type.
+/// C99: §6.7.5.3p7-8, p. 119; PDF p. 131.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Parameter<'tu> {
+    pub(crate) written_functions: ArenaList<'tu, super::WrittenFunction<'tu>>,
+    pub(crate) site:              Option<super::BoundSiteFacts<'tu>>,
+    pub(crate) binding:           Option<usize>,
+    pub(crate) name:              Option<super::Identifier>,
+    pub(crate) ty:                TypeId,
+    pub(crate) array_minimum:     Option<ArrayBound>,
+    pub(crate) original:          TypeId,
+}
+
+/// Array completeness and run-time extent; `Star` is prototype-scope `[*]`.
+/// C99: §6.7.5.2, pp. 116-118; PDF pp. 128-130.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ArrayBound {
+    Incomplete,
+    Constant(u64),
+    Variable(usize),
+    Star,
+}
+
+/// Nominal tag kind. Members and labels never share the ordinary namespace.
+/// C99: §6.2.3, p. 31; PDF p. 43; §6.7.2.3, pp. 106-107; PDF pp. 118-119.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TagKind {
+    Struct,
+    Union,
+    Enum,
+}
+
+/// Immutable array derivations stop at a scalar, pointer, function or tag.
+/// Tag completion and recovery taint are queried live at that terminal node.
+/// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48; §6.2.5p22, p. 36; PDF p. 48.
+#[derive(Clone, Copy)]
+struct ArrayTail {
+    index:      usize,
+    incomplete: bool,
+    alignment:  u32,
+}
+
+/// Iteratively strips array derivations and multiplies their extents; the
+/// retained graph and the working interner share this one definition.
+/// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
+fn layout(
+    nodes: &[TypeKind<'_>],
+    tags: &[&Tag<'_>],
+    target: &TargetLayout,
+    mut ty: TypeId,
+    natural: bool,
+) -> Option<Layout> {
+    let mut count = 1_u64;
+    let mut atomic = false;
+    let mut alignment = ty.alignment;
+    let layout = loop {
+        match nodes[ty.index] {
+            | TypeKind::Scalar(scalar) => break target.scalar(scalar)?,
+            | TypeKind::Vector {
+                element,
+                count,
+                align,
+            } => {
+                let TypeKind::Scalar(scalar) = nodes[element.index] else {
+                    return None;
+                };
+                break Layout {
+                    size: target
+                        .scalar(scalar)?
+                        .size
+                        .checked_mul(count)?
+                        .checked_next_power_of_two()?,
+                    align,
+                };
+            },
+            | TypeKind::Pointer(_) | TypeKind::Nullptr => break target.pointer,
+            | TypeKind::Tag(id) => break tags[id].layout.get()?,
+            | TypeKind::Array(element, ArrayBound::Constant(n)) => {
+                count = count.checked_mul(n)?;
+                ty = element;
+                if alignment == 0 {
+                    alignment = ty.alignment;
+                }
+            },
+            | TypeKind::Atomic(value) => {
+                atomic = true;
+                ty = value;
+            },
+            | _ => return None,
+        }
+    };
+    let layout = if atomic && layout.size <= 16 {
+        let size = layout.size.next_power_of_two();
+        Layout {
+            size,
+            align: layout.align.max(size),
+        }
+    } else {
+        layout
+    };
+    Some(Layout {
+        size:  layout.size.checked_mul(count)?,
+        align: if natural || alignment == 0 {
+            layout.align
+        } else {
+            u64::from(alignment)
+        },
+    })
+}
+
 pub(crate) fn align_up(value: u64, align: u64) -> Option<u64> {
     value.checked_add(align - 1).map(|n| n & !(align - 1))
+}
+
+impl TypeId {
+    /// GCC Common Attributes: alignment does not alter the underlying C type.
+    pub(crate) const fn with_alignment(self, alignment: u32) -> Self {
+        Self { alignment, ..self }
+    }
+
+    /// C99: §6.7.3p9, p. 109; PDF p. 121.
+    pub(crate) fn unqualified(self) -> Self {
+        Self {
+            qualifiers: TypeQualifiers::empty(),
+            ..self
+        }
+    }
+
+    /// C99: §6.7.3p9, p. 109; PDF p. 121.
+    pub(crate) fn qualified(self, qualifiers: TypeQualifiers) -> Self {
+        Self {
+            qualifiers: self.qualifiers | qualifiers,
+            ..self
+        }
+    }
+}
+
+impl Member {
+    /// Unnamed bit-fields do not participate in initialization; anonymous
+    /// structure/union members contribute their members to the containing
+    /// record.
+    /// C99: §6.7.8 paragraph 9, p. 126; PDF p. 138.
+    /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133.
+    pub(crate) const fn initializable(&self) -> bool {
+        self.name.is_some() || self.anonymous
+    }
+}
+
+impl<'tu> FieldPath<'tu> {
+    /// C11: §6.7.2.1p13, p. 115; PDF p. 133.
+    pub(crate) fn new(index: usize, next: Option<&'tu Self>) -> Self {
+        Self {
+            index,
+            next,
+            length: next.map_or(1, |path| path.length + 1),
+        }
+    }
+
+    /// C11: §6.7.2.1p13, p. 115; PDF p. 133.
+    pub(crate) const fn len(&self) -> usize {
+        self.length
+    }
+
+    /// Walks the member indices in current-object order without recursion.
+    /// C99: §6.7.8p18, p. 127; PDF p. 139; C11: §6.7.2.1p13,
+    /// p. 115; PDF p. 133.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        std::iter::successors(Some(self), |path| path.next).map(|path| path.index)
+    }
+}
+
+/// Follow type derivations to the specific missing semantic capability.
+/// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48 (derived types).
+fn unmodeled_type(
+    nodes: &[TypeKind<'_>],
+    tags: &[&Tag<'_>],
+    mut ty: TypeId,
+) -> Option<UnmodeledType> {
+    loop {
+        match nodes[ty.index] {
+            | TypeKind::Unmodeled(reason) => return Some(reason),
+            | TypeKind::Tag(id) => return tags[id].unmodeled.get(),
+            | TypeKind::Array(inner, _)
+            | TypeKind::Pointer(inner)
+            | TypeKind::Atomic(inner)
+            | TypeKind::Function { result: inner, .. } => ty = inner,
+            | _ => return None,
+        }
+    }
+}
+
+impl<'tu> Types<'tu> {
+    pub(crate) fn unmodeled_type(&self, ty: TypeId) -> Option<UnmodeledType> {
+        unmodeled_type(self.nodes, self.tags, ty)
+    }
+
+    /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
+    pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
+        layout(self.nodes, self.tags, &self.target, ty, false)
+    }
+
+    /// Required object storage alignment, including declaration overrides on
+    /// variable array derivations whose size has no constant layout.
+    /// C11: §6.7.5p6, p. 127; PDF p. 145.
+    /// GNU typedef alignment can weaken the natural boundary and retains the
+    /// same outermost override precedence as fixed array layout.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    pub(crate) fn storage_alignment(&self, mut ty: TypeId) -> Option<u64> {
+        if let Some(layout) = self.layout(ty) {
+            return Some(layout.align);
+        }
+        let mut alignment = ty.alignment;
+        while let TypeKind::Array(element, _) = self.kind(ty) {
+            ty = element;
+            if alignment == 0 {
+                alignment = ty.alignment;
+            }
+        }
+        self.layout(ty).map(|layout| {
+            if alignment == 0 {
+                layout.align
+            } else {
+                u64::from(alignment)
+            }
+        })
+    }
+
+    /// Canonical alignment before typedef/declaration storage overrides.
+    /// Record packing remains part of the nominal record layout. System V
+    /// AMD64 ABI section 3.2.3 classifies unaligned fields using this boundary,
+    /// even when GNU `aligned` lowers the field's storage alignment.
+    /// C99: §6.7.2.1p12, p. 103; PDF p. 115 (implementation-defined alignment).
+    pub(crate) fn natural_alignment(&self, ty: TypeId) -> Option<u64> {
+        layout(self.nodes, self.tags, &self.target, ty, true).map(|layout| layout.align)
+    }
+
+    /// The nominal record's value layout, independent of alignment requested
+    /// by a typedef or an object's declaration. Argument passing classifies
+    /// the record itself; stronger storage alignment is not a value property.
+    /// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48 (nominal aggregate types).
+    pub(crate) fn aggregate_value_layout(&self, ty: TypeId) -> Option<Layout> {
+        self.tag(ty)
+            .filter(|tag| tag.kind != TagKind::Enum)?
+            .layout
+            .get()
+    }
+
+    /// The unqualified type constructor; qualifiers stay on the `TypeId`.
+    /// C99: §6.2.5p26, p. 36; PDF p. 48.
+    pub(crate) fn kind(&self, ty: TypeId) -> TypeKind<'tu> {
+        self.nodes[ty.index]
+    }
+
+    /// The structure, union or enumeration a type names, if any.
+    /// C99: §6.7.2.3p4-8, pp. 106-107; PDF pp. 118-119.
+    pub(crate) fn tag(&self, ty: TypeId) -> Option<&'tu Tag<'tu>> {
+        match self.kind(ty) {
+            | TypeKind::Tag(id) => Some(self.tags[id]),
+            | _ => None,
+        }
+    }
+
+    /// Removes atomicity, keeping the qualifiers of `ty`, as lvalue
+    /// conversion does.
+    /// C11: §6.3.2.1 paragraph 2, p. 54; PDF p. 72.
+    pub(crate) fn non_atomic(&self, ty: TypeId) -> TypeId {
+        match self.kind(ty) {
+            | TypeKind::Atomic(value) => value.qualified(ty.qualifiers),
+            | _ => ty,
+        }
+    }
+
+    /// Whether analysis gave up on this type: an unmodeled extension or a
+    /// recovered declaration makes the terminal node of its array derivations
+    /// `Unknown` or a tainted tag, sometimes without a diagnostic. Lowering
+    /// treats such a type as unsupported. The scratch interner caches the
+    /// array tail; this walks the derivations instead.
+    /// C99: array derivations §6.2.5p20, pp. 35-36; PDF pp. 47-48.
+    pub(crate) fn unanalyzed(&self, mut ty: TypeId) -> bool {
+        while let TypeKind::Array(element, _) = self.kind(ty) {
+            ty = element;
+        }
+        match self.kind(ty) {
+            | TypeKind::Unknown | TypeKind::Unmodeled(_) => true,
+            | TypeKind::Tag(id) => self.tags[id].tainted.get(),
+            | _ => false,
+        }
+    }
 }

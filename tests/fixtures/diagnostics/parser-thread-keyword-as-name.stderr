@@ -1,0 +1,9 @@
+error: expected an identifier or `(` in the declarator, found keyword `__thread`
+ --> parser-thread-keyword-as-name.c:1:6
+  |
+1 | int *__thread;
+  |      ^^^^^^^^ expected a name
+  |
+  = note: `__thread` is a keyword and cannot be used as a name
+
+1 error generated.

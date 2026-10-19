@@ -314,7 +314,9 @@ fn return_assignment_conversion_is_retained() {
     );
     assert_eq!(
         kinds("int *f(const int *p) {return p;}"),
-        [SemanticErrorKind::InvalidReturnConversion]
+        [SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::PointerQualifiers
+        )]
     );
     clean("const int *f(int *p) {return p;} int *g(void) {return 0;}");
     clean("struct S {int x;}; struct S f(struct S s) {return s;}");
@@ -416,15 +418,10 @@ fn internal_definitions_exclude_constant_sizeof_uses() {
         kinds("static int f(void); int g(void) {return f();}"),
         [SemanticErrorKind::UndefinedInternal]
     );
-    assert_eq!(
-        kinds("static int f(void);"),
-        [SemanticErrorKind::UnusedStaticFunction]
-    );
+    // An unused one is reported only under -Wunused-function, as in Clang.
+    clean("static int f(void);");
     clean("static int f(void); int g(void) {return f();} static int f(void) {return 0;}");
-    assert_eq!(
-        kinds("static int f(void); int g(void) {return sizeof &f;}"),
-        [SemanticErrorKind::UnusedStaticFunction]
-    );
+    clean("static int f(void); int g(void) {return sizeof &f;}");
     assert_eq!(
         kinds("static int f(void); void g(int n) {sizeof(int[f()]);}"),
         [SemanticErrorKind::UndefinedInternal]
@@ -554,7 +551,9 @@ fn opaque_compiler_builtins_do_not_acquire_implicit_int_results() {
     );
     assert_eq!(
         kinds("int *f(void) {return 1;}"),
-        [SemanticErrorKind::InvalidReturnConversion]
+        [SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::IntConversion
+        )]
     );
 }
 
@@ -575,12 +574,9 @@ fn finalized_definitions_retain_synthesized_objects() {
             assert_eq!(context.pending_error_count(), 1);
             let kinds: Vec<_> = s.definitions.iter().map(|d| d.kind).collect();
             assert_eq!(kinds.len(), 3);
-            assert_eq!(kinds[0], functions::DefinitionKind::Tentative);
-            assert_eq!(kinds[1], functions::DefinitionKind::Function);
-            assert!(matches!(
-                kinds[2],
-                functions::DefinitionKind::FunctionName(_)
-            ));
+            assert_eq!(kinds[0], DefinitionKind::Tentative);
+            assert_eq!(kinds[1], DefinitionKind::Function);
+            assert!(matches!(kinds[2], DefinitionKind::FunctionName(_)));
         },
     );
 }
@@ -740,5 +736,33 @@ fn implicit_old_style_parameters_keep_strict_error_and_gnu_extension_policy() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn unused_static_functions_follow_their_warning_group() {
+    use crate::{
+        configuration::{
+            CompilerConfiguration,
+            DiagnosticGroup,
+            WarningOption,
+        },
+        translation_phases::ErrorSeverity,
+    };
+    for (option, severity) in [
+        (WarningOption::Enable(true), ErrorSeverity::Warning),
+        (WarningOption::Error(true), ErrorSeverity::Error),
+    ] {
+        let configuration = CompilerConfiguration::default()
+            .with_warning_option(DiagnosticGroup::UnusedFunction, option);
+        with_configuration("static int f(void);", configuration, |context, unit| {
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(errors.as_slice(), [TranslationError::Semantic(error)] if error.kind == SemanticErrorKind::UnusedStaticFunction),
+                "{errors:?}"
+            );
+            assert_eq!(errors[0].configured_severity(context), severity);
+            assert_eq!(unit.errors, usize::from(severity == ErrorSeverity::Error));
+        });
     }
 }

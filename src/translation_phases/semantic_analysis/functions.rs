@@ -2,200 +2,78 @@
 //! C99: §6.9-§6.9.2, pp. 140-143; PDF pp. 152-155; inline definitions
 //! §6.7.4p3, p. 112; PDF p. 124. This validates bodies without lowering them.
 
+use rustc_hash::FxBuildHasher;
+
 use super::{
     Analyzer,
-    ArenaMap,
-    ArenaVec,
-    ArrayBound,
     BindingKind,
-    Bump,
-    CStandard,
-    Declaration,
-    DeclarationSpecifiers,
-    Declarator,
-    DirectDeclarator,
     Duration,
-    Expression,
-    FunctionDefinition,
-    FxBuildHasher,
-    Identifier,
     Linkage,
-    Namespace,
-    Parameter,
-    Scalar,
     ScopeKind,
     SemanticErrorKind,
-    SourceVectors,
-    StorageClass,
-    StringCacheId,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
-    TypeSpecifiers,
+    StatementId,
     Work,
+    results::{
+        Definition,
+        DefinitionKind,
+        FunctionRecord,
+    },
+    scopes::Namespace,
+    types::{
+        ArrayBound,
+        Parameter,
+        Scalar,
+        TypeId,
+        TypeKind,
+    },
 };
-
-/// Finalized definitions, separate from declaration occurrences. The implicit
-/// function-name object retains its string contents for future lowering.
-/// C99: §6.9.1-§6.9.2, pp. 141-143; PDF pp. 153-155; §6.4.2.2p1,
-/// p. 52; PDF p. 64.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DefinitionKind {
-    Object,
-    Function,
-    Inline,
-    Tentative,
-    FunctionName(StringCacheId),
-}
-
-/// A completed object or function definition and its declaration binding.
-/// C99: §6.9 paragraph 5, p. 140; PDF p. 152.
-/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Definition {
-    pub(crate) binding: usize,
-    pub(crate) kind:    DefinitionKind,
-}
-
-/// The active function definition, result type and adjusted parameters.
-/// C99: §6.9.1 paragraphs 2-7, pp. 141-142; PDF pp. 153-154.
-#[derive(Clone, Copy)]
-pub(super) struct FunctionContext<'tu> {
-    pub(super) id:         usize,
-    pub(super) syntax:     &'tu FunctionDefinition<'tu>,
-    pub(super) binding:    Option<usize>,
-    pub(super) result:     TypeId,
-    pub(super) parameters: &'tu [Parameter],
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum FunctionWork<'tu> {
-    Finish(
-        Option<FunctionContext<'tu>>,
-        usize,
-        Option<usize>,
-        Option<usize>,
-    ),
-    RestoreSizeof(Option<usize>),
-}
-
-/// Definition and tentative-definition state for an identifier with linkage.
-/// GNU extension: GCC manual, "Inline".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
-/// C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
-/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
-#[derive(Clone, Copy, Default)]
-pub(super) struct Entity {
-    latest:        usize,
-    definition:    Option<SourceVectors>,
-    tentative:     Option<usize>,
-    non_inline:    bool,
-    function_body: Option<FunctionBody>,
-    /// Clang's canRedefineFunction: GNU extern inline declarations permit
-    /// a later static declaration and a replacement function body.
-    can_redefine:  bool,
-    gnu_inline:    bool,
-}
-
-/// GNU extern inline bodies may be replaced; ordinary definitions may not.
-/// Extension: Clang's canRedefineFunction; C99: §6.9p5, p. 140; PDF p. 152.
-#[derive(Clone, Copy)]
-enum FunctionBody {
-    Replaceable(SourceVectors),
-    Unique(SourceVectors),
-}
-
-#[derive(Clone, Copy)]
-struct Use {
-    binding:         usize,
-    name:            Identifier,
-    sizeof:          Option<usize>,
-    inline_function: Option<usize>,
-}
-
-#[derive(Clone, Copy)]
-struct SizeofContext<'tu> {
-    expression: &'tu Expression<'tu>,
-    parent:     Option<usize>,
-}
-
-/// A static object whose declaration is checked against inline restrictions.
-/// C99: §6.7.4 paragraph 3, p. 112; PDF p. 124.
-#[derive(Clone, Copy)]
-struct InlineObject {
-    function: usize,
-    binding:  usize,
-}
-
-pub(super) struct State<'tu, 's> {
-    pub(super) current: Option<FunctionContext<'tu>>,
-    next_function:      usize,
-    old_names:          ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
-    entities:           ArenaMap<'s, StringCacheId, Entity>,
-    previous:           ArenaMap<'s, usize, SourceVectors>,
-    uses:               ArenaVec<'s, Use>,
-    sizeof_contexts:    ArenaVec<'s, SizeofContext<'tu>>,
-    pub(super) sizeof:  Option<usize>,
-    inline_objects:     ArenaVec<'s, InlineObject>,
-}
-
-impl<'s> State<'_, 's> {
-    pub(super) fn new(scratch: &'s Bump) -> Self {
-        Self {
-            current:         None,
-            next_function:   0,
-            old_names:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:            ArenaVec::new_in(scratch),
-            sizeof_contexts: ArenaVec::new_in(scratch),
-            sizeof:          None,
-            inline_objects:  ArenaVec::new_in(scratch),
-        }
-    }
-}
-
-/// Finds the first derivation outward from the identifier, including grouping.
-/// A function typedef supplies no such derivation. Identity is the immutable
-/// suffix node, not the source span of its containing declarator.
-/// C99: §6.7.5p4-6, p. 115; PDF p. 127; §6.9.1p2, p. 141;
-/// PDF p. 153.
-pub(super) fn function_derivation<'tu>(
-    declarator: Declarator<'tu>,
-    scratch: &Bump,
-) -> Option<&'tu DirectDeclarator<'tu>> {
-    enum Step<'tu> {
-        Declarator(Declarator<'tu>),
-        Direct(&'tu DirectDeclarator<'tu>),
-        Pointer,
-    }
-    let mut work = ArenaVec::new_in(scratch);
-    work.push(Step::Declarator(declarator));
-    while let Some(step) = work.pop() {
-        match step {
-            | Step::Declarator(d) => {
-                if !d.pointer.levels.is_empty() {
-                    work.push(Step::Pointer);
-                }
-                for direct in d.kind.as_slice().iter().rev() {
-                    work.push(Step::Direct(direct));
-                }
+use crate::{
+    translation_phases::{
+        SourceVectors,
+        parsing::{
+            declaration_syntax::{
+                Declaration,
+                DeclarationSpecifiers,
+                Declarator,
+                DirectDeclarator,
+                TypeQualifiers,
+                TypeSpecifiers,
             },
-            | Step::Direct(direct) => match direct {
-                | DirectDeclarator::Parenthesized(p) => work.push(Step::Declarator(p.declarator)),
-                | DirectDeclarator::Function { .. }
-                | DirectDeclarator::KAndRStyleFunction { .. } => return Some(direct),
-                | DirectDeclarator::Array { .. } => return None,
-                | _ => {},
+            syntax::{
+                Expression,
+                FunctionDefinition,
+                Identifier,
+                Statement,
+                StatementType,
+                StorageClass,
             },
-            | Step::Pointer => return None,
-        }
-    }
-    None
-}
+        },
+    },
+    util::{
+        bump::{
+            ArenaMap,
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
+};
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn prepare_function(&mut self, f: &'tu FunctionDefinition<'tu>) {
+        self.work.push(Work::RestoreReferenceFunction(
+            self.functions.reference_function,
+        ));
+        self.functions.reference_function = Some(std::ptr::from_ref(f).addr());
+        // Definition parameter expressions execute on entry. Index them while
+        // resolving the signature, using the same root as the later body.
+        let previous = self.control.current;
+        let control =
+            self.control
+                .start_function(self.functions.next_function, self.scope, f.source_vectors);
+        _ = self
+            .function_controls
+            .insert(std::ptr::from_ref(f).addr(), (control, previous));
         if let Some(name) = f.declarator.identifier()
             && let Some(entry) = self.lookup(Namespace::Ordinary, name.name)
         {
@@ -211,10 +89,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// extern/static.
     /// GNU extension: GCC manual, "Nested Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>
-    pub(super) fn function_body(&mut self, f: &'tu FunctionDefinition<'tu>) {
-        let declared_type = self.take_type();
+    pub(super) fn function_body(&mut self, f: &'tu FunctionDefinition<'tu>, declared_type: TypeId) {
         let nested = self.scopes[self.scope].kind != ScopeKind::File;
         let name = f.declarator.identifier();
+        let prior = self.bindings.len();
+        let errors_before = self.semantic_errors;
         if nested {
             // GNU nested functions denote lexical entities, not translation-
             // unit externals. Their parser owner reports the extension.
@@ -245,6 +124,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let binding = name
             .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
             .map(|e| e.binding);
+        _ = self.correspondence.declaration(
+            f.declarator,
+            binding
+                .filter(|&i| i >= prior && self.semantic_errors == errors_before && !self.tainted)
+                .map(|i| (i, self.bindings[i])),
+            super::BoundSiteFacts {
+                ty:                  declared_type,
+                bounds:              &[],
+                operand_evaluations: &[],
+            },
+            &[],
+        );
+        if let Some(binding) = binding.filter(|&i| i >= prior) {
+            let subject = super::attributes::Subject::Function {
+                binding,
+                definition: true,
+            };
+            self.declaration_attributes(
+                subject,
+                f.declaration_specifiers.extensions,
+                Some(f.declarator),
+            );
+            self.declaration_dll(subject, f.declaration_specifiers, false);
+        }
         let ty = binding.map_or_else(|| self.types.unknown(), |i| self.bindings[i].ty);
         let derivation = function_derivation(f.declarator, self.scratch);
         if derivation.is_none()
@@ -310,25 +213,56 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some(index) = binding {
             self.record_function_definition(index, f);
         }
+        self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+            self.functions.dead,
+        )));
+        self.functions.dead = false;
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
             self.functions.current,
             self.statements.loops,
             self.statements.switch,
             self.functions.sizeof,
+            self.control.targets.len(),
         )));
         self.enter(ScopeKind::Function);
-        self.statements.vm = None;
         self.functions.sizeof = None;
         self.statements.loops = 0;
         self.statements.switch = None;
         let id = self.functions.next_function;
         self.functions.next_function += 1;
+        debug_assert_eq!(
+            id,
+            self.function_records.len(),
+            "records follow function ids"
+        );
+        let (control, previous) = self.function_controls[&std::ptr::from_ref(f).addr()];
+        debug_assert_eq!(
+            control.id.0, id,
+            "signature and body share their function root"
+        );
+        self.control.regions[control.root.0].lexical_scope = super::ScopeId(self.scope);
+        self.control.scope_regions[self.scope] = previous;
+        self.function_records.push(FunctionRecord {
+            control,
+            parameter_sites: &[],
+            old_style,
+            parameter_facts: &[],
+            syntax: f,
+            binding,
+            result,
+            scope: self.scope,
+            parameter_aliases: &[],
+            assembly: false,
+        });
         self.functions.current = Some(FunctionContext {
             id,
             syntax: f,
             binding,
             result,
             parameters,
+            scope: self.scope,
+            name: None,
+            pretty: None,
         });
         self.function_name = name;
         if old_style {
@@ -341,6 +275,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        let mut parameter_aliases = ArenaVec::new_in(self.scratch);
         if prototype_scope != 0 {
             let entries = self.scope_entries[prototype_scope].finish(self.scratch, self.scratch);
             for &index in entries {
@@ -357,10 +292,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if !old_style {
             let void = matches!(parameters, [Parameter { name: None, ty, .. }] if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void)));
+            let mut parameter_bindings = ArenaVec::new_in(self.scratch);
             for (parameter_index, parameter) in parameters.iter().enumerate() {
                 if void {
                     continue;
                 }
+                parameter_bindings.push(None);
                 let syntax = match derivation {
                     | Some(DirectDeclarator::Function { parameter_list, .. }) =>
                         parameter_list.as_slice().get(parameter_index),
@@ -405,7 +342,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Duration::Automatic,
                         None,
                     );
+                    if let Some(prototype) = parameter.binding {
+                        if let Some(&alignment) = self.binding_alignments.get(&prototype) {
+                            _ = self
+                                .binding_alignments
+                                .insert(self.bindings.len() - 1, alignment);
+                        }
+                        parameter_aliases.push((prototype, self.bindings.len() - 1));
+                        if let Some(&written) =
+                            self.function_extensions.written_types.get(&prototype)
+                        {
+                            _ = self
+                                .function_extensions
+                                .written_types
+                                .insert(self.bindings.len() - 1, written);
+                        }
+                        if let Some(&size) = self.extension_parameters.get(&prototype) {
+                            _ = self
+                                .extension_parameters
+                                .insert(self.bindings.len() - 1, size);
+                        }
+                    }
+                    if let Some(minimum) = parameter.array_minimum {
+                        _ = self
+                            .correspondence
+                            .parameter_minimums
+                            .insert(self.bindings.len() - 1, minimum);
+                    }
                     self.record_vm(self.bindings.len() - 1);
+                    if let Some(slot) = parameter_bindings.last_mut() {
+                        *slot = Some(self.bindings.len() - 1);
+                    }
                     // The body binding is distinct from its prototype binding.
                     // C99 §6.5.3.2p1, p. 78; PDF p. 90.
                     if matches!(derivation, Some(DirectDeclarator::Function { parameter_list, .. })
@@ -444,6 +411,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             self.validate_definition_stars(derivation);
+            self.function_records[id].parameter_aliases =
+                self.types.tu.alloc_slice_copy(&parameter_aliases);
+            self.retain_parameter_facts(id, parameters, &parameter_bindings);
         }
         self.define_func_name(name);
         if !old_style {
@@ -464,15 +434,369 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     pub(super) fn function_work(&mut self, work: FunctionWork<'tu>) {
         match work {
-            | FunctionWork::Finish(previous, loops, switch, sizeof) => {
+            | FunctionWork::Finish(previous, loops, switch, sizeof, targets) => {
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
                 self.statements.loops = loops;
                 self.statements.switch = switch;
+                self.control.targets.truncate(targets);
             },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
+            | FunctionWork::RestoreReferenceContext(previous) =>
+                self.functions.reference_context = previous,
+            | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
+            | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
+            | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
+            | FunctionWork::JoinArms => {
+                let then_end = self.functions.arm_ends.pop().expect("then arm ended");
+                self.functions.dead &= then_end;
+            },
+            | FunctionWork::DeadArm(condition, live, outer) => {
+                // ConstantFoldsToSimpleInteger does not elide bare floating
+                // conditions at -O0, even though loop code generation can
+                // fold their truth value when creating an exit block.
+                let info = self.expression_info(condition);
+                let value = (info.constant == super::ConstantClass::Arithmetic)
+                    .then_some(info.integer)
+                    .flatten()
+                    .map(|integer| integer.value != 0);
+                self.functions.dead = outer || value == Some(!live);
+            },
+            | FunctionWork::LoopEnd(statement, outer) => {
+                let infinite = match statement.kind {
+                    | StatementType::While {
+                        condition_expression,
+                        ..
+                    } =>
+                        super::statements::slot_expression(condition_expression)
+                            .and_then(|condition| self.generated_condition(condition))
+                            == Some(true),
+                    // Clang emits a condition exit for `for (;1;)`, but
+                    // creates none when the condition is absent.
+                    | StatementType::For(for_loop) => for_loop.condition_expression.is_none(),
+                    | _ => false,
+                };
+                let exits = self
+                    .control
+                    .statement_id(statement)
+                    .is_some_and(|id| self.has_generated_break(id));
+                self.functions.dead = outer || (infinite && !exits);
+            },
         }
+    }
+
+    /// Translation-unit completion is deterministic in declaration order.
+    /// C99: §6.9p3,p5, p. 140; PDF p. 152; §6.9.2p2-3, p. 143;
+    /// PDF p. 155; inline definitions §6.7.4p3,p6, p. 112; PDF p. 124.
+    pub(super) fn finish_translation_unit(&mut self) {
+        self.control.finalize(self.scratch, self.types.tu);
+        for i in 0..self.control.deferred_vm_labels.len() {
+            let (diagnostic, from, to) = self.control.deferred_vm_labels[i];
+            let ancestry = self.control.ancestry.as_ref().expect("control finalized");
+            let transition = ancestry.transition(&self.control.regions, from, to);
+            if let Some(region) = ancestry.first_entered_vm(&self.control.regions, transition)
+                && let Some(crate::translation_phases::TranslationError::Semantic(error)) =
+                    self.context.pending_errors.iter_mut_from(diagnostic).next()
+            {
+                error.previous = Some(self.control.regions[region.0].source);
+            }
+        }
+        self.finish_labels();
+        let mut entities = ArenaVec::new_in(self.scratch);
+        entities.extend(self.functions.entities.values().copied());
+        entities.sort_unstable_by_key(|entity| entity.latest);
+        for mut entity in entities {
+            let index = entity.latest;
+            let b = self.bindings[index];
+            if entity.definition.is_none()
+                && entity.tentative.is_some()
+                && !matches!(self.types.nodes[b.ty.index], TypeKind::Scalar(Scalar::Void))
+                && !self.declares_alias(b.name.name)
+            {
+                let mut ty = b.ty;
+                if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index]
+                    && b.linkage == Linkage::External
+                    && !self.types.unanalyzed(ty)
+                {
+                    self.error(
+                        SemanticErrorKind::TentativeArrayAssumedOne,
+                        b.name.source_vectors,
+                        Some(b.name.name),
+                        None,
+                    );
+                    ty = self
+                        .types
+                        .intern(TypeKind::Array(element, ArrayBound::Constant(1)))
+                        .qualified(ty.qualifiers);
+                    self.bindings[index].ty = ty;
+                }
+                if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
+                    if b.linkage != Linkage::Internal {
+                        self.error(
+                            SemanticErrorKind::IncompleteTentativeDefinition,
+                            b.name.source_vectors,
+                            Some(b.name.name),
+                            None,
+                        );
+                    }
+                } else {
+                    entity.definition = Some(b.name.source_vectors);
+                    self.definitions.push(Definition {
+                        binding: index,
+                        kind:    DefinitionKind::Tentative,
+                    });
+                }
+                _ = self
+                    .functions
+                    .entities
+                    .insert(self.function_identity(index), entity);
+            }
+        }
+        let mut ignored = ArenaVec::new_in(self.scratch);
+        for (index, context) in self.functions.sizeof_contexts.iter().enumerate() {
+            ignored
+                .push(self.sizeof_unevaluated(index) || context.parent.is_some_and(|p| ignored[p]));
+        }
+        let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut ignored_references = ArenaVec::new_in(self.scratch);
+        for (index, context) in self.functions.reference_contexts.iter().enumerate() {
+            ignored_references.push(
+                self.reference_context_unevaluated(index)
+                    || context.parent.is_some_and(|p| ignored_references[p]),
+            );
+        }
+        let mut owners = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for function in &self.function_records {
+            if let Some(binding) = function.binding {
+                _ = owners.insert(std::ptr::from_ref(function.syntax).addr(), binding);
+            }
+        }
+        for owner in self.declarator_functions.iter_mut().chain(
+            self.attributes
+                .refusals
+                .iter_mut()
+                .map(|refusal| &mut refusal.owner),
+        ) {
+            *owner = owner.and_then(|syntax| owners.get(&syntax).copied());
+        }
+        let mut evaluated = ArenaVec::new_in(self.scratch);
+        for i in 0..self.functions.uses.len() {
+            let usage = self.functions.uses[i];
+            let b = self.bindings[usage.binding];
+            let owner = match usage.owner {
+                | Some(ReferenceOwner::Function(syntax)) => owners.get(&syntax).copied(),
+                | Some(ReferenceOwner::Object(binding)) => Some(binding),
+                | None => None,
+            };
+            if !usage.sizeof.is_some_and(|s| ignored[s])
+                && !usage
+                    .reference_context
+                    .is_some_and(|s| ignored_references[s])
+            {
+                if let Some(owner) = owner {
+                    self.references.push(super::EntityReference {
+                        owner,
+                        binding: usage.binding,
+                    });
+                }
+                if let Some(import) = usage.dll_import {
+                    evaluated.push((owner, usage.binding, import, usage.dead));
+                }
+            }
+            if let Some(function) = usage.inline_function
+                && b.linkage == Linkage::Internal
+                && self.is_inline_definition(function)
+            {
+                self.error(
+                    SemanticErrorKind::InlineInternalReference,
+                    usage.name.source_vectors,
+                    Some(usage.name.name),
+                    Some(b.name.source_vectors),
+                );
+            }
+            if b.linkage == Linkage::Internal
+                && !usage.sizeof.is_some_and(|s| ignored[s])
+                && !usage
+                    .reference_context
+                    .is_some_and(|s| ignored_references[s])
+            {
+                _ = used
+                    .entry(self.function_identity(usage.binding))
+                    .or_insert(usage.name);
+            }
+        }
+        for i in 0..self.functions.inline_objects.len() {
+            let object = self.functions.inline_objects[i];
+            if self.is_inline_definition(object.function) {
+                let b = self.bindings[object.binding];
+                self.error(
+                    SemanticErrorKind::InlineStaticObject,
+                    b.name.source_vectors,
+                    Some(b.name.name),
+                    None,
+                );
+            }
+        }
+        let mut entities = ArenaVec::new_in(self.scratch);
+        entities.extend(self.functions.entities.values().copied());
+        entities.sort_unstable_by_key(|entity| entity.latest);
+        for entity in entities {
+            let b = self.bindings[entity.latest];
+            if b.linkage == Linkage::Internal
+                && entity.definition.is_none()
+                && !self.types.unanalyzed(b.ty)
+            {
+                if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
+                    self.error(
+                        SemanticErrorKind::UndefinedInternal,
+                        usage.source_vectors,
+                        Some(b.name.name),
+                        Some(b.name.source_vectors),
+                    );
+                } else if b.kind == BindingKind::Function {
+                    self.group_diagnostic(
+                        crate::configuration::DiagnosticGroup::UnusedFunction,
+                        SemanticErrorKind::UnusedStaticFunction,
+                        b.name.source_vectors,
+                        Some(b.name.name),
+                        None,
+                    );
+                }
+            }
+        }
+        for i in 0..self.definitions.len() {
+            let definition = self.definitions[i];
+            if matches!(
+                definition.kind,
+                DefinitionKind::Function | DefinitionKind::Inline
+            ) && self.bindings[definition.binding].linkage == Linkage::External
+            {
+                self.definitions[i].kind = self.external_function_kind(definition);
+            }
+        }
+        self.functions.evaluated_imports = evaluated.leak();
+        self.definitions.sort_unstable_by_key(|d| d.binding);
+    }
+
+    /// The final kind of an external function definition, after every
+    /// declaration. Microsoft inline bodies remain callable external
+    /// definitions; their retention follows source-order emission,
+    /// independently of C99 inline-only declarations, and they repeat in
+    /// each unit with COMDAT linkage, as in Clang's
+    /// `basicGVALinkageForFunction`. A GNU extern inline body that a
+    /// plain `inline` declaration makes visible is external. An imported
+    /// inline body supplies no definition, nor a C99 inline-only one except
+    /// a MinGW export. The resulting definitions are the alias targets.
+    /// C99 §6.7.4p6, pp. 112-113; PDF pp. 124-125; Microsoft ABI and GNU
+    /// extensions under §4p6, p. 7; PDF p. 19.
+    fn external_function_kind(&mut self, definition: Definition) -> DefinitionKind {
+        let binding = definition.binding;
+        let identity = self.function_identity(binding);
+        let Some(entity) = self.functions.entities.get(&identity).copied() else {
+            return definition.kind;
+        };
+        let source = self.bindings[binding].name.source_vectors;
+        let final_body = matches!(
+            entity.function_body,
+            Some(FunctionBody::Replaceable(body) | FunctionBody::Unique(body)) if body == source
+        );
+        let exported = self.dll_storage(binding) == Some(super::DllStorage::Export);
+        let microsoft = !self.context.configuration.target().c99_inline_definitions();
+        let mut kind = definition.kind;
+        if kind == DefinitionKind::Inline && final_body && entity.gnu_plain_inline {
+            kind = DefinitionKind::Function;
+        } else if kind == DefinitionKind::Function {
+            if !microsoft {
+                if self.inline_only_declarations(binding) && !exported {
+                    kind = DefinitionKind::Inline;
+                }
+            } else if entity.msvc_inline.emission == InlineEmission::Discardable {
+                kind = DefinitionKind::DiscardableFunction;
+            }
+        }
+        let entity_id = self.entity_of(binding);
+        if self.ends_imported(entity_id) {
+            // An imported body is no definition, nor an alias target, even
+            // where the body recorded one.
+            kind = DefinitionKind::Inline;
+            if let Some(entity) = self.functions.entities.get_mut(&identity) {
+                entity.definition = None;
+            }
+        }
+        if matches!(
+            kind,
+            DefinitionKind::Function | DefinitionKind::DiscardableFunction
+        ) {
+            if let Some(entity) = self.functions.entities.get_mut(&identity) {
+                entity.definition = Some(source);
+            }
+            if entity.msvc_inline.inline_body && !entity.gnu_inline && (microsoft || exported) {
+                self.set_inline_odr(
+                    binding,
+                    if entity.msvc_inline.explicit_extern || exported {
+                        super::InlineOdr::Strong
+                    } else {
+                        super::InlineOdr::Discardable
+                    },
+                );
+            }
+        }
+        kind
+    }
+
+    /// The latest binding of the linked entity `name` and whether the
+    /// translation unit defines it, including completed tentative objects.
+    /// C99: §6.9p5, p. 140; PDF p. 152; §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn linked_entity(&self, name: StringCacheId) -> Option<(usize, bool)> {
+        self.functions
+            .entities
+            .get(&name)
+            .map(|entity| (entity.latest, entity.definition.is_some()))
+    }
+
+    /// Whether a declaration of `binding`'s function, up to this one, says
+    /// `inline`, as Clang's `FunctionDecl::isInlined` inherits it.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    pub(super) fn inline_declared(&self, binding: usize) -> bool {
+        self.functions
+            .entities
+            .get(&self.function_identity(binding))
+            .is_some_and(|entity| entity.msvc_inline.inline_declared)
+    }
+
+    /// An applicable `dllexport` before the body keeps a Microsoft inline
+    /// definition; one first written after the body is ignored.
+    /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+    pub(super) fn note_dll_export(&mut self, binding: usize) {
+        let identity = self.function_identity(binding);
+        if let Some(entity) = self.functions.entities.get_mut(&identity)
+            && entity.function_body.is_none()
+        {
+            entity.msvc_inline.dllexport = true;
+        }
+    }
+
+    /// Where an earlier declaration defines the linked entity that `binding`
+    /// redeclares: its function body or its initialized object. A tentative
+    /// definition completes only at the end of the translation unit, so it
+    /// does not count yet.
+    /// C99: §6.9p5, p. 140; PDF p. 152; §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn earlier_definition(&self, binding: usize) -> Option<SourceVectors> {
+        let b = self.bindings[binding];
+        if b.linkage == Linkage::None {
+            return None;
+        }
+        let entity = self
+            .functions
+            .entities
+            .get(&self.function_identity(binding))?;
+        let definition = match entity.function_body {
+            | Some(FunctionBody::Replaceable(source) | FunctionBody::Unique(source)) =>
+                Some(source),
+            | None => entity.definition,
+        }?;
+        (definition != b.name.source_vectors).then_some(definition)
     }
 
     /// Definition parameters have complete adjusted object types.
@@ -596,7 +920,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut seen = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut parameters = ArenaVec::new_in(self.scratch);
+        let mut parameter_bindings = ArenaVec::new_in(self.scratch);
+        let mut original_types = ArenaVec::new_in(self.scratch);
         for parameter in current.parameters {
+            parameter_bindings.push(None);
             let Some(name) = parameter.name else {
                 continue;
             };
@@ -613,6 +940,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .lookup(Namespace::Ordinary, name.name)
                 .filter(|e| e.scope == self.scope);
             let declared = if let Some(entry) = entry {
+                if let Some(slot) = parameter_bindings.last_mut() {
+                    *slot = Some(entry.binding);
+                }
                 self.bindings[entry.binding].ty
             } else {
                 let int = self.types.scalar(Scalar::Int);
@@ -624,6 +954,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Duration::Automatic,
                     None,
                 );
+                if let Some(slot) = parameter_bindings.last_mut() {
+                    *slot = Some(self.bindings.len() - 1);
+                }
                 if !self
                     .context
                     .configuration
@@ -658,8 +991,67 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | TypeKind::Scalar(Scalar::Float) => self.types.scalar(Scalar::Double),
                 | _ => declared.unqualified(),
             };
+            original_types.push(
+                self.functions
+                    .old_types
+                    .get(&(current.id, name.name))
+                    .copied()
+                    .unwrap_or(declared),
+            );
             parameters.push(promoted);
         }
+        let mut sites = ArenaVec::new_in(self.scratch);
+        for &declaration in function.declaration_list {
+            if let Some(operand_evaluations) =
+                self.spec_evaluations(declaration.declaration_specifiers.type_specifiers)
+            {
+                sites.push(super::BoundSiteFacts {
+                    ty: self.types.unknown(),
+                    operand_evaluations,
+                    bounds: self.spec_bounds(declaration.declaration_specifiers.type_specifiers),
+                });
+            }
+            for init in declaration.init_declarators {
+                if let Some(name) = init.declarator.identifier()
+                    && let Some(&ty) = self.functions.old_types.get(&(current.id, name.name))
+                    && let Some(entry) = self.lookup(Namespace::Ordinary, name.name)
+                    && let Some(&bounds) = self.binding_bounds.get(&entry.binding)
+                {
+                    sites.push(super::BoundSiteFacts {
+                        ty,
+                        operand_evaluations: &[],
+                        bounds,
+                    });
+                }
+            }
+        }
+        self.function_records[current.id].parameter_sites = self.types.tu.alloc_slice_copy(&sites);
+        self.function_records[current.id].parameter_facts =
+            self.types
+                .tu
+                .alloc_slice_fill_iter(parameter_bindings.iter().enumerate().map(
+                    |(ordinal, &binding)| {
+                        let declared = binding.map_or_else(
+                            || self.types.unknown(),
+                            |binding| self.bindings[binding].ty,
+                        );
+                        let original = original_types.get(ordinal).copied().unwrap_or(declared);
+                        super::ParameterFacts {
+                            prototype_binding: None,
+                            body_binding: binding,
+                            declared,
+                            promoted: parameters.get(ordinal).copied().unwrap_or(declared),
+                            original,
+                            site: Some(super::BoundSiteFacts {
+                                ty:                  original,
+                                bounds:              binding
+                                    .and_then(|binding| self.binding_bounds.get(&binding).copied())
+                                    .unwrap_or(&[]),
+                                operand_evaluations: &[],
+                            }),
+                        }
+                    },
+                ));
         let Some(index) = current.binding else {
             return;
         };
@@ -733,6 +1125,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding: self.bindings.len() - 1,
             kind:    DefinitionKind::FunctionName(function.name),
         });
+        if let Some(current) = &mut self.functions.current {
+            current.name = Some(self.bindings.len() - 1);
+        }
     }
 
     /// Hosted `main` signatures are implementation-defined outside the two
@@ -788,6 +1183,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// PDF p. 124. Definition state is separate from declaration occurrences.
     /// GNU inline attribute applicability extends §6.7.4p6, pp. 112-113;
     /// PDF pp. 124-125.
+    /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19:
+    /// Clang's doesDeclarationForceExternallyVisibleDefinition retains a
+    /// deferred inline body only on a forcing file-scope redeclaration.
     pub(super) fn record_declaration(
         &mut self,
         index: usize,
@@ -807,8 +1205,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 kind:    DefinitionKind::Object,
             });
         }
+        // C11 §6.7.4p3 extends this to thread storage duration.
         if binding.kind == BindingKind::Object
-            && binding.duration == Duration::Static
+            && binding.duration.is_static_or_thread()
             && (initialized || binding.linkage == Linkage::None)
             && !self.types.unanalyzed(binding.ty)
             && self.inline_object_modifiable(binding.ty)
@@ -832,23 +1231,46 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut entity = self
             .functions
             .entities
-            .get(&binding.name.name)
+            .get(&self.function_identity(index))
             .copied()
             .unwrap_or_default();
         entity.latest = index;
+        if binding.kind == BindingKind::Function {
+            let explicit_extern = spec.storage_class == Some(StorageClass::Extern);
+            if self.scopes[binding.scope].kind == ScopeKind::File
+                && entity.msvc_inline.emission == InlineEmission::Discardable
+                && ((self.context.configuration.msvc_compatibility()
+                    && explicit_extern
+                    && !entity.msvc_inline.explicit_extern)
+                    || (!self.context.configuration.gnu89_inline()
+                        && !entity.non_inline
+                        && (!spec.function_specifiers.is_inline || explicit_extern)))
+            {
+                entity.msvc_inline.emission = InlineEmission::Required;
+            }
+            // Inline propagates forward through linked declarations, even
+            // from block scope. A block extern can require a later body,
+            // but does not itself materialize an earlier deferred body.
+            entity.msvc_inline.inline_declared |= spec.function_specifiers.is_inline;
+            entity.msvc_inline.explicit_extern |= explicit_extern;
+        }
         if self.scopes[binding.scope].kind == ScopeKind::File {
             if binding.kind == BindingKind::Function {
                 // GNU attribute applicability extends C99 §6.7.4p6:
                 // Clang ignores it without inline or after a unique body.
                 entity.gnu_inline |= spec.function_specifiers.is_inline
                     && !matches!(entity.function_body, Some(FunctionBody::Unique(_)))
-                    && self.has_gnu_inline(spec, declarator);
+                    && self.has_function_attribute(spec, declarator, "gnu_inline");
                 entity.can_redefine = spec.function_specifiers.is_inline
                     && spec.storage_class == Some(StorageClass::Extern)
-                    && (entity.gnu_inline
-                        || self.context.configuration.standard() == CStandard::C89);
+                    && (entity.gnu_inline || self.context.configuration.gnu89_inline());
                 entity.non_inline |= !spec.function_specifiers.is_inline
                     || spec.storage_class == Some(StorageClass::Extern);
+                // Clang's isInlineDefinitionExternallyVisible: under GNU
+                // inline semantics, any file-scope declaration that says
+                // `inline` without `extern` makes the body external.
+                entity.gnu_plain_inline |= spec.function_specifiers.is_inline
+                    && spec.storage_class != Some(StorageClass::Extern);
             } else if binding.kind == BindingKind::Object {
                 if initialized {
                     self.define_entity(index, &mut entity);
@@ -870,7 +1292,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
-        _ = self.functions.entities.insert(binding.name.name, entity);
+        _ = self
+            .functions
+            .entities
+            .insert(self.function_identity(index), entity);
     }
 
     /// Inline object restrictions concern the object's own qualification,
@@ -887,6 +1312,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 return true;
             }
+        }
+    }
+
+    /// A Microsoft `selectany` declaration without an initializer defines
+    /// its object, zero-initialized, even when it is `extern`, as Clang
+    /// treats it: a later initialized declaration is a redefinition, and
+    /// the type must be complete.
+    /// MSVC extension: Microsoft Learn, "selectany"; C99: §6.9p3, p. 140;
+    /// PDF p. 152; §6.7.8p10, p. 126; PDF p. 138 (zero initialization).
+    pub(super) fn select_any_definition(&mut self, index: usize) {
+        let b = self.bindings[index];
+        let mut entity = self
+            .functions
+            .entities
+            .get(&b.name.name)
+            .copied()
+            .unwrap_or_default();
+        if entity.definition == Some(b.name.source_vectors) {
+            return;
+        }
+        if !self.types.unanalyzed(b.ty) && !self.complete_object(b.ty) {
+            self.error(
+                SemanticErrorKind::IncompleteTentativeDefinition,
+                b.name.source_vectors,
+                Some(b.name.name),
+                None,
+            );
+            return;
+        }
+        let defined = entity.definition.is_some();
+        self.define_entity(index, &mut entity);
+        _ = self.functions.entities.insert(b.name.name, entity);
+        if !defined {
+            self.definitions.push(Definition {
+                binding: index,
+                kind:    DefinitionKind::Tentative,
+            });
         }
     }
 
@@ -910,6 +1372,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125; §6.9p3, p. 140;
     /// PDF p. 152. Internal bodies satisfy the definition requirement even
     /// when GNU inline semantics allow replacing them.
+    /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19:
+    /// Clang's basicGVALinkageForFunction defers an inlined definition
+    /// without an explicit extern or applicable `dllexport`, unless
+    /// `gnu_inline` applies. Export retention does not implement DLL codegen.
     fn record_function_definition(&mut self, index: usize, f: &'tu FunctionDefinition<'tu>) {
         if self.tainted {
             return;
@@ -925,7 +1391,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut entity = self
             .functions
             .entities
-            .get(&b.name.name)
+            .get(&self.function_identity(index))
             .copied()
             .unwrap_or_default();
         entity.latest = index;
@@ -943,6 +1409,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 FunctionBody::Unique(b.name.source_vectors)
             });
         }
+        // Clang's FunctionDecl::isInlined for the definition: inline
+        // written on it or on an earlier declaration.
+        entity.msvc_inline.inline_body = entity.msvc_inline.inline_declared;
+        entity.msvc_inline.emission =
+            if !self.context.configuration.target().c99_inline_definitions()
+                && !entity.gnu_inline
+                && entity.msvc_inline.inline_declared
+                && !entity.msvc_inline.explicit_extern
+                && !entity.msvc_inline.dllexport
+            {
+                InlineEmission::Discardable
+            } else {
+                InlineEmission::Required
+            };
         // C99 §6.7.4p6 and §6.9p3: an internal inline body supplies the
         // required definition even when GNU semantics permit its replacement.
         if (!entity.can_redefine || b.linkage == Linkage::Internal)
@@ -950,17 +1430,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 || !f.declaration_specifiers.function_specifiers.is_inline
                 || f.declaration_specifiers.storage_class == Some(StorageClass::Extern)
                 || entity.gnu_inline
-                || self.context.configuration.standard() == CStandard::C89)
+                || self.context.configuration.gnu89_inline())
         {
             entity.definition = entity.function_body.map(|body| match body {
                 | FunctionBody::Replaceable(source) | FunctionBody::Unique(source) => source,
             });
             entity.non_inline = true;
         }
-        _ = self.functions.entities.insert(b.name.name, entity);
+        _ = self
+            .functions
+            .entities
+            .insert(self.function_identity(index), entity);
+        // GNU extension: GCC manual, "Inline": extern inline supplies no
+        // external definition, even after an ordinary declaration. C99
+        // §6.7.4p6-7 instead considers all file-scope declarations.
+        // Microsoft retention is finalized separately from the C99/GNU
+        // definition constraints; explicit gnu_inline keeps GNU omission.
         self.definitions.push(Definition {
             binding: index,
-            kind:    DefinitionKind::Function,
+            kind:    if entity.can_redefine
+                && b.linkage == Linkage::External
+                && (entity.gnu_inline
+                    || self.context.configuration.target().c99_inline_definitions())
+            {
+                DefinitionKind::Inline
+            } else {
+                DefinitionKind::Function
+            },
         });
     }
 
@@ -972,6 +1468,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.tainted {
             return;
         }
+        let dll_import = self.dll_reference(binding);
         let inline_function = self
             .functions
             .current
@@ -984,11 +1481,190 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .and_then(|f| f.binding)
             .filter(|&i| self.bindings[i].linkage == Linkage::External);
         self.functions.uses.push(Use {
+            reference_context: self.functions.reference_context,
+            owner: self
+                .functions
+                .initializer
+                // A thread-local object's initializer is constant data too.
+                .filter(|&binding| self.bindings[binding].duration.is_static_or_thread())
+                .map(ReferenceOwner::Object)
+                .or(self
+                    .functions
+                    .reference_function
+                    .map(ReferenceOwner::Function)),
             binding,
             name,
             sizeof: self.functions.sizeof,
             inline_function,
+            dll_import,
+            dead: self.functions.dead,
         });
+    }
+
+    /// Pushes the work that enters the arm of `condition` taken when it is
+    /// `live`: code generation skips it when the condition folds to the
+    /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
+    pub(super) fn dead_arm(&mut self, condition: &'tu Expression<'tu>, live: bool) {
+        self.work.push(Work::FunctionWork(FunctionWork::DeadArm(
+            condition,
+            live,
+            self.functions.dead,
+        )));
+    }
+
+    /// Loop code generation folds arithmetic truth, including floating
+    /// constants, before deciding whether to create a condition exit.
+    /// C99: §6.8.5p4, p. 135; PDF p. 147.
+    fn generated_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
+        let info = self.expression_info(condition);
+        (info.constant == super::ConstantClass::Arithmetic)
+            .then(|| Self::constant_truth(info))
+            .flatten()
+    }
+
+    /// A generated `break` gives its innermost switch or loop an exit edge.
+    /// A nested target's break cannot make an enclosing infinite loop exit.
+    /// C99: §6.8.6.3p2, p. 138; PDF p. 150.
+    pub(super) fn generated_break(&mut self) {
+        if !self.functions.dead
+            && let Some(&(target, _)) = self.control.targets.last()
+        {
+            self.functions.generated_breaks.push(GeneratedBreak {
+                target,
+                sizeof: self.functions.sizeof,
+                reference_context: self.functions.reference_context,
+            });
+        }
+    }
+
+    fn has_generated_break(&self, target: StatementId) -> bool {
+        self.functions.generated_breaks.iter().any(|jump| {
+            if jump.target != target {
+                return false;
+            }
+            let mut sizeof = jump.sizeof;
+            while let Some(index) = sizeof {
+                if self.sizeof_unevaluated(index) {
+                    return false;
+                }
+                sizeof = self.functions.sizeof_contexts[index].parent;
+            }
+            let mut context = jump.reference_context;
+            while let Some(index) = context {
+                if self.reference_context_unevaluated(index) {
+                    return false;
+                }
+                context = self.functions.reference_contexts[index].parent;
+            }
+            true
+        })
+    }
+
+    /// Whether sizeof context `index` leaves its operand unevaluated: its
+    /// result is constant, unless the operand has a VM type.
+    /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    fn sizeof_unevaluated(&self, index: usize) -> bool {
+        let info = self.expression_info(self.functions.sizeof_contexts[index].expression);
+        info.ice || self.types.unanalyzed(info.ty)
+    }
+
+    /// Whether reference context `index` leaves its operand unevaluated:
+    /// alignof always does, GNU typeof unless its type is VM.
+    fn reference_context_unevaluated(&self, index: usize) -> bool {
+        match self.functions.reference_contexts[index].kind {
+            | ReferenceContextKind::Unevaluated => true,
+            | ReferenceContextKind::Typeof(syntax) => self
+                .typeof_sites
+                .get(&std::ptr::from_ref(syntax).addr())
+                .is_none_or(|site| !self.types.variably_modified(site.ty)),
+        }
+    }
+
+    /// Whether a reference made so far to `entity` is evaluated, as
+    /// Clang's `isUsed` records it; an operand still being analyzed counts
+    /// as unevaluated. C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    pub(super) fn evaluated_reference(&mut self, entity: super::facts::EntityId) -> bool {
+        for i in 0..self.functions.uses.len() {
+            let usage = self.functions.uses[i];
+            if usage.dll_import.is_none() || self.entity_of(usage.binding) != entity {
+                continue;
+            }
+            let mut sizeof = usage.sizeof;
+            let mut evaluated = true;
+            while let Some(index) = sizeof {
+                evaluated &= !self.sizeof_unevaluated(index);
+                sizeof = self.functions.sizeof_contexts[index].parent;
+            }
+            let mut context = usage.reference_context;
+            while let Some(index) = context {
+                evaluated &= !self.reference_context_unevaluated(index);
+                context = self.functions.reference_contexts[index].parent;
+            }
+            if evaluated {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Records, for each entity, whether the unit's last evaluated
+    /// reference in emitted code named an imported declaration. Code
+    /// generation skips dead code ([`State::dead`]) and bodies it does not
+    /// emit: a C99 inline-only or imported body, and an internal or
+    /// Microsoft discardable inline body that neither GNU `used` nor a
+    /// reference from emitted code keeps, as Clang defers such definitions
+    /// until their first use.
+    pub(super) fn finish_dll_references(&mut self, symbols: &super::facts::SymbolFacts<'tu>) {
+        let evaluated = self.functions.evaluated_imports;
+        let mut kinds = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for i in 0..self.definitions.len() {
+            let definition = self.definitions[i];
+            let entity = self.entity_of(definition.binding);
+            _ = kinds.insert(entity, definition.kind);
+        }
+        let mut emitted = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for binding in symbols
+            .aliases
+            .iter()
+            .flat_map(|alias| [alias.binding, alias.target])
+            .chain(symbols.init_functions.iter().map(|init| init.binding))
+        {
+            let entity = self.entity_of(binding);
+            _ = emitted.insert(entity, ());
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &(owner, binding, _, dead) in evaluated {
+                if !dead && self.owner_emitted(owner, &kinds, &emitted) {
+                    let entity = self.entity_of(binding);
+                    changed |= emitted.insert(entity, ()).is_none();
+                }
+            }
+        }
+        for &(owner, binding, import, dead) in evaluated {
+            if !dead && self.owner_emitted(owner, &kinds, &emitted) {
+                self.dll_referenced(binding, import);
+            }
+        }
+    }
+
+    /// Whether the body or initializer `owner` is emitted: see
+    /// [`Self::finish_dll_references`].
+    fn owner_emitted(
+        &mut self,
+        owner: Option<usize>,
+        kinds: &ArenaMap<'_, super::facts::EntityId, DefinitionKind>,
+        emitted: &ArenaMap<'_, super::facts::EntityId, ()>,
+    ) -> bool {
+        let Some(owner) = owner else { return true };
+        let entity = self.entity_of(owner);
+        let deferred = match kinds.get(&entity) {
+            | Some(DefinitionKind::Inline) => return false,
+            | Some(DefinitionKind::DiscardableFunction) => true,
+            | _ => self.bindings[owner].linkage == Linkage::Internal,
+        };
+        !deferred || emitted.contains_key(&entity) || self.retained_by_used(entity)
     }
 
     /// Constant sizeof operands do not require an internal definition.
@@ -1006,145 +1682,49 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.functions.sizeof = Some(index);
     }
 
-    /// Translation-unit completion is deterministic in declaration order.
-    /// C99: §6.9p3,p5, p. 140; PDF p. 152; §6.9.2p2-3, p. 143;
-    /// PDF p. 155; inline definitions §6.7.4p3,p6, p. 112; PDF p. 124.
-    pub(super) fn finish_translation_unit(&mut self) {
-        self.finish_labels();
-        let mut entities = ArenaVec::new_in(self.scratch);
-        entities.extend(self.functions.entities.values().copied());
-        entities.sort_unstable_by_key(|entity| entity.latest);
-        for mut entity in entities {
-            let index = entity.latest;
-            let b = self.bindings[index];
-            if entity.definition.is_none()
-                && entity.tentative.is_some()
-                && !matches!(self.types.nodes[b.ty.index], TypeKind::Scalar(Scalar::Void))
-            {
-                let mut ty = b.ty;
-                if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index]
-                    && b.linkage == Linkage::External
-                    && !self.types.unanalyzed(ty)
-                {
-                    self.error(
-                        SemanticErrorKind::TentativeArrayAssumedOne,
-                        b.name.source_vectors,
-                        Some(b.name.name),
-                        None,
-                    );
-                    ty = self
-                        .types
-                        .intern(TypeKind::Array(element, ArrayBound::Constant(1)))
-                        .qualified(ty.qualifiers);
-                    self.bindings[index].ty = ty;
-                }
-                if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
-                    if b.linkage != Linkage::Internal {
-                        self.error(
-                            SemanticErrorKind::IncompleteTentativeDefinition,
-                            b.name.source_vectors,
-                            Some(b.name.name),
-                            None,
-                        );
-                    }
-                } else {
-                    entity.definition = Some(b.name.source_vectors);
-                    self.definitions.push(Definition {
-                        binding: index,
-                        kind:    DefinitionKind::Tentative,
-                    });
-                }
-                _ = self.functions.entities.insert(b.name.name, entity);
-            }
-        }
-        let mut ignored = ArenaVec::new_in(self.scratch);
-        for context in &self.functions.sizeof_contexts {
-            let info = self.expression_info(context.expression);
-            let constant = info.ice || self.types.unanalyzed(info.ty);
-            ignored.push(constant || context.parent.is_some_and(|p| ignored[p]));
-        }
-        let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
-        for i in 0..self.functions.uses.len() {
-            let usage = self.functions.uses[i];
-            let b = self.bindings[usage.binding];
-            if let Some(function) = usage.inline_function
-                && b.linkage == Linkage::Internal
-                && self.is_inline_definition(function)
-            {
-                self.error(
-                    SemanticErrorKind::InlineInternalReference,
-                    usage.name.source_vectors,
-                    Some(usage.name.name),
-                    Some(b.name.source_vectors),
-                );
-            }
-            if b.linkage == Linkage::Internal && !usage.sizeof.is_some_and(|s| ignored[s]) {
-                _ = used.entry(b.name.name).or_insert(usage.name);
-            }
-        }
-        for i in 0..self.functions.inline_objects.len() {
-            let object = self.functions.inline_objects[i];
-            if self.is_inline_definition(object.function) {
-                let b = self.bindings[object.binding];
-                self.error(
-                    SemanticErrorKind::InlineStaticObject,
-                    b.name.source_vectors,
-                    Some(b.name.name),
-                    None,
-                );
-            }
-        }
-        let mut entities = ArenaVec::new_in(self.scratch);
-        entities.extend(self.functions.entities.values().copied());
-        entities.sort_unstable_by_key(|entity| entity.latest);
-        for entity in entities {
-            let b = self.bindings[entity.latest];
-            if b.linkage == Linkage::Internal
-                && entity.definition.is_none()
-                && !self.types.unanalyzed(b.ty)
-            {
-                if let Some(&usage) = used.get(&b.name.name) {
-                    self.error(
-                        SemanticErrorKind::UndefinedInternal,
-                        usage.source_vectors,
-                        Some(b.name.name),
-                        Some(b.name.source_vectors),
-                    );
-                } else if b.kind == BindingKind::Function {
-                    self.error(
-                        SemanticErrorKind::UnusedStaticFunction,
-                        b.name.source_vectors,
-                        Some(b.name.name),
-                        None,
-                    );
-                }
-            }
-        }
-        for i in 0..self.definitions.len() {
-            let definition = self.definitions[i];
-            if definition.kind == DefinitionKind::Function
-                && self.bindings[definition.binding].linkage == Linkage::External
-                && self.is_inline_definition(definition.binding)
-            {
-                self.definitions[i].kind = DefinitionKind::Inline;
-            }
-        }
-        self.definitions.sort_unstable_by_key(|d| d.binding);
+    /// Retains evaluation contexts for emission and internal-definition use
+    /// tracking. GNU typeof executes an expression only for VM types;
+    /// alignof never evaluates its operand. C99: §6.7.5.2p5, p. 117;
+    /// PDF p. 129 (VM types); GCC manual, "Typeof".
+    pub(super) fn enter_reference_context(
+        &mut self,
+        syntax: Option<&'tu super::ExtendedType<'tu>>,
+    ) {
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreReferenceContext(
+                self.functions.reference_context,
+            )));
+        let index = self.functions.reference_contexts.len();
+        self.functions.reference_contexts.push(ReferenceContext {
+            kind:   syntax.map_or(
+                ReferenceContextKind::Unevaluated,
+                ReferenceContextKind::Typeof,
+            ),
+            parent: self.functions.reference_context,
+        });
+        self.functions.reference_context = Some(index);
     }
 
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125, unless the target's ABI
-    /// emits inline functions as external definitions.
-    fn is_inline_definition(&self, binding: usize) -> bool {
+    /// emits inline functions as external definitions or the function is
+    /// exported, which makes a MinGW inline body an external `weak_odr`
+    /// one, as `external_function_kind` keeps it.
+    fn is_inline_definition(&mut self, binding: usize) -> bool {
         self.context.configuration.target().c99_inline_definitions()
-            && self
-                .functions
-                .entities
-                .get(&self.bindings[binding].name.name)
-                .is_some_and(|e| {
-                    !e.non_inline
-                        && !e.gnu_inline
-                        && self.context.configuration.standard() != CStandard::C89
-                })
+            && self.inline_only_declarations(binding)
+            && self.dll_storage(binding) != Some(super::DllStorage::Export)
+    }
+
+    /// Whether every file-scope declaration selects a C99 inline-only
+    /// body, independently of the target's external-inline ABI rule.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    fn inline_only_declarations(&self, binding: usize) -> bool {
+        self.functions
+            .entities
+            .get(&self.function_identity(binding))
+            .is_some_and(|e| {
+                !e.non_inline && !e.gnu_inline && !self.context.configuration.gnu89_inline()
+            })
     }
 
     /// Clang permits replacing a GNU extern inline declaration.
@@ -1157,40 +1737,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|e| e.can_redefine)
     }
 
-    /// GNU inline attribute semantics follow Clang's canRedefineFunction.
+    /// Reads recognized entity attribute names for GNU inline semantics and
+    /// Microsoft export retention. Names in arguments and unknown namespaces
+    /// do not count. GNU/MSVC extensions under C99: §4p6, p. 7; PDF p. 19.
     /// <https://clang.llvm.org/docs/AttributeReference.html#gnu-inline>
-    /// Only attribute names count; occurrences inside arguments do not.
-    /// GNU extension: GCC manual, "Inline".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
-    fn has_gnu_inline(
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/dllexport-dllimport>
+    fn has_function_attribute(
         &self,
         spec: DeclarationSpecifiers<'tu>,
         declarator: Declarator<'tu>,
+        name: &str,
     ) -> bool {
+        // The catalog's namespace-aware reader also recognizes GNU-scoped
+        // standard attributes and the Microsoft declspec spelling.
         let attribute_has = |attribute: &super::AttributeSpecifier<'tu>| {
-            if attribute.recovered
-                || !attribute.tokens.first().is_some_and(|token| {
-                    matches!(
-                        token.kind,
-                        super::super::preprocessing::TokenType::Keyword(
-                            super::super::preprocessing::KeywordTokenType::Attribute
-                        )
-                    )
-                })
-            {
-                return false;
-            }
-            let mut depth = 0usize;
-            attribute.tokens.iter().any(|token| {
-                let spelling = self.context.string_cache.at(token.contents);
-                match spelling {
-                    | "(" => depth += 1,
-                    | ")" => depth = depth.saturating_sub(1),
-                    | "gnu_inline" | "__gnu_inline__" if depth == 2 => return true,
-                    | _ => {},
-                }
-                false
-            })
+            !attribute.recovered
+                && super::attributes::known_names(attribute, self.context)
+                    .any(|(_, attribute_name)| attribute_name == name)
         };
         let mut chain = spec.extensions;
         while let Some(item) = chain {
@@ -1206,4 +1769,271 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .iter()
             .any(|direct| matches!(direct, DirectDeclarator::Attributes(a) if attribute_has(a)))
     }
+}
+
+/// The active function definition, result type and adjusted parameters.
+/// C99: §6.9.1 paragraphs 2-7, pp. 141-142; PDF pp. 153-154.
+#[derive(Clone, Copy)]
+pub(super) struct FunctionContext<'tu> {
+    pub(super) id:         usize,
+    pub(super) syntax:     &'tu FunctionDefinition<'tu>,
+    pub(super) binding:    Option<usize>,
+    pub(super) result:     TypeId,
+    pub(super) parameters: &'tu [Parameter<'tu>],
+    /// The function scope, which holds the predefined names.
+    pub(super) scope:      usize,
+    /// The `__func__` object, shared by `__FUNCTION__` as Clang shares them.
+    pub(super) name:       Option<usize>,
+    /// The `__PRETTY_FUNCTION__` object, made at its first use.
+    pub(super) pretty:     Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum FunctionWork<'tu> {
+    Finish(
+        Option<FunctionContext<'tu>>,
+        usize,
+        Option<usize>,
+        Option<usize>,
+        usize,
+    ),
+    RestoreSizeof(Option<usize>),
+    RestoreReferenceContext(Option<usize>),
+    /// Sets whether code generation skips the code that follows.
+    RestoreDead(bool),
+    /// Restores the skipped state around the innermost switch.
+    RestoreSwitchDead(bool),
+    /// Saves the skipped state at the end of an `if` statement's first arm.
+    ThenEnd,
+    /// Skips the code after an `if` statement when both arms end skipped.
+    JoinArms,
+    /// Enters the arm of a condition taken when it is `live`, given whether
+    /// the code around the condition is skipped.
+    DeadArm(&'tu Expression<'tu>, bool, bool),
+    /// Clang omits an infinite loop's exit block unless a generated break
+    /// targets it. The loop's body is emitted even for a false condition.
+    LoopEnd(&'tu Statement<'tu>, bool),
+}
+
+/// Definition and tentative-definition state for an identifier with linkage.
+/// GNU extension: GCC manual, "Inline".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
+/// C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
+/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
+#[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent declaration fact of the entity."
+)]
+pub(super) struct Entity {
+    latest:           usize,
+    definition:       Option<SourceVectors>,
+    tentative:        Option<usize>,
+    non_inline:       bool,
+    function_body:    Option<FunctionBody>,
+    msvc_inline:      MsvcInlineState,
+    /// Clang's canRedefineFunction: GNU extern inline declarations permit
+    /// a later static declaration and a replacement function body.
+    can_redefine:     bool,
+    gnu_inline:       bool,
+    /// A file-scope declaration says `inline` without `extern`, which
+    /// makes a GNU extern inline body an external definition.
+    gnu_plain_inline: bool,
+}
+
+/// Source facts and the current emission decision for Microsoft inline
+/// definitions. Inline inherits forward; explicit extern includes linked
+/// block-scope declarations; `dllexport` applies only at or before the body
+/// (`attributes/dll.rs`). `inline_body` says the body itself is inline.
+/// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+#[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent source fact of the inline function."
+)]
+struct MsvcInlineState {
+    inline_declared: bool,
+    inline_body:     bool,
+    explicit_extern: bool,
+    dllexport:       bool,
+    emission:        InlineEmission,
+}
+
+/// Whether an external Microsoft inline body is an emission root or waits
+/// for a reachable reference. This is independent of C99 definition state.
+/// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum InlineEmission {
+    #[default]
+    Required,
+    Discardable,
+}
+
+/// GNU extern inline bodies may be replaced; ordinary definitions may not.
+/// Extension: Clang's canRedefineFunction; C99: §6.9p5, p. 140; PDF p. 152.
+#[derive(Clone, Copy)]
+enum FunctionBody {
+    Replaceable(SourceVectors),
+    Unique(SourceVectors),
+}
+
+#[derive(Clone, Copy)]
+struct Use {
+    reference_context: Option<usize>,
+    owner:             Option<ReferenceOwner>,
+    binding:           usize,
+    name:              Identifier,
+    sizeof:            Option<usize>,
+    inline_function:   Option<usize>,
+    /// Whether the reference named an imported declaration, for an entity
+    /// with linkage.
+    dll_import:        Option<bool>,
+    /// Code generation skips the reference ([`State::dead`]).
+    dead:              bool,
+}
+
+/// A break's evaluation context settles after an enclosing sizeof/typeof
+/// operand is typed, just as a generated reference's context does.
+/// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+#[derive(Clone, Copy)]
+struct GeneratedBreak {
+    target:            StatementId,
+    sizeof:            Option<usize>,
+    reference_context: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct SizeofContext<'tu> {
+    expression: &'tu Expression<'tu>,
+    parent:     Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct ReferenceContext<'tu> {
+    kind:   ReferenceContextKind<'tu>,
+    parent: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+enum ReferenceContextKind<'tu> {
+    Typeof(&'tu super::ExtendedType<'tu>),
+    Unevaluated,
+}
+
+/// Parameter type sites execute as part of the definition, before its binding
+/// is installed. Resolve their syntactic owner to that binding at completion.
+/// C99: §6.9.1p10, p. 142; PDF p. 154.
+#[derive(Clone, Copy)]
+enum ReferenceOwner {
+    Function(usize),
+    Object(usize),
+}
+
+/// A static object whose declaration is checked against inline restrictions.
+/// C99: §6.7.4 paragraph 3, p. 112; PDF p. 124.
+#[derive(Clone, Copy)]
+struct InlineObject {
+    function: usize,
+    binding:  usize,
+}
+
+pub(super) struct State<'tu, 's> {
+    reference_context: Option<usize>,
+    reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
+    pub(super) reference_function: Option<usize>,
+    pub(super) initializer: Option<usize>,
+    pub(super) current: Option<FunctionContext<'tu>>,
+    next_function: usize,
+    old_names: ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
+    pub(super) old_types: ArenaMap<'s, (usize, StringCacheId), TypeId>,
+    entities: ArenaMap<'s, StringCacheId, Entity>,
+    previous: ArenaMap<'s, usize, SourceVectors>,
+    uses: ArenaVec<'s, Use>,
+    /// Evaluated DLL references retained until aliases and init roots resolve.
+    evaluated_imports: &'s [(Option<usize>, usize, bool, bool)],
+    sizeof_contexts: ArenaVec<'s, SizeofContext<'tu>>,
+    pub(super) sizeof: Option<usize>,
+    /// Code generation skips the code being analyzed, as Clang's does at
+    /// `-O0`: the arm a constant condition does not take, and statements
+    /// after a jump or a loop without an exit until a label
+    /// (`CodeGenFunction::EmitStmt`).
+    pub(super) dead: bool,
+    /// The skipped state around the innermost switch, which its case
+    /// labels resume.
+    pub(super) switch_dead: bool,
+    /// The skipped state at the end of each enclosing `if` statement's
+    /// first arm.
+    arm_ends: ArenaVec<'s, bool>,
+    /// Target and evaluation contexts of emitted breaks. Semantic jumps
+    /// and references remain independent of this code-generation fact.
+    generated_breaks: ArenaVec<'s, GeneratedBreak>,
+    inline_objects: ArenaVec<'s, InlineObject>,
+    /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
+    pub(super) outside: [Option<usize>; 2],
+}
+
+impl<'s> State<'_, 's> {
+    pub(super) fn new(scratch: &'s Bump) -> Self {
+        Self {
+            reference_context:  None,
+            reference_contexts: ArenaVec::new_in(scratch),
+            reference_function: None,
+            initializer:        None,
+            current:            None,
+            next_function:      0,
+            old_names:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses:               ArenaVec::new_in(scratch),
+            evaluated_imports:  &[],
+            sizeof_contexts:    ArenaVec::new_in(scratch),
+            sizeof:             None,
+            dead:               false,
+            switch_dead:        false,
+            arm_ends:           ArenaVec::new_in(scratch),
+            generated_breaks:   ArenaVec::new_in(scratch),
+            inline_objects:     ArenaVec::new_in(scratch),
+            outside:            [None; 2],
+        }
+    }
+}
+
+/// Finds the first derivation outward from the identifier, including grouping.
+/// A function typedef supplies no such derivation. Identity is the immutable
+/// suffix node, not the source span of its containing declarator.
+/// C99: §6.7.5p4-6, p. 115; PDF p. 127; §6.9.1p2, p. 141;
+/// PDF p. 153.
+pub(super) fn function_derivation<'tu>(
+    declarator: Declarator<'tu>,
+    scratch: &Bump,
+) -> Option<&'tu DirectDeclarator<'tu>> {
+    enum Step<'tu> {
+        Declarator(Declarator<'tu>),
+        Direct(&'tu DirectDeclarator<'tu>),
+        Pointer,
+    }
+    let mut work = ArenaVec::new_in(scratch);
+    work.push(Step::Declarator(declarator));
+    while let Some(step) = work.pop() {
+        match step {
+            | Step::Declarator(d) => {
+                if !d.pointer.levels.is_empty() {
+                    work.push(Step::Pointer);
+                }
+                for direct in d.kind.as_slice().iter().rev() {
+                    work.push(Step::Direct(direct));
+                }
+            },
+            | Step::Direct(direct) => match direct {
+                | DirectDeclarator::Parenthesized(p) => work.push(Step::Declarator(p.declarator)),
+                | DirectDeclarator::Function { .. }
+                | DirectDeclarator::KAndRStyleFunction { .. } => return Some(direct),
+                | DirectDeclarator::Array { .. } => return None,
+                | _ => {},
+            },
+            | Step::Pointer => return None,
+        }
+    }
+    None
 }

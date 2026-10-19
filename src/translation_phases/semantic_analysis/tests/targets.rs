@@ -20,14 +20,21 @@ const TARGETS: [Target; 4] = [
 ];
 
 #[test]
-fn mingw_attributes_preserve_types_and_keep_alignment_conservative() {
+fn mingw_attributes_preserve_types_and_ignore_unknown_alignment() {
     with_configuration(
         include_str!("../../../../tests/fixtures/targets/mingw-callconv.c"),
         CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
             .with_gnu_extensions(true)
             .with_target(Target::WindowsGnu),
         |context, unit| {
-            assert_eq!(context.pending_error_count(), 0);
+            // Clang warns about `pascal` and the unknown `restrict`,
+            // `allocate` and `uuid` attributes here too; nothing is an error.
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
             let ty = |name| {
                 unit.bindings
                     .iter()
@@ -35,10 +42,13 @@ fn mingw_attributes_preserve_types_and_keep_alignment_conservative() {
                     .unwrap()
                     .ty
             };
-            assert!(matches!(
-                unit.types.nodes[ty("aligned_object").index],
-                TypeKind::Unknown
-            ));
+            // MinGW's `__declspec(align(16))` is `__attribute__((align(16)))`,
+            // which Clang does not know and ignores: the structure keeps its
+            // natural alignment.
+            assert_eq!(
+                unit.types.layout(ty("aligned_object")),
+                Some(Layout { size: 4, align: 4 })
+            );
             assert!(matches!(
                 unit.types.nodes[ty("compatible").index],
                 TypeKind::Function { .. }
@@ -358,7 +368,7 @@ fn msvc_inline_functions_are_discardable_external_definitions() {
                 let inline = unit
                     .definitions
                     .iter()
-                    .filter(|d| d.kind == functions::DefinitionKind::Inline)
+                    .filter(|d| d.kind == DefinitionKind::Inline)
                     .count();
                 assert_eq!(inline, if msvc { 0 } else { 2 }, "{}", target.triple());
             },

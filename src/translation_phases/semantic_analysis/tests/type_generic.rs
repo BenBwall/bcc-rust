@@ -167,7 +167,13 @@ int following;
 
 #[test]
 fn atomic_bool_accepts_static_address_initializers() {
-    check(ATOMIC_BOOL_ADDRESS, CStandard::C11, &[]);
+    check(
+        ATOMIC_BOOL_ADDRESS,
+        CStandard::C11,
+        &[SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::PointerBoolConversion,
+        )],
+    );
 }
 
 const LOCK_FREE_SIZE: &str = r#"
@@ -284,4 +290,65 @@ fn address_difference_folding_obeys_extension_policy() {
             );
         }
     }
+}
+
+#[test]
+fn typeof_operand_evaluation_is_retained_on_written_sites() {
+    use crate::translation_phases::parsing::syntax::{
+        BlockItem,
+        ExpressionType,
+        StatementType,
+    };
+    with_source(
+        "void f(void){int n=3,a[n][n],(*p)[n]=a; typedef __typeof__(*p++) Row; Row b; int \
+         s=sizeof(__typeof__(*p++)); int x=0; __typeof__(x++) y;}",
+        |context, sema| {
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+            let StatementType::Compound { items } = sema.functions[0].syntax.body.kind else {
+                panic!("function body")
+            };
+            let sites: Vec<_> = items
+                .iter()
+                .filter_map(|item| {
+                    if let BlockItem::Declaration(d) = item {
+                        Some(sema.declaration_site(d).unwrap())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                sites
+                    .iter()
+                    .map(|site| site.operand_evaluations.len())
+                    .collect::<Vec<_>>(),
+                [0, 1, 0, 0, 0, 0]
+            );
+            let operand = sites[1].operand_evaluations[0];
+            assert!(matches!(operand.kind, ExpressionType::Unary { .. }));
+            let names: Vec<_> = sema
+                .expressions
+                .iter()
+                .filter_map(|info| {
+                    if let ExpressionType::SizeofType(name) = info.expression.kind {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(names.len(), 1);
+            let site = sema.type_name_site(names[0]).unwrap();
+            assert_eq!(site.operand_evaluations.len(), 1);
+            assert_ne!(
+                std::ptr::from_ref(site.operand_evaluations[0]),
+                std::ptr::from_ref(operand)
+            );
+        },
+    );
 }

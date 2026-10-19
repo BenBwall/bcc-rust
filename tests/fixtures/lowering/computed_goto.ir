@@ -1,0 +1,54 @@
+; int dispatch(int k, int n) {
+;     static const void *const table[] = { &&add, &&twice, &&done };
+;     static const int offsets[] = { &&add - &&done, &&done - &&done };
+;     int acc = n;
+;     goto *table[k];
+; add: acc += 1; goto *(&&done + offsets[1]);
+; twice: acc *= 2; goto *table[2];
+; done: return acc;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+global @dispatch.table internal constant size 24, align 16 = bytes "000000000000000000000000000000000000000000000000" relocs [0: blockaddress(@dispatch, label0), 8: blockaddress(@dispatch, label1), 16: blockaddress(@dispatch, label2)]
+global @dispatch.offsets internal constant size 8, align 4 = bytes "0000000000000000" relocs [0: labeldiff.i32(@dispatch, label0, label2), 4: labeldiff.i32(@dispatch, label2, label2)]
+
+function @dispatch(i32 noundef, i32 noundef) -> i32 external {
+    label0 = block_label block2
+    label1 = block_label block3
+    label2 = block_label block4
+block0(v0: i32, v1: i32):
+    v2 = global_addr @dispatch.table
+    v3 = sext.i64 v0
+    v4 = iconst.i64 8
+    v5 = imul.i64 nsw v3, v4
+    v6 = ptr_add inbounds v2, v5
+    v7 = load.ptr v6, align 8
+    jump block1(v7, v1)
+block1(v8: ptr, v9: i32):
+    indirect_br v8, [block2, block3, block4]
+block2:
+    v10 = iconst.i32 1
+    v11 = iadd.i32 nsw v9, v10
+    v12 = block_addr label2
+    v13 = global_addr @dispatch.offsets
+    v14 = iconst.i32 1
+    v15 = iconst.i64 4
+    v16 = ptr_add inbounds v13, v15
+    v17 = load.i32 v16, align 4
+    v18 = sext.i64 v17
+    v19 = ptr_add inbounds v12, v18
+    jump block1(v19, v11)
+block3:
+    v20 = iconst.i32 2
+    v21 = imul.i32 nsw v9, v20
+    v22 = global_addr @dispatch.table
+    v23 = iconst.i32 2
+    v24 = iconst.i64 16
+    v25 = ptr_add inbounds v22, v24
+    v26 = load.ptr v25, align 16
+    jump block1(v26, v21)
+block4:
+    return v9
+}

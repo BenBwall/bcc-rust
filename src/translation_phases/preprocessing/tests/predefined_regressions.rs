@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use super::Preprocessor;
 use crate::{
     configuration::CompilerConfiguration,
     translation_phases::{
@@ -10,6 +9,7 @@ use crate::{
         SourceVector,
         preprocessing::{
             IntegerTokenType,
+            Preprocessor,
             Token,
             TokenType,
         },
@@ -350,7 +350,7 @@ fn version_strict_ansi_and_identity_macros_follow_every_mode() {
                  __GNUC_MINOR__ __GNUC_PATCHLEVEL__\n#endif\n#ifdef \
                  __GNUC_GNU_INLINE__\ngnu_inline\n#endif\n#ifdef \
                  __GNUC_STDC_INLINE__\nstdc_inline\n#endif\n#ifdef _MSC_VER\nbad_ms\n#endif\n#if \
-                 defined(__clang__) || !defined(__bcc__)\nbad_identity\n#endif\n",
+                 !defined(__clang__) || !defined(__bcc__)\nbad_identity\n#endif\n",
                 configuration,
             );
             let mut expected = Vec::new();
@@ -376,25 +376,58 @@ fn version_strict_ansi_and_identity_macros_follow_every_mode() {
 }
 
 #[test]
+fn inline_macros_follow_overrides_and_gnu_inline_is_available() {
+    use crate::configuration::{
+        CStandard,
+        ExtensionPolicy,
+    };
+    for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
+        for enabled in [false, true] {
+            let config = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu89_inline(enabled);
+            let result = observe_with(
+                "#ifdef __GNUC_GNU_INLINE__\ngnu __GNUC_GNU_INLINE__\n#endif\n#ifdef \
+                 __GNUC_STDC_INLINE__\nstdc \
+                 __GNUC_STDC_INLINE__\n#endif\n__has_attribute(gnu_inline)\n",
+                config,
+            );
+            assert_eq!(
+                result.spellings,
+                [if enabled { "gnu" } else { "stdc" }, "1", "1"]
+            );
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+        }
+    }
+}
+
+#[test]
 fn msvc_identity_follows_the_umbrella_flag_and_identity_macros_can_be_undefined() {
     let source = "_MSC_VER _MSC_FULL_VER _MSC_BUILD _MSC_EXTENSIONS\n#undef __GNUC__\n#undef \
                   __bcc__\n#if defined __GNUC__ || defined __bcc__\nbad\n#endif\n";
     let result = observe_with(
         source,
         CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsMsvc)
             .with_gnu_extensions(true)
             .with_msvc_extensions(true),
     );
     assert_eq!(result.spellings, ["1933", "193300000", "1", "1"]);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     // A single group is not the umbrella, and the umbrella's opposite
-    // withdraws it.
+    // withdraws it. As in Clang, Linux and MinGW-w64 never claim MSVC, so
+    // MinGW-w64's `__CRT_INLINE` keeps its GNU `extern inline` meaning.
     for configuration in [
         CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsMsvc)
             .with_msvc_feature(crate::configuration::MsvcFeature::Declspec, true),
         CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsMsvc)
             .with_msvc_extensions(true)
             .with_msvc_extensions(false),
+        CompilerConfiguration::default().with_msvc_extensions(true),
+        CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsGnu)
+            .with_msvc_extensions(true),
     ] {
         let result = observe_with("#ifdef _MSC_VER\nbad\n#endif\n", configuration);
         assert!(result.spellings.is_empty(), "{:?}", result.spellings);

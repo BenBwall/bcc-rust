@@ -1,0 +1,17 @@
+error: computed goto operand is not a pointer
+ --> sema-computed-goto-operand.c:3:11
+  |
+3 |     goto *k;
+  |           ^ not convertible to `const void *`
+  |
+  = note: GCC Labels as Values: `goto *expression` converts the operand to `const void *` as C99 §6.5.16.1p1 simple assignment does
+
+error: computed goto in a function without label addresses
+  --> sema-computed-goto-operand.c:10:9
+   |
+10 |         goto *p;
+   |         ^^^^^^^^ no label of this function has its address taken
+   |
+   = note: GCC Labels as Values: a computed goto may only jump to a label of its own function whose address is taken with `&&`
+
+2 errors generated.

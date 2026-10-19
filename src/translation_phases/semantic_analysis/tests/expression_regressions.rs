@@ -47,6 +47,16 @@ fn assert_clean(context: &mut Context<'_>, _: &SemanticTranslationUnit<'_>) {
     );
 }
 
+fn assert_null_conversion_warning(context: &mut Context<'_>, unit: &SemanticTranslationUnit<'_>) {
+    let diagnostics = context.take_pending_errors();
+    assert!(
+        matches!(diagnostics.as_slice(), [TranslationError::Semantic(error)]
+        if error.kind == SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::NonLiteralNullConversion)),
+        "{diagnostics:?}"
+    );
+    assert_eq!(unit.errors, 0);
+}
+
 #[test]
 fn unevaluated_commas_preserve_null_pointer_ice() {
     for expression in [
@@ -59,7 +69,7 @@ fn unevaluated_commas_preserve_null_pointer_ice() {
             &format!("int *p = {expression};"),
             CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
             |context, unit| {
-                assert_clean(context, unit);
+                assert_null_conversion_warning(context, unit);
                 let info = unit.expressions.last().unwrap();
                 assert!(info.ice, "{expression}");
                 assert_eq!(info.integer.unwrap().value, 0, "{expression}");
@@ -80,7 +90,7 @@ fn evaluated_commas_are_not_null_pointer_ice() {
                     errors.iter().any(|error| matches!(
                         error,
                         TranslationError::Semantic(error)
-                            if error.kind == SemanticErrorKind::InvalidInitializer
+                            if error.kind == SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::IntConversion)
                     )),
                     "{expression}: {errors:?}"
                 );
@@ -129,7 +139,7 @@ fn vla_alignof_is_an_element_alignment_ice() {
              }}; int *p = {operator}(int[n]) == 4 ? 0 : 1; sizeof(int[n]); sizeof(a); }}"
         );
         with_configuration(&source, configuration, |context, unit| {
-            assert_clean(context, unit);
+            assert_null_conversion_warning(context, unit);
             for name in ["N", "M"] {
                 let binding = unit
                     .bindings
@@ -198,10 +208,7 @@ fn nested_subscript_type_classification_scales_linearly() {
             analyzer.types.nodes[last.ty.index],
             TypeKind::Scalar(Scalar::Int)
         );
-        assert_eq!(
-            last.category,
-            super::super::expressions::ValueCategory::ModifiableLvalue
-        );
+        assert_eq!(last.category, ValueCategory::ModifiableLvalue);
         let steps = analyzer.types.steps.get();
         assert!(
             steps <= 16 * n,
@@ -437,9 +444,20 @@ fn constant_p_has_int_type_and_checks_array_bounds() {
             configuration,
             |context, unit| {
                 let errors = context.take_pending_errors();
-                assert_eq!(errors.len(), 1, "{configuration:?}: {errors:?}");
+                assert_eq!(errors.len(), 5, "{configuration:?}: {errors:?}");
+                assert_eq!(
+                    errors
+                        .iter()
+                        .filter(|error| matches!(error, TranslationError::Extension(_)))
+                        .count(),
+                    4
+                );
+                let constraint = errors
+                    .iter()
+                    .find(|e| matches!(e, TranslationError::Semantic(_)))
+                    .unwrap();
                 assert!(matches!(
-                    errors[0],
+                    constraint,
                     TranslationError::Semantic(SemanticError {
                         kind: SemanticErrorKind::InvalidArrayBound,
                         ..

@@ -1,9 +1,9 @@
-error: incompatible assignment conversion
+warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
  --> sema2-assignment.c:1:39
   |
 1 | void f(void) { const int *q; int *p; p=q; }
-  |                                       ^ value cannot be assigned to this type
+  |                                       ^ pointer constraint violation
   |
-  = note: C99 §6.5.16.1p1: assignment requires compatible values and cannot discard pointer-target qualifiers
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
-1 error generated.
+1 warning generated.

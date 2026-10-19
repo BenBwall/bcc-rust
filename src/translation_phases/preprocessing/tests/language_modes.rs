@@ -542,8 +542,9 @@ fn named_variadic_parameters_preserve_their_spelling_and_argument_boundaries() {
         CStandard::C2y,
     ] {
         let (tokens, errors) = observe(source, mode(standard).with_gnu_extensions(true));
-        assert_eq!(errors.len(), 1, "{standard:?}: {errors:?}");
-        assert!(errors[0].contains("__VA_ARGS__"), "{errors:?}");
+        // `__VA_ARGS__` in a named variadic macro is reported only under
+        // -pedantic, as in Clang.
+        assert!(errors.is_empty(), "{standard:?}: {errors:?}");
         let tokens = spellings(&tokens);
         for value in 1..=10 {
             if value == 3 || value == 4 {
@@ -1416,7 +1417,13 @@ fn reserved_variadic_marker_diagnostics_follow_pedantic_policy() {
                 for marker in ["__VA_ARGS__", "__VA_OPT__"] {
                     let source = format!("#define {marker} 83\nint after = {marker};\n");
                     let (tokens, errors) = observe(&source, config);
-                    assert!(!errors.is_empty(), "{source}");
+                    // Clang reports a misplaced `__VA_ARGS__` only under
+                    // -pedantic, but `__VA_OPT__` by default.
+                    assert_eq!(
+                        errors.is_empty(),
+                        marker == "__VA_ARGS__" && policy == ExtensionPolicy::Allow,
+                        "{source}"
+                    );
                     let expected = if policy == ExtensionPolicy::Deny {
                         "Error:"
                     } else {

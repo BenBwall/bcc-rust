@@ -6,23 +6,27 @@
 
 use super::{
     Analyzer,
-    ConstantClass,
-    ExpressionInfo,
-    Integer,
-    Scalar,
     SemanticErrorKind,
-    SyntaxOperand,
-    TagKind,
-    TypeId,
-    TypeKind,
     constants::Floating,
-    expressions::ValueCategory,
+    expressions::{
+        ConstantClass,
+        ExpressionInfo,
+        ValueCategory,
+    },
+    integer::Integer,
+    types::{
+        Scalar,
+        TagKind,
+        TypeId,
+        TypeKind,
+    },
 };
 use crate::{
     float_parsing::LongDouble,
     translation_phases::{
         parsing::{
             Builtin,
+            SyntaxOperand,
             syntax::{
                 Expression,
                 UnaryOperator,
@@ -32,13 +36,92 @@ use crate::{
     },
 };
 
-/// GNU `__builtin_classify_type` implementation identity.
-/// GCC: Other Builtins, <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-pub(super) fn named_builtin(name: &str) -> bool {
-    name == "__builtin_classify_type"
-}
-
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// GCC Other Builtins: top-level qualifications are ignored by the type
+    /// compatibility builtin; `choose_expr` performs no usual conversions.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    pub(super) fn type_generic_builtin(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        builtin: &'tu Builtin<'tu>,
+    ) -> ExpressionInfo<'tu> {
+        if builtin.recovered {
+            return Self::expression_result(e, self.types.unknown());
+        }
+        if builtin.keyword == KeywordTokenType::BuiltinChooseExpr {
+            let [
+                SyntaxOperand::Expression(condition),
+                SyntaxOperand::Expression(yes),
+                SyntaxOperand::Expression(no),
+            ] = &*builtin.operands
+            else {
+                return Self::expression_result(e, self.types.unknown());
+            };
+            let condition = self.expression_info(condition);
+            // C99 §5.1.1.3p1: suppress a dependent constraint after operand
+            // failure.
+            if self.types.unanalyzed(condition.ty) {
+                let ty = self.types.recovery_type(&[condition.ty]);
+                return Self::expression_result(e, ty);
+            }
+            if !condition.ice || condition.integer.is_none() {
+                return self.invalid_expression(e, SemanticErrorKind::InvalidChooseCondition);
+            }
+            let selected = if condition.integer.is_some_and(|value| value.value != 0) {
+                yes
+            } else {
+                no
+            };
+            return ExpressionInfo {
+                expression: e,
+                selected_expression: Some(selected),
+                ..self.expression_info(selected)
+            };
+        }
+        let [left, right] = &*builtin.operands else {
+            return Self::expression_result(e, self.types.unknown());
+        };
+        let left = self.operand_type(*left);
+        let right = self.operand_type(*right);
+        let left = self.types.unqualified_array(left);
+        let right = self.types.unqualified_array(right);
+        let ty = if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
+            self.types.recovery_type(&[left, right])
+        } else {
+            self.types.scalar(Scalar::Int)
+        };
+        let mut result = Self::expression_result(e, ty);
+        if !self.types.unanalyzed(left) && !self.types.unanalyzed(right) {
+            result.integer = Some(Integer::int(i128::from(
+                self.types.composite(left, right).is_some(),
+            )));
+            result.ice = true;
+            result.constant = ConstantClass::Arithmetic;
+        }
+        result
+    }
+
+    /// These selections have their own unevaluated-operand ICE rules.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    /// GNU extension: GCC manual, "Complex".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Complex.html>
+    /// C11: §6.5.1.1 paragraphs 3-4, p. 79; PDF p. 97.
+    pub(super) fn type_generic_constant(&self, e: &'tu Expression<'tu>) -> bool {
+        use super::ExpressionType as E;
+        matches!(e.kind, E::Generic(_))
+            || matches!(e.kind, E::Builtin(b) if matches!(b.keyword, KeywordTokenType::BuiltinTypesCompatible | KeywordTokenType::BuiltinChooseExpr))
+            || matches!(
+                e.kind,
+                E::Unary {
+                    operator: UnaryOperator::Real | UnaryOperator::Imag,
+                    ..
+                }
+            )
+            || matches!(e.kind, E::Call { function_expression, .. } if self.classify_type_callee(function_expression))
+    }
+
     /// Clang math primitives used by glibc's older-compiler binary128 aliases.
     /// Binary128 operations retain constant eligibility without numerical
     /// folding; infinity/NaN constructors in the aliases have type double.
@@ -49,25 +132,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn math128_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
-        mut function: &'tu Expression<'tu>,
+        function: &'tu Expression<'tu>,
         arguments: &[&'tu Expression<'tu>],
     ) -> Option<ExpressionInfo<'tu>> {
         use super::ExpressionType as E;
-        while let E::Parenthesized { expression } = function.kind {
-            function = expression;
-        }
+        let function = self.selected_designator(function);
         let E::Identifier(name) = function.kind else {
             return None;
         };
         // C99 §6.5.2.2p1: a shadowing declaration uses ordinary call typing.
-        if self.expression_info(function).binding.is_some_and(|id| {
-            !matches!(self.types.nodes[self.bindings[id].ty.index], TypeKind::Function { result, .. } if result == self.types.unknown())
-        }) {
+        if !self
+            .expression_info(function)
+            .binding
+            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
+        {
             return None;
         }
         let (scalar, count, nan, operation) = match self.context.string_cache.at(name.name) {
-            | "__builtin_huge_val" | "__builtin_inf" => (Scalar::Double, 0, false, false),
-            | "__builtin_nan" | "__builtin_nans" => (Scalar::Double, 1, true, false),
+            | "__builtin_nans" => (Scalar::Double, 1, true, false),
             | "__builtin_huge_valf128" | "__builtin_inff128" => (Scalar::Float128, 0, false, false),
             | "__builtin_nanf128" | "__builtin_nansf128" => (Scalar::Float128, 1, true, false),
             | "__builtin_fabsf128" => (Scalar::Float128, 1, false, true),
@@ -103,19 +185,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if operation {
                 constant &= info.constant == ConstantClass::Arithmetic;
-                self.convert(
-                    argument,
-                    result_type,
-                    super::expressions::ConversionKind::Assignment,
-                );
+                self.convert(argument, result_type, super::ConversionKind::Assignment);
             }
             if let Some(target) = tag_type {
                 constant &= matches!(literal.kind, E::StringLiteral(_));
-                self.convert(
-                    argument,
-                    target,
-                    super::expressions::ConversionKind::Assignment,
-                );
+                self.convert(argument, target, super::ConversionKind::Assignment);
             }
         }
         let mut result = Self::expression_result(e, result_type);
@@ -134,33 +208,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(result)
     }
 
-    /// These selections have their own unevaluated-operand ICE rules.
-    /// GNU extension: GCC manual, "Other Builtins".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-    /// GNU extension: GCC manual, "Complex".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Complex.html>
-    /// C11: §6.5.1.1 paragraphs 3-4, p. 79; PDF p. 97.
-    pub(super) fn type_generic_constant(&self, e: &'tu Expression<'tu>) -> bool {
+    pub(super) fn classify_type_callee(&self, function: &'tu Expression<'tu>) -> bool {
         use super::ExpressionType as E;
-        matches!(e.kind, E::Generic(_))
-            || matches!(e.kind, E::Builtin(b) if matches!(b.keyword, KeywordTokenType::BuiltinTypesCompatible | KeywordTokenType::BuiltinChooseExpr))
-            || matches!(
-                e.kind,
-                E::Unary {
-                    operator: UnaryOperator::Real | UnaryOperator::Imag,
-                    ..
-                }
-            )
-            || matches!(e.kind, E::Call { function_expression, .. } if self.classify_type_callee(function_expression))
-    }
-
-    pub(super) fn classify_type_callee(&self, mut function: &'tu Expression<'tu>) -> bool {
-        use super::ExpressionType as E;
-        while let E::Parenthesized { expression } = function.kind {
-            function = expression;
-        }
+        let function = self.selected_designator(function);
         matches!(function.kind, E::Identifier(name) if named_builtin(self.context.string_cache.at(name.name)))
-            && self.expression_info(function).binding.is_none_or(|id| matches!(self.types.nodes[self.bindings[id].ty.index], TypeKind::Function { result, .. } if result == self.types.unknown()))
+            && self
+                .expression_info(function)
+                .binding
+                .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
     }
 
     pub(super) fn binary128_type(&self, ty: TypeId) -> bool {
@@ -184,7 +239,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | TypeKind::Scalar(s) => s,
             | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum =>
                 self.types.tags[id].compatible.get(),
-            | TypeKind::Unknown => return Self::expression_result(e, operand.ty),
+            | TypeKind::Unknown | TypeKind::Unmodeled(_) =>
+                return Self::expression_result(e, operand.ty),
             | _ => return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand),
         };
         if scalar == Scalar::Void {
@@ -211,6 +267,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result.category = operand.category;
             result.register = operand.register;
             result.bit_field = operand.bit_field;
+            result.promotion_width = operand.promotion_width;
             result.binding = operand.binding;
             // GNU component designations preserve C99 §6.6p9 address
             // eligibility.
@@ -219,7 +276,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if scalar.integer() {
             result.integer = if op == UnaryOperator::Imag {
-                Some(Integer::int(0))
+                operand.integer.map(|_| Integer::int(0))
             } else {
                 operand.integer
             };
@@ -240,71 +297,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 result.category = ValueCategory::Rvalue;
                 result.constant = operand.constant;
                 result.unfolded_binary128 = component == Scalar::Float128;
-                if !result.unfolded_binary128 {
+                if !result.unfolded_binary128 && operand.floating.is_some() {
                     result.floating = Some(Floating::real(LongDouble::ZERO));
                 }
             } else {
                 result.constant = operand.constant;
             }
-        }
-        result
-    }
-
-    /// GCC Other Builtins: top-level qualifications are ignored by the type
-    /// compatibility builtin; `choose_expr` performs no usual conversions.
-    /// GNU extension: GCC manual, "Other Builtins".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-    pub(super) fn type_generic_builtin(
-        &mut self,
-        e: &'tu Expression<'tu>,
-        builtin: &'tu Builtin<'tu>,
-    ) -> ExpressionInfo<'tu> {
-        if builtin.recovered {
-            return Self::expression_result(e, self.types.unknown());
-        }
-        if builtin.keyword == KeywordTokenType::BuiltinChooseExpr {
-            let [
-                SyntaxOperand::Expression(condition),
-                SyntaxOperand::Expression(yes),
-                SyntaxOperand::Expression(no),
-            ] = &*builtin.operands
-            else {
-                return Self::expression_result(e, self.types.unknown());
-            };
-            let condition = self.expression_info(condition);
-            // C99 §5.1.1.3p1: suppress a dependent constraint after operand
-            // failure.
-            if self.types.unanalyzed(condition.ty) {
-                return Self::expression_result(e, self.types.unknown());
-            }
-            if !condition.ice || condition.integer.is_none() {
-                return self.invalid_expression(e, SemanticErrorKind::InvalidChooseCondition);
-            }
-            let selected = if condition.integer.is_some_and(|value| value.value != 0) {
-                yes
-            } else {
-                no
-            };
-            return ExpressionInfo {
-                expression: e,
-                selected_expression: Some(selected),
-                ..self.expression_info(selected)
-            };
-        }
-        let [left, right] = &*builtin.operands else {
-            return Self::expression_result(e, self.types.unknown());
-        };
-        let left = self.operand_type(*left);
-        let right = self.operand_type(*right);
-        let left = self.types.unqualified_array(left);
-        let right = self.types.unqualified_array(right);
-        let mut result = Self::expression_result(e, self.types.scalar(Scalar::Int));
-        if !self.types.unanalyzed(left) && !self.types.unanalyzed(right) {
-            result.integer = Some(Integer::int(i128::from(
-                self.types.composite(left, right).is_some(),
-            )));
-            result.ice = true;
-            result.constant = ConstantClass::Arithmetic;
         }
         result
     }
@@ -351,4 +349,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result.constant = ConstantClass::Arithmetic;
         result
     }
+}
+
+/// GNU `__builtin_classify_type` implementation identity.
+/// GCC: Other Builtins, <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+pub(super) fn named_builtin(name: &str) -> bool {
+    name == "__builtin_classify_type"
 }

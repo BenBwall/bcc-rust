@@ -48,10 +48,16 @@ warning: macro expansion producing `defined` has undefined behavior
    = note: C99 §6.10.1p4: the behavior is undefined if macro replacement generates `defined`; it is evaluated as GCC and Clang do
    = help: test the macro name in `#if defined(NAME)` and define this macro as `1` or `0` instead
 
-error: 'long long' is a C99 extension
+error: 'long long' is a C99 extension [-Wpedantic]
  --> pp-system-header-diagnostics.c:6:6
   |
 6 | long long user_long_long;
   |      ^^^^
 
-4 errors and 3 warnings generated.
+error: 'long long' is a C99 extension [-Wpedantic]
+ --> pp-system-header-diagnostics.c:7:1
+  |
+7 | NOISY_WIDE user_from_system_macro;
+  | ^^^^^^^^^^
+
+5 errors and 3 warnings generated.

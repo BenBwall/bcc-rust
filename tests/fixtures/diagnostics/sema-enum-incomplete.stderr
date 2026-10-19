@@ -1,9 +1,7 @@
-error: enum tag has no preceding complete declaration: `Missing`
+error: 'forward reference to an enum type' is a GNU extension [-Wpedantic]
  --> sema-enum-incomplete.c:1:1
   |
 1 | enum Missing *p;
-  | ^^^^^^^^^^^^ enum is not yet complete
-  |
-  = note: C99 §6.7.2.3p3: an enum specifier without an enumerator list follows a complete declaration
+  | ^^^^^^^^^^^^
 
 1 error generated.

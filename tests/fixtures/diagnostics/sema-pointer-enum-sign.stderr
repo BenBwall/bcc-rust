@@ -1,0 +1,17 @@
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-enum-sign.c:3:29
+  |
+3 | void signed_enum(void) { pu = pn; }
+  |                             ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> sema-pointer-enum-sign.c:5:31
+  |
+5 | void unsigned_enum(void) { pi = pe; }
+  |                               ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+1 error and 1 warning generated.

@@ -23,6 +23,18 @@ use crate::{
     },
 };
 
+impl ReplayCursor<'_> {
+    pub(super) fn next_item(&mut self, context: &mut Context<'_>) -> Option<PreprocessorToken> {
+        let token = self.tokens.get(self.next)?;
+        self.next += 1;
+        Some(PreprocessorToken {
+            kind:           token.kind,
+            contents:       token.contents,
+            source_vectors: context.push_source_vectors(token.source_vectors.as_slice()),
+        })
+    }
+}
+
 /// A rewindable cursor over preprocessing tokens that phase 4 produced
 /// itself, such as a macro argument whose enclosing parameters were already
 /// replaced.
@@ -55,25 +67,19 @@ enum ReplaySources<'a> {
     Multiple(&'a [SourceVector]),
 }
 
-impl<'a> ReplaySources<'a> {
-    fn new(arena: &'a Bump, sources: &[SourceVector]) -> Self {
-        match sources {
-            | [source] => Self::Single(source.clone()),
-            | _ => Self::Multiple(arena.alloc_slice_fill_iter(sources.iter().cloned())),
-        }
-    }
-
-    fn as_slice(&self) -> &[SourceVector] {
-        match self {
-            | Self::Single(source) => std::slice::from_ref(source),
-            | Self::Multiple(sources) => sources,
-        }
-    }
-}
-
 impl<'a> ReplayCursor<'a> {
-    pub(super) fn is_exhausted(&self) -> bool {
-        self.next == self.tokens.len()
+    /// The zero-length location of the token at `index`, or of the end.
+    fn start_of(&self, index: usize) -> SourceVector {
+        self.tokens
+            .get(index)
+            .and_then(|token| token.source_vectors.as_slice().first())
+            .map_or_else(
+                || self.end.clone(),
+                |first| SourceVector {
+                    length: 0,
+                    ..first.clone()
+                },
+            )
     }
 
     /// Replays the tokens of `parts` in order, keeping them in `arena`;
@@ -128,18 +134,8 @@ impl<'a> ReplayCursor<'a> {
         }
     }
 
-    /// The zero-length location of the token at `index`, or of the end.
-    fn start_of(&self, index: usize) -> SourceVector {
-        self.tokens
-            .get(index)
-            .and_then(|token| token.source_vectors.as_slice().first())
-            .map_or_else(
-                || self.end.clone(),
-                |first| SourceVector {
-                    length: 0,
-                    ..first.clone()
-                },
-            )
+    pub(super) fn is_exhausted(&self) -> bool {
+        self.next == self.tokens.len()
     }
 
     pub(super) fn position(&self) -> SourcePosition {
@@ -167,14 +163,20 @@ impl<'a> ReplayCursor<'a> {
     ) -> SourceVectors {
         context.push_source_vectors(&[self.start_of(position.index)])
     }
+}
 
-    pub(super) fn next_item(&mut self, context: &mut Context<'_>) -> Option<PreprocessorToken> {
-        let token = self.tokens.get(self.next)?;
-        self.next += 1;
-        Some(PreprocessorToken {
-            kind:           token.kind,
-            contents:       token.contents,
-            source_vectors: context.push_source_vectors(token.source_vectors.as_slice()),
-        })
+impl<'a> ReplaySources<'a> {
+    fn new(arena: &'a Bump, sources: &[SourceVector]) -> Self {
+        match sources {
+            | [source] => Self::Single(source.clone()),
+            | _ => Self::Multiple(arena.alloc_slice_fill_iter(sources.iter().cloned())),
+        }
+    }
+
+    fn as_slice(&self) -> &[SourceVector] {
+        match self {
+            | Self::Single(source) => std::slice::from_ref(source),
+            | Self::Multiple(sources) => sources,
+        }
     }
 }

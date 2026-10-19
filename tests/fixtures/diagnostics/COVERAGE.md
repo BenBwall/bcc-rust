@@ -1,12 +1,79 @@
 # Diagnostic golden corpus
 
+Issues #49/#54 (2026-10-16): extension headlines now retain `[-Wpedantic]`,
+and the predefined-name fixture retains
+`[-Wpredefined-identifier-outside-function]`. Unknown STDC pragmas use the
+`unknown-pragmas` warning group. Pointer assignment and root initializer labels
+identify the operator and declarator; macro diagnostics identify the invocation.
+The Clang comparison in `tests/diagnostic_parity.rs` checks those positions,
+C23 nullptr constraints, default warning groups and suppress/promote controls,
+K&R calls, C89 predefined names, embedded directives, GNU subtraction and CLI
+warning-option behavior. Semantic tests retain nullptr/nonnull facts and typedef
+spellings; pipeline tests replay #49 with relocation, interpreter and native
+execution checks. Snapshot updates are reviewed against those intended changes.
+
+Issue #46 (2026-10-14): `sema-pointer-warnings` pins distinct object comparisons,
+pointer signedness, immediate/nested qualifiers, pointer/integer comparisons
+and ordered function-pointer comparisons with Clang group names. Ordering
+distinct function pointer types emits both comparison groups independently.
+`sema-pointer-errors` retains default errors for all four object conversion
+contexts, incompatible function signatures, nested signedness and both
+integer/pointer directions. `sema-pointer-werror` promotes accepted constraints;
+`sema-pointer-demote` exercises explicit default-error demotion, including the
+incompatible-pointer parent group. `sema-pointer-pedantic` pins pedantic-only
+function/void conversion and comparison and pointer/zero ordering. Every fixture
+preserves a following declaration. Semantic mode/target matrices, conversion
+facts, unrelated type controls, CLI flag precedence and all five execution arms
+are tested separately in `semantic_analysis/tests/pointers.rs` and
+`tests/pointer_diagnostics.rs`. The exact Clang oracle is in
+`language-standards.md`; `-Wdiscarded-qualifiers` is not a Clang group.
+
+PR #44 review fixes (2026-10-14): `sema-pointer-conditional` pins
+`-Wpointer-type-mismatch` for conditional arms with incompatible targets
+(signedness, function signatures, function/void and array-element
+qualifiers) and `-Wconditional-type-mismatch` for a pointer/integer pair in
+either order, beside the qualifier warning a merged `const int *` result
+produces and a silent null arm. `sema-pointer-array-qualifiers` shows that
+adding `const` through an array target is silent for parameters with
+constant, variable and unknown bounds, for assignment and for comparison,
+while dropping it warns and nested pointer levels keep Clang's exact-bound
+rule. `sema-pointer-enum-sign` (Linux, unsigned `enum E`) and
+`sema-pointer-enum-sign-msvc` (int-sized enums) pin enumeration pointer
+signedness through the compatible type. `sema-pointer-atomics` gives atomic
+builtin value operands the assignment groups; `sema-atomic-builtin` now shows
+two of its operands as `-Wincompatible-pointer-types` and `-Wint-conversion`
+errors, as Clang reports them. Every pointer-constraint note now also cites
+§6.5.15p3. `sema-pointer-system-header` (`-isystem system-headers`, with
+`system-headers/pointer-macros.h`) withholds every pointer group the header's
+own functions commit, including the default errors, and reports the header's
+macros expanded in the main file at the user's invocation. Each of these matches the bundled Clang's group and line on every
+supported target.
+
+Warnings that Clang does not report by default are off in bcc too, so their
+fixtures enable them: `initial-missing-final-newline` (`-Wnewline-eof`),
+`pp-undefined-identifier-in-preprocessor-expression` (`-Wundef`),
+`pp-unknown-pragma-directive` (`-Wunknown-pragmas`), `sema3-static-unused`
+(`-Wunused-function`) and both `pp-forced-*-promotion` fixtures (the bcc-only
+`-Wconstant-promotion`). `pp-va-args-outside-variadic-macro` and both
+`pp-line-directive-number-*` fixtures pass `-pedantic`, the only mode in which
+Clang reports them.
+
+Round-6 scalar builtin coverage: `sema-builtin-values.c` distinguishes constant
+and value requirements for object-size mode, probability, alignment, and
+prefetch read/write/locality from three incompatible-type controls.
+`sema-builtin-designators.c` pins Clang's direct-call requirement for intrinsic
+addresses and values through parentheses, choose-expr and generic selection.
+Both retain a following ordinary declaration. The semantic tests check exact
+diagnostic kinds and suppress duplicate value errors for incompatible types;
+the shared selected-callee execution fixture also preserves user shadows.
+
 Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the current directory. An optional sibling `.args` supplies whitespace-separated CLI flags before the filename. Its sibling `.stderr` stores the exact bytes, including the summary. `NO_COLOR=1` is set; `CLICOLOR_FORCE`, `CPATH`, and `C_INCLUDE_PATH` are removed. `RUST_BACKTRACE=0` keeps crash regressions from depending on an inherited backtrace setting. No paths, whitespace, source spellings, or panic output are normalized.
 
 Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagnostics_golden` to rewrite every snapshot. The guard remains active while blessing and runs every C fixture again. Both tests accumulate failures so one mismatch does not hide later fixtures.
 
 Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
-`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`. The header files are included by C fixtures, not invoked independently.
+`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`; `system-headers/pointer-macros.h` is the system header of `sema-pointer-system-header.c`. The header files are included by C fixtures, not invoked independently.
 
 ## Coverage
 
@@ -43,6 +110,7 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [Invalid assignment left operand](parser-expected-statement-expression-assignment.stderr) | The cannot-assign label points at `=`; retain and label the offending left expression. |
 | [Pragma switch](pp-missing-on-off-switch-in-s-t-d-c-pragma.stderr) | Name `FP_CONTRACT` as the pragma requiring a switch, rather than saying the switch belongs after `MAYBE`. |
 | [System header lookup](pp-header-not-found-system.stderr) | Distinguish an empty search-path list from an absolute header path. |
+| [C23 literal encodings](lexpp-c23-constraints.stderr) | Since `u` and `U` literals are typed, a concatenation of conflicting prefixes also reports an incompatible pointer conversion; Clang drops the literal after the first error. Mark the diagnosed literal so that semantic analysis gives it no type. |
 | [Left shift](pp-left-shift-overflow.stderr), [right shift](pp-right-shift-overflow.stderr) | Describe an invalid shift count separately from an overflowing result. |
 | [Angle-header newline](tokenizer-angle-header-newline.stderr), [angle-header EOF](tokenizer-angle-header-eof.stderr), [quoted-header EOF](tokenizer-quoted-header-eof.stderr) | The missing closing `>` or `"` is diagnosed at the absent delimiter, but the lookup of the partial name still reports a missing header; review whether that lookup should run. Angle EOF also reports an unexpected end of file in the directive, which quoted EOF no longer does; review whether it is redundant beside the missing `>`. |
 | [Unicode identifier recovery](parser-unicode-identifier.stderr) | Review the missing-type and continuation diagnostics for a single malformed declaration together. |
@@ -55,7 +123,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **384 top-level C inputs and 384 stderr snapshots**, plus seven supporting headers and 142 mode/policy `.args` sidecars. One hundred nineteen of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-two for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **410 top-level C inputs and 410 stderr snapshots**, plus eight supporting headers and 159 mode/policy `.args` sidecars. One hundred twenty-seven of the inputs cover semantic analysis (twenty-nine for declarations, twenty-nine for expressions and initializers, forty-six for statements and functions, three for 128-bit integers, four for resource intrinsics, two for scalar builtin constraints, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **143 preprocessor** and **66 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 124 preprocessor and 62 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -237,6 +305,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `IncludeNextInPrimarySource` | rendered | [pp-include-next-in-primary-source.c](pp-include-next-in-primary-source.c) covers `#include_next` and `__has_include_next`; both then search as `#include` would, as GCC and Clang do. |
 | `IncludeNextWithoutSearchEntry` | rendered | [pp-include-next-without-search-entry.c](pp-include-next-without-search-entry.c), through `include-next-relative.h`, which is found beside the primary source file and so has no search entry, as in Clang's `-Winclude-next-absolute-path`. |
 | `ErrorDirective` | rendered | [pp-error-directive.c](pp-error-directive.c) |
+| `PragmaMessage` | rendered | [pp-pragma-message.c](pp-pragma-message.c) covers `#pragma GCC warning` and `#pragma GCC error`, with a macro-replaced, a parenthesized and concatenated, and a malformed operand. |
 | `SystemHeaderPragmaInMainFile` | rendered | [pp-system-header-pragma-in-main-file.c](pp-system-header-pragma-in-main-file.c) |
 
 ### ParserErrorType
@@ -270,7 +339,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `ExpectedDeclarationContinuationAfterDeclarator` | rendered | [parser-expected-declaration-continuation-after-declarator-long-double.c](parser-expected-declaration-continuation-after-declarator-long-double.c), [parser-expected-declaration-continuation-after-declarator-missing-semicolon.c](parser-expected-declaration-continuation-after-declarator-missing-semicolon.c), [parser-expected-declaration-continuation-after-declarator-tab.c](parser-expected-declaration-continuation-after-declarator-tab.c), [parser-expected-declaration-continuation-after-declarator.c](parser-expected-declaration-continuation-after-declarator.c) |
 | `UnexpectedEndBeforeDeclarationSpecifier` | believed unreachable from normal dispatch | Owners only push declaration-specifier parsing after recognizing a declaration starter, or after a token has already been consumed. EOF without a starter is handled by the owner; EOF after consumed specifiers uses UnexpectedEndBeforeTypeSpecifier. |
 | `UnexpectedEndBeforeTypeSpecifier` | rendered | [parser-unexpected-end-before-type-specifier.c](parser-unexpected-end-before-type-specifier.c) |
-| `DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis` | rendered | [parser-direct-declarator-must-start-with-identifier-or-opening-parenthesis.c](parser-direct-declarator-must-start-with-identifier-or-opening-parenthesis.c), [parser-macro-expanded-keyword.c](parser-macro-expanded-keyword.c) |
+| `DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis` | rendered | [parser-direct-declarator-must-start-with-identifier-or-opening-parenthesis.c](parser-direct-declarator-must-start-with-identifier-or-opening-parenthesis.c), [parser-macro-expanded-keyword.c](parser-macro-expanded-keyword.c), [parser-thread-keyword-as-name.c](parser-thread-keyword-as-name.c) (the note names `__thread` as written) |
 | `ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator` | reached; folded | [parser-expected-declarator-after-opening-parenthesis-in-direct-declarator-eof.c](parser-expected-declarator-after-opening-parenthesis-in-direct-declarator-eof.c), [parser-expected-declarator-after-opening-parenthesis-in-direct-declarator.c](parser-expected-declarator-after-opening-parenthesis-in-direct-declarator.c) |
 | `ExpectedClosingParenthesisAfterParenthesizedDeclarator` | rendered | [parser-expected-closing-parenthesis-after-parenthesized-declarator.c](parser-expected-closing-parenthesis-after-parenthesized-declarator.c) |
 | `ExpectedClosingSquareBracketInArrayDirectDeclarator` | rendered | [parser-expected-closing-square-bracket-in-array-direct-declarator.c](parser-expected-closing-square-bracket-in-array-direct-declarator.c) |
@@ -291,6 +360,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `ExpectedEnumeratorBeforeClosingCurlyBrace` | rendered | [parser-expected-enumerator-before-closing-curly-brace.c](parser-expected-enumerator-before-closing-curly-brace.c) |
 | `ExpectedCommaOrClosingCurlyInEnumeratorList` | rendered | [parser-expected-comma-or-closing-curly-in-enumerator-list.c](parser-expected-comma-or-closing-curly-in-enumerator-list.c) |
 | `StorageClassRedefinition` | rendered | [parser-storage-class-redefinition.c](parser-storage-class-redefinition.c) |
+| `ThreadStorageConflict` | rendered | [parser-thread-storage-conflict.c](parser-thread-storage-conflict.c): `register`, `typedef`, `constexpr` and the other spelling beside a thread storage-class specifier (C11 §6.7.1p2) |
+| `ThreadLocalSpecifiedTwice` | rendered | [parser-thread-local-specified-twice.c](parser-thread-local-specified-twice.c): `__thread` twice, and `_Thread_local` with its C23 alias |
 | `DeclarationSpecifierNotAllowedHere` | rendered | [parser-declaration-specifier-not-allowed-here.c](parser-declaration-specifier-not-allowed-here.c) |
 | `ConstSpecifiedTwice` | rendered | [parser-const-specified-twice.c](parser-const-specified-twice.c) |
 | `VolatileSpecifiedTwice` | rendered | [parser-volatile-specified-twice.c](parser-volatile-specified-twice.c) |
@@ -495,6 +566,7 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | --- | --- | --- |
 | `InvalidStorage` | [storage](sema-storage.c) | File-scope auto/register. |
 | `InvalidFunctionStorage` | [function storage](sema-function-storage.c) | Block-scope function storage other than extern. |
+| `ThreadLocalFunction`, `ThreadLocalBlockScope`, `ThreadLocalAfterNonThreadLocal`, `NonThreadLocalAfterThreadLocal` | [thread storage](sema-thread-local.c) | C11 §6.7.1p3-4 with `-std=c11`: a thread-local function, a block-scope thread-local object without `static`/`extern`, and declarations disagreeing on thread storage. The same fixture shows a thread-local parameter, a member, and a thread-local address in a static initializer through their existing kinds. |
 | `LinkedBlockInitializer` | [linked initializer](sema-linked-initializer.c) | Block-scope declaration with linkage and an initializer; the label marks the initializer. |
 | `InvalidRestrict` | [restrict](sema-restrict.c) | Restrict needs an object/incomplete-target pointer. |
 | `QualifiedFunction` | [function qualifier](sema-function-qualifier.c) | Warning for undefined behavior from qualifying a function typedef; qualifiers are ignored. |
@@ -511,12 +583,15 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `ConflictingLinkage` | [linkage](sema-linkage.c) | Internal/external linkage mix. Positive extern-after-static is in unit tests. |
 | `TagKindMismatch` | [tag kind](sema-tag-kind.c) | Tag namespace kind conflicts. |
 | `TagRedefinition` | [tag definition](sema-tag-redefinition.c) | Completing an already complete tag. |
-| `IncompleteEnum` | [enum declaration](sema-enum-incomplete.c) | Strict C99 enum tag without a prior completion. |
+| `Extension(ForwardEnumReference)` | [enum declaration](sema-enum-incomplete.c) | An enum tag without a prior completion under `-pedantic-errors`; accepted silently otherwise, as Clang does. |
 | `InvalidConstant` | [constant](sema-constant.c) | Runtime enumerator operand, including unselected conditional/logical arms. |
 | `ConstantOverflow` | [overflow](sema-overflow.c) | Exceptional ICE evaluation; no dependent enumerator cascade. |
 | `EnumeratorRange` | [enum range](sema-enum-range.c) | Members that no 64-bit integer type holds; under `-pedantic-errors` the C23 extension diagnostic for values outside int precedes it. |
 | `InvalidMember` | [member](sema-member.c) | Incomplete/function member and a flexible array that is not the last member. |
 | `Extension(FlexibleArrayExtensions)` | [flexible extension](sema-flexible-extension.c) | GNU flexible arrays in unions or otherwise empty structures, nested flexible structures and arrays of them (§6.7.2.1p2, p16). |
+| `FlexibleArrayBraces`, `FlexibleArrayDesignator` | [flexible designators](sema-flexible-designators.c) | A designated flexible array member initialized by a scalar, and a designator into its elements (which also lacks braces), each noting the member, as Clang reports them; a designated list stays valid. |
+| `InitializerOverride`, `PartialInitializerOverride` | [initializer overrides](sema-initializer-overrides.c) | Clang's `-Winitializer-overrides`: a repeated member, a write into an element an expression initialized (at its designator), another union member (at the element) and a repeated flexible array member list, each noting the earlier initializer. |
+| `TransparentUnionNotUnion`, `TransparentUnionNotDefinition`, `TransparentUnionPlacement` | [transparent_union applicability](sema-transparent-union-applicability.c) | `transparent_union` in a tag-only declaration's specifiers, on an object, on a union specifier that does not define the union, and on a structure. |
 | `DuplicateMember` | [member name](sema-duplicate-member.c) | Duplicate names in a record member namespace. |
 | `InvalidBitFieldWidth`, `InvalidBitFieldType`, `NamedZeroWidthBitField` | [bit-field](sema-bit-field.c) | Width, type and zero-width-name constraints, each with its own message. |
 | `InvalidParameter` | [parameter](sema-parameter.c) | Parameter storage and non-outermost array static/qualifiers. |
@@ -695,8 +770,8 @@ redefinition of the predefined `__INT64_C` and `long long` are withheld, while
 `#pragma GCC system_header` remains and the ones after it are withheld. The main
 file keeps its own warning and errors, including the redefinition of a system
 header's macro. The `long long` that the system macro `NOISY_WIDE` supplies is
-withheld even where the main file uses it, because it is spelled in the system
-header. A `defined` that the system macros `NOISY_PROLOG` and `NOISY_DEFINED`
+reported where the main file uses it, at that invocation, because the
+expansion location decides, as in Clang 23; the snapshot gained that error. A `defined` that the system macros `NOISY_PROLOG` and `NOISY_DEFINED`
 produce is withheld in `noisy.h` but reported where the main file expands
 them, because that diagnostic is placed at the outermost invocation, as GCC and
 Clang place it; the snapshot gained those two diagnostics and the `#error`
@@ -812,3 +887,57 @@ the same rule.
 
 The pedantic member fixture also includes `system-headers/mingw-members.h`,
 which suppresses the promoted warning under `#pragma GCC system_header`.
+
+### Implicit library declarations
+
+`sema-implicit-library.c` renders `ImplicitLibraryFunction` warnings for
+`memcpy`, `strcmp`, `printf`, `strlen`, `abort` and `exit`, including the
+function name, complete target-specific type and C99 call/library note.
+The semantic tests cover repeated calls, all extension policies, C89/GNU17,
+LP64/LLP64, const inputs, variadic parameters, explicit incompatible declarations,
+unknown-name `int ()` fallback and strict C99 rejection. The pipeline regressions
+run headerless termination and memory/string calls before/after ABI lowering,
+with/without bcc optimization, and through all four native arms. A live Clang
+comparison checks LLVM scalar types and `noundef` at declarations and call sites.
+
+### Statement-expression entry
+
+`semantic-statement-expression-goto.c`, `semantic-statement-expression-switch.c`
+and `semantic-statement-expression-prior-call.c` pin semantic diagnostics for
+entering a GNU statement expression. Primary labels identify the goto or switch
+label; secondary labels identify the expression. These prevent the previous
+lowering/SSA internal errors from becoming user diagnostics. Semantic and
+pipeline tests also preserve legal internal jumps and exits.
+
+### Statement-expression header jumps
+
+`semantic-statement-expression-header-jumps.c` renders the existing
+`BreakOutsideLoopOrSwitch` and `ContinueOutsideLoop` constraints for statement
+expressions in while/do conditions, for initializers/conditions/increments and
+switch controlling expressions. Its GNU99 sidecar avoids extension-policy
+noise; all twelve primary labels identify their jump and retain the C99 notes.
+A following ordinary declaration survives. Semantic tests check each error
+individually; the shared header-target execution probe preserves valid outer
+loop/switch targets, including continue through a switch.
+
+### Representation attributes and GNU constant forms
+
+`sema-representation.c` pins invalid GNU alignment and scalar modes, weakening
+ISO alignment, mismatched union-cast member types and reversed GNU ranges.
+Its GNU11 sidecar keeps the diagnostics focused on operand constraints; a
+following declaration survives every error.
+
+### Predefined function-name identifiers
+
+`sema-predefined-outside-function.c` renders the default warning
+`predefined identifier is only valid inside function` (Clang's
+`-Wpredefined-identifier-outside-function`) for `__func__`, `__FUNCTION__` and
+`__PRETTY_FUNCTION__` at file scope, in an initializer and in a `sizeof`
+operand; each use warns and a following declaration survives. `sema-predefined-readonly.c`
+renders the ordinary read-only errors for assigning to the const arrays.
+Acceptance without a diagnostic in every mode, as in Clang 23.1.1 even under
+`-std=c99 -pedantic`, has no golden because a silent compile has no stderr; the
+semantic tests check each ISO and GNU revision and extension policy. The text of
+`__PRETTY_FUNCTION__` is checked against the bundled Clang by the
+`semantic/predefined-function-names.c` end-to-end program and by
+`semantic_analysis/tests/predefined_identifiers.rs`.

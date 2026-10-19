@@ -129,7 +129,7 @@ fn declaration_attributes_never_erase_a_shared_tag_layout() {
 }
 
 #[test]
-fn only_layout_attributes_make_declarator_types_unanalyzed() {
+fn modeled_layout_attributes_preserve_redeclaration_constraints() {
     // Function, pointer and member attributes that do not change layout keep
     // the declared type, so later conflicts are still found.
     assert_eq!(
@@ -151,14 +151,17 @@ fn only_layout_attributes_make_declarator_types_unanalyzed() {
         ),
         [SemanticErrorKind::IncompatibleDeclaration]
     );
-    // Non-vector alignment, packing and modes are not modeled.
+    // Alignment retains C type identity; scalar modes select a real type.
     assert_eq!(
         kinds(
             "int x __attribute__((aligned(16))); extern long x; int \
              *__attribute__((__aligned__(8))) q; long q; int m __attribute__((mode(DI))); long m;",
             gnu17()
         ),
-        []
+        [
+            SemanticErrorKind::IncompatibleDeclaration,
+            SemanticErrorKind::IncompatibleDeclaration
+        ]
     );
     assert_eq!(
         tag_layout(
@@ -174,7 +177,10 @@ fn only_layout_attributes_make_declarator_types_unanalyzed() {
             gnu17(),
             "S"
         ),
-        None
+        Some(Layout {
+            size:  16,
+            align: 8,
+        })
     );
 }
 
@@ -340,7 +346,7 @@ fn exceptional_array_bounds_are_variable_length_arrays() {
             .unwrap();
         assert!(matches!(
             s.types.nodes[b.ty.index],
-            TypeKind::Array(_, ArrayBound::Variable)
+            TypeKind::Array(_, ArrayBound::Variable(_))
         ));
     });
     assert_eq!(
@@ -757,10 +763,73 @@ fn braced_strings_initialize_the_first_nested_array() {
         ),
         []
     );
+    // A string that does not fit the array initializes its first element,
+    // which an `int` cannot take from a pointer, as in Clang.
     assert_eq!(
         kinds("int a[3] = { \"ab\" };", gnu17()),
-        [SemanticErrorKind::InvalidInitializer]
+        [SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::IntConversion
+        )]
     );
+}
+
+/// A sole braced string initializes the first element of an array that is
+/// not of a character or wide kind the string fits (C99 §6.7.8p14-15 and
+/// p17), as Clang accepts SQLite's `static const char *azEndings[] = {
+/// "dll" };`. Character and wide arrays keep string initialization and its
+/// diagnostics; an unbraced string still cannot initialize such an array.
+#[test]
+fn braced_strings_initialize_the_first_element_of_other_arrays() {
+    for target in [
+        crate::target::Target::LinuxGnu,
+        crate::target::Target::WindowsMsvc,
+    ] {
+        let configuration = gnu17().with_target(target);
+        assert_eq!(
+            kinds(
+                "static const char *a[] = { \"dll\" }; char *b[2] = { \"x\" }; const char *c[][2] \
+                 = { \"x\" }; const char *d[][2] = { { \"x\" } }; void *e[] = { \"v\" }; struct S \
+                 { const char *p; int n; } s[] = { \"x\" }; const char *f[] = { (\"p\") }; void \
+                 g(void) { const char *h[] = { \"x\" }; static const char *i[1] = { \"x\" }; char \
+                 j[] = { \"x\" }; unsigned char k[2] = { \"x\" }; char l[] = { u8\"x\" }; }",
+                configuration
+            ),
+            [],
+            "{target:?}"
+        );
+        for (source, expected) in [
+            ("char *a[] = \"x\";", SemanticErrorKind::InvalidInitializer),
+            ("int a[] = \"x\";", SemanticErrorKind::InvalidInitializer),
+            (
+                "char a[1] = { \"xy\" };",
+                SemanticErrorKind::ExcessInitializer,
+            ),
+            (
+                "long a[3] = { \"ab\" };",
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+            ),
+            (
+                "char a[] = { L\"x\" };",
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+            ),
+            (
+                "typedef __WCHAR_TYPE__ wchar_t; wchar_t a[] = { \"x\" };",
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+            ),
+        ] {
+            assert_eq!(
+                kinds(source, configuration),
+                [expected],
+                "{target:?}: {source}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -825,4 +894,141 @@ fn gnu_modes_fold_static_const_integer_objects() {
             SemanticErrorKind::NonConstantInitializer,
         ]
     );
+}
+
+/// Thread storage is a duration, not a type, and keeps its constraints.
+/// C11: §6.2.4 paragraph 4, p. 38; PDF p. 56; §6.7.1 paragraphs 3-4, p. 109;
+/// PDF p. 127; §6.7.9 paragraph 4, p. 139; PDF p. 157.
+#[test]
+fn thread_storage_is_a_duration_with_its_constraints() {
+    let source = "_Thread_local int a = 1; static __thread long b; int f(void) { static \
+                  _Thread_local int c; extern __thread long b; int *p = &a; return *p + c + \
+                  (int)b; }";
+    with_configuration(source, c11(), |context, s| {
+        assert_eq!(context.pending_error_count(), 0);
+        let mut thread = Vec::new();
+        for binding in s.bindings {
+            if binding.duration == Duration::Thread {
+                assert!(!s.types.unanalyzed(binding.ty));
+                thread.push(context.string_cache.at(binding.name.name));
+            }
+        }
+        assert_eq!(thread, ["a", "b", "c", "b"]);
+    });
+    assert_eq!(
+        kinds(
+            "int x; _Thread_local int x; __thread int y; extern int y; void g(void) { __thread \
+             int z; } _Thread_local int h(void); void k(_Thread_local int p); int *q = &y; int \
+             n(void); _Thread_local int m = n();",
+            c11()
+        ),
+        [
+            SemanticErrorKind::ThreadLocalAfterNonThreadLocal,
+            SemanticErrorKind::NonThreadLocalAfterThreadLocal,
+            SemanticErrorKind::ThreadLocalBlockScope,
+            SemanticErrorKind::ThreadLocalFunction,
+            SemanticErrorKind::InvalidParameter,
+            SemanticErrorKind::NonConstantInitializer,
+            SemanticErrorKind::NonConstantInitializer,
+        ]
+    );
+}
+
+/// MSVC `__declspec(thread)` is thread storage under another spelling, so
+/// the object is not silently shared between threads. On MinGW the declspec
+/// is a macro for a GNU attribute of the same name, which counts too.
+/// MSVC extension: Microsoft Learn, "thread".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/thread>
+#[test]
+fn msvc_declspec_thread_is_thread_storage() {
+    let msvc = gnu17().with_msvc_extensions(true);
+    with_configuration(
+        "__declspec(thread) int a = 1; static __declspec(thread) long b; __attribute__((thread)) \
+         int c; int f(void) { static __declspec(thread) int d; return a + d; }",
+        msvc,
+        |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            let mut thread = Vec::new();
+            for binding in s.bindings {
+                if binding.duration == Duration::Thread {
+                    thread.push(context.string_cache.at(binding.name.name));
+                }
+            }
+            assert_eq!(thread, ["a", "b", "c", "d"]);
+        },
+    );
+    assert_eq!(
+        kinds(
+            "int x; __declspec(thread) int x; void g(void) { __declspec(thread) int z; } \
+             __declspec(thread) int h(void); int *q = &x; __declspec(thread) int y; int *r = &y;",
+            msvc
+        ),
+        [
+            SemanticErrorKind::ThreadLocalAfterNonThreadLocal,
+            SemanticErrorKind::ThreadLocalBlockScope,
+            SemanticErrorKind::ThreadLocalFunction,
+            SemanticErrorKind::NonConstantInitializer,
+        ]
+    );
+}
+
+/// Microsoft's Windows Runtime headers declare `typedef enum E E;` before `enum
+/// E`'s list. GCC and Clang accept the forward reference in every mode, with a
+/// pedantic diagnostic only; the type stays incomplete until its list.
+#[test]
+fn forward_enum_references_are_an_extension_in_every_mode() {
+    let source = "typedef enum E E; enum E { A = 2 }; E value = A; int a[sizeof(E) == sizeof(int) \
+                  ? 1 : -1];";
+    let strict = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    assert_eq!(kinds(source, strict), []);
+    assert_eq!(
+        extensions(source, pedantic(CStandard::C99, false)),
+        ["'forward reference to an enum type' is a GNU extension"]
+    );
+    // Until its list, the enum is incomplete.
+    assert_eq!(
+        kinds("enum F *p; int n = sizeof(enum F);", strict),
+        [SemanticErrorKind::InvalidSizeof]
+    );
+}
+
+/// Microsoft's `__annotation`, which `TraceLoggingProvider.h` uses, takes
+/// wide string literals with Microsoft extensions, as in Clang.
+#[test]
+fn annotation_takes_wide_string_literals() {
+    let msvc = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_target(crate::target::Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    for target in [
+        crate::target::Target::WindowsMsvc,
+        crate::target::Target::WindowsGnu,
+    ] {
+        let configuration = msvc.with_target(target);
+        for source in [
+            "void f(void) { __annotation(L\"a\", L\"b\"); }",
+            "void f(void) { __annotation((L\"a\"), (((L\"b\")))); }",
+            "void f(void) { __annotation((L\"a\" L\"b\")); }",
+        ] {
+            assert_eq!(kinds(source, configuration), [], "{target:?}: {source}");
+        }
+        for source in [
+            "void f(void) { __annotation(L\"a\", \"narrow\"); }",
+            "void f(void) { __annotation((L\"a\" + 0)); }",
+        ] {
+            assert_eq!(
+                kinds(source, configuration),
+                [SemanticErrorKind::AnnotationArgument],
+                "{target:?}: {source}"
+            );
+        }
+        // The UTF-16 prefix is a C11 token; C99 rejects it before semantics.
+        let c11 = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
+            .with_target(target)
+            .with_msvc_extensions(true);
+        assert_eq!(
+            kinds("void f(void) { __annotation(u\"a\"); }", c11),
+            [SemanticErrorKind::AnnotationArgument],
+            "{target:?}: UTF-16 is not a wide string"
+        );
+    }
 }

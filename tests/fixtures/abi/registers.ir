@@ -1,0 +1,101 @@
+; sysv
+abi lowered
+
+function @pair(ptr registers(i64, i64, align 8), i64, f32) external {
+    slot0 = stack_slot 12, align 8
+block0(v0: ptr, v9: i64, v10: f32):
+    v1 = stack_addr slot0
+    store.i64 v9, v1, align 8
+    v11 = iconst.i64 8
+    v12 = ptr_add inbounds v1, v11
+    store.f32 v10, v12, align 4
+    v2 = load.i32 v1, align 4
+    v3 = sext.i64 v2
+    store.i64 v3, v0, align 8
+    v4 = iconst.i64 8
+    v5 = ptr_add inbounds v1, v4
+    v6 = load.i32 v5, align 4
+    v7 = zext.i64 v6
+    v8 = ptr_add inbounds v0, v4
+    store.i64 v7, v8, align 8
+    return
+}
+
+function @main() -> i64 external {
+    slot0 = stack_slot 16, align 8
+    slot1 = stack_slot 12, align 4
+block0:
+    v0 = stack_addr slot0
+    v1 = stack_addr slot1
+    v2 = iconst.i32 -5
+    store.i32 v2, v1, align 4
+    v3 = iconst.i64 4
+    v4 = ptr_add inbounds v1, v3
+    v5 = iconst.i32 1065353216
+    store.i32 v5, v4, align 4
+    v6 = iconst.i64 8
+    v7 = ptr_add inbounds v1, v6
+    v8 = iconst.i32 1073741824
+    store.i32 v8, v7, align 4
+    v13 = load.i32 v1, align 4
+    v14 = freeze.i32 v13
+    v15 = zext.i64 v14
+    v16 = iconst.i64 4
+    v17 = ptr_add inbounds v1, v16
+    v18 = load.i32 v17, align 4
+    v19 = freeze.i32 v18
+    v20 = zext.i64 v19
+    v21 = iconst.i64 32
+    v22 = shl.i64 v20, v21
+    v23 = or.i64 v15, v22
+    v24 = iconst.i64 8
+    v25 = ptr_add inbounds v1, v24
+    v26 = load.f32 v25, align 4
+    call @pair(v0, v23, v26)
+    v9 = load.i64 v0, align 8
+    v10 = ptr_add inbounds v0, v6
+    v11 = load.i64 v10, align 8
+    v12 = iadd.i64 v9, v11
+    return v12
+}
+
+; win64
+abi lowered
+
+function @pair(ptr sret(size 16, align 8), ptr) external {
+block0(v0: ptr, v1: ptr):
+    v2 = load.i32 v1, align 4
+    v3 = sext.i64 v2
+    store.i64 v3, v0, align 8
+    v4 = iconst.i64 8
+    v5 = ptr_add inbounds v1, v4
+    v6 = load.i32 v5, align 4
+    v7 = zext.i64 v6
+    v8 = ptr_add inbounds v0, v4
+    store.i64 v7, v8, align 8
+    return
+}
+
+function @main() -> i64 external {
+    slot0 = stack_slot 16, align 8
+    slot1 = stack_slot 12, align 4
+block0:
+    v0 = stack_addr slot0
+    v1 = stack_addr slot1
+    v2 = iconst.i32 -5
+    store.i32 v2, v1, align 4
+    v3 = iconst.i64 4
+    v4 = ptr_add inbounds v1, v3
+    v5 = iconst.i32 1065353216
+    store.i32 v5, v4, align 4
+    v6 = iconst.i64 8
+    v7 = ptr_add inbounds v1, v6
+    v8 = iconst.i32 1073741824
+    store.i32 v8, v7, align 4
+    call @pair(v0, v1)
+    v9 = load.i64 v0, align 8
+    v10 = ptr_add inbounds v0, v6
+    v11 = load.i64 v10, align 8
+    v12 = iadd.i64 v9, v11
+    return v12
+}

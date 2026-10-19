@@ -1,0 +1,65 @@
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> sema-pointer-errors.c:1:36
+  |
+1 | void assign(char *p, float *q) { p = q; }
+  |                                    ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> sema-pointer-errors.c:2:35
+  |
+2 | void initialize(float *q) { char *p = q; }
+  |                                   ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> sema-pointer-errors.c:4:34
+  |
+4 | void argument(float *q) { accept(q); }
+  |                                  ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> sema-pointer-errors.c:5:33
+  |
+5 | char *result(float *q) { return q; }
+  |                                 ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible function pointer types in conversion [-Wincompatible-function-pointer-types]
+ --> sema-pointer-errors.c:6:59
+  |
+6 | void function_assign(int (*p)(int), int (*q)(double)) { p = q; }
+  |                                                           ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible integer and pointer conversion [-Wint-conversion]
+ --> sema-pointer-errors.c:7:41
+  |
+7 | void integer_pointer(int *p, int q) { p = q; }
+  |                                         ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible integer and pointer conversion [-Wint-conversion]
+ --> sema-pointer-errors.c:8:41
+  |
+8 | void pointer_integer(int p, int *q) { p = q; }
+  |                                         ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+  --> sema-pointer-errors.c:9:45
+   |
+ 9 | void nested_sign(int **p, unsigned **q) { p = q; }
+   |                                             ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+8 errors generated.

@@ -1,13 +1,17 @@
 //! Keyword classification must happen after macro replacement.
 use std::path::PathBuf;
 
-use super::{
-    Context,
-    Preprocessor,
-    SharedVec,
-    TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        preprocessing::{
+            KeywordTokenType,
+            Preprocessor,
+            token::TokenType,
+        },
+    },
+    util::shared::SharedVec,
 };
-use crate::translation_phases::preprocessing::KeywordTokenType;
 
 #[test]
 fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
@@ -207,6 +211,7 @@ fn newly_introduced_non_reserved_words_remain_identifiers_in_old_modes() {
         "_Alignas",
         "_Noreturn",
         "_Thread_local",
+        "__thread",
         "_Atomic",
         "__attribute__",
         "__typeof__",
@@ -315,6 +320,7 @@ fn every_alias_spelling_has_its_keyword_gate_and_origin() {
         ("__typeof_unqual", K::TypeofUnqual, Gate::Always, gnu),
         ("__typeof_unqual__", K::TypeofUnqual, Gate::Always, gnu),
         ("__attribute", K::Attribute, Gate::Always, gnu),
+        ("__thread", K::ThreadLocal, Gate::Always, gnu),
         ("asm", K::Asm, Gate::Gnu, gnu),
         (
             "_asm",

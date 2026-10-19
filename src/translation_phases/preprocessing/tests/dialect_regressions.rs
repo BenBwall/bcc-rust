@@ -718,6 +718,89 @@ fn has_c_attribute_reports_noreturn_spellings() {
     }
 }
 
+/// A UTF-8 byte-order mark that begins a file maps to no source character
+/// (as in Microsoft's `icu.h`), so a directive may follow it; elsewhere it
+/// is an ordinary stray character. C99 §5.1.1.2p1, phase 1.
+#[test]
+fn leading_byte_order_mark_is_skipped() {
+    let (tokens, errors) = observe("\u{feff}#define X 1\n// note\nX\n", mode(CStandard::C99));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(texts(&tokens), "1");
+    let (_, errors) = observe("int a;\n\u{feff}int b;\n", mode(CStandard::C99));
+    assert!(!errors.is_empty(), "a later mark is not skipped");
+}
+
+/// `__has_attribute` and scoped `__has_c_attribute` answer from the
+/// attribute catalog as bundled Clang 23 does, including attributes bcc
+/// refuses (`overloadable`, `ifunc`) or only accepts (`may_alias`,
+/// `artificial`), the two scopes Clang distinguishes, and target-specific
+/// names.
+#[test]
+fn attribute_queries_answer_as_clang() {
+    use std::fmt::Write as _;
+
+    let queries = [
+        "__has_attribute(may_alias)",
+        "__has_attribute(__artificial__)",
+        "__has_attribute(overloadable)",
+        "__has_attribute(guarded_var)",
+        "__has_attribute(noipa)",
+        "__has_attribute(ifunc)",
+        "__has_attribute(dllimport)",
+        "__has_attribute(unknown_name)",
+        "__has_c_attribute(gnu::weak)",
+        "__has_c_attribute(clang::weak)",
+        "__has_c_attribute(clang::overloadable)",
+        "__has_c_attribute(__gnu__::__packed__)",
+        "__has_c_attribute(vendor::weak)",
+        "__has_attribute(external_source_symbol) == 20230206",
+    ];
+    let mut source = String::new();
+    for query in queries {
+        writeln!(source, "#if {query}\n1\n#else\n0\n#endif").unwrap();
+    }
+    for (target, expected) in [
+        (
+            crate::target::Target::LinuxGnu,
+            "1 1 1 1 0 1 0 0 1 0 1 1 0 1",
+        ),
+        (
+            crate::target::Target::LinuxMusl,
+            "1 1 1 1 0 0 0 0 1 0 1 1 0 1",
+        ),
+        (
+            crate::target::Target::WindowsGnu,
+            "1 1 1 1 0 0 1 0 1 0 1 1 0 1",
+        ),
+    ] {
+        let (tokens, errors) = observe(&source, mode(CStandard::C23).with_target(target));
+        assert!(errors.is_empty(), "{target:?}: {errors:?}");
+        assert_eq!(texts(&tokens), expected, "{target:?}");
+    }
+}
+
+/// Clang declares x86 `__rdtsc` for every x86 target and mode, and
+/// Microsoft's `__debugbreak` only with Microsoft extensions.
+#[test]
+fn intrinsic_queries_follow_their_availability() {
+    let source = "#if __has_builtin(__rdtsc)\n1\n#else\n0\n#endif\n#if \
+                  __has_builtin(__debugbreak)\n1\n#else\n0\n#endif\n#if \
+                  __has_builtin(__annotation)\n1\n#else\n0\n#endif\n";
+    for (target, expected) in [
+        (crate::target::Target::LinuxGnu, "1 0 0"),
+        (crate::target::Target::WindowsGnu, "1 0 0"),
+        (crate::target::Target::WindowsMsvc, "1 1 1"),
+    ] {
+        let mut configuration = mode(CStandard::C99).with_target(target);
+        if target == crate::target::Target::WindowsMsvc {
+            configuration = configuration.with_msvc_extensions(true);
+        }
+        let (tokens, errors) = observe(source, configuration);
+        assert!(errors.is_empty(), "{target:?}: {errors:?}");
+        assert_eq!(texts(&tokens), expected, "{target:?}");
+    }
+}
+
 /// C23 §6.10.1p1: an embed parameter's clause is optional in the grammar; a
 /// query with a parameter it does not support evaluates to
 /// `__STDC_EMBED_NOT_FOUND__` (C23 §6.10.2p10) without a diagnostic.

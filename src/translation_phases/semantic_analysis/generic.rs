@@ -3,14 +3,18 @@
 
 use super::{
     Analyzer,
-    ArenaVec,
-    Expression,
-    ExpressionInfo,
     SemanticErrorKind,
-    SyntaxOperand,
-    TypeKind,
+    expressions::ExpressionInfo,
+    types::TypeKind,
 };
-use crate::translation_phases::parsing::GenericSelection;
+use crate::{
+    translation_phases::parsing::{
+        GenericSelection,
+        SyntaxOperand,
+        syntax::Expression,
+    },
+    util::bump::ArenaVec,
+};
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Checks generic associations and preserves the selected expression.
@@ -24,7 +28,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | SyntaxOperand::Expression(operand) => self.converted(self.expression_info(operand)),
             | SyntaxOperand::Type(name) => self
                 .resolved_type_names
-                .get(&name.source_vectors)
+                .get(&super::type_name_identity(name))
                 .copied()
                 .unwrap_or_else(|| self.types.unknown()),
         };
@@ -39,7 +43,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let Some(name) = association.type_name {
                 let ty = self
                     .resolved_type_names
-                    .get(&name.source_vectors)
+                    .get(&super::type_name_identity(name))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 if self.types.unanalyzed(ty) {

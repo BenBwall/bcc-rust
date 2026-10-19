@@ -1,4 +1,4 @@
-warning: '__pragma' is an MSVC extension
+warning: '__pragma' is an MSVC extension [-Wpedantic]
  --> lexpp-ms-pragma.c:1:1
   |
 1 | __pragma(STDC FP_CONTRACT MAYBE)

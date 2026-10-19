@@ -1,0 +1,67 @@
+error: cleanup function must take one parameter: `two`
+ --> sema-cleanup-jumps.c:7:34
+  |
+7 |     int a __attribute__((cleanup(two)));
+  |                                  ^^^ cleanup function must take one parameter
+  |
+  = note: Clang: the cleanup function receives only a pointer to the variable
+
+error: cleanup function parameter is incompatible with a pointer to the variable: `unsigned_release`
+ --> sema-cleanup-jumps.c:8:34
+  |
+8 |     int b __attribute__((cleanup(unsigned_release)));
+  |                                  ^^^^^^^^^^^^^^^^ parameter type is incompatible with the variable
+  |
+  = note: Clang: a pointer to the variable must convert to the parameter type; GCC calls the function as if by assignment (C99 §6.5.16.1p1)
+
+error: cleanup argument is not a function: `object`
+  --> sema-cleanup-jumps.c:9:34
+   |
+ 9 |     int c __attribute__((cleanup(object)));
+   |                                  ^^^^^^ not a function
+   |
+   = note: GCC Common Variable Attributes: cleanup names a function to call with the variable's address
+
+warning: attribute ignored: `cleanup` [-Wignored-attributes]
+  --> sema-cleanup-jumps.c:10:33
+   |
+10 |     static int d __attribute__((cleanup(release)));
+   |                                 ^^^^^^^ attribute ignored here
+   |
+   = note: Clang -Wignored-attributes: the attribute does not apply to this declaration, or bcc drops its effect (see language-standards.md, "Attribute status")
+
+error: cannot jump from switch statement to this case label
+  --> sema-cleanup-jumps.c:21:5
+   |
+20 |         int b __attribute__((cleanup(release)));
+   |             - cleanup variable is declared here
+21 |     case 1:
+   |     ^^^^^^^ jump bypasses a cleanup variable's initialization
+22 |         break;
+   |         ^^^^^^
+   |
+   = note: Clang: switch dispatch into the scope of a cleanup variable would bypass its initialization
+
+error: cannot jump from this goto statement to its label
+  --> sema-cleanup-jumps.c:13:10
+   |
+13 |     goto inside;
+   |          ^^^^^^ jump bypasses a cleanup variable's initialization
+14 |     {
+15 |         int a __attribute__((cleanup(release))) = 1;
+   |             - cleanup variable is declared here
+   |
+   = note: Clang: a jump into the scope of a cleanup variable would bypass its initialization; jumps out of it run the cleanup
+
+error: cannot jump from this indirect goto statement to one of its possible targets
+  --> sema-cleanup-jumps.c:27:9
+   |
+27 |         goto *target;
+   |         ^^^^^^^^^^^^^ indirect jump crosses a cleanup scope
+28 |     }
+29 | done:;
+   | ------ possible target is here
+   |
+   = note: Clang: an indirect goto cannot enter or leave the scope of a cleanup variable
+
+6 errors and 1 warning generated.
