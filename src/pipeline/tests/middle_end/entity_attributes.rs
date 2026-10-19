@@ -363,7 +363,7 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
     // clang with its C library so that constructors and the dynamic loader
     // behave as usual.
     let wsl_clang = cfg!(windows)
-        && crate::test_support::native::run_native(Command::new("wsl.exe").args([
+        && crate::test_support::wsl::run_wsl(Command::new("wsl.exe").args([
             "-e",
             "clang",
             "--version",
@@ -398,14 +398,14 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
             },
         );
         let program = format!("two-{}", arm.name);
-        let link = crate::test_support::native::run_native(
+        let link = crate::test_support::wsl::run_wsl(
             Command::new("wsl.exe")
                 .args(["-e", "clang", &object, "clang.c", "-o", &program])
                 .current_dir(directory.path()),
         )
         .unwrap();
         assert!(link.status.success(), "{link:?}");
-        let run = crate::test_support::native::run_native(
+        let run = crate::test_support::wsl::run_wsl(
             Command::new("wsl.exe")
                 .args(["-e", &format!("./{program}")])
                 .current_dir(directory.path()),
@@ -426,7 +426,7 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
 #[test]
 fn single_unit_programs_run_on_system_v_under_wsl() {
     let wsl_clang = cfg!(windows)
-        && crate::test_support::native::run_native(Command::new("wsl.exe").args([
+        && crate::test_support::wsl::run_wsl(Command::new("wsl.exe").args([
             "-e",
             "clang",
             "--version",
@@ -439,7 +439,7 @@ fn single_unit_programs_run_on_system_v_under_wsl() {
     let directory = TempDir::new("entity-attributes-sysv");
     for &(name, source, status, output) in ATTRIBUTE_PROGRAMS {
         std::fs::write(directory.join(format!("{name}.c")), source).unwrap();
-        let reference = crate::test_support::native::run_native(
+        let reference = crate::test_support::wsl::run_wsl(
             Command::new("wsl.exe")
                 .args([
                     "-e",
@@ -475,7 +475,7 @@ fn single_unit_programs_run_on_system_v_under_wsl() {
                 },
             );
             let program = format!("{name}-{}", arm.name);
-            let link = crate::test_support::native::run_native(
+            let link = crate::test_support::wsl::run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", "clang", &object, "-o", &program])
                     .current_dir(directory.path()),
@@ -483,7 +483,7 @@ fn single_unit_programs_run_on_system_v_under_wsl() {
             .unwrap();
             assert!(link.status.success(), "{link:?}");
             for executable in [program, format!("{name}-clang")] {
-                let run = crate::test_support::native::run_native(
+                let run = crate::test_support::wsl::run_wsl(
                     Command::new("wsl.exe")
                         .args(["-e", &format!("./{executable}")])
                         .current_dir(directory.path()),

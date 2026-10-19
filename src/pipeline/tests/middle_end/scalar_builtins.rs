@@ -527,7 +527,7 @@ fn gcc_scalar_builtins_emit_matching_llvm_intrinsics() {
 #[test]
 fn gcc_scalar_builtins_execute_in_linux_native_arms() {
     if !cfg!(windows)
-        || !crate::test_support::native::run_native(Command::new("wsl.exe").args(["-e", "true"]))
+        || !crate::test_support::wsl::run_wsl(Command::new("wsl.exe").args(["-e", "true"]))
             .is_ok_and(|o| o.status.success())
     {
         eprintln!("skipping Linux builtin execution: WSL runner unavailable");
@@ -580,7 +580,7 @@ void *memcpy(void *p,const void *q,unsigned long n){volatile unsigned char *a=p;
                 "{name}: {}",
                 String::from_utf8_lossy(&linked.stderr)
             );
-            let ran = crate::test_support::native::run_native(
+            let ran = crate::test_support::wsl::run_wsl(
                 Command::new("wsl.exe")
                     .arg("-e")
                     .arg(format!(

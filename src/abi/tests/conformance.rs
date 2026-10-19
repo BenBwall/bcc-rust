@@ -807,7 +807,7 @@ impl Runner {
         }
         if target == Target::LinuxGnu
             && cfg!(windows)
-            && crate::test_support::native::run_native(Command::new("wsl.exe").args(["-e", "true"]))
+            && crate::test_support::wsl::run_wsl(Command::new("wsl.exe").args(["-e", "true"]))
                 .is_ok_and(|output| output.status.success())
         {
             return Some(Self::Wsl);
@@ -821,7 +821,7 @@ impl Runner {
         let output = match self {
             | Self::Native =>
                 crate::test_support::native::run_native(&mut Command::new(executable)),
-            | Self::Wsl => crate::test_support::native::run_native(
+            | Self::Wsl => crate::test_support::wsl::run_wsl(
                 Command::new("wsl.exe")
                     .arg("-e")
                     .arg(format!(
