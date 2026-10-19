@@ -16,7 +16,9 @@ pub(super) fn write<'a>(coff: &Coff<'a>) -> Result<ArenaVec<'a, u8>> {
     let object = &coff.object;
     let arena = object.arena;
     let count = object.sections.len();
-    if count > 0x7FFF {
+    // LLVM's MaxNumberOfSections16 reserves 0xFF00..0xFFFF. Classic
+    // section numbers use all remaining 16 bits, including the high bit.
+    if count > 0xFEFF {
         return Err(Error("too many COFF sections"));
     }
     let mut strings = ArenaVec::new_in(arena);
@@ -226,7 +228,7 @@ pub(super) fn write<'a>(coff: &Coff<'a>) -> Result<ArenaVec<'a, u8>> {
                 &mut strings,
                 &name,
                 narrow(symbol.value)?,
-                if section == 0 { -1 } else { section },
+                if section == 0 { 0xFFFF } else { section },
                 kind,
                 [2, 0],
             )?;
@@ -291,7 +293,7 @@ fn record(
     strings: &mut ArenaVec<'_, u8>,
     name: &str,
     value: u32,
-    section: i16,
+    section: u16,
     kind: u16,
     class_and_aux: [u8; 2],
 ) -> Result<()> {
@@ -316,8 +318,11 @@ fn string(table: &mut ArenaVec<'_, u8>, text: &str) -> Result<u32> {
     Ok(at)
 }
 
-fn section_number(id: usize) -> Result<i16> {
-    i16::try_from(id + 1).map_err(|_| Error("too many COFF sections"))
+fn section_number(id: usize) -> Result<u16> {
+    u16::try_from(id + 1)
+        .ok()
+        .filter(|&number| number <= 0xFEFF)
+        .ok_or(Error("too many COFF sections"))
 }
 
 fn reloc_count(count: usize) -> u16 {
@@ -367,6 +372,60 @@ mod tests {
         backend::native::object::Reloc,
         util::bump::Bump,
     };
+
+    #[test]
+    fn coff_classic_section_limit_matches_llvm() {
+        let arena = Bump::new();
+        let mut coff = Coff::new(&arena, false);
+        for _ in 0..0xFEFF {
+            coff.object.sections.push(super::super::super::Section {
+                name:   ".s",
+                kind:   1,
+                flags:  0,
+                align:  1,
+                size:   0,
+                group:  None,
+                data:   ArenaVec::new_in(&arena),
+                relocs: ArenaVec::new_in(&arena),
+            });
+            coff.sections.push(super::super::Attributes {
+                characteristics: 0x4000_0040,
+                selection:       0,
+                associative:     None,
+            });
+        }
+        let id = coff.object.symbol("last");
+        coff.object.symbols[id].section = Some(0xFEFE);
+        coff.object.symbols[id].binding = 1;
+        let bytes = write(&coff).unwrap();
+        assert_eq!(u16::from_le_bytes(bytes[2..4].try_into().unwrap()), 0xFEFF);
+        let symtab = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        for number in [0x7FFF, 0x8000, 0xFEFF] {
+            let at = symtab + (number - 1) * 36;
+            for field in [at + 12, at + 18 + 12] {
+                assert_eq!(
+                    u16::from_le_bytes(bytes[field..field + 2].try_into().unwrap()) as usize,
+                    number
+                );
+            }
+        }
+        let last = symtab + 0xFEFF * 36;
+        assert_eq!(
+            u16::from_le_bytes(bytes[last + 12..last + 14].try_into().unwrap()),
+            0xFEFF
+        );
+        coff.object.sections.push(super::super::super::Section {
+            name:   ".extra",
+            kind:   1,
+            flags:  0,
+            align:  1,
+            size:   0,
+            group:  None,
+            data:   ArenaVec::new_in(&arena),
+            relocs: ArenaVec::new_in(&arena),
+        });
+        assert!(write(&coff).is_err());
+    }
 
     #[test]
     fn coff_rel32_variants_preserve_types_and_implicit_addends() {

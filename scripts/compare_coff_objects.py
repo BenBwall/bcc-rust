@@ -53,7 +53,7 @@ def view(path):
     symbols = {}
     index = 0
     while index < nsyms:
-        raw, value, section, kind, storage, naux = struct.unpack_from('<8sIhHBB', data, symtab + index * 18)
+        raw, value, section, kind, storage, naux = struct.unpack_from('<8sIHHBB', data, symtab + index * 18)
         require(index + naux < nsyms, "COFF auxiliary records outside symbol table")
         aux = data[symtab + (index + 1) * 18:symtab + (index + 1 + naux) * 18]
         symbols[index] = [name(raw), value, section, kind, storage, aux, '']
@@ -64,6 +64,9 @@ def view(path):
             target, = struct.unpack_from('<I', aux)
             record[6] = tuple(symbols[target][:5])
             record[5] = bytes(4) + aux[4:]
+    section_symbols = {}
+    for symbol in symbols.values():
+        section_symbols.setdefault(symbol[2], []).append(symbol)
     sections, relocations, comdats = [], [], []
     for index in range(count):
         raw, virtual_size, address, size, pointer, relptr, lines, nrel, nlines, flags = struct.unpack_from('<8sIIIIIIHHI', data, 20 + index * 40)
@@ -73,10 +76,10 @@ def view(path):
             require(pointer >= 20 + count * 40 and len(body) == size, "invalid COFF section data extent")
         sections.append((name(raw, True), size, flags, body))
         if flags & 0x1000:
-            section_symbols = [s for s in symbols.values() if s[2] == index + 1]
-            definition = next(s for s in section_symbols if s[4] == 3 and len(s[5]) == 18)
+            members = section_symbols.get(index + 1, [])
+            definition = next(s for s in members if s[4] == 3 and len(s[5]) == 18)
             if definition[5][14] != 5:  # associative COMDATs use the aux section number
-                key = next((s for s in section_symbols if not s[5]), None)
+                key = next((s for s in members if not s[5]), None)
                 comdats.append((index, tuple(key[:5]) if key else None))
         if flags & 0x01000000:  # IMAGE_SCN_LNK_NRELOC_OVFL
             require(nrel == 0xFFFF, "invalid COFF relocation overflow count")

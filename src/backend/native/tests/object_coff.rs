@@ -70,12 +70,14 @@ pub(crate) fn equivalent(text: &str, target: Target) -> io::Result<()> {
     Ok(())
 }
 
+type SymbolKey = (String, u32, u16, u16, u8);
+
 #[derive(Debug, PartialEq, Eq)]
 struct View {
     header:      (u16, u16, u32, u16, u16),
     sections:    Vec<(String, u32, u32, Vec<u8>)>,
     symbols:     Vec<SymbolView>,
-    relocations: Vec<(usize, u32, u16, String, i16)>,
+    relocations: Vec<(usize, u32, u16, SymbolKey)>,
     comdats:     Vec<(usize, Option<String>)>,
 }
 
@@ -83,7 +85,7 @@ struct View {
 struct SymbolView {
     name:        String,
     value:       u32,
-    section:     i16,
+    section:     u16,
     kind:        u16,
     class:       u8,
     aux:         Vec<u8>,
@@ -126,7 +128,13 @@ fn inspect(bytes: &[u8]) -> View {
     let mut index = 0;
     while index < symbol_count {
         let at = symtab + 18 * index;
-        names[index] = Some((name(&bytes[at..at + 8], false), i16_at(bytes, at + 12)));
+        names[index] = Some((
+            name(&bytes[at..at + 8], false),
+            u32_at(bytes, at + 8),
+            u16_at(bytes, at + 12),
+            u16_at(bytes, at + 14),
+            bytes[at + 16],
+        ));
         index += 1 + usize::from(bytes[at + 17]);
     }
     let mut view = View {
@@ -171,14 +179,8 @@ fn inspect(bytes: &[u8]) -> View {
         }
         for n in 0..relocation_count {
             let at = relocs + n * 10;
-            let (symbol, section) = names[u32_at(bytes, at + 4) as usize].as_ref().unwrap();
-            view.relocations.push((
-                id,
-                u32_at(bytes, at),
-                u16_at(bytes, at + 8),
-                symbol.clone(),
-                *section,
-            ));
+            let symbol = names[u32_at(bytes, at + 4) as usize].as_ref().unwrap();
+            view.relocations.push((id, u32_at(bytes, at), u16_at(bytes, at + 8), symbol.clone()));
         }
     }
     index = 0;
@@ -195,7 +197,7 @@ fn inspect(bytes: &[u8]) -> View {
         view.symbols.push(SymbolView {
             name: name(&bytes[at..at + 8], false),
             value: u32_at(bytes, at + 8),
-            section: i16_at(bytes, at + 12),
+            section: u16_at(bytes, at + 12),
             kind: u16_at(bytes, at + 14),
             class: bytes[at + 16],
             aux,
@@ -203,23 +205,25 @@ fn inspect(bytes: &[u8]) -> View {
         });
         index += aux_count + 1;
     }
+    let mut section_symbols = vec![Vec::new(); count + 1];
+    for symbol in &view.symbols {
+        if let Some(section) = section_symbols.get_mut(usize::from(symbol.section)) {
+            section.push(symbol);
+        }
+    }
     for (id, section) in view.sections.iter().enumerate() {
         if section.2 & 0x1000 == 0 {
             continue;
         }
-        let number = i16::try_from(id + 1).unwrap();
-        let definition = view
-            .symbols
+        let symbols = &section_symbols[id + 1];
+        let definition = symbols
             .iter()
-            .find(|s| s.section == number && s.class == 3 && s.aux.len() == 18)
+            .find(|s| s.class == 3 && s.aux.len() == 18)
             .unwrap();
         if definition.aux[14] != 5 {
             // Symbol order may vary, but the first non-section symbol in a
             // COMDAT must still identify the same linker selection key.
-            let key = view
-                .symbols
-                .iter()
-                .find(|s| s.section == number && s.aux.is_empty());
+            let key = symbols.iter().find(|s| s.aux.is_empty());
             view.comdats.push((id, key.map(|s| s.name.clone())));
         }
     }
@@ -229,9 +233,6 @@ fn inspect(bytes: &[u8]) -> View {
 
 fn u16_at(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes(b[at..at + 2].try_into().unwrap())
-}
-fn i16_at(b: &[u8], at: usize) -> i16 {
-    i16::from_le_bytes(b[at..at + 2].try_into().unwrap())
 }
 fn u32_at(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
@@ -571,4 +572,28 @@ fn coff_weak_defaults_prefer_non_comdat_externals() {
             equivalent(text, target).unwrap();
         }
     }
+}
+
+#[test]
+fn coff_equivalence_distinguishes_relocation_target_values() {
+    let arena = Bump::new();
+    let bytes = super::super::object::encode_coff(
+        ".data\na:\n.quad 0\nb:\n.quad a\n",
+        Target::WindowsMsvc,
+        &arena,
+    )
+    .unwrap();
+    let mut original = bytes.to_vec();
+    let symtab = u32_at(&bytes, 8) as usize;
+    let first = usize::from(u16_at(&bytes, 2)) * 2;
+    // Give two local symbols the same name/section but different values.
+    original[symtab + (first + 1) * 18] = b'a';
+    let baseline = inspect(&original);
+    let mut changed = original.clone();
+    let relocation = u32_at(&bytes, 20 + 40 + 24) as usize;
+    changed[relocation + 4..relocation + 8]
+        .copy_from_slice(&u32::try_from(first + 1).unwrap().to_le_bytes());
+    let redirected = inspect(&changed);
+    assert_eq!(baseline.symbols, redirected.symbols);
+    assert_ne!(baseline.relocations, redirected.relocations);
 }
