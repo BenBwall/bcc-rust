@@ -880,7 +880,7 @@ Sizes are estimated Rust lines including tests.
 | 1 | Integer and pointer code: arithmetic, comparisons, branches, switch chains, block parameters, direct and indirect calls (SysV and Win64, stack arguments, calls to variadic functions), stack slots, loads and stores, globals with relocated initializers, `copy`/`fill` inline or through `rep movsb`/`memmove`, bit operations, `sret`/`byval`/integer `registers`; linear scan with spilling; assembly text through clang; `--backend=native`, `--emit=asm`; arms B0/B1 in the torture survey | 5-6k | e2e programs match the interpreter on Windows and WSL; difftest native oracle clean; torture survey: zero native wrong results where A0 passes, zero crashes | done |
 | 2 | Variadic definitions (`va_start` save areas), `dyn_alloca`/`stack_save`/`stack_restore` with a frame pointer, inline `copy`/`fill` for small constant sizes; over-aligned slots and jump tables for dense switches | 2k | torture: every integer-only source A0 passes also passes B0 | done except jump tables (and stack arguments aligned above 16) |
 | 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done |
-| 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | done except the red zone; B1/A1 1.05× on native Linux (from 1.42×); checker clean on every test, torture corpus not yet run with it |
+| 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | done, with the red zone and loop alignment added after stage 5 (#85); B1/A1 1.05× on native Linux (from 1.42×), 1.03× with those two in a pinned run; checker clean on every test and on the whole torture corpus (1,890 sources, debug builds, no checker failure) |
 | 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | ELF opt-in (`--native-object`); COFF retains text assembly |
 | 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | open |
 
@@ -1216,9 +1216,10 @@ Done on 2026-10-19, in the order the measurements asked for:
   power of two with shifts and masks (`stencil` divided by 4 with `idiv`),
   and dead-code elimination of arithmetic whose result and flags are dead.
 
-Left open: the **red zone** (it changes the prologue, the epilogue and the
-unwind information, which stage 5's object writer generates, so it waits
-for that writer to land); releasing the **scratch registers** `%r10`/`%r11`
+Left open at the time: the **red zone** (it changes the prologue, the
+epilogue and the unwind information, which stage 5's object writer
+generates, so it waited for that writer; added later, see "Red zone and loop
+alignment" below); releasing the **scratch registers** `%r10`/`%r11`
 and `%xmm14`/`%xmm15`, which the allocator's fallback and parallel-copy
 cycles still use; **rematerialization** of hoisted symbol bases instead of
 spilling them; **value-based coalescing**; and a 32-bit `lea` form.
@@ -1265,7 +1266,8 @@ a 3-byte `nop` after one `lea` before the loop, while a same-length `leal`
 in place of that `leaq` stays slow, so the loop's alignment, not its
 instructions, costs the difference. Aligning loop headers (`.p2align 4`, as
 LLVM does) belongs with stage 5's object writer, which must then pad with
-multi-byte `nop`s itself. Of the rest, `bytecode` (1.30×) repeats its
+multi-byte `nop`s itself; it was added with the red zone (below). Of the
+rest, `bytecode` (1.30×) repeats its
 dispatch test in every handler and indexes 16-byte records with a shift,
 and `particles` (1.19×) copies its structure through the stack, which the
 bcc optimizer leaves.
@@ -1275,11 +1277,15 @@ builds). The difftest native oracle passed its default sweep and the
 500-case sweep (`--include-ignored`) after every change, as did the native
 end-to-end programs (B0 and B1 against the interpreter, wide floats against
 the LLVM back end) and the ABI conformance tests that link native objects
-with Clang's in both directions. The GCC torture survey was not run: its
-corpus is not on the Linux host used. Release builds skip the checker, so
-the survey's "checker clean on the whole torture corpus" criterion needs a
-debug build of bcc-rust (or a release build with debug assertions) on a
-host with the corpus.
+with Clang's in both directions. The GCC torture survey was not run by the
+stage itself, since its corpus was not on the Linux host used and release
+builds skip the checker. The stage's review then ran it with debug builds
+of the stage 3 base and the stage 4 branch (GCC 15.2.0
+`gcc.c-torture/execute`, 1,677 top-level and 213 `ieee/` and `builtins/`
+sources, 1,890 in all, arms A0, B0 and B1, `x86_64-unknown-linux-gnu`): no
+checker rejection, no compiler crash, and no source whose result differs
+between base and branch, which meets the "checker clean on the whole
+torture corpus" criterion.
 
 ### Stage 5: opt-in ELF object emission
 
@@ -1403,3 +1409,73 @@ These are emission-phase measurements on small inputs on a shared machine,
 not full-process or release-build compile-time speedups. Reproduce with
 `cargo test --lib benchmark_native_object_emission -- --ignored --nocapture`
 (through the shared cargo wrapper in the overnight environment).
+
+### Red zone and loop alignment (stage 4 leftovers)
+
+Added on 2026-10-19 (#85), after the direct object writer, which reproduces
+both:
+
+- **Red zone** (see "Frame layout"): a System V leaf whose frame below the
+  pushes fits 128 bytes keeps it below `%rsp`. Of the 56 functions of
+  `benches/c` at B1, 9 do. The unwind information needs nothing new: the
+  CFA stays where the pushes put it, which the shared CFI events already
+  say. `unwinding_through_a_red_zone_leaf_in_a_signal_handler` interrupts
+  such a leaf with `SIGPROF` while its frame is live, unwinds from the
+  handler through the signal frame and the leaf to its caller and `main`
+  with `_Unwind_Backtrace`, and checks that the frame survived the
+  handlers. With a CFA that wrongly counts the frame (a hand-edited
+  `.cfi_def_cfa_offset`), every sample taken in the leaf fails to unwind
+  past it.
+- **Loop alignment**: each loop header of the final layout, the target of
+  an edge from a later block or from itself, starts at a 16-byte boundary
+  (`.p2align 4`, multi-byte `nop`s, no padding limit), which is LLVM's
+  x86-64 alignment. LLVM's block placement also aligns other hot blocks
+  inside loops whose predecessor in the layout does not fall into them.
+  Without block frequencies that rule aligns every case of an
+  interpreter's dispatch, and it measured slower: `switchvm` went from
+  0.60× to 0.79-0.83× of LLVM in three runs. A padding limit as GCC's
+  `.p2align 4,,10` measured slower too, because `levenshtein`'s loop needs
+  more padding and lost its gain. The direct encoder still implements the
+  max-skip form (stage 5 above).
+
+Measured on native Linux (AMD Ryzen 9 5900X, shared with other builds;
+release builds; CPU time; the C programs pinned to one core and run with
+ASLR off; 11 interleaved repetitions; every output checked against
+A1's): B1/A1 per program for the base, loop headers aligned to 16 bytes,
+as built, and to 64 bytes, for comparison. The ratios move by a few
+percent between runs on this machine; `linkedlist` moves by more, since
+its run time depends on where its heap lands.
+
+| Benchmark | Base | 16-byte headers | 64-byte headers |
+| --- | ---: | ---: | ---: |
+| bits | 1.095 | 1.025 | 1.063 |
+| bytecode | 1.278 | 1.279 | 1.299 |
+| collatz | 1.008 | 0.995 | 0.983 |
+| crc32 | 1.003 | 0.999 | 1.009 |
+| fannkuch | 0.991 | 0.962 | 0.986 |
+| hashtable | 0.987 | 1.070 | 1.045 |
+| levenshtein | 1.185 | 1.009 | 0.992 |
+| linkedlist | 0.998 | 0.867 | 1.087 |
+| mandel | 1.029 | 1.032 | 1.021 |
+| matmul | 1.014 | 1.014 | 0.989 |
+| nqueens | 1.106 | 1.166 | 1.099 |
+| particles | 1.184 | 1.154 | 1.149 |
+| sieve | 1.055 | 1.010 | 0.996 |
+| sorts | 1.070 | 1.090 | 1.049 |
+| stencil | 1.468 | 1.467 | 1.299 |
+| strings | 1.049 | 1.033 | 1.012 |
+| switchvm | 0.609 | 0.576 | 0.599 |
+| **geometric mean** | **1.052** | **1.028** | **1.028** |
+
+`.text` over the 17 programs grows from 12,260 to 13,496 bytes (10%) with
+16-byte alignment; 64-byte alignment would take 18,462 (51%).
+
+Alignment helps `levenshtein` (1.18× to 1.01×) and `bits`, costs
+`hashtable` a few percent, and does not settle `stencil`. Shifting the code
+before its loop by 0 to 63 bytes, as
+unrelated changes do between builds, moves it between 0.230 s and 0.265 s
+with 16-byte alignment (0.227-0.263 s without): its speed follows the
+loop's offset within a 64-byte line, which 16- and 32-byte alignment leave
+free. Only 64-byte alignment pins it (0.216-0.237 s over the same shifts,
+apart from one at 0.248 s), at the code size above, so the back end keeps LLVM's
+16 bytes; 64-byte loop alignment for this processor is left open.
