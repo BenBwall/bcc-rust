@@ -15,7 +15,9 @@
 //! are saved with `movaps` after the allocation (`.seh_savexmm`). A function
 //! whose stack moves sets `%rbp` to `%rsp` after the allocation
 //! (`.cfi_def_cfa_register`, `.seh_setframe %rbp, 0`) and its epilogue
-//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form.
+//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form. A
+//! System V leaf frame in the red zone (`frame.rs`) needs neither the `sub`
+//! nor the `add`, and its CFA stays where the pushes left it.
 //!
 //! Each function's read-only constants follow it in `.rodata` (`.rdata` on
 //! COFF), 16 bytes each so that `xorps` may read them.
@@ -261,6 +263,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     fn prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let size = frame.allocation();
         let mut cfa = 8;
         for &register in &frame.saved {
             writeln!(self.out, "\tpushq\t%{}", register.name(Width::B64))?;
@@ -276,23 +279,23 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "\t.seh_pushreg %{}", register.name(Width::B64))?;
             }
         }
-        if frame.size > 0 {
-            if !self.elf && frame.size >= 4096 {
+        if size > 0 {
+            if !self.elf && size >= 4096 {
                 let probe = if self.target == Target::WindowsMsvc {
                     "__chkstk"
                 } else {
                     "___chkstk_ms"
                 };
-                writeln!(self.out, "\tmovl\t${}, %eax", frame.size)?;
+                writeln!(self.out, "\tmovl\t${size}, %eax")?;
                 writeln!(self.out, "\tcallq\t{probe}")?;
                 writeln!(self.out, "\tsubq\t%rax, %rsp")?;
             } else {
-                writeln!(self.out, "\tsubq\t${}, %rsp", frame.size)?;
+                writeln!(self.out, "\tsubq\t${size}, %rsp")?;
             }
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_offset {}", frame.cfa_offset())?;
             } else {
-                writeln!(self.out, "\t.seh_stackalloc {}", frame.size)?;
+                writeln!(self.out, "\t.seh_stackalloc {size}")?;
             }
         }
         for &(register, offset) in &frame.saved_xmm {
@@ -318,6 +321,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     fn epilogue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let size = frame.allocation();
         if self.elf {
             writeln!(self.out, "\t.cfi_remember_state")?;
         }
@@ -331,14 +335,14 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             )?;
         }
         if frame.rbp_based {
-            writeln!(self.out, "\tleaq\t{}(%rbp), %rsp", frame.size)?;
-            cfa -= frame.size;
+            writeln!(self.out, "\tleaq\t{size}(%rbp), %rsp")?;
+            cfa -= size;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa %rsp, {cfa}")?;
             }
-        } else if frame.size > 0 {
-            writeln!(self.out, "\taddq\t${}, %rsp", frame.size)?;
-            cfa -= frame.size;
+        } else if size > 0 {
+            writeln!(self.out, "\taddq\t${size}, %rsp")?;
+            cfa -= size;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_offset {cfa}")?;
             }

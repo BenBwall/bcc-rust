@@ -58,6 +58,9 @@ pub(crate) struct MFunction<'a> {
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
     pub(crate) register_save:    bool,
+    /// The largest alignment an IR stack slot asks for; a slot aligned
+    /// above 16 bytes rounds its address up from `%rsp` at run time.
+    pub(crate) slot_align:       u64,
     /// A callee-saved register the prologue pushes first, written or not:
     /// `%rbp` when the function takes its frame address, so the caller's
     /// `%rbp` is where a frame pointer would save it.
@@ -85,6 +88,7 @@ impl<'a> MFunction<'a> {
             calls:            false,
             dynamic:          false,
             register_save:    false,
+            slot_align:       1,
             first_push:       None,
             indirect:         ArenaVec::new_in(arena),
             labels:           ArenaVec::new_in(arena),

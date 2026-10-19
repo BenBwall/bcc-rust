@@ -584,10 +584,14 @@ Microsoft "x64 stack usage": "The stack will always be maintained 16-byte
 aligned, except within the prolog"). Every call is made at that alignment.
 
 - **System V red zone.** A leaf function may use the 128 bytes below `%rsp`
-  without moving it (psABI §3.2.2). The back end still always moves `%rsp`;
-  using the red zone for small leaf frames is a stage 4 item left open (see
-  "Stage 4"), since it changes the prologue, the epilogue and the unwind
-  information that stage 5's object writer generates.
+  without moving it (psABI §3.2.2). A function whose frame below the pushes
+  is at most 128 bytes keeps it there, laid out as above but addressed
+  `size` bytes lower from the unmoved `%rsp`, with no `sub`/`add` and no
+  CFA change after the pushes, provided it makes no call (libcalls such as
+  `memmove` included), has no dynamic allocation or frame pointer, names
+  `%rsp` in no instruction (`stack_save`), has no `va_start` save area and
+  no slot aligned above 16. Win64 has no red zone ("x64 ABI conventions":
+  memory below `%rsp` is volatile), so its frames always move `%rsp`.
 - **Win64 shadow space.** A caller reserves 32 bytes above its outgoing
   arguments for the callee to home `%rcx`, `%rdx`, `%r8`, `%r9`; every
   function that calls reserves it, even for callees with fewer parameters
