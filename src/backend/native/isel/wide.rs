@@ -21,17 +21,18 @@
 use super::{
     Selector,
     ValueKind,
-    calls::Passed,
+    calls::{
+        LibArg,
+        LibResult,
+    },
     mask,
     sign_extend,
 };
 use crate::{
     backend::native::{
-        conv::ConvKind,
         mir::{
             AluOp,
             Base,
-            Callee,
             Cond,
             FrameObject,
             FrameSlotData,
@@ -42,7 +43,6 @@ use crate::{
             Reg,
             ShiftAmount,
             ShiftOp,
-            SymbolRef,
             UnaryOp,
             Width,
         },
@@ -428,6 +428,28 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// Loads a pair value of type `ty`: an `f80` as its eight significand
+    /// bytes and two sign and exponent bytes, which is all the IR's `f80`
+    /// load reads; an `i128` or `f128` as two eight-byte halves.
+    pub(super) fn pair_load(&mut self, ty: Type, dst: Halves, mem: Mem) {
+        if ty != Type::F80 {
+            self.wide_load(dst, mem);
+            return;
+        }
+        self.emit(MInst::Mov {
+            width: Width::B64,
+            dst:   dst.0,
+            src:   Operand::Mem(mem),
+        });
+        self.emit(MInst::Extend {
+            signed: false,
+            from:   Width::B16,
+            to:     Width::B32,
+            dst:    dst.1,
+            src:    Operand::Mem(Mem::new(mem.base, mem.disp + 8)),
+        });
+    }
+
     /// Loads an `i128` as two 8-byte halves.
     pub(super) fn wide_load(&mut self, dst: Halves, mem: Mem) {
         for (half, disp) in [(dst.0, 0), (dst.1, 8)] {
@@ -439,16 +461,22 @@ impl Selector<'_, '_, '_> {
         }
     }
 
-    /// Stores an `i128` as two 8-byte halves.
-    pub(super) fn wide_store(&mut self, value: Value, mem: Mem) {
+    /// Stores a pair value of type `ty`: ten bytes of an `f80`, sixteen of
+    /// an `i128` or `f128`.
+    pub(super) fn pair_store(&mut self, ty: Type, value: Value, mem: Mem) {
+        let high = if ty == Type::F80 {
+            Width::B16
+        } else {
+            Width::B64
+        };
         let halves = match self.kind(value) {
             | ValueKind::Wide(bits) => {
                 #[expect(
                     clippy::cast_possible_truncation,
                     reason = "The halves are split here."
                 )]
-                let halves = [bits as u64, (bits >> 64) as u64];
-                halves.map(|half| match super::immediate(half, Width::B64) {
+                let halves = [(bits as u64, Width::B64), ((bits >> 64) as u64, high)];
+                halves.map(|(half, width)| match super::immediate(half, width) {
                     | Some(imm) => Operand::Imm(imm),
                     | None => {
                         let reg = self.vreg();
@@ -462,9 +490,9 @@ impl Selector<'_, '_, '_> {
                 [Operand::Reg(low), Operand::Reg(high)]
             },
         };
-        for (src, disp) in halves.into_iter().zip([0, 8]) {
+        for ((src, disp), width) in halves.into_iter().zip([0, 8]).zip([Width::B64, high]) {
             self.emit(MInst::Store {
-                width: Width::B64,
+                width,
                 dst: Mem::new(mem.base, mem.disp + disp),
                 src,
             });
@@ -473,49 +501,15 @@ impl Selector<'_, '_, '_> {
 
     /// Calls a runtime `i128` division routine.
     fn wide_libcall(&mut self, name: &'static str, dst: Halves, a: Halves, b: Halves) {
-        let callee = Callee::Symbol(SymbolRef::Runtime(name));
-        match self.conv.kind {
-            | ConvKind::SystemV => {
-                self.call_sequence(
-                    callee,
-                    &[Passed::Pair(a.0, a.1), Passed::Pair(b.0, b.1)],
-                    false,
-                );
-                self.copy(dst.0, Reg::Phys(PReg::Rax));
-                self.copy(dst.1, Reg::Phys(PReg::Rdx));
-            },
-            | ConvKind::Win64 => {
-                let first = self.wide_temporary();
-                let second = self.wide_temporary();
-                let mut args = [Passed::Scalar(Operand::Imm(0)); 2];
-                for ((slot, value), arg) in [(first, a), (second, b)].into_iter().zip(&mut args) {
-                    for (half, disp) in [(value.0, 0), (value.1, 8)] {
-                        self.emit(MInst::Store {
-                            width: Width::B64,
-                            dst:   Mem::new(slot.base, disp),
-                            src:   Operand::Reg(half),
-                        });
-                    }
-                    let pointer = self.vreg();
-                    self.emit(MInst::Lea {
-                        dst:  pointer,
-                        addr: slot,
-                    });
-                    *arg = Passed::Scalar(Operand::Reg(pointer));
-                }
-                self.call_sequence(callee, &args, false);
-                self.emit(MInst::Move128 {
-                    load: false,
-                    reg:  Reg::Phys(PReg::Xmm0),
-                    mem:  first,
-                });
-                self.wide_load(dst, first);
-            },
-        }
+        self.libcall(
+            name,
+            &[LibArg::Wide(Type::I128, a), LibArg::Wide(Type::I128, b)],
+            LibResult::Wide(Type::I128, dst),
+        );
     }
 
     /// A fresh 16-byte, 16-aligned frame slot.
-    fn wide_temporary(&mut self) -> Mem {
+    pub(super) fn wide_temporary(&mut self) -> Mem {
         let slot = u32::try_from(self.func.slots.len()).expect("frame slots fit u32");
         self.func.slots.push(FrameSlotData {
             size:  16,

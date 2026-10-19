@@ -16,7 +16,14 @@ use super::{
     },
     sweep,
 };
-use crate::optimizer::Pass;
+use crate::{
+    abi::lower_abi,
+    backend::native::emit_assembly,
+    ir::parse_module,
+    optimizer::Pass,
+    target::Target,
+    util::bump::Bump,
+};
 
 /// The first seed of the default sweeps; any seed works.
 const DEFAULT_SEED: u64 = 0xBCC0_D1FF;
@@ -306,4 +313,130 @@ fn generated_conditions_exercise_combining() {
         combined >= 10,
         "{combined} of 50 programs combined a condition"
     );
+}
+
+/// Conversions between `i128` and `f32` or `f64`, which the generator does
+/// not write: the native back end calls the runtime's `__floattidf`,
+/// `__fixsfti` and their unsigned forms, and both arms must print what the
+/// interpreter prints.
+const WIDE_CONVERSIONS: &str = "\
+global @fmt_x internal constant size 5, align 1 = bytes \"5b25785d00\"
+function @printf(ptr, ...) -> i32 external
+
+function @show(i64) -> i32 internal {
+block0(v0: i64):
+    v1 = global_addr @fmt_x
+    v2 = trunc.i32 v0
+    v3 = call @printf(v1, v2)
+    v4 = iconst.i64 32
+    v5 = lshr.i64 v0, v4
+    v6 = trunc.i32 v5
+    v7 = call @printf(v1, v6)
+    return v7
+}
+
+function @show_wide(i128) -> i32 internal {
+block0(v0: i128):
+    v1 = trunc.i64 v0
+    v2 = call @show(v1)
+    v3 = iconst.i128 64
+    v4 = lshr.i128 v0, v3
+    v5 = trunc.i64 v4
+    v6 = call @show(v5)
+    return v6
+}
+
+function @convert(i128) -> i32 internal {
+block0(v0: i128):
+    v1 = sitofp.f64 v0
+    v2 = sitofp.f32 v0
+    v3 = bitcast.i64 v1
+    v4 = call @show(v3)
+    v5 = bitcast.i32 v2
+    v6 = zext.i64 v5
+    v7 = call @show(v6)
+    v8 = fptosi.i128 v1
+    v9 = call @show_wide(v8)
+    v10 = fptosi.i128 v2
+    v11 = call @show_wide(v10)
+    v12 = iconst.i128 0
+    v13 = icmp.i128 slt v0, v12
+    v14 = isub.i128 v12, v0
+    v15 = select.i128 v13, v14, v0
+    v16 = uitofp.f64 v15
+    v17 = uitofp.f32 v15
+    v18 = bitcast.i64 v16
+    v19 = call @show(v18)
+    v20 = fptoui.i128 v16
+    v21 = call @show_wide(v20)
+    v22 = fptoui.i128 v17
+    v23 = call @show_wide(v22)
+    return v23
+}
+
+function @main() -> i32 external {
+block0:
+    v0 = iconst.i128 0
+    v1 = call @convert(v0)
+    v2 = iconst.i128 -1000000007
+    v3 = call @convert(v2)
+    v4 = iconst.i128 1512366075204170929049582354406559215
+    v5 = call @convert(v4)
+    v6 = iconst.i128 -39614081257132168796771975169
+    v7 = call @convert(v6)
+    v8 = iconst.i128 9007199254740993
+    v9 = call @convert(v8)
+    v10 = iconst.i128 170141173319264429905852091742258462719
+    v11 = uitofp.f32 v10
+    v12 = fptoui.i128 v11
+    v13 = call @show_wide(v12)
+    v14 = iconst.i32 0
+    return v14
+}
+";
+
+/// The native back end accepts the conversions for every target once they
+/// are lowered for its ABI, and the host's executable prints what the
+/// interpreter prints. Win64 passes the `i128` to `__floattidf` and
+/// `__floattisf` by reference and receives it from `__fixdfti` in
+/// `%xmm0`.
+#[test]
+fn native_backend_matches_the_interpreter_on_wide_conversions() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let arena = Bump::new();
+        let mut module = parse_module(&arena, WIDE_CONVERSIONS).unwrap();
+        lower_abi(&mut module, target, &Bump::new()).unwrap();
+        let mut assembly = String::new();
+        emit_assembly(&module, target, &mut assembly)
+            .unwrap_or_else(|error| panic!("{target:?}: {error}"));
+        for routine in [
+            "__floattidf",
+            "__floattisf",
+            "__floatuntidf",
+            "__floatuntisf",
+            "__fixdfti",
+            "__fixsfti",
+            "__fixunsdfti",
+            "__fixunssfti",
+        ] {
+            assert!(
+                assembly.contains(routine),
+                "{target:?} does not call {routine}:\n{assembly}"
+            );
+        }
+    }
+    let reference = super::oracle::Reference {
+        seed:        0,
+        text:        WIDE_CONVERSIONS.to_string(),
+        observation: observe_text(WIDE_CONVERSIONS),
+        rewrites:    0,
+    };
+    assert!(
+        reference.observation.result.is_ok(),
+        "{:?}",
+        reference.observation
+    );
+    let (failures, refused) = check_native_backend(&[reference]);
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    assert_eq!(refused, 0, "the native back end refused the conversions");
 }

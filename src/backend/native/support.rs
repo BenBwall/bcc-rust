@@ -4,10 +4,11 @@
 //! compiled in part or wrongly.
 //!
 //! The back end (see `docs/design/native-backend.md`) compiles integer,
-//! pointer, `i128`, `f32` and `f64` code, variadic definitions and dynamic
-//! stack allocation. It refuses `f80` and `f128` values, `i128` bit counts,
-//! byte swaps, float conversions and `switch`es, `i128` values where Win64
-//! passes them only by reference, stack objects aligned above 16 bytes,
+//! pointer, `i128`, `f32`, `f64`, `f80` and `f128` code, variadic
+//! definitions and dynamic stack allocation. It refuses `i128` bit counts,
+//! byte swaps and `switch`es, `i128` values where Win64 passes them only by
+//! reference, structure results in register combinations other than the
+//! ones System V and Win64 define, stack arguments aligned above 16 bytes,
 //! stack argument areas whose offsets would leave a 32-bit displacement,
 //! thread-local globals in named sections, and calls to functions that may
 //! return twice.
@@ -111,15 +112,13 @@ impl Checker<'_, '_> {
     /// slots, and every instruction and call signature.
     fn function(&self, function: &Function<'_>, body: &Body<'_>) -> Result<(), Construct> {
         self.signature(self.module.signature(function.signature))?;
-        for index in 0..body.value_count() {
-            scalar(body.value_type(crate::ir::Entity::new(index)))?;
-        }
         let mut frame = 0_u64;
         for (_, slot) in body.stack_slots() {
-            if slot.align.bytes() > 16 {
-                return Err(Construct::SlotAlignment(slot.align.bytes()));
-            }
-            frame += u64::from(slot.size).next_multiple_of(slot.align.bytes());
+            // An over-aligned object takes `align - 16` spare bytes.
+            let align = slot.align.bytes();
+            let spare = align.saturating_sub(16);
+            frame = frame
+                .saturating_add((u64::from(slot.size) + spare).next_multiple_of(align.min(16)));
         }
         if frame > MAX_FRAME_BYTES {
             return Err(Construct::FrameSize(frame));
@@ -148,12 +147,6 @@ impl Checker<'_, '_> {
                 ty: Type::I1 | Type::I128,
                 ..
             } if opcode.is_bit_unary() => Err(Construct::Opcode(opcode)),
-            | InstData::Unary { ty, arg, .. }
-                if matches!(
-                    opcode,
-                    Opcode::Sitofp | Opcode::Uitofp | Opcode::Fptosi | Opcode::Fptoui
-                ) && (ty == Type::I128 || wide(arg)) =>
-                Err(Construct::WideConversion(opcode)),
             | InstData::Switch { value, .. } if wide(value) => Err(Construct::WideSwitch),
             | InstData::Unary { .. } if opcode == Opcode::VaArg => Err(Construct::Opcode(opcode)),
             | InstData::Atomic { .. }
@@ -188,7 +181,6 @@ impl Checker<'_, '_> {
     /// the copies, as [`MAX_FRAME_BYTES`] keeps a frame.
     fn signature(&self, signature: Signature<'_>) -> Result<(), Construct> {
         for &ty in signature.params.iter().chain(signature.result.iter()) {
-            scalar(ty)?;
             if ty == Type::I128 && self.win64 {
                 return Err(Construct::WideByValue);
             }
@@ -209,9 +201,14 @@ impl Checker<'_, '_> {
                 | ParamAbi::Registers(registers) if registers.align.bytes() > 16 =>
                     return Err(Construct::SlotAlignment(registers.align.bytes())),
                 | ParamAbi::Sret(_) | ParamAbi::ByVal(_) | ParamAbi::Indirect(_) => {},
-                // Win64's `__int128` result in `%xmm0`.
+                // Win64's `__int128` result and System V's `__float128` one
+                // in `%xmm0`, and System V's `long double` in `%st0`, or a
+                // complex one in `%st0` and `%st1`.
                 | ParamAbi::Registers(registers)
-                    if registers.first == Type::I128 && registers.second.is_none() => {},
+                    if matches!(registers.first, Type::I128 | Type::F128 | Type::F80)
+                        && registers.second.is_none() => {},
+                | ParamAbi::Registers(registers)
+                    if registers.first == Type::F80 && registers.second == Some(Type::F80) => {},
                 | ParamAbi::Registers(registers) =>
                     for ty in registers.types() {
                         if !matches!(
@@ -243,28 +240,11 @@ impl Checker<'_, '_> {
     ) -> Result<(), Construct> {
         for &arg in args.get(signature.params.len()..).unwrap_or_default() {
             let ty = body.value_type(arg);
-            scalar(ty)?;
             if ty == Type::I128 && self.win64 {
                 return Err(Construct::WideByValue);
             }
         }
         Ok(())
-    }
-}
-
-/// Whether the back end handles values of `ty`.
-fn scalar(ty: Type) -> Result<(), Construct> {
-    match ty {
-        | Type::I1
-        | Type::I8
-        | Type::I16
-        | Type::I32
-        | Type::I64
-        | Type::I128
-        | Type::Ptr
-        | Type::F32
-        | Type::F64 => Ok(()),
-        | Type::F80 | Type::F128 => Err(Construct::Type(ty)),
     }
 }
 
@@ -295,17 +275,17 @@ pub(crate) struct Unsupported<'m> {
 /// What is not supported.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Construct {
-    /// Values of this type (`f80` and `f128`).
+    /// Memory accesses of this type (`i1`).
     Type(Type),
     Opcode(Opcode),
-    /// A conversion between `i128` and a float.
-    WideConversion(Opcode),
     /// A `switch` on an `i128`.
     WideSwitch,
     /// A Win64 `i128` passed by value.
     WideByValue,
     /// A structure result returned in registers of this type.
     RegisterResult(Type),
+    /// A stack argument or return area aligned above 16 bytes, which the
+    /// caller's 16-byte-aligned stack cannot place without realigning it.
     SlotAlignment(u64),
     FrameSize(u64),
     /// Stack arguments, chiefly `byval` structures, of this many bytes.
@@ -332,14 +312,12 @@ impl fmt::Display for Unsupported<'_> {
         match self.construct {
             | Construct::Type(ty) => write!(f, "{ty} values")?,
             | Construct::Opcode(opcode) => write!(f, "the `{opcode}` instruction")?,
-            | Construct::WideConversion(opcode) =>
-                write!(f, "the `{opcode}` instruction between i128 and a float")?,
             | Construct::WideSwitch => write!(f, "a switch on an i128 value")?,
             | Construct::WideByValue => write!(f, "an i128 passed by value on Win64")?,
             | Construct::RegisterResult(ty) =>
                 write!(f, "a structure result returned in an {ty} register")?,
             | Construct::SlotAlignment(align) =>
-                write!(f, "a stack object aligned to {align} bytes")?,
+                write!(f, "a stack argument aligned to {align} bytes")?,
             | Construct::FrameSize(bytes) => write!(f, "a {bytes}-byte stack frame")?,
             | Construct::ArgumentArea(bytes) => write!(f, "{bytes} bytes of stack arguments")?,
             | Construct::SymbolName => write!(f, "a symbol name with quotes or controls")?,
