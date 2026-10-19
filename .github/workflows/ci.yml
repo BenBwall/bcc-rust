@@ -48,12 +48,15 @@ jobs:
       key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v5
+      # The installation depends only on the pinned Rust revision (which pins
+      # LLVM), the CMake configuration in build_support/llvm/tools.rs, and
+      # the toolchain, whose LLVM version the installation stamp records.
       - name: Compute cache key
         id: key
         run: |
           rust=$(git rev-parse HEAD:vendor/rust)
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "key=llvm-${{ runner.os }}-$rust-${{ hashFiles('build_support/llvm.rs', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
+          echo "key=llvm-${{ runner.os }}-$rust-${{ hashFiles('build_support/llvm/tools.rs', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
       - name: Restore LLVM installation
         id: cache
         uses: actions/cache/restore@v4
