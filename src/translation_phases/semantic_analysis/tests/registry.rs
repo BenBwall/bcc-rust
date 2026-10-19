@@ -8,7 +8,6 @@ use crate::target::Target;
 fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
     use crate::builtins::{
         NamingPolicy,
-        SyntaxForm,
         lookup,
     };
     let mut source = String::new();
@@ -25,9 +24,6 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             usize::from(advertised)
         )
         .unwrap();
-        if descriptor.syntax == SyntaxForm::OrdinaryCall {
-            assert_eq!(named_builtin(descriptor.spelling), advertised);
-        }
         for suffix in ["x", "lll", "_bad"] {
             let spelling = format!("{}{suffix}", descriptor.spelling);
             // A suffix can form another exact builtin, such as fma + x = fmax.
@@ -43,7 +39,7 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             .unwrap();
         }
     }
-    assert_eq!(ids.len(), 369);
+    assert_eq!(ids.len(), 775);
     source.push_str("int following;\n");
     for target in [
         Target::LinuxGnu,
@@ -235,7 +231,7 @@ fn m4_adjusted_sysv_varargs_parameters_retain_pointer_evaluation() {
 }
 
 #[test]
-fn m4_binding_origins_keep_implicit_and_m6_opaque_calls_distinct() {
+fn binding_origins_keep_implicit_registered_and_opaque_calls_distinct() {
     with_configuration(
         "int f(void){(void)__atomic_always_lock_free(4,0);
         (void)__builtin_classify_type(0);(void)__builtin_M4_unknown();return external();}",
@@ -247,7 +243,10 @@ fn m4_binding_origins_keep_implicit_and_m6_opaque_calls_distinct() {
                     "__atomic_always_lock_free",
                     BindingOrigin::Intrinsic(crate::builtins::BuiltinId::AtomicGnuAlwaysLockFree),
                 ),
-                ("__builtin_classify_type", BindingOrigin::LegacyIntrinsic),
+                (
+                    "__builtin_classify_type",
+                    BindingOrigin::Intrinsic(crate::builtins::BuiltinId::ClassifyType),
+                ),
                 ("__builtin_M4_unknown", BindingOrigin::OpaqueIntrinsic),
                 ("external", BindingOrigin::ImplicitOrdinary),
             ] {
@@ -340,5 +339,215 @@ fn m4_registry_preserves_baseline_semantic_types_on_every_target() {
         assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
         let arena = Bump::new();
         assert_eq!(unit.inspect(&context, &arena), expected, "{target:?}");
+    }
+}
+
+#[test]
+fn m6_family_descriptors_retain_no_instance_and_keep_their_contracts() {
+    use crate::builtins::{
+        BuiltinOperation as B,
+        ConstantConstraint,
+        SignatureType,
+        SyntaxForm,
+        TypeRule,
+    };
+    let mut x86 = 0;
+    let mut immediates = 0;
+    for descriptor in crate::builtins::test_descriptors() {
+        let family = matches!(
+            descriptor.type_rule,
+            TypeRule::X86Signature
+                | TypeRule::VectorShuffle
+                | TypeRule::VectorOverload(_)
+                | TypeRule::ConvertVector
+                | TypeRule::BitCast
+                | TypeRule::TypesCompatible
+                | TypeRule::ChooseExpr
+                | TypeRule::TypeClassify
+                | TypeRule::Math128(_)
+        );
+        assert_eq!(
+            family,
+            matches!(descriptor.operation, B::Semantic(_) | B::Unsupported(_)),
+            "{}",
+            descriptor.spelling
+        );
+        assert_eq!(
+            family,
+            !descriptor.operation.retains_instance(),
+            "{}",
+            descriptor.spelling
+        );
+        if descriptor.type_rule == TypeRule::X86Signature {
+            x86 += 1;
+            assert!(descriptor.spelling.starts_with("__builtin_ia32_"));
+            assert!(descriptor.signature.prototype && !descriptor.signature.variadic);
+            let count = descriptor.signature.parameters.len();
+            assert_eq!(descriptor.arguments.len(), count);
+            assert_eq!(descriptor.arity, (count, count));
+            immediates += usize::from(
+                descriptor
+                    .arguments
+                    .iter()
+                    .any(|rule| matches!(rule.constraint, ConstantConstraint::Immediate(..))),
+            );
+        } else if family {
+            assert_eq!(descriptor.signature.result, SignatureType::Opaque);
+            assert_eq!(descriptor.syntax == SyntaxForm::OrdinaryCall, {
+                !matches!(
+                    descriptor.type_rule,
+                    TypeRule::ConvertVector
+                        | TypeRule::BitCast
+                        | TypeRule::TypesCompatible
+                        | TypeRule::ChooseExpr
+                )
+            });
+        }
+    }
+    assert_eq!((x86, immediates), (384, 111));
+}
+
+/// The generated x86 shard merges header calls that name a scalar spelling;
+/// the scalar descriptor must have the signature Clang verified.
+#[test]
+fn m6_merged_x86_spellings_agree_with_their_scalar_descriptor() {
+    use crate::{
+        builtins::{
+            BuiltinOperation,
+            SignatureType as T,
+        },
+        target::Scalar as S,
+    };
+    for &(spelling, encoding) in crate::builtins::test_merged_x86 {
+        let descriptor = crate::builtins::lookup(spelling).unwrap();
+        assert!(matches!(descriptor.operation, BuiltinOperation::Bit(..)));
+        let code = |pattern| match pattern {
+            | T::Scalar(S::Int) => "i",
+            | T::Scalar(S::UnsignedInt) => "I",
+            | T::Scalar(S::UnsignedLongLong) => "Q",
+            | other => panic!("{spelling}: {other:?}"),
+        };
+        let signature = descriptor.signature;
+        let mut codes = vec![code(signature.result)];
+        codes.extend(
+            signature
+                .parameters
+                .iter()
+                .map(|&parameter| code(parameter)),
+        );
+        assert!(signature.prototype && !signature.variadic);
+        assert_eq!(codes.join(","), encoding, "{spelling}");
+    }
+}
+
+/// Every builtin, atomic or keyword spelling a resource header names is
+/// registered, so no header call falls back to an opaque binding.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Header discovery and loading are outside compiler allocation measurements."
+)]
+fn m6_every_resource_header_builtin_is_registered() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/headers");
+    let mut pending = vec![directory];
+    let mut checked = 0;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "h") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (start, _) in text.match_indices("__") {
+                let rest = &text[start..];
+                let end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                let word = &rest[..end];
+                if start > 0
+                    && text[..start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    continue;
+                }
+                if !["__builtin_", "__atomic_", "__sync_"]
+                    .iter()
+                    .any(|prefix| word.starts_with(prefix))
+                    || word == "__builtin_va_list"
+                {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    crate::builtins::lookup(word).is_some(),
+                    "{}: {word}",
+                    path.display()
+                );
+            }
+        }
+    }
+    assert!(checked > 400, "{checked}");
+}
+
+/// x86 signatures use only fixed-width scalars, so every target projects
+/// the same types; vectors are aligned to their size.
+#[test]
+fn m6_x86_signatures_project_identically_on_every_target() {
+    let mut source = String::from("void f(void){\n");
+    for descriptor in crate::builtins::test_descriptors() {
+        if descriptor.type_rule == crate::builtins::TypeRule::X86Signature {
+            writeln!(source, "(void)sizeof({});", descriptor.spelling).unwrap();
+        }
+    }
+    source.push('}');
+    let mut expected: Option<Vec<String>> = None;
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        with_configuration(
+            &source,
+            crate::configuration::CompilerConfiguration::default()
+                .with_gnu_extensions(true)
+                .with_target(target),
+            |context, unit| {
+                let mut types = Vec::new();
+                for binding in unit.bindings {
+                    let name = context.string_cache.at(binding.name.name);
+                    if !name.starts_with("__builtin_ia32_") {
+                        continue;
+                    }
+                    let TypeKind::Function {
+                        result, parameters, ..
+                    } = unit.types.nodes[binding.ty.index]
+                    else {
+                        panic!("{name}");
+                    };
+                    for &ty in std::iter::once(&result).chain(parameters) {
+                        if let TypeKind::Vector { count, align, .. } = unit.types.nodes[ty.index] {
+                            assert_eq!(unit.types.layout(ty).unwrap().size, align);
+                            assert!(count.is_power_of_two());
+                        }
+                    }
+                    types.push(format!(
+                        "{name} {}",
+                        builtin_names::spell(unit, context, binding.ty)
+                    ));
+                }
+                assert_eq!(types.len(), 384);
+                match &expected {
+                    | Some(expected) => assert_eq!(&types, expected, "{target:?}"),
+                    | None => expected = Some(types),
+                }
+            },
+        );
     }
 }

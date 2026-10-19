@@ -16,10 +16,7 @@ use crate::{
         SourceVectors,
         parsing::{
             declaration_syntax::TypeQualifiers,
-            syntax::{
-                Expression,
-                ExpressionType,
-            },
+            syntax::Expression,
         },
         semantic_analysis::{
             Analyzer,
@@ -50,23 +47,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(in crate::translation_phases::semantic_analysis) fn atomic_call(
         &mut self,
         e: &'tu Expression<'tu>,
-        callee: &'tu Expression<'tu>,
+        builtin: crate::builtins::AtomicBuiltin,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
-    ) -> Option<ExpressionInfo<'tu>> {
+    ) -> ExpressionInfo<'tu> {
         use Operation as O;
-        let callee = self.selected_designator(callee);
-        let ExpressionType::Identifier(name) = callee.kind else {
-            return None;
-        };
-        // C99 §6.5.2.2p1: shadowing bindings use ordinary call typing.
-        if !self
-            .expression_info(callee)
-            .binding
-            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
-        {
-            return None;
-        }
-        let builtin = intrinsic(self.context.string_cache.at(name.name))?;
         let operation = builtin.operation;
         let args = arguments.as_slice();
         if args.len() < builtin.count
@@ -79,14 +63,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             );
-            return Some(Self::expression_result(e, self.types.unknown()));
+            return Self::expression_result(e, self.types.unknown());
         }
         let mut result = self.types.scalar(Scalar::Void);
         if matches!(operation, O::ThreadFence | O::SignalFence) {
             if builtin.count != 0 {
                 self.atomic_integer_argument(args[0]);
             }
-            return Some(Self::expression_result(e, result));
+            return Self::expression_result(e, result);
         }
         if matches!(operation, O::AlwaysLockFree | O::IsLockFree) {
             let size_type = self.types.scalar(self.types.target.size_t);
@@ -133,12 +117,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             }
-            return Some(info);
+            return info;
         }
         let address = self.expression_info(args[0]);
         let address_ty = self.converted(address);
         if self.types.unanalyzed(address_ty) {
-            return Some(Self::expression_result(e, self.types.unknown()));
+            return Self::expression_result(e, self.types.unknown());
         }
         let TypeKind::Pointer(object) = self.types.nodes[address_ty.index] else {
             self.error(
@@ -147,7 +131,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             );
-            return Some(Self::expression_result(e, self.types.unknown()));
+            return Self::expression_result(e, self.types.unknown());
         };
         let atomic = matches!(self.types.nodes[object.index], TypeKind::Atomic(_));
         let value = self.types.non_atomic(object).unqualified();
@@ -194,7 +178,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             );
-            return Some(Self::expression_result(e, self.types.unknown()));
+            return Self::expression_result(e, self.types.unknown());
         }
         // Generic GNU operands and compare-exchange expected values are
         // pointer parameters; ordinary values use assignment conversion.
@@ -259,7 +243,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut info = Self::expression_result(e, result);
         info.operation_type = Some(object);
-        Some(info)
+        info
     }
 
     /// Applies the integer parameter conversion for an atomic order or size.
@@ -390,15 +374,4 @@ impl Analyzer<'_, '_, '_> {
                 .qualified(value.qualifiers)
         }
     }
-}
-
-/// Recognition follows the neutral registry.
-fn intrinsic(name: &str) -> Option<crate::builtins::AtomicBuiltin> {
-    match crate::builtins::lookup(name)?.operation {
-        | crate::builtins::BuiltinOperation::Atomic(atomic) => Some(atomic),
-        | _ => None,
-    }
-}
-pub(crate) fn modeled(name: &str) -> bool {
-    intrinsic(name).is_some()
 }

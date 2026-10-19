@@ -95,10 +95,6 @@ mod inspection;
 use std::cell::Cell;
 
 pub(crate) use attributes::clang_attribute_version;
-pub(crate) use builtins::{
-    implemented_builtin,
-    named_builtin,
-};
 use collection::Collection;
 pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;

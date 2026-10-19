@@ -50,8 +50,10 @@ use crate::{
 };
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
-    /// Only type-generic/vector special forms retain the explicit M6 syntax
-    /// bridge. C99: §7.15.1, pp. 249-251; PDF pp. 261-263.
+    /// Varargs and offsetof keyword forms execute their checked instance;
+    /// `choose_expr` evaluates its retained selection. The other type-generic
+    /// and vector forms are unsupported. C99: §7.15.1, pp. 249-251;
+    /// PDF pp. 261-263.
     pub(super) fn schedule_keyword(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -187,7 +189,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
     }
 
-    /// Dispatch only the semantic instance; M6 families have no instance yet.
+    /// Dispatch only the semantic instance. Semantic-only and unsupported
+    /// family operations retain none and continue as unsupported calls.
     pub(super) fn schedule_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -206,14 +209,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.unit.sema.bindings[binding]
                     .origin
                     .descriptor()
-                    .is_some()
+                    .is_some_and(|descriptor| descriptor.operation.retains_instance())
             }) {
                 return Err(LoweringError::missing(
                     "checked named builtin is not retained",
                     e.source_vectors,
                 ));
             }
-            return Ok(false); // Explicit temporary M6/opaque-reserved bridge.
+            return Ok(false); // A family or opaque reserved builtin.
         };
         if matches!(
             instance.operation,
@@ -312,6 +315,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Varargs(_) | CommonBuiltin::Library | CommonBuiltin::Offsetof =>
                 return Err(LoweringError::missing(
                     "varargs must use keyword scheduling",
+                    source,
+                )),
+            | CommonBuiltin::Semantic(_) | CommonBuiltin::Unsupported(_) =>
+                return Err(LoweringError::missing(
+                    "family builtins retain no checked instance",
                     source,
                 )),
             | CommonBuiltin::Complex => {
