@@ -789,6 +789,102 @@ int main(void) {
     return first != 91 || buffer[13] != 13;
 }"#,
     },
+    Program {
+        // Every instruction form the selector makes, with its operands
+        // among more values live into the targets of an indirect jump than
+        // there are registers of either class: indexed stores, loads and
+        // `lea`s of every width, SSE loads and stores, `i128` pairs, shifts
+        // by `%cl` (`shld` too), division, the `imul` forms, `cmov`, bit
+        // scans, `setcc`, `bswap`, `neg`, `test`, `ucomisd` and the
+        // conversions, inline copies and fills, an indirect call and a
+        // variadic one. The end-to-end tests also run it with every value
+        // spilled.
+        name:   "every_form_across_an_indirect_jump",
+        source: r#"int printf(const char *, ...);
+volatile unsigned long long in[32];
+unsigned long long q[64];
+unsigned w32[64];
+unsigned short w16[64];
+signed char w8[64];
+double wd[64];
+float wf[64];
+unsigned __int128 wq[16];
+struct S { long long a, b, c; } ws[8];
+unsigned long long *volatile qp = q;
+unsigned long long *volatile kept;
+static unsigned long long add3(unsigned long long a, unsigned long long b, unsigned long long c) {
+    return a * 3 + b * 5 + c;
+}
+unsigned long long (*volatile fp)(unsigned long long, unsigned long long, unsigned long long) = add3;
+#define A(n) unsigned long long a##n = in[n];
+#define D(n) double d##n = (double)(a##n & 0xffff) + 0.5;
+static unsigned long long run(int sel) {
+    A(0) A(1) A(2) A(3) A(4) A(5) A(6) A(7) A(8) A(9) A(10) A(11) A(12) A(13) A(14) A(15)
+    A(16) A(17) A(18) A(19) A(20) A(21) A(22) A(23) A(24) A(25) A(26) A(27)
+    D(0) D(1) D(2) D(3) D(4) D(5) D(6) D(7) D(8) D(9) D(10) D(11) D(12) D(13) D(14) D(15)
+    unsigned long long *p = qp;
+    unsigned long long r = 0;
+    void *t = sel == 0 ? &&L0 : sel == 1 ? &&L1 : &&L2;
+    goto *t;
+L0:
+    p[a0 & 63] = a1;
+    w32[a2 & 63] = (unsigned)a3;
+    w16[a4 & 63] = (unsigned short)a5;
+    w8[a6 & 63] = (signed char)a7;
+    r += p[a8 & 63] + w32[a9 & 63] + w16[a10 & 63] + (unsigned long long)w8[a11 & 63];
+    kept = &p[a12 & 63];
+    wd[a13 & 63] = d0;
+    wf[a14 & 63] = (float)d1;
+    r += (unsigned long long)(wd[a15 & 63] + wf[a16 & 63]);
+    p[(a17 & 31) * 2] += a18;
+    r += p[a19 & 63] < a20 ? 1 : 3;
+    goto End;
+L1:
+    wq[a20 & 15] = (unsigned __int128)a21 * a22;
+    r += (unsigned long long)(wq[a23 & 15] >> 64) + (unsigned long long)wq[a24 & 15];
+    r += (unsigned long long)(((unsigned __int128)a25 << (a26 & 127)) >> 64);
+    r += (unsigned long long)(((unsigned __int128)a1 << 64 | a2) >> (a3 & 127));
+    r += a27 << (a0 & 63) ^ a1 >> (a2 & 63) ^ (unsigned long long)((long long)a3 >> (a4 & 63));
+    r += a5 / (a6 | 1) + a7 % (a8 | 1);
+    r += (unsigned long long)((long long)a9 / ((long long)(a10 & 0xff) + 1));
+    r += (unsigned long long)((long long)a11 % ((long long)(a12 & 0xff) - 300));
+    r += (unsigned)a13 / ((unsigned)a14 | 1) + (unsigned)a15 % ((unsigned)a16 | 1);
+    ws[a13 & 7] = ws[a14 & 7];
+    __builtin_memset(&ws[a15 & 7], (int)a16, sizeof(struct S));
+    goto End;
+L2:
+    r += a17 * 1000003 + a18 * a19;
+    r += a20 < a21 ? a22 : a23;
+    r += (unsigned long long)__builtin_clzll(a24 | 1) + (unsigned long long)__builtin_ctzll(a25 | 0x100)
+        + (unsigned long long)__builtin_popcountll(a26);
+    r += (a27 == a0) + (a1 < a2) + ((long long)a3 > (long long)a4);
+    r += __builtin_bswap64(a5) ^ -a6;
+    r += (a7 & a8) ? 1 : 2;
+    r += (unsigned long long)(long long)(d2 * d3 - d4) + (d5 < d6) + (d7 == d8);
+    r += (unsigned long long)(double)(long long)(a9 >> 12);
+    r += fp(a9, a10, a11);
+    r += (unsigned)(a12 + a13) + (unsigned)a14 * 3u;
+    printf("%llu %llu %lld\n", a15, a16, (long long)(d9 * 10));
+    goto End;
+End:
+    return r + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14
+        + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25 + a26 + a27
+        + (unsigned long long)(d0 + d1 + d2 + d3 + d4 + d5 + d6 + d7 + d8 + d9 + d10 + d11
+                               + d12 + d13 + d14 + d15);
+}
+int main(void) {
+    for (int i = 0; i < 32; i++) in[i] = (unsigned long long)i * 0x9E3779B97F4A7C15ULL + i;
+    unsigned long long h = 0;
+    for (int sel = 0; sel < 3; sel++) h = h * 31 + run(sel);
+    for (int i = 0; i < 64; i++)
+        h = h * 33 + q[i] + w32[i] + w16[i] + (unsigned long long)w8[i]
+            + (unsigned long long)(long long)(wd[i] + wf[i]);
+    for (int i = 0; i < 8; i++) h = h * 7 + (unsigned long long)ws[i].a + (unsigned long long)ws[i].b + (unsigned long long)ws[i].c;
+    for (int i = 0; i < 16; i++) h = h * 5 + (unsigned long long)wq[i] + (unsigned long long)(wq[i] >> 64);
+    printf("%llu %d\n", h, (int)(kept - q));
+    return (int)(h & 0x7f);
+}"#,
+    },
 ];
 
 /// Programs with `long double` values, which the interpreter does not
@@ -1001,6 +1097,47 @@ int main(void) {
         unsigned r8 = i < 2 ? u8(narrow[i]) : 0;
         printf("%u %u %u %d\n", r32, r16, r8, fetestexcept(invalid) != 0);
     }
+    return 0;
+}"#,
+    },
+    Program {
+        // x87 loads and stores through indexed addresses whose base and
+        // index are among more values live into the targets of an indirect
+        // jump than there are registers.
+        name:   "long_double_across_an_indirect_jump",
+        source: r#"int printf(const char *, ...);
+typedef long double ld;
+volatile unsigned long long in[20];
+ld wl[16];
+ld *volatile lp = wl;
+#define A(n) unsigned long long a##n = in[n];
+static unsigned long long run(int sel) {
+    A(0) A(1) A(2) A(3) A(4) A(5) A(6) A(7) A(8) A(9) A(10) A(11) A(12) A(13) A(14) A(15)
+    ld *p = lp;
+    unsigned long long r = 0;
+    void *t = sel ? &&L1 : &&L0;
+    goto *t;
+L0: p[a0 & 15] = (ld)(a1 >> 2) / 3;
+    wl[a2 & 15] = (ld)a3 * 0.25L;
+    r += (unsigned long long)(p[a4 & 15] + wl[a5 & 15]);
+    goto End;
+L1: p[a6 & 15] = p[a7 & 15] * 2 + (ld)a8;
+    r += (unsigned long long)(long long)(wl[a9 & 15] - (ld)(a10 & 0xffff));
+    goto End;
+End:
+    return r + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14
+        + a15;
+}
+int main(void) {
+    for (int i = 0; i < 20; i++) in[i] = (unsigned long long)i * 0x10001ULL + 3;
+    unsigned long long h = run(0);
+    h = h * 31 + run(1);
+    for (int i = 0; i < 16; i++) {
+        unsigned long long words[2] = { 0, 0 };
+        __builtin_memcpy(words, &wl[i], 10);
+        h = h * 33 + words[0] + (words[1] & 0xffff);
+    }
+    printf("%llu\n", h);
     return 0;
 }"#,
     },

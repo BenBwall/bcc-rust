@@ -812,3 +812,42 @@ fn an_inserted_lea_with_a_displacement_is_not_a_move() {
     .expect_err("only a plain sum is an address");
     assert!(matches!(error.kind, ErrorKind::NotAMove), "{error}");
 }
+
+/// An unsigned 64-bit conversion picks its 2^63 adjustment with a `cmov`
+/// that reads the flags of the comparison before it, so whatever the
+/// allocation puts between the two, reloads included, must leave the flags
+/// alone: only moves.
+#[test]
+fn the_flags_of_a_conversion_compare_reach_its_cmov_when_spilled() {
+    let ir = "abi lowered
+function @from_wide(ptr) -> i64 external {
+block0(v0: ptr):
+    v1 = load.f80 v0, align 16
+    v2 = fptoui.i64 v1
+    return v2
+}
+function @from_double(f64) -> i64 external {
+block0(v0: f64):
+    v1 = fptoui.i64 v0
+    return v1
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for text in [assembly(ir, target), spilled(ir, target)] {
+            for (name, compare, pick) in [
+                ("from_wide", "\tfucomip\t", "\tcmovbeq\t"),
+                ("from_double", "\tucomisd\t", "\tcmovaeq\t"),
+            ] {
+                let f = function_text(&text, name);
+                let from = f.find(compare).unwrap_or_else(|| panic!("{f}"));
+                let to = from + f[from..].find(pick).unwrap_or_else(|| panic!("{f}"));
+                for line in f[from..to].lines().skip(1) {
+                    assert!(
+                        line.starts_with("\tmov"),
+                        "{name}, {target:?}: {line:?} between the compare and the pick:\n{f}"
+                    );
+                }
+            }
+        }
+    }
+}
