@@ -141,7 +141,9 @@ mod tests {
                 assert!(!output.status.success(), "{source}: {stderr}");
                 if bcc {
                     assert!(
-                        stderr.contains("error: static-storage initializer requires a constant expression"),
+                        stderr.contains(
+                            "error: static-storage initializer requires a constant expression"
+                        ),
                         "{source}: {stderr}"
                     );
                     let column = if initializer == "*ip" { 10 } else { 17 };
