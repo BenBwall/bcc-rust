@@ -541,6 +541,176 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
         std::fs::remove_file(source_path).unwrap();
     }
 
+    /// MSVC `__forceinline` matches the pinned Clang's linkage, symbols and
+    /// inline control before LLVM's passes (#89): `linkonce_odr`, or
+    /// `weak_odr` with `extern`, on MSVC; on GNU targets a C99 inline
+    /// definition, which Clang emits `available_externally` and bcc as an
+    /// external declaration whose direct calls reach a private
+    /// `.always_inline` copy. `noinline` prevails over it. bcc's optimizer
+    /// then expands every direct call of a `__forceinline` function.
+    #[test]
+    fn forceinline_linkage_and_inlining_match_clang() {
+        const SOURCES: [(&str, &str); 2] = [
+            (
+                "specifiers",
+                "__forceinline int k(int x) { return x; } static __forceinline int s(int x) { \
+                 return x + 1; } extern __forceinline int e(int x) { return x + 2; } \
+                 __forceinline int unused(int x) { return x + 3; } static __forceinline int \
+                 sunused(int x) { return x + 4; } extern __forceinline int eunused(int x) { \
+                 return x + 5; } int u(int x) { return k(x) + s(x) + e(x); } int (*p)(int) = k; \
+                 int (*q)(int) = s; int (*r)(int) = e;",
+            ),
+            (
+                "redeclarations",
+                "__forceinline __attribute__((noinline)) int n1(int x) { return x; } \
+                 __attribute__((noinline)) __forceinline int n2(int x) { return x; } \
+                 __forceinline int d1(int x); int d1(int x) { return x; } int d2(int x); \
+                 __forceinline int d2(int x) { return x; } __forceinline int d3(int x); \
+                 __forceinline int d3(int x) { return x; } int u(int x) { return n1(x) + n2(x) + \
+                 d1(x) + d2(x) + d3(x); }",
+            ),
+        ];
+        let clang = clang();
+        let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/forceinline.c");
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-w64-windows-gnu",
+            "x86_64-pc-windows-msvc",
+        ] {
+            let target_flag = format!("--target={target}");
+            for (name, source) in SOURCES {
+                std::fs::write(&source_path, source).unwrap();
+                let reference = Command::new(&clang)
+                    .arg(&target_flag)
+                    .args([
+                        "-S",
+                        "-emit-llvm",
+                        "-O0",
+                        "-Xclang",
+                        "-disable-llvm-passes",
+                        "-fms-extensions",
+                        "-std=c17",
+                        "-o",
+                        "-",
+                    ])
+                    .arg(&source_path)
+                    .output()
+                    .unwrap();
+                assert!(
+                    reference.status.success(),
+                    "{target} {name}: {}",
+                    String::from_utf8_lossy(&reference.stderr)
+                );
+                let flags = ["--emit=llvm", "-fms-extensions", &target_flag, "-std=c17"];
+                let output = bcc(source, &flags);
+                assert!(
+                    output.status.success(),
+                    "{target} {name}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    inline_contract(&output.stdout, false),
+                    inline_contract(&reference.stdout, true),
+                    "{target} {name}:\n{}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+                let optimized = bcc(source, &[&flags[..], &["--opt=bcc"]].concat());
+                let text = String::from_utf8_lossy(&optimized.stdout);
+                assert!(optimized.status.success(), "{target} {name}: {optimized:?}");
+                let caller = text
+                    .split("define i32 @u(")
+                    .nth(1)
+                    .and_then(|body| body.split("\n}").next())
+                    .unwrap_or_else(|| panic!("{target} {name}: {text}"));
+                let calls: Vec<_> = caller
+                    .lines()
+                    .filter_map(|line| line.split_once("call i32 @"))
+                    .map(|(_, callee)| callee.split('(').next().unwrap())
+                    .collect();
+                let expected: &[&str] = if name == "redeclarations" {
+                    &["n1", "n2"]
+                } else {
+                    &[]
+                };
+                assert_eq!(calls, expected, "{target} {name}: {text}");
+            }
+        }
+        std::fs::remove_file(source_path).unwrap();
+    }
+
+    /// Each defined function with its linkage and inline control, and each
+    /// undefined function a global initializer references. A Clang
+    /// `available_externally` body supplies no symbol: it stands for bcc's
+    /// external declaration and, when `always_inline`, for the private copy
+    /// that bcc's direct calls reach. Declarations carry no inline control
+    /// that matters, and an unreferenced one emits no symbol.
+    fn inline_contract(bytes: &[u8], clang: bool) -> BTreeSet<String> {
+        const WORDS: [&str; 5] = [
+            "define",
+            "internal",
+            "weak_odr",
+            "linkonce_odr",
+            "available_externally",
+        ];
+        let text = String::from_utf8_lossy(bytes);
+        let control = |line: &str| {
+            let groups: Vec<_> = line
+                .split(' ')
+                .filter(|word| word.starts_with('#'))
+                .map(|group| format!("attributes {group} = {{"))
+                .collect();
+            // Clang -O0 marks every other function `noinline optnone`.
+            let words: Vec<_> = text
+                .lines()
+                .filter(|attributes| groups.iter().any(|group| attributes.starts_with(group)))
+                .flat_map(|attributes| attributes.split(' '))
+                .collect();
+            if words.contains(&"alwaysinline") {
+                "alwaysinline"
+            } else if words.contains(&"noinline") && !words.contains(&"optnone") {
+                "noinline"
+            } else {
+                ""
+            }
+        };
+        let referenced = |name: &str| {
+            let symbol = format!("@{name}");
+            text.lines()
+                .filter(|line| line.starts_with('@'))
+                .filter_map(|line| line.split_once(" = "))
+                .any(|(_, value)| {
+                    value.match_indices(&symbol).any(|(at, _)| {
+                        !value[at + symbol.len()..]
+                            .starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.')
+                    })
+                })
+        };
+        let mut contract = BTreeSet::new();
+        for line in text
+            .lines()
+            .filter(|line| line.starts_with("define ") || line.starts_with("declare "))
+        {
+            let name = line.split_once('@').unwrap().1.split('(').next().unwrap();
+            let words: Vec<_> = line
+                .split([' ', '('])
+                .filter(|word| WORDS.contains(word))
+                .collect();
+            let control = control(line);
+            let undefined = !words.contains(&"define") || words.contains(&"available_externally");
+            if undefined {
+                if referenced(name) {
+                    _ = contract.insert(format!("{name}: undefined"));
+                }
+                if clang && words.contains(&"available_externally") && control == "alwaysinline" {
+                    _ = contract.insert(format!("{name}.always_inline: define internal {control}"));
+                }
+            } else {
+                _ = contract.insert(format!("{name}: {} {control}", words.join(" ")));
+            }
+        }
+        contract
+    }
+
     /// Each emitted or declared global with its linkage and DLL storage.
     fn linkage(bytes: &[u8]) -> BTreeSet<String> {
         const WORDS: [&str; 7] = [

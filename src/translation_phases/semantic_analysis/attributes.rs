@@ -321,6 +321,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.declares_alignment(binding);
                 }
             }
+            if item.kind == SpecifierExtensionKind::MsModifier(KeywordTokenType::Forceinline) {
+                self.forceinline(subject, item.source_vectors);
+            }
             chain = item.next;
         }
         let lists = self.declaration_attribute_lists(specifiers, declarator);

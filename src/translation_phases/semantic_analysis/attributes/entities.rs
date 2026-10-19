@@ -100,12 +100,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         subject: Subject,
         specifier: &'tu AttributeSpecifier<'tu>,
     ) {
-        let linked = match subject {
-            | Subject::Function { binding, .. } | Subject::Object { binding, .. }
-                if self.bindings[binding].linkage != Linkage::None =>
-                Some((self.entity_of(binding), self.earlier_definition(binding))),
-            | _ => None,
-        };
+        let linked = self.attribute_entity(subject);
         for attribute in self.written_attributes(specifier) {
             let Some(rule) = rule(
                 specifier.syntax,
@@ -115,28 +110,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ) else {
                 continue;
             };
-            if let Some((entity, definition)) = linked
-                && follows_definition(rule, attribute.name)
+            if follows_definition(rule, attribute.name)
+                && self.ignored_after_definition(linked, attribute.name, attribute.source)
             {
-                let name = self.context.string_cache.intern(attribute.name);
-                match definition {
-                    | Some(definition)
-                        if !self
-                            .attributes
-                            .before_definition
-                            .contains_key(&(entity, name)) =>
-                    {
-                        self.error(
-                            SemanticErrorKind::AttributeAfterDefinition,
-                            attribute.source,
-                            None,
-                            Some(definition),
-                        );
-                        continue;
-                    },
-                    | Some(_) => {},
-                    | None => _ = self.attributes.before_definition.insert((entity, name), ()),
-                }
+                continue;
             }
             match rule {
                 | Rule::CallDiagnostic => self.apply_call_diagnostic(subject, specifier, attribute),
@@ -179,6 +156,80 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | _ => {},
             }
+        }
+    }
+
+    /// MSVC `__forceinline` on a function: the parser already records it as
+    /// the `inline` function specifier, so the definition takes the inline
+    /// linkage of the target (C99 inline definitions on GNU targets, the
+    /// Microsoft ABI's COMDAT linkage on MSVC); this adds the
+    /// `always_inline` request, as Clang's `AlwaysInlineAttr` spelled
+    /// `__forceinline` does. Like that attribute it is ignored with a
+    /// warning on a redeclaration after the definition, `noinline` still
+    /// prevails, and on anything but a function it adds nothing to the
+    /// diagnostic that `inline` there already gets.
+    /// C99: §6.7.4 paragraphs 5-7, pp. 112-113; PDF pp. 124-125.
+    /// MSVC extension: Microsoft Learn, "inline, __inline, __forceinline".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/inline-functions-cpp>
+    pub(super) fn forceinline(&mut self, subject: Subject, source: SourceVectors) {
+        let Subject::Function { binding, .. } = subject else {
+            return;
+        };
+        let linked = self.attribute_entity(subject);
+        if self.ignored_after_definition(linked, "always_inline", source) {
+            return;
+        }
+        let entity = self.entity_of(binding);
+        let attributes = self.attributes.entity(entity);
+        if attributes.inlining != Inlining::Never {
+            attributes.inlining = Inlining::Always;
+        }
+    }
+
+    /// The linked entity a function or object declaration names, with the
+    /// source of its definition when an earlier declaration supplied one.
+    fn attribute_entity(&mut self, subject: Subject) -> Option<(EntityId, Option<SourceVectors>)> {
+        match subject {
+            | Subject::Function { binding, .. } | Subject::Object { binding, .. }
+                if self.bindings[binding].linkage != Linkage::None =>
+                Some((self.entity_of(binding), self.earlier_definition(binding))),
+            | _ => None,
+        }
+    }
+
+    /// Whether an attribute named `name` (underscores trimmed) is ignored,
+    /// with Clang's warning, because a redeclaration adds it after the
+    /// definition; before the definition it is recorded as written there.
+    fn ignored_after_definition(
+        &mut self,
+        linked: Option<(EntityId, Option<SourceVectors>)>,
+        name: &str,
+        source: SourceVectors,
+    ) -> bool {
+        let Some((entity, definition)) = linked else {
+            return false;
+        };
+        let name = self.context.string_cache.intern(name);
+        match definition {
+            | Some(definition)
+                if !self
+                    .attributes
+                    .before_definition
+                    .contains_key(&(entity, name)) =>
+            {
+                self.error(
+                    SemanticErrorKind::AttributeAfterDefinition,
+                    source,
+                    None,
+                    Some(definition),
+                );
+                true
+            },
+            | Some(_) => false,
+            | None => {
+                _ = self.attributes.before_definition.insert((entity, name), ());
+                false
+            },
         }
     }
 
