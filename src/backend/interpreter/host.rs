@@ -128,7 +128,12 @@ impl Host for DefaultHost<'_> {
     }
 
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
-        check_signature(call, self.long_width, self.long_double)?;
+        if crate::builtins::external_signature(call.name).is_some()
+            || HOST_FUNCTIONS.contains(&call.name)
+            || checked::provides(call.name)
+        {
+            check_signature(call, self.long_width, self.long_double)?;
+        }
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
             return result;
         }
@@ -299,7 +304,7 @@ const HOST_FUNCTIONS: [&str; 26] = [
 /// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84.
 fn check_signature(call: HostCall<'_>, long_width: u32, long_double: Type) -> Result<(), Fault> {
     let Some(signature) = crate::builtins::external_signature(call.name) else {
-        return Ok(());
+        return Err(UbKind::SignatureMismatch.into());
     };
     if call.result != external_type(signature.result, long_width, long_double)
         || (!signature.variadic && call.arg_types.len() != signature.parameters.len())
