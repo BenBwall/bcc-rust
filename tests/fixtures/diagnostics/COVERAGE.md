@@ -5,7 +5,7 @@ and the predefined-name fixture retains
 `[-Wpredefined-identifier-outside-function]`. Unknown STDC pragmas use the
 `unknown-pragmas` warning group. Pointer assignment and root initializer labels
 identify the operator and declarator; macro diagnostics identify the invocation.
-The Clang comparison in `tests/diagnostic_parity.rs` checks those positions,
+The Clang comparison in `tests/integration/diagnostic_parity.rs` checks those positions,
 C23 nullptr constraints, default warning groups and suppress/promote controls,
 K&R calls, C89 predefined names, embedded directives, GNU subtraction and CLI
 warning-option behavior. Semantic tests retain nullptr/nonnull facts and typedef
@@ -25,7 +25,7 @@ function/void conversion and comparison and pointer/zero ordering. Every fixture
 preserves a following declaration. Semantic mode/target matrices, conversion
 facts, unrelated type controls, CLI flag precedence and all five execution arms
 are tested separately in `semantic_analysis/tests/pointers.rs` and
-`tests/pointer_diagnostics.rs`. The exact Clang oracle is in
+`tests/integration/pointer_diagnostics.rs`. The exact Clang oracle is in
 `language-standards.md`; `-Wdiscarded-qualifiers` is not a Clang group.
 
 PR #44 review fixes (2026-10-14): `sema-pointer-conditional` pins
@@ -69,7 +69,7 @@ the shared selected-callee execution fixture also preserves user shadows.
 
 Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the current directory. An optional sibling `.args` supplies whitespace-separated CLI flags before the filename. Its sibling `.stderr` stores the exact bytes, including the summary. `NO_COLOR=1` is set; `CLICOLOR_FORCE`, `CPATH`, and `C_INCLUDE_PATH` are removed. `RUST_BACKTRACE=0` keeps crash regressions from depending on an inherited backtrace setting. No paths, whitespace, source spellings, or panic output are normalized.
 
-Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagnostics_golden` to rewrite every snapshot. The guard remains active while blessing and runs every C fixture again. Both tests accumulate failures so one mismatch does not hide later fixtures.
+Run `cargo test --test integration diagnostics_golden`. Use `BLESS=1 cargo test --test integration diagnostics_golden` to rewrite every snapshot. The guard remains active while blessing and runs every C fixture again. Both tests accumulate failures so one mismatch does not hide later fixtures.
 
 Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
@@ -530,7 +530,7 @@ requires zero global allocations while rendering them.
 
 ## Integrated language-mode CLI coverage
 
-[`tests/language_cli.rs`](../../language_cli.rs) checks every standard alias
+[`tests/integration/language_cli.rs`](../../integration/language_cli.rs) checks every standard alias
 through macro expansion, parsing and syntax inspection. It covers C attribute
 queries with macro-produced attribute specifiers, GNU keywords and imaginary
 constants, embedded bytes as initializer elements, and MSVC macro pragmas with

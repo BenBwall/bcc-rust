@@ -1,9 +1,5 @@
 //! GNU error/warning contracts follow calls through the actual codegen
 //! pipeline.
-#![expect(
-    unused_crate_dependencies,
-    reason = "CLI integration tests exercise the binary."
-)]
 
 #[cfg(test)]
 #[expect(

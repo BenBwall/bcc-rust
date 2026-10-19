@@ -1,6 +1,5 @@
 //! Real Clang resource headers exercise arithmetic promotion overloads and
 //! unavailable fallbacks independently of the host C library.
-#![expect(unused_crate_dependencies, reason = "Tests run compiler processes.")]
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,

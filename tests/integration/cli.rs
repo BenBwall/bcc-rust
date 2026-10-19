@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    reason = "This integration test crate contains no public API."
-)]
-#![expect(
-    unused_crate_dependencies,
-    reason = "Integration tests inherit package dependencies but exercise the compiled binary."
-)]
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -248,15 +239,15 @@ mod tests {
 
     #[test]
     fn shared_extension_diagnostics_match_goldens() {
-        let source = include_str!("fixtures/diagnostics/language/extension.c");
+        let source = include_str!("../fixtures/diagnostics/language/extension.c");
         for (flag, expected) in [
             (
                 "-pedantic",
-                include_str!("fixtures/diagnostics/language/extension-warning.stderr"),
+                include_str!("../fixtures/diagnostics/language/extension-warning.stderr"),
             ),
             (
                 "-pedantic-errors",
-                include_str!("fixtures/diagnostics/language/extension-error.stderr"),
+                include_str!("../fixtures/diagnostics/language/extension-error.stderr"),
             ),
         ] {
             let output = run(&[flag, "--input", source]);
@@ -275,7 +266,7 @@ mod tests {
             ("-std=iso9899:199409", "extern object; f(void){return 0;}\n"),
             (
                 "-std=c99",
-                include_str!("fixtures/diagnostics/language/iso-c89.c"),
+                include_str!("../fixtures/diagnostics/language/iso-c89.c"),
             ),
             ("-std=c11", c11),
             ("-std=c17", c11),
@@ -286,7 +277,7 @@ mod tests {
             ),
             (
                 "-std=c2y",
-                include_str!("fixtures/diagnostics/language/iso-c2y.c"),
+                include_str!("../fixtures/diagnostics/language/iso-c2y.c"),
             ),
         ] {
             let output = run(&[flag, "-pedantic-errors", "--syntax-tree", "--input", source]);
@@ -307,15 +298,15 @@ mod tests {
 
     #[test]
     fn iso_parser_policy_diagnostics_match_goldens() {
-        let source = include_str!("fixtures/diagnostics/language/iso-c89.c");
+        let source = include_str!("../fixtures/diagnostics/language/iso-c89.c");
         for (flag, expected) in [
             (
                 "-pedantic",
-                include_str!("fixtures/diagnostics/language/iso-c89-warning.stderr"),
+                include_str!("../fixtures/diagnostics/language/iso-c89-warning.stderr"),
             ),
             (
                 "-pedantic-errors",
-                include_str!("fixtures/diagnostics/language/iso-c89-error.stderr"),
+                include_str!("../fixtures/diagnostics/language/iso-c89-error.stderr"),
             ),
         ] {
             let output = run(&["-std=c89", flag, "--input", source]);
@@ -330,7 +321,7 @@ mod tests {
     fn iso_grammar_token_seam_matches_its_snapshot() {
         // Pins the existing phase-7 tokens consumed by the new parser grammar.
         // This test changes no lexer or preprocessing behavior.
-        let source = include_str!("fixtures/diagnostics/language/iso-c2y.c");
+        let source = include_str!("../fixtures/diagnostics/language/iso-c2y.c");
         let output = run(&[
             "-std=c2y",
             "-pedantic-errors",
@@ -341,21 +332,21 @@ mod tests {
         assert!(output.status.success(), "{output:?}");
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
-            include_str!("fixtures/lexing/iso_parser_token_seam.snap")
+            include_str!("../fixtures/lexing/iso_parser_token_seam.snap")
         );
     }
 
     #[test]
     fn gnu_parser_policy_diagnostics_match_goldens() {
-        let source = include_str!("fixtures/diagnostics/language/gnu-parser.c");
+        let source = include_str!("../fixtures/diagnostics/language/gnu-parser.c");
         for (flag, expected) in [
             (
                 "-pedantic",
-                include_str!("fixtures/diagnostics/language/gnu-parser-warning.stderr"),
+                include_str!("../fixtures/diagnostics/language/gnu-parser-warning.stderr"),
             ),
             (
                 "-pedantic-errors",
-                include_str!("fixtures/diagnostics/language/gnu-parser-error.stderr"),
+                include_str!("../fixtures/diagnostics/language/gnu-parser-error.stderr"),
             ),
         ] {
             let output = run(&["-std=c17", flag, "--input", source]);
@@ -387,12 +378,12 @@ mod tests {
 
     #[test]
     fn gnu_grammar_token_seam_matches_its_snapshot() {
-        let source = include_str!("fixtures/diagnostics/language/gnu-parser.c");
+        let source = include_str!("../fixtures/diagnostics/language/gnu-parser.c");
         let output = run(&["-std=gnu17", "--tokens", "--input", source]);
         assert!(output.status.success(), "{output:?}");
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
-            include_str!("fixtures/lexing/gnu_parser_token_seam.snap")
+            include_str!("../fixtures/lexing/gnu_parser_token_seam.snap")
         );
     }
 
@@ -442,15 +433,15 @@ mod tests {
 
     #[test]
     fn msvc_parser_policy_diagnostics_and_token_seam_match_goldens() {
-        let source = include_str!("fixtures/diagnostics/language/msvc-parser.c");
+        let source = include_str!("../fixtures/diagnostics/language/msvc-parser.c");
         for (flag, expected) in [
             (
                 "-pedantic",
-                include_str!("fixtures/diagnostics/language/msvc-parser-warning.stderr"),
+                include_str!("../fixtures/diagnostics/language/msvc-parser-warning.stderr"),
             ),
             (
                 "-pedantic-errors",
-                include_str!("fixtures/diagnostics/language/msvc-parser-error.stderr"),
+                include_str!("../fixtures/diagnostics/language/msvc-parser-error.stderr"),
             ),
         ] {
             let output = run(&["-std=c17", "-fms-extensions", flag, "--input", source]);
@@ -473,9 +464,9 @@ mod tests {
             assert_eq!(
                 String::from_utf8_lossy(&output.stderr),
                 if enabled {
-                    include_str!("fixtures/lexing/msvc_parser_enabled.snap")
+                    include_str!("../fixtures/lexing/msvc_parser_enabled.snap")
                 } else {
-                    include_str!("fixtures/lexing/msvc_parser_disabled.snap")
+                    include_str!("../fixtures/lexing/msvc_parser_disabled.snap")
                 }
             );
         }
@@ -522,11 +513,11 @@ mod tests {
 
     #[test]
     fn malformed_msvc_syntax_matches_its_recovery_golden() {
-        let source = include_str!("fixtures/diagnostics/language/msvc-recovery.c");
+        let source = include_str!("../fixtures/diagnostics/language/msvc-recovery.c");
         let output = run(&["-std=c17", "-fms-extensions", "--input", source]);
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
-            include_str!("fixtures/diagnostics/language/msvc-recovery.stderr")
+            include_str!("../fixtures/diagnostics/language/msvc-recovery.stderr")
         );
         let output = run(&[
             "-std=c17",

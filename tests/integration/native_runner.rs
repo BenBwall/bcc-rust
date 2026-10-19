@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "Native runner regression tests."
-)]
-
-#[path = "support/native.rs"]
-mod native;
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -20,7 +11,7 @@ mod tests {
     #[test]
     fn completed_program_returns_captured_output() {
         let output =
-            super::native::run_native(Command::new(std::env::current_exe().unwrap()).arg("--list"))
+            crate::native::run_native(Command::new(std::env::current_exe().unwrap()).arg("--list"))
                 .unwrap();
         assert!(output.status.success(), "{output:?}");
         assert!(!output.stdout.is_empty(), "the test list is captured");
@@ -33,11 +24,11 @@ mod tests {
     )]
     fn inherited_pipes_cannot_outlive_the_reader_deadline() {
         let start = Instant::now();
-        let error = super::native::run_native_with_timeout(
+        let error = crate::native::run_native_with_timeout(
             Command::new(std::env::current_exe().unwrap()).args([
                 "--ignored",
                 "--exact",
-                "tests::exiting_parent_fixture",
+                "native_runner::tests::exiting_parent_fixture",
                 "--nocapture",
             ]),
             Duration::from_millis(500),
@@ -59,7 +50,7 @@ mod tests {
             .args([
                 "--ignored",
                 "--exact",
-                "tests::descendant_fixture",
+                "native_runner::tests::descendant_fixture",
                 "--nocapture",
             ])
             .spawn()
@@ -74,11 +65,11 @@ mod tests {
     )]
     fn timeout_kills_descendants_with_inherited_pipes() {
         let start = Instant::now();
-        let error = super::native::run_native_with_timeout(
+        let error = crate::native::run_native_with_timeout(
             Command::new(std::env::current_exe().unwrap()).args([
                 "--ignored",
                 "--exact",
-                "tests::parent_fixture",
+                "native_runner::tests::parent_fixture",
                 "--nocapture",
             ]),
             Duration::from_millis(500),
@@ -110,7 +101,7 @@ mod tests {
             .args([
                 "--ignored",
                 "--exact",
-                "tests::descendant_fixture",
+                "native_runner::tests::descendant_fixture",
                 "--nocapture",
             ])
             .spawn()

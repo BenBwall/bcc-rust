@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "Integration tests exercise the compiled CLI."
-)]
-
-#[path = "support/native.rs"]
-mod native;
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -31,7 +22,7 @@ mod tests {
         },
     };
 
-    use super::native::{
+    use crate::native::{
         run_native,
         run_native_with_timeout,
     };
@@ -528,7 +519,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
 
     #[test]
     fn nested_overlapping_unions_finish_and_match_the_simple_union_abi() {
-        let source = include_str!("fixtures/lowering/nested_overlapping_unions.c");
+        let source = include_str!("../fixtures/lowering/nested_overlapping_unions.c");
         for target in [
             "--target=x86_64-unknown-linux-gnu",
             "--target=x86_64-w64-windows-gnu",

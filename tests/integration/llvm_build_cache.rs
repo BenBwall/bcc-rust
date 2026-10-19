@@ -1,10 +1,4 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "Build cache regression tests."
-)]
-
-#[path = "../build_support/llvm/cache.rs"]
+#[path = "../../build_support/llvm/cache.rs"]
 #[expect(
     clippy::disallowed_methods,
     reason = "Build-time cache tooling reads host files."

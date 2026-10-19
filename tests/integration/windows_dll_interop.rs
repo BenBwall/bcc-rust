@@ -1,6 +1,5 @@
 //! Real DLL boundaries and repeated Microsoft inline bodies must link with
 //! Clang in both directions. Windows also executes every linked client.
-#![expect(unused_crate_dependencies, reason = "Tests run compiler processes.")]
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,

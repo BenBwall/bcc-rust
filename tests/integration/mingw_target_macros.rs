@@ -1,9 +1,4 @@
 #![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "CLI target regression tests."
-)]
-#![expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,
     clippy::disallowed_methods,

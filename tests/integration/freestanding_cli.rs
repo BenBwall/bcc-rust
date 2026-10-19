@@ -1,9 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "CLI integration tests have no public API."
-)]
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -51,7 +45,7 @@ mod tests {
 
     #[test]
     fn every_resource_header_and_value_passes_the_shared_probe() {
-        let source = include_str!("fixtures/freestanding/conformance.c");
+        let source = include_str!("../fixtures/freestanding/conformance.c");
         clean(&bcc(&["-std=c11", "-pedantic-errors", "--input", source]));
         clean(&bcc(&["-std=gnu17", "--input", source]));
         // Clang's resource headers also implement the freestanding execution
@@ -91,7 +85,7 @@ mod tests {
 
     #[test]
     fn every_target_macro_expands_in_every_language_mode() {
-        let definitions = include_str!("fixtures/freestanding/target-macros.h");
+        let definitions = include_str!("../fixtures/freestanding/target-macros.h");
         let mut source = String::from("#define S0(x) #x\n#define S(x) S0(x)\n");
         let mut count = 0;
         for definition in definitions.lines() {

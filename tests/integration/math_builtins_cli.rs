@@ -1,13 +1,5 @@
 //! Math builtin execution through both executable-producing CLI back ends.
 
-#![expect(
-    unused_crate_dependencies,
-    reason = "CLI regressions invoke the compiled binary."
-)]
-
-#[path = "support/native.rs"]
-mod native;
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -74,7 +66,7 @@ int main(void) {
                 "{backend}: {}",
                 String::from_utf8_lossy(&built.stderr)
             );
-            let ran = super::native::run_native(&mut Command::new(&executable)).unwrap();
+            let ran = crate::native::run_native(&mut Command::new(&executable)).unwrap();
             assert_eq!(ran.status.code(), Some(0), "{backend}: {ran:?}");
         }
         fs::remove_dir_all(directory).unwrap();

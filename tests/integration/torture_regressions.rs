@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    reason = "This integration test crate contains no public API."
-)]
-#![expect(
-    unused_crate_dependencies,
-    reason = "These regressions exercise the compiled CLI."
-)]
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

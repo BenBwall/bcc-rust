@@ -1,5 +1,4 @@
 //! C overload symbols must link across compiler boundaries in both directions.
-#![expect(unused_crate_dependencies, reason = "Tests run compiler processes.")]
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,

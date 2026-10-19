@@ -1,9 +1,5 @@
 //! Target resource headers, independent of the host's C library.
 #![expect(
-    unused_crate_dependencies,
-    reason = "Integration tests run compiler processes."
-)]
-#![expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,
     clippy::disallowed_methods,

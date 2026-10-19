@@ -1143,8 +1143,8 @@ library is left to the linker to reject.
   `src/lowering/tests/programs.rs` in the interpreter with and without the bcc
   pipeline, and compiles eight of them (two printing with `printf`) in arms
   A0-A3 for the host, running them side by side and comparing status and
-  output with the interpreter. `tests/code_generation_cli.rs` covers the
-  command line.
+  output with the interpreter. `tests/integration/code_generation_cli.rs`
+  covers the command line.
   Native test programs run with captured stdout/stderr and a 20-second
   deadline; `BCC_TEST_TIMEOUT_MS` overrides it with a positive millisecond
   count. On timeout the shared runner kills the process tree (Windows) or
@@ -1157,7 +1157,7 @@ library is left to the linker to reject.
   discovery; the CLI regression removes `MINGW_ROOT` and clears `PATH`.
 - `benches/c` holds seventeen self-checking performance programs; their reduced
   workloads (`-DBENCH_REDUCED`) run in the interpreter, with and without the
-  bcc optimizer, in `tests/bench_corpus.rs`.
+  bcc optimizer, in `tests/integration/bench_corpus.rs`.
 - Corpora later: GCC c-torture `execute`, then Csmith/YARPGen differential runs,
   then Embench and Polybench for performance (see the methodology note).
 
@@ -1613,7 +1613,7 @@ frames down, 0 delivered as 1, repeated returns, unchanged non-volatile
 locals in a loop, a Lua-style handler chain, glibc `_setjmp` and `sigsetjmp`)
 through the interpreter for Linux and, with MinGW-w64's declarations, for
 Windows, and natively through LLVM at O0 and with `--opt=bcc` and O2
-(`tests/code_generation_cli.rs`); unit tests in `ir/tests/symbols.rs`,
+(`tests/integration/code_generation_cli.rs`); unit tests in `ir/tests/symbols.rs`,
 `lowering/tests/extensions.rs`, `optimizer/tests/inline.rs`,
 `backend/interpreter/tests/nonlocal.rs`, `backend/llvm/tests/golden.rs` and
 `backend/native/tests/selection.rs`. The issue's `setjmp_linux.c`
