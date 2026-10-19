@@ -249,6 +249,19 @@ impl<'ir> Module<'ir> {
         &self.init_functions
     }
 
+    /// Appends a file-scope assembly block, copying its text into the
+    /// module's arena. Back ends emit the blocks in this order.
+    /// GNU extension: GCC manual, "Basic Asm", at file scope.
+    pub(crate) fn add_module_asm(&mut self, text: &str) {
+        let text = self.arena.alloc_str(text);
+        self.asm_blocks.push(text);
+    }
+
+    /// The file-scope assembly blocks in source order.
+    pub(crate) fn module_asm(&self) -> &[&'ir str] {
+        &self.asm_blocks
+    }
+
     /// Gives a global its initializer, copying the bytes and relocations
     /// into the module's arena.
     pub(crate) fn define_global(&mut self, global: GlobalId, init: GlobalInit<'_>) {
@@ -295,6 +308,7 @@ impl<'ir> Module<'ir> {
             signature_ids: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             symbols: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             init_functions: ArenaVec::new_in(arena),
+            asm_blocks: ArenaVec::new_in(arena),
         }
     }
 
@@ -449,6 +463,7 @@ impl fmt::Debug for Module<'_> {
             .field("functions", &self.functions)
             .field("globals", &self.globals)
             .field("signatures", &self.signatures)
+            .field("asm_blocks", &self.asm_blocks)
             .finish_non_exhaustive()
     }
 }
