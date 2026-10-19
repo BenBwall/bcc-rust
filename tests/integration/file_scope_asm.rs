@@ -40,10 +40,9 @@ __asm__(\"# last \\\"block\\\"\");
         let output = bcc(PROGRAM, &[LINUX, "--emit=llvm"]);
         assert!(output.status.success(), "{}", text(&output.stderr));
         let llvm = text(&output.stdout);
-        let block = llvm
-            .split_once("module asm\n")
-            .map(|(_, rest)| rest)
-            .unwrap_or_else(|| panic!("no module asm:\n{llvm}"));
+        let Some((_, block)) = llvm.split_once("module asm\n") else {
+            panic!("no module asm:\n{llvm}");
+        };
         assert!(
             block.starts_with(
                 "    \".globl answer\"\n    \"answer:\"\n    \"\\09movl $42, %eax\"\n    \
@@ -111,7 +110,9 @@ __asm__(\"# last \\\"block\\\"\");
             if backend == "--backend=native" {
                 assert!(!built.status.success(), "{}", text(&built.stderr));
             }
-            _ = std::fs::remove_file(object);
+            if object.exists() {
+                std::fs::remove_file(object).unwrap();
+            }
         }
     }
 
