@@ -28,9 +28,7 @@ fn complex_scalars_cross_both_directions() {
                     &module,
                     &clang,
                 );
-                if real != "long double" || target == Target::WindowsMsvc {
-                    assert_native_conforms(target, &module, &clang);
-                }
+                assert_native_conforms(target, &module, &clang);
             }
         }
     }

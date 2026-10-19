@@ -498,6 +498,81 @@ int main(void) {
 }"#,
     },
     Program {
+        // `i128` to and from `f32` and `f64` through the runtime's
+        // `__floattidf`, `__fixsfti` and their unsigned forms, with values
+        // that round, exceed 64 bits, and set the top bit.
+        name:   "int128_float_conversions",
+        source: r#"int printf(const char *, ...);
+typedef __int128 i128;
+typedef unsigned __int128 u128;
+static unsigned long long bits(double d) { unsigned long long b; __builtin_memcpy(&b, &d, 8); return b; }
+static unsigned fbits(float f) { unsigned b; __builtin_memcpy(&b, &f, 4); return b; }
+static void show(u128 x) { printf(" %llx:%llx", (unsigned long long)(x >> 64), (unsigned long long)x); }
+static i128 big(int k) { return ((i128)0x123456789ABCDEFLL << 40) * k + k; }
+int main(void) {
+    i128 values[] = { 0, 1, -1, 1000000007, -((i128)1 << 100), big(3), big(-7),
+                      ((i128)1 << 64) + 1, ((i128)1 << 24) + 1, -(((i128)1 << 53) + 1) };
+    u128 uvalues[] = { 0, 5, ~(u128)0, (u128)1 << 127, ((u128)1 << 64) - 1, big(9) };
+    for (int i = 0; i < 10; i++) {
+        double d = (double)values[i];
+        float f = (float)values[i];
+        printf("%llx %x", bits(d), fbits(f));
+        show((u128)(i128)d);
+        show((u128)(i128)f);
+        printf("\n");
+    }
+    for (int i = 0; i < 6; i++) {
+        double d = (double)uvalues[i];
+        float f = (float)uvalues[i];
+        printf("%llx %x", bits(d), fbits(f));
+        if (i != 2) {
+            show((u128)d);
+            show((u128)f);
+        }
+        printf("\n");
+    }
+    double x = 1.5e30;
+    float y = -2.5e20f;
+    show((u128)(i128)x);
+    show((u128)(i128)y);
+    show((u128)3.0e38f);
+    show((u128)-0.75);
+    printf("\n");
+    return 0;
+}"#,
+    },
+    Program {
+        // Locals aligned above the stack's 16 bytes, in a leaf, beside a
+        // call, beside a dynamic allocation, and passed by address.
+        name:   "over_aligned_locals",
+        source: r#"int printf(const char *, ...);
+typedef unsigned long long u64;
+static int check(const void *p, u64 align) { return ((u64)p & (align - 1)) == 0; }
+static int leaf(int k) {
+    _Alignas(64) char buffer[100];
+    __attribute__((aligned(256))) int table[3];
+    for (int i = 0; i < 100; i++) buffer[i] = (char)(i * k);
+    table[0] = buffer[99]; table[1] = k; table[2] = (int)((u64)buffer & 63) + (int)((u64)table & 255);
+    return table[0] + table[1] + table[2];
+}
+static int caller(int k) {
+    _Alignas(32) double values[4] = { 1, 2, 3, 4 };
+    _Alignas(128) char small = (char)k;
+    int ok = check(values, 32) && check(&small, 128);
+    return ok * 1000 + leaf(k) + (int)values[3] + small;
+}
+static int dynamic(int n) {
+    char vla[n];
+    _Alignas(64) int aligned[2] = { n, 2 * n };
+    for (int i = 0; i < n; i++) vla[i] = (char)i;
+    return check(aligned, 64) * 100 + aligned[1] + vla[n - 1];
+}
+int main(void) {
+    printf("%d %d %d\n", caller(3), caller(-7), dynamic(17));
+    return 0;
+}"#,
+    },
+    Program {
         // An over-aligned dynamic block must not reach into the outgoing
         // arguments (`printf`'s stack arguments, and on Win64 the home area
         // it saves its registers into); a leaf's blocks are 16-byte aligned
@@ -606,3 +681,283 @@ int main(void) {
 }"#,
     },
 ];
+
+/// Programs with `long double` values, which the interpreter does not
+/// run: the LLVM back end's executable of the same module is the expected
+/// behaviour. Each prints the bits of what it computes, so that printing
+/// does not depend on the C library's `long double` support.
+pub(super) const WIDE_FLOAT_PROGRAMS: &[Program] = &[
+    Program {
+        name:   "long_double_arithmetic",
+        source: r#"int printf(const char *, ...);
+long double fmodl(long double, long double);
+typedef long double ld;
+static void show(ld x) {
+    // The sign and payload of a NaN that arithmetic makes are unspecified.
+    if (x != x) { printf(" nan"); return; }
+    unsigned long long words[2] = { 0, 0 };
+    __builtin_memcpy(words, &x, 10);
+    printf(" %llx:%llx", words[1] & 0xffff, words[0]);
+}
+static ld add(ld a, ld b) { return a + b; }
+static ld sub(ld a, ld b) { return a - b; }
+static ld mul(ld a, ld b) { return a * b; }
+static ld quo(ld a, ld b) { return a / b; }
+static ld neg(ld a) { return -a; }
+static ld pick(int c, ld a, ld b) { return c ? a : b; }
+int main(void) {
+    ld zero = 0.0L;
+    ld values[] = { 0.0L, -0.0L, 1.5L, -2.25L, 0.1L, 3.0L, 1e4000L, 1e-4000L, zero / zero, 1.0L / zero };
+    for (int i = 0; i < 10; i++) {
+        for (int j = 0; j < 10; j++) {
+            ld a = values[i], b = values[j];
+            printf("%d%d%d%d%d%d", a < b, a <= b, a == b, a != b, a > b, a >= b);
+            printf("%d%d ", !(a >= b), !(a < b) && !(a >= b));
+            if (j % 3 == 0) {
+                show(add(a, b));
+                show(sub(a, b));
+                show(mul(a, b));
+                show(quo(a, b));
+                printf("\n");
+            }
+        }
+        show(neg(values[i]));
+        show(pick(i & 1, values[i], values[9 - i]));
+        printf("\n");
+    }
+    ld sum = 0;
+    for (int i = 1; i <= 1000; i++) sum += 1.0L / i;
+    show(sum);
+    ld product = 1;
+    for (int i = 1; i <= 30; i++) product *= i;
+    show(product);
+    show(fmodl(values[2] * 1000, 3.25L));
+    printf("\n");
+    return 0;
+}"#,
+    },
+    Program {
+        name:   "long_double_conversions",
+        source: r#"int printf(const char *, ...);
+typedef long double ld;
+static void show(ld x) {
+    // The sign and payload of a NaN that arithmetic makes are unspecified.
+    if (x != x) { printf(" nan"); return; }
+    unsigned long long words[2] = { 0, 0 };
+    __builtin_memcpy(words, &x, 10);
+    printf(" %llx:%llx", words[1] & 0xffff, words[0]);
+}
+static unsigned long long dbits(double d) { unsigned long long b; __builtin_memcpy(&b, &d, 8); return b; }
+static unsigned fbits(float f) { unsigned b; __builtin_memcpy(&b, &f, 4); return b; }
+static void wide(unsigned __int128 x) { printf(" %llx:%llx", (unsigned long long)(x >> 64), (unsigned long long)x); }
+int main(void) {
+    ld values[] = { 0.0L, 1.0L, -1.0L, 2.5L, -2.5L, 3.75L, -3.75L, 100.9L, -127.9L, 32767.5L };
+    for (int i = 0; i < 10; i++) {
+        ld x = values[i];
+        printf("%d %d %d %d %lld", (short)x, (int)x, (_Bool)(x != 0), (int)(long long)x, (long long)(x * 1e14L));
+        if (x > -128 && x < 128) printf(" %d", (signed char)x);
+        if (x >= 0 && x < 256) printf(" %u", (unsigned char)x);
+        if (x >= 0)
+            printf(" %u %u %llu", (unsigned short)x, (unsigned)(x * 1e5L), (unsigned long long)(x * 1e14L));
+        printf(" %llx %x", dbits((double)x), fbits((float)x));
+        wide((unsigned __int128)(__int128)(x * 1e30L));
+        printf("\n");
+    }
+    long long ints[] = { 0, 1, -1, 123456789, -987654321012345LL, 9223372036854775807LL, (-9223372036854775807LL - 1) };
+    for (int i = 0; i < 7; i++) {
+        show((ld)ints[i]);
+        show((ld)(int)ints[i]);
+        show((ld)(short)ints[i]);
+        show((ld)(signed char)ints[i]);
+        show((ld)(unsigned long long)ints[i]);
+        show((ld)(unsigned)ints[i]);
+        show((ld)(unsigned short)ints[i]);
+        show((ld)(unsigned char)ints[i]);
+        show((ld)(_Bool)ints[i]);
+        printf("\n");
+    }
+    unsigned long long big[] = { 9223372036854775808ULL, 18446744073709551615ULL, 18000000000000000000ULL };
+    for (int i = 0; i < 3; i++) {
+        ld x = (ld)big[i];
+        show(x);
+        printf(" %llu %llu\n", (unsigned long long)x, (unsigned long long)(x / 2));
+    }
+    double doubles[] = { 0.1, -1e300, 1e-310, 3.5 };
+    float floats[] = { 0.1f, -3e38f, 1e-40f, 7.25f };
+    for (int i = 0; i < 4; i++) {
+        show((ld)doubles[i]);
+        show((ld)floats[i]);
+        printf(" %llx %x\n", dbits((double)((ld)doubles[i] / 3)), fbits((float)((ld)floats[i] / 3)));
+    }
+    __int128 wides[] = { 0, -1, (__int128)1 << 100, -((__int128)12345678901234567LL * 1000000007), ((__int128)1 << 64) + 3 };
+    for (int i = 0; i < 5; i++) {
+        ld x = (ld)wides[i];
+        show(x);
+        show((ld)(unsigned __int128)wides[i]);
+        wide((unsigned __int128)(__int128)x);
+        if (x >= 0) wide((unsigned __int128)x);
+        printf("\n");
+    }
+    return 0;
+}"#,
+    },
+    Program {
+        // System V passes `long double` in memory and returns it in
+        // `%st0`; Win64 passes it by reference and returns it through a
+        // hidden pointer. Structures and complex values of `long double`
+        // come back in `%st0` (and `%st1`) on System V.
+        name:   "long_double_calls",
+        source: r#"int printf(const char *, ...);
+typedef long double ld;
+struct wrap { ld x; };
+struct mixed { ld x; int n; };
+static void show(ld x) {
+    // The sign and payload of a NaN that arithmetic makes are unspecified.
+    if (x != x) { printf(" nan"); return; }
+    unsigned long long words[2] = { 0, 0 };
+    __builtin_memcpy(words, &x, 10);
+    printf(" %llx:%llx", words[1] & 0xffff, words[0]);
+}
+static ld many(ld a, int i, ld b, double d, ld c, float f, ld e, long long k, ld g, ld h, int j, ld l) {
+    return a * i + b - d * c + f / e + k - g * h + j * l;
+}
+static struct wrap wrapped(ld x) { struct wrap w = { x * 3 }; return w; }
+static struct mixed mix(struct mixed m) { m.x += m.n; m.n *= 2; return m; }
+static ld unwrap(struct wrap w, struct wrap v) { return w.x - v.x; }
+static _Complex long double cplx(ld r, ld i) { return __builtin_complex(r * 2, i - 1); }
+static ld (*pointer)(ld, int, ld, double, ld, float, ld, long long, ld, ld, int, ld) = many;
+static ld global = 2.75L;
+static ld array[3] = { 1.0L, 2.0L, 4.0L };
+static ld recurse(int n, ld x) { return n == 0 ? x : recurse(n - 1, x * 1.5L) + n; }
+int main(void) {
+    show(many(1.5L, 2, 3.25L, 0.5, 4.0L, 0.25f, 8.0L, 7, 1.25L, 2.0L, 3, 0.1L));
+    show(pointer(1.5L, 2, 3.25L, 0.5, 4.0L, 0.25f, 8.0L, 7, 1.25L, 2.0L, 3, 0.1L));
+    struct wrap w = wrapped(1.25L);
+    show(w.x);
+    struct mixed m = mix((struct mixed){ 0.5L, 3 });
+    show(m.x);
+    printf(" %d", m.n);
+    show(unwrap(w, (struct wrap){ 0.125L }));
+    _Complex long double z = cplx(1.5L, 2.5L);
+    show(__real__ z);
+    show(__imag__ z);
+    global += array[2];
+    show(global);
+    show(recurse(10, 1.0L));
+    printf("\n");
+    return 0;
+}"#,
+    },
+    Program {
+        // Each unsigned conversion that is in range raises no "invalid"
+        // exception, as C99 §F.4p1 has it: 2^63 and above too.
+        name:   "long_double_unsigned_conversions",
+        source: r#"int printf(const char *, ...);
+int feclearexcept(int);
+int fetestexcept(int);
+typedef long double ld;
+// FE_INVALID is 0x01 in glibc but 0x10 in MinGW-w64 13, whose 0x01 is
+// FE_INEXACT (0x10 is glibc's FE_UNDERFLOW). 0/0 raises only "invalid",
+// so the one of the two bits that it sets is FE_INVALID.
+static int invalid;
+static int find_invalid(void) {
+    volatile double zero = 0.0;
+    feclearexcept(0x11);
+    volatile double quiet = zero / zero;
+    (void)quiet;
+    invalid = fetestexcept(0x11);
+    return invalid == 0x01 || invalid == 0x10;
+}
+static unsigned long long u64(ld x) { return x; }
+static unsigned u32(ld x) { return x; }
+static unsigned short u16(ld x) { return x; }
+static unsigned char u8(ld x) { return x; }
+int main(void) {
+    if (!find_invalid())
+        return 2;
+    volatile ld values[] = {
+        0x1p63L, 0x1p64L - 0x1p11L, 0.0L, 0x1p63L - 1, 0x1p64L - 1, 0.75L, 1e18L, 0x1p63L + 0x1p62L,
+    };
+    for (int i = 0; i < 8; i++) {
+        feclearexcept(invalid);
+        unsigned long long r = u64(values[i]);
+        int raised = fetestexcept(invalid) != 0;
+        printf("%llu %d\n", r, raised);
+    }
+    volatile ld narrow[] = { 0.0L, 255.5L, 65535.75L, 0x1p31L, 4294967295.0L };
+    for (int i = 0; i < 5; i++) {
+        feclearexcept(invalid);
+        unsigned r32 = u32(narrow[i]);
+        unsigned r16 = i < 3 ? u16(narrow[i]) : 0;
+        unsigned r8 = i < 2 ? u8(narrow[i]) : 0;
+        printf("%u %u %u %d\n", r32, r16, r8, fetestexcept(invalid) != 0);
+    }
+    return 0;
+}"#,
+    },
+];
+
+/// Unsigned conversions from `double` and `float` that are in range, with
+/// whether each raised the "invalid" exception (C99 §F.4p1). The LLVM back
+/// end's conversions raise it for values at or above 2^63, so the output
+/// is checked against [`SSE_UNSIGNED_CONVERSIONS_OUTPUT`] instead.
+pub(super) const SSE_UNSIGNED_CONVERSIONS: Program = Program {
+    name:   "sse_unsigned_conversions",
+    source: r#"int printf(const char *, ...);
+int feclearexcept(int);
+int fetestexcept(int);
+// FE_INVALID is 0x01 in glibc but 0x10 in MinGW-w64 13, whose 0x01 is
+// FE_INEXACT (0x10 is glibc's FE_UNDERFLOW). 0/0 raises only "invalid",
+// so the one of the two bits that it sets is FE_INVALID.
+static int invalid;
+static int find_invalid(void) {
+    volatile double zero = 0.0;
+    feclearexcept(0x11);
+    volatile double quiet = zero / zero;
+    (void)quiet;
+    invalid = fetestexcept(0x11);
+    return invalid == 0x01 || invalid == 0x10;
+}
+static unsigned long long from_double(double x) { return x; }
+static unsigned long long from_float(float x) { return x; }
+static unsigned from_double32(double x) { return x; }
+int main(void) {
+    if (!find_invalid())
+        return 2;
+    volatile double doubles[] = { 0x1p63, 0x1p64 - 0x1p11, 0.0, 0x1p63 - 0x1p10, 0.75, 1e18, 0x1p63 + 0x1p62 };
+    for (int i = 0; i < 7; i++) {
+        feclearexcept(invalid);
+        unsigned long long r = from_double(doubles[i]);
+        printf("%llu %d\n", r, fetestexcept(invalid) != 0);
+    }
+    volatile float floats[] = { 0x1p63f, 0x1p64f - 0x1p40f, 0.0f, 0x1p63f - 0x1p39f, 0.75f };
+    for (int i = 0; i < 5; i++) {
+        feclearexcept(invalid);
+        unsigned long long r = from_float(floats[i]);
+        printf("%llu %d\n", r, fetestexcept(invalid) != 0);
+    }
+    volatile double narrow = 4294967295.0;
+    feclearexcept(invalid);
+    unsigned r = from_double32(narrow);
+    printf("%u %d\n", r, fetestexcept(invalid) != 0);
+    return 0;
+}"#,
+};
+
+/// What [`SSE_UNSIGNED_CONVERSIONS`] prints: Clang's values, and no
+/// exception.
+pub(super) const SSE_UNSIGNED_CONVERSIONS_OUTPUT: &str = "\
+9223372036854775808 0
+18446744073709549568 0
+0 0
+9223372036854774784 0
+0 0
+1000000000000000000 0
+13835058055282163712 0
+9223372036854775808 0
+18446742974197923840 0
+0 0
+9223371487098961920 0
+0 0
+4294967295 0
+";

@@ -316,6 +316,18 @@ impl ArgumentAssigner {
         Err(self.memory(16, 16))
     }
 
+    /// The location of a System V `__float128` argument: all of the next
+    /// SSE register, or a 16-byte-aligned stack slot (psABI §3.2.3: SSE and
+    /// SSEUP classes travel in one vector register, and in memory when none
+    /// is left).
+    pub(crate) fn vector(&mut self) -> Result<PReg, u32> {
+        if let Some(&register) = self.conv.float_arguments.get(self.xmm) {
+            self.xmm += 1;
+            return Ok(register);
+        }
+        Err(self.memory(16, 16))
+    }
+
     /// The stack location of an argument copied whole to the stack (System
     /// V `byval`), aligned to at least eight bytes.
     pub(crate) fn memory(&mut self, size: u32, align: u32) -> u32 {

@@ -10,7 +10,12 @@ use std::{
     thread,
 };
 
-use super::programs::PROGRAMS;
+use super::programs::{
+    PROGRAMS,
+    SSE_UNSIGNED_CONVERSIONS,
+    SSE_UNSIGNED_CONVERSIONS_OUTPUT,
+    WIDE_FLOAT_PROGRAMS,
+};
 use crate::{
     abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,
     backend::{
@@ -20,7 +25,11 @@ use crate::{
             RuntimeValue,
             Termination,
         },
-        llvm::OutputKind,
+        llvm::{
+            LlvmOptions,
+            OutputKind,
+            compile_module,
+        },
         native::{
             assemble,
             emit_assembly,
@@ -786,4 +795,199 @@ int start(void) { return shared_value + shared_list[3]; }";
         !linked && stderr.contains("requires pseudo relocations"),
         "{stderr}"
     );
+}
+
+/// `f80` and `f128` arithmetic, every comparison, conversions to and from
+/// every integer width, `i128` and the other floats, block parameters, and
+/// calls with more such arguments than registers. The interpreter does not
+/// run `f80` or `f128`, so the module's executable from the LLVM back end
+/// is the expected behaviour. The module is written before ABI lowering,
+/// since Win64 passes its `i128` arguments by reference.
+const WIDE_FLOAT_IR: &str = include_str!("wide_floats.ir");
+
+/// The line of [`WIDE_FLOAT_IR`] that computes an `frem.f128`, and an
+/// inline operation that replaces it where nothing links `fmodf128`. The
+/// parser wants dense value numbers, so the line is replaced, not removed.
+const WIDE_FLOAT_IR_FREM128: (&str, &str) = ("v10 = frem.f128 v0, v1", "v10 = fneg.f128 v1");
+
+/// Whether `target`'s C library defines `fmodf128`, which both back ends
+/// call for `frem.f128`, as Clang does for it and for `__builtin_fmodf128`.
+/// glibc has it since 2.26. MinGW-w64's runtime has no binary128 functions,
+/// and GCC's libquadmath names the routine `fmodq`.
+fn has_fmodf128(target: Target) -> bool {
+    !matches!(target, Target::WindowsGnu)
+}
+
+/// [`WIDE_FLOAT_IR`] lowered for `target`'s ABI and verified.
+fn wide_float_ir(arena: &Bump, target: Target) -> Module<'_> {
+    lowered_wide_float_ir(arena, target, WIDE_FLOAT_IR)
+}
+
+/// [`wide_float_ir`] without its `frem.f128` where nothing links it.
+fn linkable_wide_float_ir(arena: &Bump, target: Target) -> Module<'_> {
+    if has_fmodf128(target) {
+        return wide_float_ir(arena, target);
+    }
+    let (frem, replacement) = WIDE_FLOAT_IR_FREM128;
+    let count = WIDE_FLOAT_IR.matches(frem).count();
+    assert_eq!(count, 1, "{target:?}: wide_floats.ir has {count} `{frem}`");
+    lowered_wide_float_ir(arena, target, &WIDE_FLOAT_IR.replace(frem, replacement))
+}
+
+/// `text`, parsed, lowered for `target`'s ABI and verified.
+fn lowered_wide_float_ir<'ir>(arena: &'ir Bump, target: Target, text: &str) -> Module<'ir> {
+    let mut module = crate::ir::parse_module(arena, text).unwrap();
+    crate::abi::lower_abi(&mut module, target, &Bump::new()).unwrap();
+    let scratch = Bump::new();
+    let errors = crate::ir::verify_module(&module, Profile::PostAbi, &scratch)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{target:?}: {}", errors.join("\n"));
+    module
+}
+
+/// Builds `module` with the LLVM back end at `-O0` and runs it.
+fn run_llvm(
+    module: &Module<'_>,
+    target: Target,
+    directory: &Path,
+    name: &str,
+) -> Result<Run, String> {
+    let executable = directory.join(format!("{name}-llvm.exe"));
+    let options = LlvmOptions {
+        opt: None,
+        disable_llvm_passes: false,
+        target,
+        kind: OutputKind::Executable,
+        code: crate::target::CodeOptions::default(),
+    };
+    compile_module(module, &executable, options).map_err(|error| error.to_string())?;
+    let output = run_native(&mut Command::new(&executable)).map_err(|error| error.to_string())?;
+    Ok(Run {
+        status: output.status.code().ok_or("the program was killed")?,
+        stdout: String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+    })
+}
+
+/// Compiles `module` with both back ends and compares the runs.
+fn check_against_llvm(
+    module: &Module<'_>,
+    target: Target,
+    directory: &Path,
+    name: &str,
+) -> Result<(), String> {
+    let mut text = String::new();
+    emit_assembly(module, target, &mut text).map_err(|error| format!("{name}: {error}"))?;
+    let expected = run_llvm(module, target, directory, name)?;
+    if expected.stdout.trim().is_empty() {
+        return Err(format!("{name}: the program printed nothing: {expected:?}"));
+    }
+    let actual = run_assembly(&text, target, Runner::Native, directory, name)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name}: the LLVM back end's executable did {expected:?}, the native one \
+             {actual:?}\n{text}"
+        ))
+    }
+}
+
+/// Every target's native back end compiles the wide-float programs,
+/// whichever targets the host runs.
+#[test]
+fn wide_float_programs_compile_for_every_target() {
+    for target in [Target::WindowsGnu, Target::LinuxGnu] {
+        for program in WIDE_FLOAT_PROGRAMS {
+            for optimize in [false, true] {
+                with_module(program.source, target, optimize, |module| {
+                    let mut text = String::new();
+                    emit_assembly(module, target, &mut text).unwrap_or_else(|error| {
+                        panic!("{}-{target:?}-{optimize}: {error}", program.name)
+                    });
+                });
+            }
+        }
+        let arena = Bump::new();
+        let module = wide_float_ir(&arena, target);
+        let mut text = String::new();
+        emit_assembly(&module, target, &mut text)
+            .unwrap_or_else(|error| panic!("wide-ir-{target:?}: {error}"));
+        // Clang's spelling, even where the C library lacks it.
+        assert!(text.contains("fmodf128"), "wide-ir-{target:?}:\n{text}");
+        let module = linkable_wide_float_ir(&arena, target);
+        let mut text = String::new();
+        emit_assembly(&module, target, &mut text)
+            .unwrap_or_else(|error| panic!("linkable wide-ir-{target:?}: {error}"));
+        assert_eq!(
+            text.contains("fmodf128"),
+            has_fmodf128(target),
+            "linkable wide-ir-{target:?}:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn wide_float_programs_match_the_llvm_back_end() {
+    let directory = TempDir::new("native-wide-floats");
+    let mut failures = Vec::new();
+    for (target, runner) in targets() {
+        if runner != Runner::Native {
+            eprintln!("skipping {target:?}: the LLVM back end's executables run only natively");
+            continue;
+        }
+        for program in WIDE_FLOAT_PROGRAMS {
+            for optimize in [false, true] {
+                let name = format!("{}-{target:?}-{optimize}", program.name);
+                let result = with_module(program.source, target, optimize, |module| {
+                    check_against_llvm(module, target, directory.path(), &name)
+                });
+                if let Err(failure) = result {
+                    failures.push(failure);
+                }
+            }
+        }
+        let arena = Bump::new();
+        let module = linkable_wide_float_ir(&arena, target);
+        let name = format!("wide-ir-{target:?}");
+        if let Err(failure) = check_against_llvm(&module, target, directory.path(), &name) {
+            failures.push(failure);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// `double` and `float` values at or above 2^63 convert to unsigned
+/// without the "invalid" exception that converting them signed would
+/// raise. The links name `fetestexcept`, which WSL's link has no `-lm` for.
+#[test]
+fn sse_unsigned_conversions_raise_no_invalid_exception() {
+    let directory = TempDir::new("native-unsigned-conversions");
+    let program = SSE_UNSIGNED_CONVERSIONS;
+    for (target, runner) in targets() {
+        if runner != Runner::Native {
+            eprintln!("skipping {target:?}: the program links with the C library's fenv");
+            continue;
+        }
+        for optimize in [false, true] {
+            let name = format!("{}-{target:?}-{optimize}", program.name);
+            let run = with_module(program.source, target, optimize, |module| {
+                let mut text = String::new();
+                emit_assembly(module, target, &mut text).unwrap_or_else(|error| {
+                    panic!("{name}: {error}");
+                });
+                run_assembly(&text, target, runner, directory.path(), &name)
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                run,
+                Run {
+                    status: 0,
+                    stdout: SSE_UNSIGNED_CONVERSIONS_OUTPUT.to_owned(),
+                },
+                "{name}"
+            );
+        }
+    }
 }

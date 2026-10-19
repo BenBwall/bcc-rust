@@ -626,10 +626,17 @@ modes and dispatches the checked operation. Scalar name redispatch, the syntheti
 varargs `Builtin` AST adapters and varargs storage rediscovery are deleted. ABI
 classification and cursor movement remain downstream. Atomic builtins now use
 the neutral registry and retain object types and memory-order operands for
-execution. The x86, vector and type-generic recognition/keyword handlers remain
-explicit temporary M6 bridges;
-preprocessing retains its capability adapter until that migration. Scalar/library
-support is tested against the registry on every current target and environment.
+execution. Scalar/library support is tested against the registry on every
+current target and environment.
+
+**M6 is complete.** The x86, vector and type-generic families are registry
+descriptors too, and `__has_builtin` queries the registry. Their operations are
+`Semantic` (folded or selected by semantic analysis) or `Unsupported`; neither
+retains a checked instance, so `schedule_builtin` lets the call reach the same
+refusal as before (an unsupported builtin, or an opaque binding's unanalyzed
+type), never an external symbol. Lowering's
+keyword scheduling still matches the keyword of a varargs, offsetof or
+`choose_expr` form.
 
 **M5 is complete.** Effects-only evaluation (an overflow predicate's third operand
 and the statements of a GNU block inside it) interprets retained
@@ -642,15 +649,16 @@ block, the same shape short circuits already had; an omitted conditional, or a
 conditional with one effect-free arm, now takes that shape too. A missing summary
 or recipe is a provenance-bearing `MissingFact`.
 
-Initializer placement plans, symbolic constants, remaining builtin families and
-final symbol/function policies remain later migration work.
+Initializer placement plans, symbolic constants and final symbol/function
+policies remain later migration work.
 Some consumers therefore still inspect syntax in those families. See
 [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and the
 [M1 receipt](docs/research/semantic-facts-m1.md),
 [M2 receipt](docs/research/semantic-facts-m2.md),
 [M3 receipt](docs/research/semantic-facts-m3.md),
-[M4 receipt](docs/research/semantic-facts-m4.md), and
-[M5 receipt](docs/research/semantic-facts-m5.md) for checks and corpus comparisons.
+[M4 receipt](docs/research/semantic-facts-m4.md),
+[M5 receipt](docs/research/semantic-facts-m5.md) and
+[M6 receipt](docs/research/semantic-facts-m6.md) for checks and corpus comparisons.
 
 ### Atomic execution
 

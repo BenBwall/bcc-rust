@@ -476,19 +476,13 @@ pub(crate) enum BindingOrigin {
     User,
     Intrinsic(crate::builtins::BuiltinId),
     ImplicitOrdinary,
-    /// Temporary M6 recognition bridge: atomic/x86/vector/type-generic
-    /// families.
-    LegacyIntrinsic,
     /// Unknown reserved names retain opaque signatures and bounded refusals.
     OpaqueIntrinsic,
 }
 
 impl BindingOrigin {
     pub(crate) fn is_intrinsic(self) -> bool {
-        matches!(
-            self,
-            Self::Intrinsic(_) | Self::LegacyIntrinsic | Self::OpaqueIntrinsic
-        )
+        matches!(self, Self::Intrinsic(_) | Self::OpaqueIntrinsic)
     }
 
     pub(crate) fn descriptor(self) -> Option<&'static crate::builtins::BuiltinDescriptor> {

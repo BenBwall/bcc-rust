@@ -8,11 +8,13 @@
 //! Both are built at `-O0` and `-O2`. The Windows GNU host runs its
 //! executables directly; System V executables are linked freestanding and
 //! run under WSL when it is available. A missing toolchain or WSL makes a
-//! test print why and pass.
+//! test print why and pass, as does a WSL run of a test that needs the
+//! runtime library ([`Runtime::Library`]), which a freestanding link lacks.
 
 mod aggregate_varargs;
 mod complex_values;
 mod layout_alignment;
+mod native_wide_floats;
 mod noundef;
 mod poison_returns;
 mod transparent_unions;
@@ -380,6 +382,12 @@ fn structures_cross_between_bcc_and_clang() {
         _ = optimize(&mut module, &options, &scratch);
         lower_abi(&mut module, target, &scratch).unwrap();
         assert_conforms("structures", target, &module, &format!("{TYPES}{CLANG}"));
+        assert_native_conforms(
+            "structures-native",
+            target,
+            &module,
+            &format!("{TYPES}{CLANG}"),
+        );
     }
 }
 
@@ -644,9 +652,20 @@ int main(void) {
 /// executable for `target` at `-O0` and `-O2`, runs each, and asserts that
 /// it exits with 0.
 fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
+    assert_conforms_with(name, target, Runtime::None, module, c);
+}
+
+/// As [`assert_conforms`], for a test whose code calls the `runtime`.
+fn assert_conforms_with(
+    name: &str,
+    target: Target,
+    runtime: Runtime,
+    module: &Module<'_>,
+    c: &str,
+) {
     let mut ll = String::new();
     emit_module(module, target, &mut ll).unwrap();
-    assert_object_conforms(name, target, c, &ll, |object, options| {
+    assert_object_conforms(name, target, runtime, c, &ll, |object, options| {
         compile_module(
             module,
             object,
@@ -662,10 +681,22 @@ fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
 /// As [`assert_conforms`], with the bcc side compiled by the native back
 /// end instead of LLVM.
 fn assert_native_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
+    assert_native_conforms_with(name, target, Runtime::None, module, c);
+}
+
+/// As [`assert_native_conforms`], for a test whose code calls the
+/// `runtime`. The assembly is emitted even where the test cannot link.
+fn assert_native_conforms_with(
+    name: &str,
+    target: Target,
+    runtime: Runtime,
+    module: &Module<'_>,
+    c: &str,
+) {
     let mut assembly = String::new();
     crate::backend::native::emit_assembly(module, target, &mut assembly)
         .unwrap_or_else(|error| panic!("{name} for {target:?}: {error}"));
-    assert_object_conforms(name, target, c, &assembly, |object, _| {
+    assert_object_conforms(name, target, runtime, c, &assembly, |object, _| {
         crate::backend::native::assemble(&assembly, object, target, OutputKind::Object)
             .unwrap_or_else(|error| panic!("{name} for {target:?} does not assemble: {error}"));
     });
@@ -677,6 +708,7 @@ fn assert_native_conforms(name: &str, target: Target, module: &Module<'_>, c: &s
 fn assert_object_conforms(
     name: &str,
     target: Target,
+    runtime: Runtime,
     c: &str,
     text: &str,
     compile: impl Fn(&Path, LlvmOptions),
@@ -684,6 +716,12 @@ fn assert_object_conforms(
     let Some(runner) = Runner::for_target(target) else {
         return;
     };
+    if runtime == Runtime::Library && runner == Runner::Wsl {
+        eprintln!(
+            "skipping {name} for {target:?}: the freestanding WSL link has no runtime library"
+        );
+        return;
+    }
     let toolchain = match Toolchain::bundled(target) {
         | Ok(toolchain) => toolchain,
         | Err(error) => {
@@ -732,6 +770,18 @@ fn assert_object_conforms(
             "{name} for {target:?} at {opt:?} failed its check {status:?}:\n{text}"
         );
     }
+}
+
+/// What the code on either side calls beyond the startup and memory
+/// routines [`FREESTANDING`] supplies.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Runtime {
+    /// Nothing.
+    None,
+    /// The runtime library the hosted link adds, libgcc or compiler-rt:
+    /// `__float128` arithmetic (`__addtf3`) and conversions between
+    /// `__int128` and the floats (`__floattidf`, `__fixxfti`).
+    Library,
 }
 
 /// How a test runs an executable for its target.

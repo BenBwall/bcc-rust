@@ -1378,17 +1378,28 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             drop(std::fs::remove_file(file));
         }
 
-        // Unsupported code is refused before anything is written.
+        // `long double` goes through the x87 unit.
         let float = temporary("native-float.exe");
-        let refused = bcc(
+        let built = bcc(
             "long double half(long double x) { return x / 2; }\nint main(void) { return half(4) \
              != 2; }\n",
+            &[&target, "--backend=native", "-o", &path(&float)],
+        );
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&float)).unwrap();
+        assert_eq!(run.status.code(), Some(0));
+        drop(std::fs::remove_file(&float));
+
+        // Unsupported code is refused before anything is written.
+        let refused = bcc(
+            "int pick(__int128 x) { switch (x) { case 1: return 2; default: return 3; } }\nint \
+             main(void) { return pick(1) != 2; }\n",
             &[&target, "--backend=native", "-o", &path(&float)],
         );
         assert_eq!(refused.status.code(), Some(1));
         assert_eq!(
             text(&refused.stderr).trim(),
-            "error: not yet supported by the native back end: f80 values (in @half)"
+            "error: not yet supported by the native back end: a switch on an i128 value (in @pick)"
         );
         assert!(!float.exists());
     }

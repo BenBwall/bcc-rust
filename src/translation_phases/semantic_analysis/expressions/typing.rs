@@ -2022,13 +2022,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
+            // A keyword form's spelling is an identifier only where its
+            // keyword is disabled; it stays an opaque reserved name there.
             let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name))
+                .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
-            let ty = if let Some(ty) = descriptor
-                .map(|descriptor| self.descriptor_type(descriptor))
-                .or_else(|| self.x86_builtin_type(name))
+            if let Some(descriptor) = descriptor
+                && descriptor.type_rule == crate::builtins::TypeRule::X86Signature
+                && let Some(feature) = descriptor.availability.feature
             {
-                ty
+                self.context
+                    .report_extension(feature, "x86 builtin", name.source_vectors);
+            }
+            let ty = if let Some(descriptor) = descriptor {
+                self.descriptor_type(descriptor)
             } else {
                 let result = self.types.unknown();
                 self.types.intern(TypeKind::Function {
@@ -2047,15 +2054,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
-            self.bindings[index].origin = if let Some(descriptor) = descriptor {
-                super::super::BindingOrigin::Intrinsic(descriptor.id)
-            } else if super::super::builtins::legacy_named_builtin(
-                self.context.string_cache.at(name.name),
-            ) {
-                super::super::BindingOrigin::LegacyIntrinsic
-            } else {
-                super::super::BindingOrigin::OpaqueIntrinsic
-            };
+            self.bindings[index].origin = descriptor
+                .map_or(super::super::BindingOrigin::OpaqueIntrinsic, |descriptor| {
+                    super::super::BindingOrigin::Intrinsic(descriptor.id)
+                });
             return;
         }
         if let ExpressionType::Identifier(name) = e.kind
@@ -2111,12 +2113,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | crate::builtins::NamingPolicy::Microsoft =>
                     self.context.configuration.msvc_compatibility(),
             }
-        }) || super::atomics::modeled(self.context.string_cache.at(name.name))
-            || self
-                .context
-                .string_cache
-                .at(name.name)
-                .starts_with("__builtin_")
+        }) || self
+            .context
+            .string_cache
+            .at(name.name)
+            .starts_with("__builtin_")
     }
 
     /// Checks integer switch expressions and scalar selection/iteration

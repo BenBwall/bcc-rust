@@ -215,6 +215,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         syntax: &'tu crate::translation_phases::parsing::Builtin<'tu>,
     ) {
         let Some(descriptor) = super::super::builtins::registry::keyword_descriptor(syntax.keyword)
+            .filter(|descriptor| descriptor.operation.retains_instance())
         else {
             return;
         };
@@ -287,6 +288,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 instance: self.bindings[binding]
                     .origin
                     .descriptor()
+                    .filter(|descriptor| descriptor.operation.retains_instance())
                     .map(|descriptor| self.checked_named_builtin(info, descriptor, arguments)),
             },
             | Some(binding) if direct => Callee::Direct {

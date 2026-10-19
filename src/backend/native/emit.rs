@@ -719,6 +719,27 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     reg(dst, Width::B64)
                 )
             },
+            | MInst::X87Load { format, mem } => writeln!(
+                out,
+                "\t{}\t{}",
+                format.load(),
+                at(Operand::Mem(mem), Width::B64)
+            ),
+            | MInst::X87Store { format, mem } => writeln!(
+                out,
+                "\t{}\t{}",
+                format.store(),
+                at(Operand::Mem(mem), Width::B64)
+            ),
+            | MInst::X87Arith { op } => writeln!(out, "\t{}\t%st(1), %st", op.name()),
+            | MInst::X87Pop => writeln!(out, "\tfstp\t%st(0)"),
+            | MInst::X87Compare => writeln!(out, "\tfucomip\t%st(1), %st"),
+            | MInst::X87ControlWord { store, mem } => writeln!(
+                out,
+                "\t{}\t{}",
+                if store { "fnstcw" } else { "fldcw" },
+                at(Operand::Mem(mem), Width::B16)
+            ),
             | MInst::Ret { .. } => self.epilogue(frame),
             | MInst::Ud2 => writeln!(out, "\tud2"),
             | MInst::Int3 => writeln!(out, "\tint3"),

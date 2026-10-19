@@ -22,6 +22,7 @@ use super::oracle::{
     verify_errors,
 };
 use crate::{
+    abi::lower_abi,
     backend::llvm::{
         LlvmOptions,
         OptLevel,
@@ -238,11 +239,14 @@ fn check_backend_arm(
     } else {
         case.text.clone()
     };
-    // The generator writes no aggregate or extension, so its modules are
-    // already in the post-ABI profile.
-    let text = format!("abi lowered\n{text}");
+    // The native back end takes a module lowered for its target's ABI, as
+    // the pipeline hands it one. The generator writes no aggregate or
+    // extension, but a hand-written case's `i128` still changes: Win64
+    // passes it by reference.
     let arena = Bump::new();
-    let module = parse_module(&arena, &text).map_err(|error| error.to_string())?;
+    let mut module = parse_module(&arena, &text).map_err(|error| error.to_string())?;
+    lower_abi(&mut module, target, &Bump::new())
+        .map_err(|error| format!("seed {:#x} {arm}: {error}", case.seed))?;
     let errors = verify_errors(&module, Profile::PostAbi);
     if !errors.is_empty() {
         return Err(format!(
@@ -258,7 +262,7 @@ fn check_backend_arm(
     crate::backend::native::assemble(&assembly, &executable, target, OutputKind::Executable)
         .map_err(|error| format!("seed {:#x} {arm}: {error}\n{assembly}", case.seed))?;
     let output = crate::test_support::native::run_native(&mut Command::new(&executable))
-        .map_err(|error| format!("seed {:#x} {arm}: {error}\n{text}\n{assembly}", case.seed))?;
+        .map_err(|error| format!("seed {:#x} {arm}: {error}\n{module}\n{assembly}", case.seed))?;
     let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
     let expected_stdout = String::from_utf8_lossy(&case.observation.output);
     let status = output.status.code();
@@ -271,7 +275,7 @@ fn check_backend_arm(
     Err(format!(
         "seed {:#x}, arm {arm}: the interpreter says the original {}, but the native back end's \
          executable exits with {status:?} and prints {stdout:?}\nrerun with \
-         BCC_DIFFTEST_SEED={:#x}\n\nthe compiled module:\n{text}\nits assembly:\n{assembly}",
+         BCC_DIFFTEST_SEED={:#x}\n\nthe compiled module:\n{module}\nits assembly:\n{assembly}",
         case.seed, case.observation, case.seed
     ))
 }

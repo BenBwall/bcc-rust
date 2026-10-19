@@ -15,6 +15,8 @@
 //! Registers come in two classes: general-purpose registers for integers
 //! and pointers, and SSE registers (`%xmm0`-`%xmm15`) for `f32` and `f64`.
 //! Each virtual register has one class, recorded in [`MFunction::classes`].
+//! `i128`, `f80` and `f128` values live in pairs of general registers; the
+//! x87 instructions that compute on `f80` read and write memory only.
 
 use std::fmt;
 
@@ -664,6 +666,64 @@ impl XOp {
     }
 }
 
+/// The memory format of an x87 load or store.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum X87Format {
+    F32,
+    F64,
+    /// The 80-bit extended format, ten bytes.
+    F80,
+    I16,
+    I32,
+    I64,
+}
+
+impl X87Format {
+    /// The mnemonic that pushes a value of this format.
+    pub(crate) const fn load(self) -> &'static str {
+        match self {
+            | Self::F32 => "flds",
+            | Self::F64 => "fldl",
+            | Self::F80 => "fldt",
+            | Self::I16 => "filds",
+            | Self::I32 => "fildl",
+            | Self::I64 => "fildll",
+        }
+    }
+
+    /// The mnemonic that stores `%st(0)` in this format and pops it.
+    pub(crate) const fn store(self) -> &'static str {
+        match self {
+            | Self::F32 => "fstps",
+            | Self::F64 => "fstpl",
+            | Self::F80 => "fstpt",
+            | Self::I16 => "fistps",
+            | Self::I32 => "fistpl",
+            | Self::I64 => "fistpll",
+        }
+    }
+}
+
+/// An x87 arithmetic operation, `%st(0) ← %st(0) op %st(1)`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum X87Op {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl X87Op {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            | Self::Add => "fadd",
+            | Self::Sub => "fsub",
+            | Self::Mul => "fmul",
+            | Self::Div => "fdiv",
+        }
+    }
+}
+
 /// A shift count: an immediate or `%cl`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ShiftAmount {
@@ -857,7 +917,8 @@ pub(crate) enum MInst {
         src:   Operand,
     },
     /// `movups`: all 16 bytes of an SSE register loaded from or stored to
-    /// memory (Win64 `__int128` results in `%xmm0`).
+    /// memory: Win64 `__int128` results and System V `__float128` values in
+    /// whole registers, and the System V register save area.
     Move128 {
         load: bool,
         reg:  Reg,
@@ -924,6 +985,34 @@ pub(crate) enum MInst {
     RepMovsb,
     /// `rep stosb`: stores `%al` into `%rcx` bytes from `(%rdi)`.
     RepStosb,
+    /// Pushes a value from memory onto the x87 stack (`fld`, `fild`).
+    /// The x87 stack is not allocated: every sequence that pushes pops
+    /// everything again before anything else runs, except the `%st(0)`
+    /// result that a `Ret` returns.
+    X87Load {
+        format: X87Format,
+        mem:    Mem,
+    },
+    /// Stores `%st(0)` to memory and pops it (`fstp`, `fistp`, which
+    /// rounds by the control word's rounding mode).
+    X87Store {
+        format: X87Format,
+        mem:    Mem,
+    },
+    /// `%st(0) ← %st(0) op %st(1)`.
+    X87Arith {
+        op: X87Op,
+    },
+    /// `fstp %st(0)`: pops the x87 stack.
+    X87Pop,
+    /// `fucomip %st(1), %st`: ZF, PF and CF from comparing `%st(0)` with
+    /// `%st(1)`, as `ucomis*` sets them, then pops `%st(0)`.
+    X87Compare,
+    /// `fnstcw` (`store`) or `fldcw` of the x87 control word.
+    X87ControlWord {
+        store: bool,
+        mem:   Mem,
+    },
     /// Returns, after the epilogue; reads the result registers.
     Ret {
         uses: PRegSet,
@@ -1053,11 +1142,20 @@ impl MInst {
                 phys(PReg::Rcx, Role::UseDef, &mut visit);
                 phys(PReg::Rax, Role::Use, &mut visit);
             },
+            | Self::X87Load { mem, .. }
+            | Self::X87Store { mem, .. }
+            | Self::X87ControlWord { mem, .. } => memory(mem, &mut visit),
             | Self::Ret { uses } =>
                 for register in uses.iter() {
                     phys(register, Role::Use, &mut visit);
                 },
-            | Self::Jmp { .. } | Self::Jcc { .. } | Self::Ud2 | Self::Int3 => {},
+            | Self::X87Arith { .. }
+            | Self::X87Pop
+            | Self::X87Compare
+            | Self::Jmp { .. }
+            | Self::Jcc { .. }
+            | Self::Ud2
+            | Self::Int3 => {},
         }
     }
 

@@ -1489,10 +1489,7 @@ fn omitted_variadic_arguments_keep_specialized_policy_in_each_expansion_path() {
 
 #[test]
 fn has_builtin_agrees_with_every_builtin_keyword_implementation() {
-    use crate::translation_phases::{
-        preprocessing::KeywordTokenType,
-        semantic_analysis,
-    };
+    use crate::translation_phases::preprocessing::KeywordTokenType;
     for standard in [CStandard::C89, CStandard::C17, CStandard::C23] {
         for gnu in [false, true] {
             let config = mode(standard).with_gnu_extensions(gnu);
@@ -1507,7 +1504,7 @@ fn has_builtin_agrees_with_every_builtin_keyword_implementation() {
                 let (output, errors) = observe(&source, config);
                 assert!(errors.is_empty(), "{errors:?}");
                 assert_eq!(output.len(), 1);
-                let expected = if semantic_analysis::implemented_builtin(keyword) {
+                let expected = if crate::builtins::lookup(keyword.spelling()).is_some() {
                     "identifier `yes`"
                 } else {
                     "identifier `no`"

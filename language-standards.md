@@ -405,9 +405,9 @@ duplicate reports from the parser.
 
 `KeywordClassification` also records whether the written assembly introducer is
 the ambiguous reserved __asm alias. Grammar owners use that metadata to choose
-GNU parentheses or MSVC instructions/blocks. __has_builtin takes keyword identity
-from classify and implementation support from `semantic_analysis::implemented_builtin`;
-ordinary-call builtins use their implementation owners' named predicates.
+GNU parentheses or MSVC instructions/blocks. __has_builtin queries the builtin
+registry (`src/builtins.rs`): a keyword form is advertised where `classify`
+makes its spelling a keyword, an ordinary-call spelling by its naming policy.
 
 ## Feature matrix
 
@@ -863,7 +863,10 @@ Microsoft's `__debugbreak` with Microsoft extensions),
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
-`__atomic_*` and `__sync_*` names, and the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12).
+`__atomic_*` and `__sync_*` names, the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12),
+the generated x86 builtins, the vector shuffle, conversion, bit-cast,
+elementwise and non-temporal builtins, and the binary128 primitives
+(`__builtin_inff128` and its family), whatever their lowering status.
 Unmodeled names return 0. Clang's `__has_feature` and `__has_extension` share
 `__has_attribute`'s gate: `c_alignas`, `c_alignof`, `c_atomic`,
 `c_generic_selections`, `c_static_assert` and `c_thread_local` are features

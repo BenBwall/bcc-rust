@@ -9,18 +9,30 @@
 //! how `va_arg` walks a `va_list`. This file only places the resulting
 //! scalars and builds the `va_list` the expanded `va_arg` expects.
 //!
+//! The wide scalars ABI lowering leaves as they are travel as LLVM's code
+//! generator passes them, which is what Clang's output links against: under
+//! System V an `i128` in a register pair, an `f80` in a 16-byte stack slot
+//! and returned in `%st(0)`, an `f128` in a whole SSE register (or a 16-byte
+//! stack slot) and returned in `%xmm0`; under Win64 an `f80` or `f128`
+//! argument as a pointer to a 16-byte copy, and its result through a hidden
+//! pointer passed first and returned in `%rax`. Runtime routines
+//! ([`Selector::libcall`]) take and return them the same way, except that
+//! Win64 routines take an `i128` by reference and return one in `%xmm0`.
+//!
 //! References: psABI §3.2.3 "Parameter Passing" (registers, stack order,
 //! `%al` for variadic calls, `sret` returned in `%rax`, SSE results in
-//! `%xmm0`/`%xmm1`) and §3.5.7 "Variable Argument Lists" (the register save
-//! area and `va_list`, Figure 3.33); Microsoft Learn, "x64 calling
-//! convention", sections "Parameter passing", "Varargs" (floating-point
-//! variadic arguments are duplicated in the integer register of their
-//! position) and "Return values".
+//! `%xmm0`/`%xmm1`, X87 results in `%st0`) and §3.5.7 "Variable Argument
+//! Lists" (the register save area and `va_list`, Figure 3.33); Microsoft
+//! Learn, "x64 calling convention", sections "Parameter passing", "Varargs"
+//! (floating-point variadic arguments are duplicated in the integer register
+//! of their position) and "Return values".
 
 use super::{
     Selector,
     ValueKind,
     class_of,
+    is_pair,
+    wide::Halves,
     width,
 };
 use crate::{
@@ -44,6 +56,7 @@ use crate::{
             RegClass,
             SymbolRef,
             Width,
+            X87Format,
         },
         support::Construct,
     },
@@ -106,6 +119,35 @@ pub(in crate::backend::native) enum Passed {
     },
     /// A System V `__int128`: low and high halves.
     Pair(Reg, Reg),
+    /// A System V `long double`, always in a 16-byte stack slot: the low
+    /// eight significand bytes, then the sign and exponent.
+    Memory(Reg, Reg),
+    /// A System V `__float128`: all of an SSE register, or a 16-byte stack
+    /// slot.
+    Vector(Reg, Reg),
+}
+
+/// An argument of a runtime routine.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::backend::native) enum LibArg {
+    /// An integer of at most 64 bits, already extended to what the routine
+    /// reads.
+    Gpr(Reg),
+    /// An `f32` or `f64`.
+    Xmm(Reg),
+    /// An `i128`, `f80` or `f128` pair.
+    Wide(Type, Halves),
+}
+
+/// The result of a runtime routine.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::backend::native) enum LibResult {
+    /// An integer of at most 64 bits, from `%rax`.
+    Gpr(Reg),
+    /// An `f32` or `f64`, from `%xmm0`.
+    Xmm(Reg),
+    /// An `i128`, `f80` or `f128` pair.
+    Wide(Type, Halves),
 }
 
 impl Selector<'_, '_, '_> {
@@ -123,18 +165,60 @@ impl Selector<'_, '_, '_> {
         }
         let mut assigner = self.conv.assigner();
         let mut stack = ArenaVec::new_in(self.arena);
+        // Win64 `f80` and `f128` parameters: the pointers to their copies.
+        let mut indirect = ArenaVec::new_in(self.arena);
+        if self.conv.kind == ConvKind::Win64
+            && matches!(self.signature.result, Some(Type::F80 | Type::F128))
+        {
+            let pointer = self.vreg();
+            match assigner.scalar(RegClass::Gpr) {
+                | ArgLocation::Reg(register) => self.copy(pointer, Reg::Phys(register)),
+                | ArgLocation::Stack(_) => unreachable!("the first position is a register"),
+            }
+            self.result = ResultArea::Sret(pointer);
+        }
         for (index, &param) in params.iter().enumerate() {
             let vreg = match self.kind(param) {
                 | ValueKind::Reg(vreg) => vreg,
                 | ValueKind::Pair(low, high) => {
-                    match assigner.pair() {
-                        | Ok((first, second)) => {
-                            self.copy(Reg::Virt(low), Reg::Phys(first));
-                            self.copy(Reg::Virt(high), Reg::Phys(second));
+                    let halves = (Reg::Virt(low), Reg::Virt(high));
+                    let at = |offset: u32| {
+                        [
+                            (halves.0, offset, Some(Type::I64)),
+                            (halves.1, offset + 8, Some(Type::I64)),
+                        ]
+                    };
+                    match (self.conv.kind, self.ty(param)) {
+                        | (ConvKind::SystemV, Type::I128) => match assigner.pair() {
+                            | Ok((first, second)) => {
+                                self.copy(halves.0, Reg::Phys(first));
+                                self.copy(halves.1, Reg::Phys(second));
+                            },
+                            | Err(offset) => stack.extend(at(offset)),
                         },
-                        | Err(offset) => {
-                            stack.push((Reg::Virt(low), offset, Some(Type::I64)));
-                            stack.push((Reg::Virt(high), offset + 8, Some(Type::I64)));
+                        | (ConvKind::SystemV, Type::F80) =>
+                            stack.extend(at(assigner.memory(16, 16))),
+                        | (ConvKind::SystemV, _) => match assigner.vector() {
+                            | Ok(register) => {
+                                let temp = self.wide_temporary();
+                                self.emit(MInst::Move128 {
+                                    load: false,
+                                    reg:  Reg::Phys(register),
+                                    mem:  temp,
+                                });
+                                self.wide_load(halves, temp);
+                            },
+                            | Err(offset) => stack.extend(at(offset)),
+                        },
+                        | (ConvKind::Win64, ty) => {
+                            let pointer = self.vreg();
+                            match assigner.scalar(RegClass::Gpr) {
+                                | ArgLocation::Reg(register) =>
+                                    self.copy(pointer, Reg::Phys(register)),
+                                | ArgLocation::Stack(offset) =>
+                                    stack.push((pointer, offset, Some(Type::I64))),
+                            }
+                            indirect.push((ty, halves, pointer));
                         },
                     }
                     continue;
@@ -198,6 +282,9 @@ impl Selector<'_, '_, '_> {
                 }),
             }
         }
+        for (ty, halves, pointer) in indirect {
+            self.pair_load(ty, halves, Mem::new(Base::Reg(pointer), 0));
+        }
         if uses_va_start {
             let (gpr, xmm) = assigner.registers_used();
             self.va_start = match self.conv.kind {
@@ -250,10 +337,11 @@ impl Selector<'_, '_, '_> {
                 for (index, &register) in conv.float_arguments.iter().enumerate() {
                     let offset = 48 + 16 * u32::try_from(index).expect("eight registers");
                     debug_assert!(offset < REGISTER_SAVE_BYTES, "the save area holds it");
-                    self.emit(MInst::XStore {
-                        width: Width::B64,
-                        dst:   Mem::new(Base::Frame(FrameObject::RegisterSave(offset)), 0),
-                        src:   Reg::Phys(register),
+                    // All 16 bytes: a `__float128` argument fills its register.
+                    self.emit(MInst::Move128 {
+                        load: false,
+                        reg:  Reg::Phys(register),
+                        mem:  Mem::new(Base::Frame(FrameObject::RegisterSave(offset)), 0),
                     });
                 }
             },
@@ -350,8 +438,11 @@ impl Selector<'_, '_, '_> {
             },
             | _ => return Err(Construct::Opcode(data.opcode())),
         };
-        let mut passed = ArenaVec::with_capacity_in(args.len(), self.arena);
+        let mut passed = ArenaVec::with_capacity_in(args.len() + 1, self.arena);
         let mut area = None;
+        let sret = signature
+            .result
+            .and_then(|ty| self.wide_result_area(ty, &mut passed));
         for (index, &arg) in args.iter().enumerate() {
             let fixed = index < signature.params.len();
             match signature.param_abi(index).filter(|_| fixed) {
@@ -363,9 +454,11 @@ impl Selector<'_, '_, '_> {
                 }),
                 | _ => {
                     let extension = signature.param_extension(index).filter(|_| fixed);
-                    if self.ty(arg) == Type::I128 {
-                        let (low, high) = self.pair(arg);
-                        passed.push(Passed::Pair(low, high));
+                    let ty = self.ty(arg);
+                    if is_pair(ty) {
+                        let halves = self.pair(arg);
+                        let arg = self.pass_wide(ty, halves);
+                        passed.push(arg);
                         continue;
                     }
                     let operand = match extension {
@@ -379,12 +472,18 @@ impl Selector<'_, '_, '_> {
             }
         }
         self.call_sequence(callee, &passed, signature.variadic);
-        if let Some(result) = body.inst_result(inst)
+        let result = body.inst_result(inst);
+        if let Some(result) = result
             && let ValueKind::Pair(low, high) = self.kind(result)
         {
-            self.copy(Reg::Virt(low), Reg::Phys(PReg::Rax));
-            self.copy(Reg::Virt(high), Reg::Phys(PReg::Rdx));
-        } else if let Some(result) = body.inst_result(inst) {
+            self.receive_wide(self.ty(result), (Reg::Virt(low), Reg::Virt(high)), sret);
+        } else if result.is_none()
+            && signature.result == Some(Type::F80)
+            && self.conv.kind == ConvKind::SystemV
+        {
+            // The x87 stack must be empty again.
+            self.emit(MInst::X87Pop);
+        } else if let Some(result) = result {
             let ValueKind::Reg(dst) = self.kind(result) else {
                 unreachable!("a call result is a register");
             };
@@ -397,13 +496,30 @@ impl Selector<'_, '_, '_> {
         }
         if let Some((arg, registers)) = area {
             let mem = self.address(arg);
-            if registers.first == Type::I128 {
-                // Win64's `__int128` result, all of `%xmm0`.
+            if matches!(registers.first, Type::I128 | Type::F128) {
+                // Win64's `__int128` or System V's `__float128` result, all
+                // of `%xmm0`.
                 self.emit(MInst::Move128 {
                     load: false,
                     reg: Reg::Phys(PReg::Xmm0),
                     mem,
                 });
+                return Ok(());
+            }
+            if registers.first == Type::F80 {
+                // `%st(0)`, and `%st(1)` for a complex `long double`.
+                self.emit(MInst::X87Store {
+                    format: X87Format::F80,
+                    mem,
+                });
+                if registers.second == Some(Type::F80) {
+                    let offset =
+                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    self.emit(MInst::X87Store {
+                        format: X87Format::F80,
+                        mem:    Mem::new(mem.base, mem.disp + offset),
+                    });
+                }
                 return Ok(());
             }
             for (offset, ty, register) in result_registers(registers) {
@@ -442,6 +558,7 @@ impl Selector<'_, '_, '_> {
         let mut registers = ArenaVec::new_in(self.arena);
         let mut stack = ArenaVec::new_in(self.arena);
         let mut copies = ArenaVec::new_in(self.arena);
+        let mut vectors = ArenaVec::new_in(self.arena);
         for &arg in args {
             match arg {
                 | Passed::Scalar(operand) => {
@@ -461,6 +578,18 @@ impl Selector<'_, '_, '_> {
                         registers.push((first, Operand::Reg(low)));
                         registers.push((second, Operand::Reg(high)));
                     },
+                    | Err(offset) => {
+                        stack.push((offset, Operand::Reg(low), RegClass::Gpr));
+                        stack.push((offset + 8, Operand::Reg(high), RegClass::Gpr));
+                    },
+                },
+                | Passed::Memory(low, high) => {
+                    let offset = assigner.memory(16, 16);
+                    stack.push((offset, Operand::Reg(low), RegClass::Gpr));
+                    stack.push((offset + 8, Operand::Reg(high), RegClass::Gpr));
+                },
+                | Passed::Vector(low, high) => match assigner.vector() {
+                    | Ok(register) => vectors.push((register, low, high)),
                     | Err(offset) => {
                         stack.push((offset, Operand::Reg(low), RegClass::Gpr));
                         stack.push((offset + 8, Operand::Reg(high), RegClass::Gpr));
@@ -490,7 +619,28 @@ impl Selector<'_, '_, '_> {
                 }),
             }
         }
+        // A whole SSE register is loaded from a copy of its halves.
+        let mut loads = ArenaVec::with_capacity_in(vectors.len(), self.arena);
+        for (register, low, high) in vectors {
+            let temp = self.wide_temporary();
+            for (half, disp) in [(low, 0), (high, 8)] {
+                self.emit(MInst::Store {
+                    width: Width::B64,
+                    dst:   Mem::new(temp.base, disp),
+                    src:   Operand::Reg(half),
+                });
+            }
+            loads.push((register, temp));
+        }
         let mut uses = PRegSet::EMPTY;
+        for (register, mem) in loads {
+            self.emit(MInst::Move128 {
+                load: true,
+                reg: Reg::Phys(register),
+                mem,
+            });
+            uses = uses.with(register);
+        }
         for (register, operand) in registers {
             if let Operand::Reg(Reg::Virt(vreg)) = operand {
                 self.func.hint(vreg, Reg::Phys(register));
@@ -554,13 +704,31 @@ impl Selector<'_, '_, '_> {
                 self.copy(Reg::Phys(PReg::Rax), pointer);
                 uses = uses.with(PReg::Rax);
             },
-            | ResultArea::Registers { area, registers } if registers.first == Type::I128 => {
+            | ResultArea::Registers { area, registers }
+                if matches!(registers.first, Type::I128 | Type::F128) =>
+            {
                 self.emit(MInst::Move128 {
                     load: true,
                     reg:  Reg::Phys(PReg::Xmm0),
                     mem:  area,
                 });
                 uses = uses.with(PReg::Xmm0);
+            },
+            | ResultArea::Registers { area, registers } if registers.first == Type::F80 => {
+                // A complex `long double` returns its imaginary part in
+                // `%st(1)`, so that part is pushed first.
+                if registers.second == Some(Type::F80) {
+                    let offset =
+                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    self.emit(MInst::X87Load {
+                        format: X87Format::F80,
+                        mem:    Mem::new(area.base, area.disp + offset),
+                    });
+                }
+                self.emit(MInst::X87Load {
+                    format: X87Format::F80,
+                    mem:    area,
+                });
             },
             | ResultArea::Registers { area, registers } => {
                 for (offset, ty, register) in result_registers(registers) {
@@ -573,7 +741,9 @@ impl Selector<'_, '_, '_> {
         }
         if let Some(value) = value {
             let ty = self.ty(value);
-            if ty == Type::I128 {
+            if matches!(ty, Type::F80 | Type::F128) {
+                self.return_wide(ty, value, &mut uses);
+            } else if ty == Type::I128 {
                 let (low, high) = self.pair(value);
                 self.copy(Reg::Phys(PReg::Rax), low);
                 self.copy(Reg::Phys(PReg::Rdx), high);
@@ -606,6 +776,138 @@ impl Selector<'_, '_, '_> {
             }
         }
         self.emit(MInst::Ret { uses });
+    }
+}
+
+impl Selector<'_, '_, '_> {
+    /// How an `i128`, `f80` or `f128` argument travels (see the module
+    /// documentation).
+    pub(super) fn pass_wide(&mut self, ty: Type, (low, high): Halves) -> Passed {
+        match (self.conv.kind, ty) {
+            | (ConvKind::SystemV, Type::I128) => Passed::Pair(low, high),
+            | (ConvKind::SystemV, Type::F80) => Passed::Memory(low, high),
+            | (ConvKind::SystemV, _) => Passed::Vector(low, high),
+            | (ConvKind::Win64, _) => {
+                let temp = self.wide_temporary();
+                for (half, disp) in [(low, 0), (high, 8)] {
+                    self.emit(MInst::Store {
+                        width: Width::B64,
+                        dst:   Mem::new(temp.base, disp),
+                        src:   Operand::Reg(half),
+                    });
+                }
+                let pointer = self.vreg();
+                self.emit(MInst::Lea {
+                    dst:  pointer,
+                    addr: temp,
+                });
+                Passed::Scalar(Operand::Reg(pointer))
+            },
+        }
+    }
+
+    /// For a Win64 call whose result is an `f80` or `f128`: the area the
+    /// callee returns it in, whose address goes first in `passed`.
+    fn wide_result_area(&mut self, ty: Type, passed: &mut ArenaVec<'_, Passed>) -> Option<Mem> {
+        if self.conv.kind != ConvKind::Win64 || !matches!(ty, Type::F80 | Type::F128) {
+            return None;
+        }
+        let temp = self.wide_temporary();
+        let pointer = self.vreg();
+        self.emit(MInst::Lea {
+            dst:  pointer,
+            addr: temp,
+        });
+        passed.push(Passed::Scalar(Operand::Reg(pointer)));
+        Some(temp)
+    }
+
+    /// Moves an `i128`, `f80` or `f128` result into `dst` right after the
+    /// call: from the hidden result area `sret`, `%rdx:%rax`, `%st(0)` or
+    /// `%xmm0`.
+    pub(super) fn receive_wide(&mut self, ty: Type, dst: Halves, sret: Option<Mem>) {
+        if let Some(area) = sret {
+            self.pair_load(ty, dst, area);
+            return;
+        }
+        match (self.conv.kind, ty) {
+            | (ConvKind::SystemV, Type::I128) => {
+                self.copy(dst.0, Reg::Phys(PReg::Rax));
+                self.copy(dst.1, Reg::Phys(PReg::Rdx));
+            },
+            | (ConvKind::SystemV, Type::F80) => {
+                let mem = self.scratch(0);
+                self.emit(MInst::X87Store {
+                    format: X87Format::F80,
+                    mem,
+                });
+                self.pair_load(ty, dst, mem);
+            },
+            // System V's `f128`, Win64's `i128` from a runtime routine.
+            | _ => {
+                let mem = self.scratch(0);
+                self.emit(MInst::Move128 {
+                    load: false,
+                    reg: Reg::Phys(PReg::Xmm0),
+                    mem,
+                });
+                self.wide_load(dst, mem);
+            },
+        }
+    }
+
+    /// `return` of an `f80` or `f128`: through the hidden pointer on Win64
+    /// (which the entry put in [`ResultArea::Sret`], and `ret` in `%rax`),
+    /// in `%st(0)` or `%xmm0` on System V.
+    fn return_wide(&mut self, ty: Type, value: Value, uses: &mut PRegSet) {
+        match (self.conv.kind, ty) {
+            | (ConvKind::Win64, _) => {
+                let ResultArea::Sret(pointer) = self.result else {
+                    unreachable!("the entry received the result pointer");
+                };
+                self.pair_store(ty, value, Mem::new(Base::Reg(pointer), 0));
+            },
+            | (ConvKind::SystemV, Type::F80) => self.x87_push(value, 0),
+            | (ConvKind::SystemV, _) => {
+                let mem = self.scratch(0);
+                self.pair_store(ty, value, mem);
+                self.emit(MInst::Move128 {
+                    load: true,
+                    reg: Reg::Phys(PReg::Xmm0),
+                    mem,
+                });
+                *uses = uses.with(PReg::Xmm0);
+            },
+        }
+    }
+
+    /// Calls the runtime routine `name` (`__floattidf`, `__addtf3` …) as
+    /// LLVM's code generator does, which is how the runtime libraries
+    /// Clang links were built to be called.
+    pub(in crate::backend::native) fn libcall(
+        &mut self,
+        name: &'static str,
+        args: &[LibArg],
+        result: LibResult,
+    ) {
+        let mut passed = ArenaVec::with_capacity_in(args.len() + 1, self.arena);
+        let sret = match result {
+            | LibResult::Wide(ty, _) => self.wide_result_area(ty, &mut passed),
+            | _ => None,
+        };
+        for &arg in args {
+            let arg = match arg {
+                | LibArg::Gpr(reg) | LibArg::Xmm(reg) => Passed::Scalar(Operand::Reg(reg)),
+                | LibArg::Wide(ty, halves) => self.pass_wide(ty, halves),
+            };
+            passed.push(arg);
+        }
+        self.call_sequence(Callee::Symbol(SymbolRef::Runtime(name)), &passed, false);
+        match result {
+            | LibResult::Gpr(dst) => self.copy(dst, Reg::Phys(PReg::Rax)),
+            | LibResult::Xmm(dst) => self.copy(dst, Reg::Phys(PReg::Xmm0)),
+            | LibResult::Wide(ty, dst) => self.receive_wide(ty, dst, sret),
+        }
     }
 }
 
