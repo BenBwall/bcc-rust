@@ -427,17 +427,40 @@ impl Width {
     }
 }
 
-/// A memory operand, `disp(base)`.
+/// A memory operand, `disp(base)` or `disp(base, index, scale)`. Only a
+/// register or frame base takes an index; RIP-relative operands cannot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Mem {
-    pub(crate) base: Base,
-    pub(crate) disp: i32,
+    pub(crate) base:  Base,
+    pub(crate) index: Option<Index>,
+    pub(crate) disp:  i32,
 }
 
 impl Mem {
     pub(crate) const fn new(base: Base, disp: i32) -> Self {
-        Self { base, disp }
+        Self {
+            base,
+            index: None,
+            disp,
+        }
     }
+
+    /// The same operand `disp` bytes further on.
+    #[must_use]
+    pub(crate) const fn offset(self, disp: i32) -> Self {
+        Self {
+            disp: self.disp + disp,
+            ..self
+        }
+    }
+}
+
+/// The scaled index register of a memory operand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Index {
+    pub(crate) reg:   Reg,
+    /// 1, 2, 4 or 8.
+    pub(crate) scale: u8,
 }
 
 /// What a memory operand is relative to.
@@ -1279,9 +1302,12 @@ fn operand(operand: &mut Operand, visit: &mut impl FnMut(&mut Reg, Role)) {
     }
 }
 
-/// Visits the base register of a memory operand, if it has one.
+/// Visits the base and index registers of a memory operand.
 fn memory(mem: &mut Mem, visit: &mut impl FnMut(&mut Reg, Role)) {
     if let Base::Reg(reg) = &mut mem.base {
         visit(reg, Role::Use);
+    }
+    if let Some(index) = &mut mem.index {
+        visit(&mut index.reg, Role::Use);
     }
 }

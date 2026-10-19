@@ -588,7 +588,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                     | Opcode::Shl => self.shift(ShiftOp::Shl, ty, dst, args),
                     | Opcode::Lshr => self.shift(ShiftOp::Shr, ty, dst, args),
                     | Opcode::Ashr => self.shift(ShiftOp::Sar, ty, dst, args),
-                    | Opcode::PtrAdd => self.alu(AluOp::Add, Type::I64, dst, args, true),
+                    | Opcode::PtrAdd => self.pointer_add(inst, dst, args),
                     | Opcode::UaddOverflow => self.add_overflow(ty, dst, args),
                     | Opcode::UmulOverflow => self.mul_overflow(ty, dst, args),
                     | _ => return Err(Construct::Opcode(opcode)),
@@ -816,6 +816,17 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         if ty == Type::I1 && matches!(op, AluOp::Add | AluOp::Sub) {
             self.canonical_bool(dst);
         }
+    }
+
+    /// `dst = base + offset` for a `ptr_add`: one `lea` of the address its
+    /// chain folds into, else an addition.
+    fn pointer_add(&mut self, inst: Inst, dst: Reg, args: [Value; 2]) {
+        let value = self.body.inst_result(inst).expect("a ptr_add has a result");
+        if let Some(addr) = self.folded_address(value) {
+            self.emit(MInst::Lea { dst, addr });
+            return;
+        }
+        self.alu(AluOp::Add, Type::I64, dst, args, true);
     }
 
     /// `dst = lhs * rhs`, with the three-operand form for a constant.

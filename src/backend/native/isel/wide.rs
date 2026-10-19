@@ -446,7 +446,7 @@ impl Selector<'_, '_, '_> {
             from:   Width::B16,
             to:     Width::B32,
             dst:    dst.1,
-            src:    Operand::Mem(Mem::new(mem.base, mem.disp + 8)),
+            src:    Operand::Mem(mem.offset(8)),
         });
     }
 
@@ -456,7 +456,7 @@ impl Selector<'_, '_, '_> {
             self.emit(MInst::Mov {
                 width: Width::B64,
                 dst:   half,
-                src:   Operand::Mem(Mem::new(mem.base, mem.disp + disp)),
+                src:   Operand::Mem(mem.offset(disp)),
             });
         }
     }
@@ -493,7 +493,7 @@ impl Selector<'_, '_, '_> {
         for ((src, disp), width) in halves.into_iter().zip([0, 8]).zip([Width::B64, high]) {
             self.emit(MInst::Store {
                 width,
-                dst: Mem::new(mem.base, mem.disp + disp),
+                dst: mem.offset(disp),
                 src,
             });
         }

@@ -76,6 +76,36 @@ int main(void) {
 }"#,
     },
     Program {
+        name:   "indexed_addresses",
+        source: r#"int printf(const char *, ...);
+struct point { short x; int y; long long z; };
+static int ints[64];
+static long long longs[64];
+static struct point points[16];
+static int get(const int *p, int i) { return p[i] + p[i + 1] + p[i - 1]; }
+static long long walk(const long long *p, long n, long stride) {
+    long long sum = 0;
+    for (long i = 0; i < n; i += stride) sum += p[i] * (i + 1);
+    return sum;
+}
+int main(void) {
+    char chars[40];
+    short shorts[40];
+    for (int i = 0; i < 64; i++) { ints[i] = i * i - 50; longs[i] = (long long)i << 33 | i; }
+    for (int i = 0; i < 40; i++) { chars[i] = (char)(i * 7); shorts[i] = (short)(i * -300); }
+    for (int i = 0; i < 16; i++) { points[i].x = (short)-i; points[i].y = i * 1000; points[i].z = -i * 100000LL; }
+    long long sum = 0;
+    for (int i = 1; i < 39; i++) sum += chars[i] + shorts[i - 1] * 3 + get(ints, i) + longs[i + 20];
+    for (int i = 15; i >= 0; i--) sum += points[i].x + points[i].y + points[i].z + points[15 - i].y;
+    int *middle = &ints[32];
+    for (int i = -30; i < 30; i += 7) sum ^= middle[i] + middle[-i];
+    printf("%lld %lld %lld\n", sum, walk(longs, 64, 3), walk(longs + 5, 50, 7));
+    unsigned idx = 3; long neg = -2;
+    printf("%d %d %lld\n", ints[idx * 2], (&ints[10])[neg], longs[idx + (unsigned)neg]);
+    return 0;
+}"#,
+    },
+    Program {
         name:   "comparisons",
         source: r#"int printf(const char *, ...);
 int cmp(int a, int b) {

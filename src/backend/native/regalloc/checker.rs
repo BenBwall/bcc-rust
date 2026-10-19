@@ -484,6 +484,7 @@ const fn spill(mem: Mem) -> Option<Loc> {
     match mem {
         | Mem {
             base: Base::Frame(FrameObject::Spill(slot)),
+            index: None,
             disp: 0,
         } => Some(Loc::Spill(slot)),
         | _ => None,

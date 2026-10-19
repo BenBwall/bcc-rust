@@ -1278,3 +1278,31 @@ block0(v0: i32, v1: i32):
     assert!(f.contains("andl\t$3, "), "{f}");
     assert!(f.contains("andl\t$-4, "), "{f}");
 }
+
+#[test]
+fn scaled_offsets_fold_into_indexed_operands() {
+    let text = assembly(
+        "abi lowered
+function @f(ptr, i32) -> i32 external {
+block0(v0: ptr, v1: i32):
+    v2 = sext.i64 v1
+    v3 = iconst.i64 4
+    v4 = imul.i64 v2, v3
+    v5 = ptr_add v0, v4
+    v6 = iconst.i64 8
+    v7 = ptr_add v5, v6
+    v8 = load.i32 v7, align 4
+    store.i32 v8, v5, align 4
+    return v8
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("8(%rdi,%rax,4)") || f.contains("8(%rdi,%rcx,4)"),
+        "{f}"
+    );
+    assert!(!f.contains("shl"), "{f}");
+    assert!(!f.contains("imul"), "{f}");
+}
