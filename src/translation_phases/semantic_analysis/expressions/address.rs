@@ -226,6 +226,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .map(|v| v.value)
     }
 
+    /// Fold arithmetic on an absolute pointer without inventing a symbolic
+    /// base. A null value plus zero remains zero data, with no relocation.
+    /// Implementation latitude: absolute pointer arithmetic follows the
+    /// target's element size and 64-bit pointer representation.
+    /// C99: §6.6p9-10, p. 96; PDF p. 108 (address constants and extra forms).
+    pub(super) fn absolute_pointer_offset(
+        &self,
+        pointer: ExpressionInfo<'tu>,
+        index: ExpressionInfo<'tu>,
+        target: TypeId,
+        subtract: bool,
+    ) -> Option<Integer> {
+        let base = Self::pointer_value(pointer)?;
+        let offset = index
+            .integer?
+            .to_i128()?
+            .checked_mul(i128::from(self.arithmetic_size(target)?))?;
+        let value = if subtract {
+            base.checked_sub(offset)?
+        } else {
+            base.checked_add(offset)?
+        };
+        Some(Integer::int(value).cast(64, false))
+    }
+
     /// Implementation-defined pointer-to-integer folding for the address of
     /// an lvalue reached from an integer-valued pointer constant, as in the
     /// classic `offsetof` macro.

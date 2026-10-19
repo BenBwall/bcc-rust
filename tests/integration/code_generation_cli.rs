@@ -1738,6 +1738,50 @@ int main(void) { printf("main\n"); return zero; }
     }
 
     #[test]
+    fn null_pointer_arithmetic_emits_zero_data_without_fixups() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let object = temporary("null-pointer-arithmetic.o");
+            let mut flags = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ];
+            flags.extend_from_slice(backend);
+            let output = bcc(
+                "char *a __attribute__((section(\".bss.a\"))) = (char *)0 + 0;\nint *b \
+                 __attribute__((section(\".bss.b\"))) = 0 + (int *)0;\nchar *c = (char *)0 - 0;\n",
+                &flags,
+            );
+            assert!(
+                output.status.success(),
+                "{backend:?}: {}",
+                text(&output.stderr)
+            );
+            assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+            assert!(object.exists());
+            if cfg!(target_os = "linux") {
+                let relocations = Command::new("readelf")
+                    .arg("-r")
+                    .arg(&object)
+                    .output()
+                    .unwrap();
+                assert!(relocations.status.success());
+                assert!(
+                    text(&relocations.stdout).contains("There are no relocations"),
+                    "{}",
+                    text(&relocations.stdout)
+                );
+            }
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    #[test]
     fn windows_gnu_object_output_needs_no_mingw() {
         let object = temporary("no-mingw.o");
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))

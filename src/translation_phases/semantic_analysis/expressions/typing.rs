@@ -380,6 +380,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         info.ty = lt;
                         if self.address_value(left) && right.ice && right.integer.is_some() {
                             info.constant = ConstantClass::Address;
+                            info.integer = self.absolute_pointer_offset(
+                                left,
+                                right,
+                                target,
+                                op == B::Subtraction,
+                            );
                         }
                     } else if op == B::Subtraction
                         && self.pointer_target(rt).is_some_and(|t| {
@@ -413,6 +419,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     info.ty = rt;
                     if self.address_value(right) && left.ice && left.integer.is_some() {
                         info.constant = ConstantClass::Address;
+                        info.integer = self.absolute_pointer_offset(
+                            right,
+                            left,
+                            self.pointer_target(rt).expect("validated pointer target"),
+                            false,
+                        );
                     }
                 } else {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
