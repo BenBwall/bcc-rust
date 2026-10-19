@@ -10,6 +10,7 @@ mod tests {
 
     use std::{
         collections::BTreeSet,
+        fmt::Write as _,
         process::Command,
     };
 
@@ -17,11 +18,13 @@ mod tests {
         let mut source = String::new();
         for name in ["__OPTIMIZE__", "__OPTIMIZE_SIZE__"] {
             if expected.contains(&format!("#define {name} 1")) {
-                source.push_str(&format!(
+                write!(
+                    source,
                     "#if !defined({name}) || {name} != 1\n#error {name}\n#endif\n"
-                ));
+                )
+                .unwrap();
             } else {
-                source.push_str(&format!("#ifdef {name}\n#error {name}\n#endif\n"));
+                write!(source, "#ifdef {name}\n#error {name}\n#endif\n").unwrap();
             }
         }
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
