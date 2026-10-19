@@ -39,9 +39,13 @@ pub(crate) fn equivalent(text: &str, target: Target) -> io::Result<()> {
     let native = directory.join("native.obj");
     std::fs::write(&native, &direct)?;
     let mut disassemblies = Vec::new();
+    let objdump = super::object::objdump(&toolchain);
     for path in [&reference, &native] {
-        let output =
-            super::object::required_objdump(Command::new("objdump").arg("-drw").arg(path))?;
+        let Some(output) =
+            super::object::optional_objdump(Command::new(&objdump).arg("-drw").arg(path))?
+        else {
+            return Ok(());
+        };
         assert!(
             output.status.success(),
             "COFF disassembly failed: {output:?}"
@@ -180,7 +184,8 @@ fn inspect(bytes: &[u8]) -> View {
         for n in 0..relocation_count {
             let at = relocs + n * 10;
             let symbol = names[u32_at(bytes, at + 4) as usize].as_ref().unwrap();
-            view.relocations.push((id, u32_at(bytes, at), u16_at(bytes, at + 8), symbol.clone()));
+            view.relocations
+                .push((id, u32_at(bytes, at), u16_at(bytes, at + 8), symbol.clone()));
         }
     }
     index = 0;

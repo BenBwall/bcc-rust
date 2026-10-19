@@ -37,25 +37,17 @@ pub(crate) fn equivalent(text: &str) -> io::Result<()> {
     let actual = inspect(&direct);
     assert_equivalent(&actual, &expected, text);
     // Raw executable-section equality above also pins every encoded
-    // instruction. Require objdump's independent disassembly as well.
+    // instruction. Cross-check disassembly when an inspection tool is present.
     std::fs::write(&native, &direct)?;
-    let llvm = toolchain.clang().with_file_name(if cfg!(windows) {
-        "llvm-objdump.exe"
-    } else {
-        "llvm-objdump"
-    });
-    let objdump = if llvm.is_file() {
-        llvm
-    } else {
-        "objdump".into()
-    };
-    let expected = required_objdump(Command::new(&objdump).arg("-dr").arg(&reference))?;
-    {
+    let objdump = objdump(&toolchain);
+    if let Some(expected) = optional_objdump(Command::new(&objdump).arg("-dr").arg(&reference))? {
         assert!(
             expected.status.success(),
             "reference disassembly failed: {expected:?}"
         );
-        let actual = required_objdump(Command::new(&objdump).arg("-dr").arg(&native))?;
+        let Some(actual) = optional_objdump(Command::new(&objdump).arg("-dr").arg(&native))? else {
+            return Ok(());
+        };
         assert!(
             actual.status.success(),
             "direct disassembly failed: {actual:?}"
@@ -631,7 +623,13 @@ fn coff_option_preserves_unwind_comdats_refptr_and_exports() {
         .unwrap();
     super::super::build_object(text, &native, Target::WindowsMsvc, OutputKind::Object).unwrap();
     super::object_coff::equivalent(text, Target::WindowsMsvc).unwrap();
-    let dump = required_objdump(Command::new("objdump").args(["-x", "-dr"]).arg(&native)).unwrap();
+    let toolchain = Toolchain::bundled(Target::WindowsMsvc).unwrap();
+    if let Some(dump) = optional_objdump(
+        Command::new(objdump(&toolchain))
+            .args(["-x", "-dr"])
+            .arg(&native),
+    )
+    .unwrap()
     {
         assert!(dump.status.success(), "{dump:?}");
         let dump = String::from_utf8_lossy(&dump.stdout);
@@ -1306,24 +1304,53 @@ fn equivalence_rejects_section_header_mutations() {
     );
 }
 
-pub(super) fn required_objdump(command: &mut Command) -> io::Result<std::process::Output> {
-    command.output().map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!(
-                "required objdump {:?} could not run: {error}; install llvm-objdump or GNU \
-                 binutils (COFF checks require GNU objdump)",
+pub(super) fn objdump(toolchain: &Toolchain) -> std::path::PathBuf {
+    let llvm = toolchain.clang().with_file_name(if cfg!(windows) {
+        "llvm-objdump.exe"
+    } else {
+        "llvm-objdump"
+    });
+    if llvm.is_file() {
+        llvm
+    } else {
+        "objdump".into()
+    }
+}
+
+pub(super) fn optional_objdump(command: &mut Command) -> io::Result<Option<std::process::Output>> {
+    match command.output() {
+        | Ok(output) => {
+            // Some host binutils builds only understand their own object
+            // format. Structural/byte comparison has already run in Rust.
+            if !output.status.success()
+                && String::from_utf8_lossy(&output.stderr).contains("file format not recognized")
+            {
+                eprintln!(
+                    "SKIP optional disassembly: {:?} does not support this object format",
+                    command.get_program()
+                );
+                return Ok(None);
+            }
+            Ok(Some(output))
+        },
+        | Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            eprintln!(
+                "SKIP optional disassembly: {:?} is unavailable: {error}; core object \
+                 byte/structure comparison completed",
                 command.get_program()
-            ),
-        )
-    })
+            );
+            Ok(None)
+        },
+        | Err(error) => Err(error),
+    }
 }
 
 #[test]
-fn missing_objdump_is_an_explicit_failure() {
+fn missing_objdump_explicitly_skips_optional_disassembly() {
     let directory = TempDir::new("missing-objdump");
-    let error = required_objdump(&mut Command::new(directory.join("absent-objdump"))).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::NotFound);
-    assert!(error.to_string().contains("required objdump"));
-    assert!(error.to_string().contains("install"));
+    assert!(
+        optional_objdump(&mut Command::new(directory.join("absent-objdump")))
+            .unwrap()
+            .is_none()
+    );
 }

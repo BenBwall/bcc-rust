@@ -794,9 +794,10 @@ assembler. It has three parts behind the same MIR-after-allocation input:
    bundled LLD.
 
 The encoder is validated against the assembler: assemble stage 1's text with
-clang, disassemble both objects with `llvm-objdump -d -r`, and require
-identical instructions and relocations on every test program and torture
-source. An in-process alternative available before stage 5 is to hand the
+clang and compare the complete section bytes and structural records with
+independent ELF/COFF parsers on every test program and torture source.
+When available, `llvm-objdump -d -r` or GNU `objdump` adds a disassembly
+cross-check; its absence prints an explicit skip line. An in-process alternative available before stage 5 is to hand the
 assembly text to LLVM MC as module-level inline assembly through LLVM-C
 (`LLVMSetModuleInlineAsm2` on an empty module, then the existing object
 emission), which removes the clang process for `-c` but not the dependency.
@@ -1331,9 +1332,11 @@ File offsets, string-table packing and symbol order within the local/global
 partitions may differ; `sh_info` must identify the exact partition boundary.
 Mutation tests cover the boundary, section order, links, info and entry sizes.
 The writer places each group before its members and each RELA section after its
-target. The tests also require disassembly with adjacent `llvm-objdump` or GNU
-`objdump`; COFF section checks require GNU `objdump`. A missing tool fails with
-an installation diagnostic instead of silently skipping verification. Native
+target. ELF and COFF byte/structure comparisons use independent Rust parsers
+and do not require inspection tools. Disassembly is an optional cross-check,
+using adjacent `llvm-objdump` or GNU `objdump` from PATH. Missing tools and
+unsupported object formats print an explicit `SKIP optional disassembly` line;
+all core comparisons still run. Native
 selection helpers check their ELF listings, and native assembly/run helpers
 check equivalence and link/run the direct ELF object. The latter also covers
 the difftest native oracle and native ABI conformance tests. Boundary fixtures
