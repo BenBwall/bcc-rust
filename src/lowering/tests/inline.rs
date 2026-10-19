@@ -766,6 +766,33 @@ fn always_inline_bodies_follow_clang_creation_order() {
         position("f") < position("g") && position("g") < position("h"),
         "{text}"
     );
+    // Code generation skips dead code, so a call there creates nothing:
+    // the unreachable `h` call, the code after `return`, and the
+    // constant-false operand leave Clang's order f, g, h (#109 review).
+    for dead in [
+        "if (0) h(0);",
+        "(void)(0 && h(0));",
+        "(void)(1 || h(0));",
+        "(void)(0 ? h(0) : 0);",
+    ] {
+        let text = lowered(&format!(
+            "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); \
+             inline __attribute__((always_inline)) int g(int); inline \
+             __attribute__((always_inline)) int h(int); inline __attribute__((always_inline)) int \
+             f(int x) {{ return x ? 2 * g(x - 1) : 1; }} inline __attribute__((always_inline)) \
+             int g(int x) {{ return x ? 3 * h(x - 1) : 1; }} inline \
+             __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : 1; }} int \
+             main(void) {{ {dead} printf(\"%d\\n\", f(6)); return 0; h(1); }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(
+            position("f") < position("g") && position("g") < position("h"),
+            "{dead}\n{text}"
+        );
+    }
 }
 
 /// A weak inline definition is a weak definition, emitted where it is

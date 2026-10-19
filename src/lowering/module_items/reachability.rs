@@ -128,14 +128,23 @@ impl<'a> Unit<'a, '_, '_> {
     /// (`CodeGenModule::EmitDeferred`). LLVM's always-inliner visits
     /// functions in this module order, so it decides which recursive inline
     /// calls stay calls; lowering declares `always_inline` bodies in it.
-    /// References are visited in source order, which is the order Clang
-    /// emits the expressions that name them. Indexed by binding.
+    /// Live references are visited in source order, which is the order
+    /// Clang emits the expressions that name them; a dead reference
+    /// ([`EntityReference::dead`](crate::translation_phases::semantic_analysis::EntityReference))
+    /// creates nothing, as Clang emits no code for it. Indexed by binding.
     pub(super) fn clang_creation_order(&self) -> ArenaVec<'a, Option<usize>> {
         let canonical = self.canonical_bindings();
         // References grouped by owner, in source order.
         let mut starts = ArenaVec::new_in(self.tables);
         starts.resize(canonical.len() + 1, 0usize);
-        for reference in self.sema.references {
+        // Clang's code generation skips dead code, which creates nothing.
+        let live = || {
+            self.sema
+                .references
+                .iter()
+                .filter(|reference| !reference.dead)
+        };
+        for reference in live() {
             starts[canonical[reference.owner] + 1] += 1;
         }
         for index in 1..starts.len() {
@@ -143,8 +152,8 @@ impl<'a> Unit<'a, '_, '_> {
         }
         let mut next = starts.clone();
         let mut targets = ArenaVec::new_in(self.tables);
-        targets.resize(self.sema.references.len(), 0usize);
-        for reference in self.sema.references {
+        targets.resize(starts[canonical.len()], 0usize);
+        for reference in live() {
             let owner = canonical[reference.owner];
             targets[next[owner]] = canonical[reference.binding];
             next[owner] += 1;

@@ -609,6 +609,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.references.push(super::EntityReference {
                         owner,
                         binding: usage.binding,
+                        dead: usage.dead,
                     });
                 }
                 if let Some(import) = usage.dll_import {

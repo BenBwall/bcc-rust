@@ -101,6 +101,10 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 pub(crate) struct EntityReference {
     pub(crate) owner:   usize,
     pub(crate) binding: usize,
+    /// The reference is in code that Clang's code generation skips (an
+    /// unreachable statement or a constant-false operand): it still keeps
+    /// what it names reachable, but creates no LLVM value there.
+    pub(crate) dead:    bool,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than
