@@ -1,7 +1,7 @@
-//! The native x86-64 back end: post-ABI bcc IR to AT&T assembly, which the
-//! bundled clang assembles and links. Stage 1 of
-//! `docs/design/native-backend.md`: integer and pointer code under the
-//! System V and Win64 conventions.
+//! The native x86-64 back end: post-ABI bcc IR to AT&T assembly, or opt-in
+//! direct ELF objects. Bundled clang assembles the text path and links both
+//! paths. See `docs/design/native-backend.md` for the System V and Win64
+//! conventions and the staged implementation.
 //!
 //! [`emit_assembly`] first checks that the back end supports everything
 //! the module uses (`support.rs`), so a module is compiled whole or refused
@@ -25,7 +25,8 @@
 //! - Machine IR: `mir.rs`.
 //! - Passes: `isel.rs` with `isel/`, `regalloc.rs` with `regalloc/`,
 //!   `frame.rs`.
-//! - Output: `emit.rs` (text), `driver.rs` (assembling and linking).
+//! - Output: `emit.rs` (shared listing), `object.rs` with `object/` (ELF
+//!   encoding, relaxation and unwind), `driver.rs` (output and linking).
 //! - `tests.rs` and `tests/`: selection, allocation and end-to-end tests.
 //!
 //! The back end is not a C translation phase; it implements the target ABIs
@@ -46,10 +47,14 @@ mod regalloc;
 // Output
 mod driver;
 mod emit;
+mod object;
 
 use std::fmt;
 
-pub(crate) use driver::assemble;
+pub(crate) use driver::{
+    assemble,
+    build_object,
+};
 pub(crate) use support::Unsupported;
 
 use self::{

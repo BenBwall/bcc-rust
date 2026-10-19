@@ -321,6 +321,10 @@ pub(super) struct CodeGeneration {
     /// support yet.
     #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
     pub(super) backend:              BackEnd,
+    /// Emit ELF objects in process with the native back end. COFF targets
+    /// retain clang assembly until the direct COFF writer is implemented.
+    #[arg(long, requires = "back_end")]
+    pub(super) native_object:        bool,
 }
 
 /// What `--emit` prints.
@@ -382,6 +386,9 @@ impl CodeGeneration {
             | Some(Emit::Llvm) if native =>
                 return Some("--emit=llvm prints LLVM IR, which --backend=native does not use"),
             | _ => {},
+        }
+        if self.native_object && !native {
+            return Some("--native-object requires --backend=native");
         }
         if !native {
             return None;
@@ -562,7 +569,12 @@ fn build_native(
         report_stderr(format_args!("error: {error}"));
         return FAILURE_STATUS;
     }
-    match native::assemble(&text, output, target, options.output_kind()) {
+    let result = if options.native_object {
+        native::build_object(&text, output, target, options.output_kind())
+    } else {
+        native::assemble(&text, output, target, options.output_kind())
+    };
+    match result {
         | Ok(()) => 0,
         | Err(error) => {
             report_stderr(format_args!(

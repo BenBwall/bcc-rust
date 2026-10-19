@@ -1344,7 +1344,12 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let target = format!("--target={target}");
         let path = |path: &Path| path.to_str().unwrap().to_owned();
         let executable = temporary("native-hello.exe");
-        for flags in [&[][..], &["--opt=bcc"][..]] {
+        for flags in [
+            &[][..],
+            &["--opt=bcc"][..],
+            &["--native-object"][..],
+            &["--native-object", "--opt=bcc"][..],
+        ] {
             let built = bcc(
                 HELLO,
                 &[
@@ -1368,12 +1373,18 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let run = run_native(&mut Command::new(&pair)).unwrap();
         assert_eq!(run.status.code(), Some(42));
         let object = temporary("native-hello.o");
-        let compiled = bcc(
-            HELLO,
-            &[&target, "--backend=native", "-c", "-o", &path(&object)],
-        );
-        assert!(compiled.status.success(), "{}", text(&compiled.stderr));
-        assert!(object.is_file());
+        for flags in [&[][..], &["--native-object"][..]] {
+            let compiled = bcc(
+                HELLO,
+                &[
+                    &[&target[..], "--backend=native", "-c", "-o", &path(&object)][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            assert!(compiled.status.success(), "{}", text(&compiled.stderr));
+            assert!(object.is_file());
+        }
         for file in [executable, pair, object] {
             drop(std::fs::remove_file(file));
         }
@@ -1428,6 +1439,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         );
         assert!(text(&asm.stdout).contains(".seh_proc\tmain"));
         for (flags, message) in [
+            (
+                &["--native-object", "--emit=ir"][..],
+                "error: --native-object requires --backend=native",
+            ),
             (
                 &["--emit=asm"][..],
                 "error: --emit=asm prints the native back end's assembly; add --backend=native",
