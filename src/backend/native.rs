@@ -217,6 +217,19 @@ pub(crate) fn emit_assembly_with<'m>(
     code: CodeOptions,
     out: &mut dyn fmt::Write,
 ) -> Result<(), NativeError<'m>> {
+    emit(module, target, code, out, |_, _| {})
+}
+
+/// Writes the module's assembly as [`emit_assembly_with`] does, letting
+/// `adjust` change each function's allocation before the rewrite: the tests
+/// put every value in a spill slot this way.
+fn emit<'m>(
+    module: &'m Module<'_>,
+    target: Target,
+    code: CodeOptions,
+    out: &mut dyn fmt::Write,
+    adjust: impl Fn(&mir::MFunction<'_>, &mut regalloc::Allocation<'_>),
+) -> Result<(), NativeError<'m>> {
     if !module.triple().is_empty() && Target::parse(module.triple()) != Some(target) {
         return Err(NativeError::TargetMismatch {
             module:    module.triple(),
@@ -243,7 +256,8 @@ pub(crate) fn emit_assembly_with<'m>(
                     function: Some(function.name),
                     construct,
                 })?;
-            let allocation = regalloc::allocate(&mut func, conv, arena);
+            let mut allocation = regalloc::allocate(&mut func, conv, arena);
+            adjust(&func, &mut allocation);
             regalloc::rewrite(&mut func, &allocation, arena);
             let frame = Frame::layout(&func, &allocation, conv, arena).map_err(|construct| {
                 Unsupported {

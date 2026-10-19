@@ -53,7 +53,8 @@ block2:
         Target::LinuxGnu,
     );
     let f = function_text(&text, "f");
-    assert!(f.contains("addl\t$5, "), "{f}");
+    // `v0` lives on, so the addition is a `lea` rather than `mov` and `add`.
+    assert!(f.contains("leaq\t5(%rdi), "), "{f}");
     assert!(f.contains("cmpl\t$100, "), "{f}");
     assert!(f.contains("\tjl\t") || f.contains("\tjge\t"), "{f}");
     assert!(!f.contains("setl"), "the branch compare is fused:\n{f}");
@@ -801,9 +802,11 @@ block0(v0: i64):
         f.contains("callq\t___chkstk_ms\n\tsubq\t"),
         "dynamic pages are probed:\n{f}"
     );
-    // The block starts 16-byte aligned above the outgoing arguments; the
-    // address rounds up into its 16 spare bytes, never down below it.
-    let round_up = f.find("addq\t$16, %").expect(f);
+    // The block starts 16-byte aligned above the outgoing arguments (32
+    // bytes of home area here); the address rounds up into its 16 spare
+    // bytes, never down below it. The `lea` of the block's start and the
+    // `add` of 16 combine.
+    let round_up = f.find("leaq\t48(%rsp), %").expect(f);
     assert!(f[round_up..].contains("andq\t$-32, "), "{f}");
     assert!(
         f.contains("(%rbp)"),
@@ -1180,8 +1183,9 @@ block0(v0: i32):
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         let text = assembly(ir, target);
         let f = function_text(&text, "f");
+        // The slot's address plus 63, in one `lea`, then rounded down.
         assert!(
-            f.contains("addq\t$63, ") && f.contains("andq\t$-64, "),
+            f.contains("63(%rsp), ") && f.contains("andq\t$-64, "),
             "{f}"
         );
         // 40 bytes and 48 spare, after the 16-byte-aligned frame.
@@ -1250,4 +1254,167 @@ block0(v0: f32):
             assert!(f[convert..].contains("xorq"), "{target:?}:\n{f}");
         }
     }
+}
+
+#[test]
+fn division_by_a_power_of_two_shifts() {
+    let text = assembly(
+        "abi lowered
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iconst.i32 4
+    v3 = sdiv.i32 v0, v2
+    v4 = srem.i32 v1, v2
+    v5 = udiv.i32 v0, v2
+    v6 = urem.i32 v1, v2
+    v7 = iadd.i32 v3, v4
+    v8 = iadd.i32 v5, v6
+    v9 = iadd.i32 v7, v8
+    return v9
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(!f.contains("div"), "{f}");
+    assert!(f.contains("sarl\t$2, "), "{f}");
+    assert!(f.contains("shrl\t$2, "), "{f}");
+    assert!(f.contains("andl\t$3, "), "{f}");
+    assert!(f.contains("andl\t$-4, "), "{f}");
+}
+
+#[test]
+fn scaled_offsets_fold_into_indexed_operands() {
+    let text = assembly(
+        "abi lowered
+function @f(ptr, i32) -> i32 external {
+block0(v0: ptr, v1: i32):
+    v2 = sext.i64 v1
+    v3 = iconst.i64 4
+    v4 = imul.i64 v2, v3
+    v5 = ptr_add v0, v4
+    v6 = iconst.i64 8
+    v7 = ptr_add v5, v6
+    v8 = load.i32 v7, align 4
+    store.i32 v8, v5, align 4
+    return v8
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("8(%rdi,%rax,4)") || f.contains("8(%rdi,%rcx,4)"),
+        "{f}"
+    );
+    assert!(!f.contains("shl"), "{f}");
+    assert!(!f.contains("imul"), "{f}");
+}
+
+#[test]
+fn indexed_symbol_bases_are_loaded_once() {
+    let text = assembly(
+        "abi lowered
+global @table internal size 64, align 4 = zero
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 slt v2, v0
+    brif v4, block2, block3
+block2:
+    v5 = sext.i64 v2
+    v6 = iconst.i64 4
+    v7 = imul.i64 v5, v6
+    v8 = global_addr @table
+    v9 = ptr_add v8, v7
+    v10 = load.i32 v9, align 4
+    v11 = iadd.i32 v3, v10
+    v12 = iconst.i32 1
+    v13 = iadd.i32 v2, v12
+    jump block1(v13, v11)
+block3:
+    return v3
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert_eq!(f.matches("leaq\ttable(%rip)").count(), 1, "{f}");
+    assert!(f.contains(",4), %e"), "{f}");
+}
+
+#[test]
+fn small_products_and_offsets_become_lea() {
+    let text = assembly(
+        "abi lowered
+function @f(i64, i64) -> i64 external {
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 3
+    v3 = imul.i64 v0, v2
+    v4 = iconst.i64 1
+    v5 = iadd.i64 v3, v4
+    v6 = iadd.i64 v1, v4
+    v7 = imul.i64 v6, v1
+    v8 = iadd.i64 v5, v7
+    return v8
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("leaq\t1(%rdi,%rdi,2), %"), "{f}");
+    assert!(f.contains("leaq\t1(%rsi), %"), "{f}");
+    assert!(!f.contains("imulq\t$3"), "{f}");
+}
+
+#[test]
+fn copies_and_32_bit_additions_become_lea() {
+    // `i + 1` while `i` lives on: one `lea` in place of `mov` and `add`.
+    let text = assembly(
+        "abi lowered
+function @f(i32, ptr) -> i32 external {
+block0(v0: i32, v1: ptr):
+    v2 = iconst.i32 1
+    v3 = iadd.i32 v0, v2
+    store.i32 v3, v1, align 4
+    v4 = imul.i32 v0, v3
+    return v4
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("leaq\t1(%rdi), %"), "{f}");
+}
+
+#[test]
+fn compares_fuse_into_every_user_in_any_block() {
+    let text = assembly(
+        "abi lowered
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = icmp.i32 slt v0, v1
+    v3 = iconst.i32 7
+    v4 = iadd.i32 v0, v3
+    jump block1
+block1:
+    v5 = select.i32 v2, v4, v1
+    brif v2, block2, block3
+block2:
+    return v5
+block3:
+    v6 = select.i32 v2, v1, v0
+    return v6
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(
+        !f.contains("set"),
+        "no compare result is materialized:\n{f}"
+    );
+    assert!(f.matches("cmpl\t").count() >= 2, "{f}");
 }

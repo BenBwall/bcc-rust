@@ -1224,19 +1224,28 @@ impl fmt::Display for Op<'_, '_, '_> {
         match self.operand {
             | Operand::Reg(reg) => write!(f, "{}", RegName(reg.phys(), self.width)),
             | Operand::Imm(imm) => write!(f, "${imm}"),
-            | Operand::Mem(Mem { base, disp }) => {
+            | Operand::Mem(Mem { base, index, disp }) => {
                 let module = self.module;
+                let index = fmt::from_fn(|f| match index {
+                    | Some(index) => write!(
+                        f,
+                        ",{},{}",
+                        RegName(index.reg.phys(), Width::B64),
+                        index.scale
+                    ),
+                    | None => Ok(()),
+                });
                 match base {
                     | Base::Reg(reg) => {
                         if disp != 0 {
                             write!(f, "{disp}")?;
                         }
-                        write!(f, "({})", RegName(reg.phys(), Width::B64))
+                        write!(f, "({}{index})", RegName(reg.phys(), Width::B64))
                     },
                     | Base::Frame(object) => {
                         let (base, offset) = self.frame.address(object);
                         let offset = offset + i64::from(disp);
-                        write!(f, "{offset}({})", RegName(base, Width::B64))
+                        write!(f, "{offset}({}{index})", RegName(base, Width::B64))
                     },
                     | Base::Constant(index) => {
                         write!(f, "{}", ConstantLabel(self.func, index as usize))?;

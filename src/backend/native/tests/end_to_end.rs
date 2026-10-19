@@ -10,11 +10,14 @@ use std::{
     thread,
 };
 
-use super::programs::{
-    PROGRAMS,
-    SSE_UNSIGNED_CONVERSIONS,
-    SSE_UNSIGNED_CONVERSIONS_OUTPUT,
-    WIDE_FLOAT_PROGRAMS,
+use super::{
+    programs::{
+        PROGRAMS,
+        SSE_UNSIGNED_CONVERSIONS,
+        SSE_UNSIGNED_CONVERSIONS_OUTPUT,
+        WIDE_FLOAT_PROGRAMS,
+    },
+    spilled_assembly,
 };
 use crate::{
     abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,
@@ -192,14 +195,16 @@ fn run_assembly(
     })
 }
 
-/// One compilation to check: a program, a target, and whether the bcc
-/// pipeline runs first.
+/// One compilation to check: a program, a target, whether the bcc
+/// pipeline runs first, and whether every value is spilled (see
+/// `spill_everything`).
 struct Job<'a> {
     name:     &'a str,
     source:   &'a str,
     target:   Target,
     runner:   Runner,
     optimize: bool,
+    spill:    bool,
 }
 
 /// What one job found.
@@ -216,10 +221,15 @@ enum Verdict {
 fn check(job: &Job<'_>, directory: &Path) -> Verdict {
     let compiled = with_module(job.source, job.target, job.optimize, |module| {
         let expected = interpret(module, job.target);
-        let mut text = String::new();
-        let assembly =
-            emit_assembly(module, job.target, &mut text).map_err(|error| error.to_string());
-        (expected, assembly.map(|()| text))
+        let assembly = if job.spill {
+            spilled_assembly(module, job.target)
+        } else {
+            let mut text = String::new();
+            emit_assembly(module, job.target, &mut text)
+                .map(|()| text)
+                .map_err(|error| error.to_string())
+        };
+        (expected, assembly)
     });
     let (expected, text) = match compiled {
         | (_, Err(refusal)) => return Verdict::Refused(refusal),
@@ -227,10 +237,11 @@ fn check(job: &Job<'_>, directory: &Path) -> Verdict {
         | (Ok(expected), Ok(text)) => (expected, text),
     };
     let name = format!(
-        "{}-{:?}-{}",
+        "{}-{:?}-{}{}",
         job.name,
         job.target,
-        if job.optimize { "bcc" } else { "none" }
+        if job.optimize { "bcc" } else { "none" },
+        if job.spill { "-spilled" } else { "" }
     );
     match run_assembly(&text, job.target, job.runner, directory, &name) {
         | Ok(actual) => {
@@ -301,6 +312,7 @@ fn native_programs_match_the_interpreter() {
                     target,
                     runner,
                     optimize,
+                    spill: false,
                 });
             }
         }
@@ -321,6 +333,105 @@ fn native_programs_match_the_interpreter() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// Every program again with every value in a spill slot for its whole
+/// life, so that every operand of every instruction the selector makes
+/// goes through the spill code: an indexed store or ALU operation then
+/// reads three spilled general registers, and its address goes through a
+/// `lea` into a scratch register.
+#[test]
+fn programs_with_every_value_spilled_match_the_interpreter() {
+    if crate::backend::llvm::Toolchain::bundled(Target::WindowsGnu).is_err() && cfg!(windows) {
+        eprintln!("skipping: no bundled toolchain");
+        return;
+    }
+    let directory = TempDir::new("native-spilled");
+    let mut jobs = Vec::new();
+    for (target, runner) in targets() {
+        for program in PROGRAMS {
+            for optimize in [false, true] {
+                jobs.push(Job {
+                    name: program.name,
+                    source: program.source,
+                    target,
+                    runner,
+                    optimize,
+                    spill: true,
+                });
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for (job, verdict) in jobs.iter().zip(check_all(&jobs, directory.path())) {
+        match verdict {
+            | Verdict::Passed => {},
+            | Verdict::Refused(refusal) =>
+                failures.push(format!("{} {:?}: refused: {refusal}", job.name, job.target)),
+            | Verdict::NoOracle => failures.push(format!(
+                "{} {:?}: the interpreter traps",
+                job.name, job.target
+            )),
+            | Verdict::Failed(failure) => failures.push(failure),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// Every program the native back end accepts compiles for both calling
+/// conventions with its own allocation and with every value spilled, and
+/// the allocation checker (on in debug builds) proves each function: the
+/// conventions this host cannot run are checked here too.
+#[test]
+fn every_value_spilled_passes_the_checker_under_both_conventions() {
+    let programs = PROGRAMS
+        .iter()
+        .chain(WIDE_FLOAT_PROGRAMS)
+        .chain([&SSE_UNSIGNED_CONVERSIONS])
+        .map(|program| (program.name, program.source))
+        .chain(
+            LOWERING_PROGRAMS
+                .iter()
+                .chain(BY_VALUE_PROGRAMS)
+                .map(|program| (program.name, program.source)),
+        )
+        .collect::<Vec<_>>();
+    let parallelism = thread::available_parallelism()
+        .map_or(4, usize::from)
+        .min(8);
+    let mut failures = Vec::new();
+    for chunk in programs.chunks(parallelism.div_ceil(2).max(1)) {
+        thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .flat_map(|&(name, source)| {
+                    [Target::LinuxGnu, Target::WindowsGnu].map(|target| {
+                        scope.spawn(move || {
+                            let mut failures = Vec::new();
+                            for optimize in [false, true] {
+                                with_module(source, target, optimize, |module| {
+                                    let mut text = String::new();
+                                    if emit_assembly(module, target, &mut text).is_err() {
+                                        // Refused before allocation.
+                                        return;
+                                    }
+                                    if let Err(error) = spilled_assembly(module, target) {
+                                        failures
+                                            .push(format!("{name} {target:?} {optimize}: {error}"));
+                                    }
+                                });
+                            }
+                            failures
+                        })
+                    })
+                })
+                .collect();
+            for handle in handles {
+                failures.extend(handle.join().expect("a compilation does not panic"));
+            }
+        });
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn accepted_lowering_programs_match_the_interpreter() {
     let directory = TempDir::new("native-lowering-programs");
@@ -334,6 +445,7 @@ fn accepted_lowering_programs_match_the_interpreter() {
                     target,
                     runner,
                     optimize,
+                    spill: false,
                 });
             }
         }
@@ -706,6 +818,14 @@ fn ir_programs_match_the_interpreter() {
                 "{target:?}
 {text}"
             );
+            let text = spilled_assembly(&module, target).unwrap();
+            let name = format!("ir{index}-{target:?}-spilled");
+            let actual = run_assembly(&text, target, runner, directory.path(), &name).unwrap();
+            assert_eq!(
+                actual, expected,
+                "{target:?}, every value spilled
+{text}"
+            );
         }
     }
 }
@@ -870,7 +990,8 @@ fn run_llvm(
     })
 }
 
-/// Compiles `module` with both back ends and compares the runs.
+/// Compiles `module` with both back ends, the native one also with every
+/// value spilled, and compares the runs.
 fn check_against_llvm(
     module: &Module<'_>,
     target: Target,
@@ -879,19 +1000,25 @@ fn check_against_llvm(
 ) -> Result<(), String> {
     let mut text = String::new();
     emit_assembly(module, target, &mut text).map_err(|error| format!("{name}: {error}"))?;
+    let spilled =
+        spilled_assembly(module, target).map_err(|error| format!("{name}, spilled: {error}"))?;
     let expected = run_llvm(module, target, directory, name)?;
     if expected.stdout.trim().is_empty() {
         return Err(format!("{name}: the program printed nothing: {expected:?}"));
     }
-    let actual = run_assembly(&text, target, Runner::Native, directory, name)?;
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(format!(
-            "{name}: the LLVM back end's executable did {expected:?}, the native one \
-             {actual:?}\n{text}"
-        ))
+    for (text, name) in [
+        (text, name.to_owned()),
+        (spilled, format!("{name}-spilled")),
+    ] {
+        let actual = run_assembly(&text, target, Runner::Native, directory, &name)?;
+        if actual != expected {
+            return Err(format!(
+                "{name}: the LLVM back end's executable did {expected:?}, the native one \
+                 {actual:?}\n{text}"
+            ));
+        }
     }
+    Ok(())
 }
 
 /// Every target's native back end compiles the wide-float programs,
@@ -960,7 +1087,8 @@ fn wide_float_programs_match_the_llvm_back_end() {
 
 /// `double` and `float` values at or above 2^63 convert to unsigned
 /// without the "invalid" exception that converting them signed would
-/// raise. The links name `fetestexcept`, which WSL's link has no `-lm` for.
+/// raise, with its own allocation and with every value spilled. The links
+/// name `fetestexcept`, which WSL's link has no `-lm` for.
 #[test]
 fn sse_unsigned_conversions_raise_no_invalid_exception() {
     let directory = TempDir::new("native-unsigned-conversions");
@@ -970,13 +1098,22 @@ fn sse_unsigned_conversions_raise_no_invalid_exception() {
             eprintln!("skipping {target:?}: the program links with the C library's fenv");
             continue;
         }
-        for optimize in [false, true] {
-            let name = format!("{}-{target:?}-{optimize}", program.name);
+        for (optimize, spill) in [(false, false), (true, false), (false, true), (true, true)] {
+            let name = format!(
+                "{}-{target:?}-{optimize}{}",
+                program.name,
+                if spill { "-spilled" } else { "" }
+            );
             let run = with_module(program.source, target, optimize, |module| {
-                let mut text = String::new();
-                emit_assembly(module, target, &mut text).unwrap_or_else(|error| {
-                    panic!("{name}: {error}");
-                });
+                let text = if spill {
+                    spilled_assembly(module, target)
+                } else {
+                    let mut text = String::new();
+                    emit_assembly(module, target, &mut text)
+                        .map(|()| text)
+                        .map_err(|error| error.to_string())
+                }
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
                 run_assembly(&text, target, runner, directory.path(), &name)
             })
             .unwrap_or_else(|error| panic!("{name}: {error}"));

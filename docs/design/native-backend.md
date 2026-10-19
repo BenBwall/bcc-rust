@@ -1,7 +1,8 @@
 # Native x86-64 back end
 
-Status: design, with stages 1 and 3 and most of stage 2 implemented in
-`src/backend/native/` (2026-10-18); see "Implementation status" at the end.
+Status: design, with stages 1 and 3, most of stage 2 and most of stage 4
+implemented in `src/backend/native/` (2026-10-19); see "Implementation
+status" at the end.
 
 This document designs bcc-rust's own code generator for x86-64: the path from
 the post-ABI bcc IR to assembly and, later, to object files, without LLVM. It
@@ -98,9 +99,10 @@ can later enable v2/v3 forms.
           │ per function, in a scratch arena reset between functions:
           │   instruction selection   IR → machine IR over virtual registers;
           │                           block parameters → parallel copies
-          │   liveness, intervals     iterative dataflow; one range per vreg
-          │   register allocation     linear scan, fixed-register ranges
-          │   rewrite                 physical registers, spill code, copies
+          │   liveness, intervals     iterative dataflow; ranges with holes
+          │   register allocation     coalescing, linear scan with splitting
+          │   rewrite                 physical registers, moves; checker
+          │                           (debug), `lea` peepholes, loop rotation
           │   frame layout            callee-saved, spills, slots, out-args
           │   emission                prologue/epilogue, unwind directives
           ▼
@@ -213,14 +215,21 @@ expander is easy to make total (every opcode has a case; anything else is
    loop, and the allocator never spills one. A `poison` materializes as zero,
    consistently at every use.
 2. **Address folding.** A load or store whose address is a `stack_addr`, a
-   defined `global_addr`, or a `ptr_add` of a register and a constant that
-   fits 32 bits becomes one memory operand (`disp(base)`), recursively over a
-   chain of constant `ptr_add`s (iteratively: the selector walks the chain
-   with a loop, not a recursive call).
-3. **Compare fusion.** An `icmp` whose only use is the `brif` or `select` of
-   the same block, with no intervening flag-clobbering instruction, is not
-   materialized: the selector emits `cmp` immediately before the `jcc` or
-   `cmov`. Otherwise `icmp` produces a canonical `i1` with `setcc`/`movzbl`.
+   defined `global_addr`, or a chain of `ptr_add`s becomes one memory
+   operand: constants go into the displacement and one register offset into
+   the index (stage 4), scaled when an `imul` by 1, 2, 4 or 8 or a `shl` by
+   at most 3 computed it (`disp(base, index, scale)`; iteratively: the
+   selector walks the chain with a bounded loop, not a recursive call). A
+   symbol base with an index, which RIP-relative addressing cannot take, is
+   loaded into a register once at the function's entry. A `ptr_add` that is
+   materialized is one `lea` of the same address.
+3. **Compare fusion.** An `icmp` whose every use is the condition of a
+   `brif` or `select` is not materialized: the selector emits the `cmp`
+   again immediately before each user's `jcc` or `cmov`, in whatever block
+   the user is (stage 4; stage 1 fused only the one user in the compare's
+   own block). The compare's operands dominate every user, so they are
+   available there. Otherwise `icmp` produces a canonical `i1` with
+   `setcc`/`movzbl`.
 
 Use counts come from one pass over the function's operands; the IR has no use
 lists and the selector does not need them otherwise.
@@ -230,14 +239,14 @@ The selector's per-opcode table for stage 1:
 | IR | Machine code |
 | --- | --- |
 | `iadd`/`isub`/`and`/`or`/`xor` | `mov d, a; op d, b` (two-address); `b` may be an immediate |
-| `imul` | `mov d, a; imul d, b`, or `imul d, a, $imm` |
-| `sdiv`/`srem`, `udiv`/`urem` | narrow operands extended to 32 bits; `mov %rax, a; cltd/cqto` or `xor %edx,%edx`; `idiv`/`div b`; result from `%rax` or `%rdx` |
+| `imul` | `mov d, a; imul d, b`, or `imul d, a, $imm`; a power of two is a shift and a 64-bit product by 3, 5 or 9 a `lea` (stage 4) |
+| `sdiv`/`srem`, `udiv`/`urem` | narrow operands extended to 32 bits; `mov %rax, a; cltd/cqto` or `xor %edx,%edx`; `idiv`/`div b`; result from `%rax` or `%rdx`. By a power of two (stage 4): `shr`, `and`, or for signed operands the dividend plus its sign shifted down, then `sar` or `and` and `sub` |
 | `shl`/`lshr`/`ashr` | amount in `%cl` (or an immediate masked to the width); `lshr`/`ashr` extend a narrow operand first |
 | `icmp` | `cmp a, b` at the operand width, then `setcc` + `movzbl`, or fused |
 | `select` | `test c`/fused `cmp`; `mov d, b; cmovcc d, a` at 32 or 64 bits |
 | `zext`/`sext`/`trunc` | `movzbl`/`movzwl`/`movl`, `movsbl`/`movswl`/`movslq`/…, or a copy |
 | `ptrtoint`/`inttoptr`/`bitcast`/`freeze` | a copy (an `inttoptr` from a narrower integer zero-extends) |
-| `ptr_add` | `leaq off(base), d` for a constant offset, else `mov d, base; add d, off` |
+| `ptr_add` | `leaq` of the folded address (`off(base)`, `off(base, index, scale)`), else `mov d, base; add d, off` |
 | `load`/`store` | `mov` of the access width; narrow loads zero-extend into 32 bits |
 | `clz`/`ctz` (+`_defined`) | `bsr`/`bsf`; `_defined` adds `cmov` from the width on zero; `clz` computes `width-1 - bsr` with `xor` |
 | `popcount` | the 12-instruction SWAR sequence (x86-64 v1 has no `popcnt`) |
@@ -322,9 +331,10 @@ pub(crate) enum Reg { Phys(PReg), Virt(VReg) }
 /// Operand width; selects the instruction suffix and sub-register name.
 pub(crate) enum Width { B8, B16, B32, B64 }
 
-/// A memory operand: `disp(base)`. An index register (`disp(base, index, scale)`)
-/// comes with stage 4's addressing-mode selection.
-pub(crate) struct Mem { base: Base, disp: i32 }
+/// A memory operand: `disp(base)` or `disp(base, index, scale)`; only a
+/// register or frame base takes an index (stage 4).
+pub(crate) struct Mem { base: Base, index: Option<Index>, disp: i32 }
+pub(crate) struct Index { reg: Reg, scale: u8 }   // scale 1, 2, 4 or 8
 
 pub(crate) enum Base {
     Reg(Reg),
@@ -406,82 +416,145 @@ register for the same reason.
 
 ### Register allocation
 
-**Stage 1: linear scan over whole live intervals with fixed-register ranges**
-(Poletto and Sarkar, "Linear Scan Register Allocation", TOPLAS 1999), with
-hints and whole-interval spilling. It is linear in the number of intervals
-after sorting, simple to check, and non-recursive by construction.
+**Stage 4 (as built): linear scan over split intervals with lifetime holes**
+(Wimmer and Mössenböck, "Optimized Interval Splitting in a Linear Scan
+Register Allocator", VEE 2005, the successor of Traub et al.'s second-chance
+binpacking), after copy coalescing, with fixed-register ranges, proven by a
+symbolic checker. Every pass is a linear walk, a worklist or a binary heap;
+nothing recurses.
 
-1. **Numbering.** Machine instructions are numbered in block layout order;
+1. **Critical edges.** A conditional branch's edge to a block with several
+   predecessors gets an empty block of its own (placed right after the
+   branch), so every edge has a place for moves. An indirect jump's edges
+   cannot be split; values live across them keep one location.
+2. **Numbering.** Machine instructions are numbered in block layout order;
    instruction *i* reads its uses at position `2i` and writes its defs at
    `2i+1`, so a value that dies at an instruction can share a register with
-   the value it defines (x86 reads all inputs before writing outputs).
-2. **Liveness.** Per-block use/def bit sets, then backward iterative dataflow
-   (`live_in = use ∪ (live_out − def)`) over blocks in reverse layout order
-   until nothing changes. Bit sets are `u64` words in the function arena.
-3. **Intervals.** One range `[start, end]` per vreg: the minimum and maximum
-   position at which it is defined, used or live across a block boundary. A
-   value live into a loop header and out of the latch covers the whole loop.
-   The single range ignores holes, which costs registers but never
-   correctness.
-4. **Fixed ranges.** A backward walk per block records for each physical
+   the value it defines (x86 reads all inputs before writing outputs). Moves
+   the allocator inserts go *between* instructions, so intervals are split
+   only at even positions.
+3. **Liveness and dead code.** Per-block use/def bit sets, then backward
+   iterative dataflow (`live_in = use ∪ (live_out − def)`) until nothing
+   changes, in `u64` words in the function arena. A backward walk removes
+   pure instructions whose results are dead, and arithmetic whose results
+   and flags are (the `mov`/`add` of a `ptr_add` a load folded), repeating
+   until nothing changes.
+4. **Intervals.** Each vreg's interval is a sorted list of half-open ranges
+   with lifetime holes, built backward over the blocks (Wimmer and Franz,
+   CGO 2010, `BuildIntervals`), plus the positions where an instruction
+   needs it in a register. A read through a *memory source operand* (the
+   source of `mov`, `movzx`/`movsx`, integer ALU operations, `cmp`, scalar
+   SSE operations but `xorps`) is not such a position: a spilled value is
+   read from its slot there.
+5. **Fixed ranges.** A backward walk per block records for each physical
    register the ranges where a precolored value lives (from its `mov` def to
    its use) and the single position `2i+1` of each clobber (calls clobber all
-   caller-saved registers). An interval may take register *r* only if it
-   overlaps no fixed range of *r*; a value live across a call therefore
-   overlaps every caller-saved clobber and gets a callee-saved register or the
-   stack, without special cases.
-5. **Scan.** Intervals sorted by start; an active list expires intervals that
-   end before the current start. The current interval takes its hint if free
-   and fixed-compatible, else the first free compatible register in the
-   allocation order. When none is free it spills the interval, among itself
-   and the active intervals whose register is compatible, that ends last
-   (Poletto's heuristic).
-6. **Rewrite.** Virtual registers become their physical registers; identity
-   moves are deleted. A spilled vreg lives in its own 8-byte spill slot for
-   its whole life; each instruction that uses it loads it into a *reserved
-   scratch register* first and each that defines it stores it afterwards.
-   Stage 1 reserves `%r10` and `%r11` (caller-saved in both conventions and
-   never argument registers; no MIR instruction names more than two distinct
-   vregs, so two suffice).
+   caller-saved registers). An interval may hold register *r* only where it
+   meets no fixed range of *r*, which keeps the call, division, shift and
+   string-instruction constraints and the conventions' saved sets without
+   special cases.
+6. **Coalescing.** Copies between vregs whose intervals do not overlap are
+   joined, deepest loop first, into one interval (union-find over the
+   representatives; later candidates test against the union). The copy
+   becomes a move between a register and itself, which the rewrite deletes;
+   `mov t, i; add t, 1` and a back edge's `i := t` become one `add` in place.
+7. **Scan.** A binary heap orders intervals by start. *Active* intervals hold
+   a register at the current position, *inactive* ones are in a hole. The
+   current interval takes a register free for its whole life (its hint
+   first: a register a copy connects it to, or the previous piece's), else
+   the register free longest, splitting itself where that register is next
+   needed, preferably at a block boundary of a shallower loop. When none is
+   free, the register whose occupants are next needed latest is taken: an
+   occupant used in the innermost loop around the position and live around
+   its back edge counts as needed at the loop's end. The occupants leave the
+   register at the shallowest boundary after their last use, wait in their
+   spill slots, and return to the heap just before their next use that needs
+   a register (hoisted to a shallower block boundary when there is one). If
+   the current interval is needed later than every occupant, it is the one
+   spilled up to its first use. A piece that must keep one location
+   (across an indirect jump) or that no register can be taken for stays in
+   its slot and goes through the scratch registers (`%r11`/`%r10`,
+   `%xmm15`/`%xmm14`, still reserved), a fallback that never fails: a value
+   an instruction only defines shares a scratch register with one it only
+   reads, and an instruction reading three spilled general registers (an
+   indexed store's base, index and value) first computes its address into
+   `%r11` with a flag-preserving `lea`.
+8. **Resolution.** Each vreg's pieces become `(from position, location)`
+   lists. A move goes where a split falls inside a block while the value is
+   live on both sides, and on each edge whose ends disagree: at the start of
+   a successor with one predecessor, else at the end of a predecessor with
+   one successor (split moves before edge moves there). The moves at one
+   place form a parallel copy, sequentialized with a scratch register for
+   cycles.
+9. **Rewrite, check and cleanup.** Vregs become their locations at each
+   instruction and the moves go in. Debug builds (so every test) then run
+   the **symbolic checker** (`regalloc/checker.rs`): an abstract
+   interpretation of the rewritten function against the virtual-register
+   program, as in `regalloc2`, but over the final machine code. Its state is
+   the set of facts "location *L* holds the current value of *v*"; a program
+   instruction must be the original with registers replaced and read
+   locations holding the values the original read, an inserted instruction
+   must be a whole-register move or the `lea` of an indexed address (whose
+   destination then holds the symbolic address `b + i × s`, stale once `b`
+   or `i` is redefined, which the instruction using `d(r)` for `d(b, i, s)`
+   must find in `r`), and states meet by intersection at joins
+   until a fixed point. Then identity copies go, a copy followed by an
+   addition (or a `lea` followed by one) becomes one `lea` where the flags
+   are dead, a copy straight back after a copy goes, blocks holding only a
+   `jmp` are threaded away, and a `jmp` to a block of at most eight
+   instructions that ends in a conditional branch takes a copy of it when
+   the copy's branch can fall through or take a loop's back edge (loop
+   rotation: the back edge tests the condition itself).
 
 Allocation order: caller-saved registers first (no save cost) — `%rax %rcx
 %rdx %rsi %rdi %r8 %r9` on System V, `%rax %rcx %rdx %r8 %r9` on Win64 — then
 callee-saved `%rbx %r12 %r13 %r14 %r15 %rbp` (plus `%rsi %rdi` on Win64).
-The frame pointer is omitted, so `%rbp` is allocatable.
+The frame pointer is omitted, so `%rbp` is allocatable. SSE registers go
+`%xmm0`-`%xmm13`; on Win64 `%xmm6` and up are callee-saved and saved by the
+frame when written. x87 values are never allocated (see "Legalization").
 
 ```rust
-struct Interval { vreg: VReg, start: u32, end: u32, hint: Option<PReg> }
-/// Sorted, disjoint fixed ranges of one physical register.
-struct FixedRanges<'a> { ranges: [ArenaVec<'a, (u32, u32)>; 16] }
-enum Location { Reg(PReg), Spill(u32) }
-struct Allocation<'a> { locations: &'a [Location], used_callee_saved: PRegSet, spill_slots: u32 }
+/// One piece of a vreg's lifetime (`regalloc/intervals.rs`).
+struct Interval<'a> {
+    vreg: VReg, class: RegClass,
+    ranges: ArenaVec<'a, (u32, u32)>,   // sorted, disjoint, half-open
+    uses: ArenaVec<'a, u32>,             // positions that need a register
+    from: u32,                           // split position this piece starts at
+    loc: Loc, hint: Option<PReg>,
+    carried: bool,                       // live across `from` inside a block
+    unsplittable: bool,                  // live across an indirect jump
+}
+enum Location { None, Reg(PReg), Spill(u32) }
+struct Allocation<'a> {
+    rep: ArenaVec<'a, VReg>,                 // coalescing representatives
+    pieces: ArenaVec<'a, (u32, Location)>,   // per representative, by position
+    edits: ArenaVec<'a, Edit>,               // moves by block, instruction, phase
+    spill_slots: u32,
+    fallbacks: u32,
+}
 ```
 
-Debug builds check the result: no two overlapping intervals share a register,
-and no interval overlaps a fixed range of its register.
+**Stage 1** (replaced) scanned one interval per vreg from its first to its
+last position (Poletto and Sarkar, TOPLAS 1999), with hints, and spilled
+whole intervals, reloading every use through the scratch registers.
 
-**Later stages** (4) keep the interface (`MFunction` in, `Allocation` out) and
-improve quality behind it:
+Still open behind the same interface:
 
-- *Splitting.* Intervals with holes (a list of ranges), split at block
-  boundaries and around calls, with spill code placed at split points rather
-  than at every use; second-chance binpacking (Traub et al.) or a greedy
-  priority-queue allocator in the style of LLVM's `RegAllocGreedy`.
-- *Coalescing.* Join copy-related intervals that do not interfere before
-  allocation (the hints cover the common case in stage 1).
-- *Rematerialization* of constants and addresses is already structural
-  (stage 1 never allocates them).
-- *Memory operands.* Use a spilled value directly as an instruction's memory
-  operand instead of reloading it through a scratch register, then stop
-  reserving `%r10`/`%r11`.
+- *Rematerialization* instead of spilling. Constants and most addresses are
+  already rematerialized structurally (the selector never allocates them);
+  the hoisted symbol bases of indexed operands are spilled and reloaded
+  like any value.
+- *Stop reserving the scratch registers.* The scan's fallback still needs
+  them; with memory operands and splitting it is rare.
+- *Value-based coalescing* of copies whose intervals overlap while both hold
+  the same value.
 - *`regalloc2`.* The `regalloc2` crate (Cranelift's allocator) was evaluated
   against the arena rules: it allocates its working state from the global
   allocator, takes its input through a trait over `Vec`-backed structures and
   recurses in places, so adopting it would need an `#[expect]`-wrapped
   boundary and an exception to `tests/allocation_count.rs`. Its
-  `Function` trait is a good model for keeping our own allocator replaceable;
-  its symbolic checker (abstract interpretation of the allocated code against
-  the vreg program) is the right verification design for stage 4.
+  `Function` trait was a good model for keeping our own allocator
+  replaceable, and its checker the model for ours.
 
 ### Frame layout
 
@@ -511,9 +584,10 @@ Microsoft "x64 stack usage": "The stack will always be maintained 16-byte
 aligned, except within the prolog"). Every call is made at that alignment.
 
 - **System V red zone.** A leaf function may use the 128 bytes below `%rsp`
-  without moving it (psABI §3.2.2). Stage 1 always moves `%rsp`; using the red
-  zone for small leaf frames is a stage 4 peephole that saves the `sub`/`add`
-  and the CFA updates.
+  without moving it (psABI §3.2.2). The back end still always moves `%rsp`;
+  using the red zone for small leaf frames is a stage 4 item left open (see
+  "Stage 4"), since it changes the prologue, the epilogue and the unwind
+  information that stage 5's object writer generates.
 - **Win64 shadow space.** A caller reserves 32 bytes above its outgoing
   arguments for the callee to home `%rcx`, `%rdx`, `%r8`, `%r9`; every
   function that calls reserves it, even for callees with fewer parameters
@@ -739,7 +813,7 @@ Following [CONTRIBUTING.md](../../CONTRIBUTING.md#source-layout):
 | `native/conv.rs` | `CallConv`: argument and result registers, saved sets, shadow space |
 | `native/mir.rs` | the machine IR: registers, operands, instructions, blocks |
 | `native/isel.rs` | instruction selection, with `isel/calls.rs` (calls, returns, entry, `va_start`), `isel/edges.rs` (terminators and parallel copies), `isel/memory.rs` (addresses, loads, stores, `copy`, `fill`), `isel/float.rs` (SSE), `isel/wide.rs` (`i128` pairs), `isel/x87.rs` (`f80`), `isel/quad.rs` (`f128` and the conversions that call the runtime) and `isel/stack.rs` (dynamic allocation) |
-| `native/regalloc.rs` | linear scan, with `regalloc/liveness.rs` (liveness, intervals, fixed ranges) and `regalloc/rewrite.rs` (spill code and physical rewrite) |
+| `native/regalloc.rs` | the allocator's entry and `Allocation`, with `regalloc/edges.rs` (critical edges, jump threading, loop rotation), `regalloc/liveness.rs` (liveness, dead code, intervals, fixed ranges), `regalloc/intervals.rs`, `regalloc/coalesce.rs`, `regalloc/scan.rs` (the split-interval scan), `regalloc/resolve.rs` (pieces and moves), `regalloc/rewrite.rs` (physical rewrite and parallel moves), `regalloc/checker.rs` (the symbolic checker) and `regalloc/peephole.rs` (`lea` combining) |
 | `native/frame.rs` | frame layout, prologue and epilogue |
 | `native/emit.rs` | AT&T text: instructions, functions, globals, symbols |
 | `native/driver.rs` | the assembly file and the bundled clang invocation |
@@ -761,7 +835,9 @@ The assembly text accumulates in one `ArenaString` in a module-lifetime arena.
    family, that a value live across a call gets a callee-saved register or a
    spill slot, that pressure above the register count spills without
    overlapping, that block-parameter swaps go through a temporary, and that
-   the allocation checker accepts every function of the test programs.
+   the allocation checker accepts every function of the test programs (it
+   runs on every function in debug builds) and rejects allocations broken
+   on purpose.
 3. **End-to-end programs** (`native/tests/programs.rs`): small C programs
    covering arithmetic at every width, signed and unsigned division and
    shifts, comparisons, loops with block parameters, recursion, calls with
@@ -799,7 +875,7 @@ Sizes are estimated Rust lines including tests.
 | 1 | Integer and pointer code: arithmetic, comparisons, branches, switch chains, block parameters, direct and indirect calls (SysV and Win64, stack arguments, calls to variadic functions), stack slots, loads and stores, globals with relocated initializers, `copy`/`fill` inline or through `rep movsb`/`memmove`, bit operations, `sret`/`byval`/integer `registers`; linear scan with spilling; assembly text through clang; `--backend=native`, `--emit=asm`; arms B0/B1 in the torture survey | 5-6k | e2e programs match the interpreter on Windows and WSL; difftest native oracle clean; torture survey: zero native wrong results where A0 passes, zero crashes | done |
 | 2 | Variadic definitions (`va_start` save areas), `dyn_alloca`/`stack_save`/`stack_restore` with a frame pointer, inline `copy`/`fill` for small constant sizes; over-aligned slots and jump tables for dense switches | 2k | torture: every integer-only source A0 passes also passes B0 | done except jump tables (and stack arguments aligned above 16) |
 | 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done |
-| 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | B1/A1 is 1.25-1.40× on Windows already; the allocator work is open |
+| 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | done except the red zone; B1/A1 1.05× on native Linux (from 1.42×); checker clean on every test, torture corpus not yet run with it |
 | 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | open |
 | 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | open |
 
@@ -969,6 +1045,9 @@ shows where:
 5. **Compare results through `setcc`** feed arithmetic (`a != b` added to an
    integer) where `sbb`/`adc` idioms are shorter.
 
+Stage 4 addressed the first four (see "Stage 4: register allocation and
+code quality"); the fifth is still open.
+
 Compile time is comparable: median whole-process build 1.29-1.51 s for B0/B1
 against 1.09-1.25 s for N/A1, the difference being the extra clang run that
 assembles the text.
@@ -1092,3 +1171,107 @@ failed, 7 ignored. The GCC torture survey was not rerun: the full
 `gcc.c-torture/execute` corpus is not on the Linux host used, so the 16
 `f80` refusals of the last Windows survey are expected to become passes
 but are not yet measured.
+
+### Stage 4: register allocation and code quality
+
+Done on 2026-10-19, in the order the measurements asked for:
+
+- **The symbolic allocation checker** came first and guards everything
+  after it (`regalloc/checker.rs`, described under "Register allocation").
+  Debug builds run it on every function, so every native test, the
+  difftest native oracle and the ABI conformance tests run it; unit tests
+  corrupt allocations on purpose (a value left in a clobbered register, two
+  live values in one register or one spill slot, a value in the wrong class)
+  and check it rejects them. The native tests caught one allocator bug
+  during the work (a reloaded piece queued behind the scan's position),
+  fixed before it was committed.
+- **The allocator**: copy coalescing and linear scan over split intervals
+  with lifetime holes, loop-aware split and spill positions, resolution
+  moves as parallel copies, and memory operands for spilled values (see
+  "Register allocation"). Fixed-register constraints (calls, divisions,
+  shifts, `rep movsb`), the System V and Win64 saved sets (Win64's
+  `%xmm6`-`%xmm15` saved by the frame when written) and the x87 values that
+  are never allocated are unchanged.
+- **Addressing modes**: memory operands take an index register and scale,
+  folded from `ptr_add` chains; symbol bases of indexed operands are loaded
+  once at entry; a materialized `ptr_add` is one `lea`.
+- **LEA arithmetic**: 64-bit products by 3, 5 and 9, and, after allocation,
+  a copy followed by a 32- or 64-bit addition (or a `lea` followed by one)
+  where the flags are dead. A 64-bit `lea` leaves the upper half of a
+  32-bit sum unspecified, which "Narrow integer representation" allows.
+- **Loop rotation**, as tail duplication after allocation: a `jmp` to a
+  block of at most eight instructions ending in a conditional branch takes
+  a copy of that block when the copied branch can fall through to the next
+  block, or when the jump is a loop's back edge, the branch then turned to
+  take the edge to the body; a back edge thus tests the condition itself.
+- **Compare/branch fusion across blocks**: an `icmp` whose every use is a
+  `brif` or `select` condition, in any block, is emitted again before each
+  user instead of being materialized with `setcc`.
+- **Selection peepholes** found on the way: division and remainder by a
+  power of two with shifts and masks (`stencil` divided by 4 with `idiv`),
+  and dead-code elimination of arithmetic whose result and flags are dead.
+
+Left open: the **red zone** (it changes the prologue, the epilogue and the
+unwind information, which stage 5's object writer generates, so it waits
+for that writer to land); releasing the **scratch registers** `%r10`/`%r11`
+and `%xmm14`/`%xmm15`, which the allocator's fallback and parallel-copy
+cycles still use; **rematerialization** of hoisted symbol bases instead of
+spilling them; **value-based coalescing**; and a 32-bit `lea` form.
+
+Measured on 2026-10-19 on native Linux (AMD Ryzen 9 5900X, a machine shared
+with other builds; release builds; `scripts/compare_optimizers.py --arms
+A1,B1 --baseline A1 --reps 7`, CPU time, every output checked against the
+interpreter's), the stage 3 build and this branch back to back. Static
+counts are over the assembly of `--opt=bcc --backend=native` for System V:
+instructions, register-to-register moves, and `%rsp`/`%rbp`-relative
+operands (spill code and stack slots).
+
+| Benchmark | B1/A1 before | B1/A1 after | Instructions | Register moves | Frame operands |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bits | 1.341 | 1.082 | 350 → 216 | 79 → 38 | 79 → 0 |
+| bytecode | 1.709 | 1.298 | 233 → 156 | 29 → 8 | 0 → 0 |
+| collatz | 1.637 | 0.999 | 97 → 60 | 25 → 8 | 5 → 0 |
+| crc32 | 1.116 | 1.002 | 178 → 127 | 45 → 21 | 6 → 0 |
+| fannkuch | 1.289 | 1.002 | 200 → 113 | 24 → 5 | 55 → 3 |
+| hashtable | 1.217 | 0.999 | 230 → 165 | 25 → 15 | 40 → 2 |
+| levenshtein | 1.593 | 1.172 | 249 → 211 | 32 → 14 | 12 → 12 |
+| linkedlist | 1.025 | 1.004 | 142 → 104 | 36 → 16 | 0 → 0 |
+| mandel | 1.980 | 1.021 | 182 → 142 | 28 → 17 | 37 → 19 |
+| matmul | 1.186 | 0.999 | 134 → 104 | 32 → 4 | 0 → 0 |
+| nqueens | 1.372 | 1.129 | 108 → 120 | 18 → 17 | 10 → 16 |
+| particles | 1.967 | 1.185 | 594 → 448 | 65 → 31 | 157 → 71 |
+| sieve | 1.152 | 1.067 | 78 → 60 | 19 → 12 | 0 → 0 |
+| sorts | 1.420 | 1.065 | 368 → 277 | 54 → 40 | 61 → 10 |
+| stencil | 2.495 | 1.457 | 289 → 203 | 47 → 11 | 7 → 0 |
+| strings | 1.284 | 1.057 | 399 → 296 | 70 → 12 | 48 → 0 |
+| switchvm | 1.054 | 0.597 | 511 → 369 | 80 → 18 | 24 → 6 |
+| **total / geometric mean** | **1.417** [1.404, 1.434] | **1.052** [1.048, 1.061] | 4342 → 3171 | 708 → 287 | 541 → 139 |
+
+The stage's target, B1/A1 within 1.5×, held before (1.42×) and now stands
+at 1.05×, with 4 of 17 programs faster than LLVM's code generator. Whole
+builds take as long as before (B1 builds in 0.95-0.96× A1's time in both
+runs). Instructions grew in a few programs where loop rotation copied
+tests; fewer of them run.
+
+Code placement now dominates what is left in some programs: `stencil`
+moves between 1.16× and 1.46× from build to build with the same inner loop.
+On this machine its executable runs in 0.246 s as built and in 0.192 s with
+a 3-byte `nop` after one `lea` before the loop, while a same-length `leal`
+in place of that `leaq` stays slow, so the loop's alignment, not its
+instructions, costs the difference. Aligning loop headers (`.p2align 4`, as
+LLVM does) belongs with stage 5's object writer, which must then pad with
+multi-byte `nop`s itself. Of the rest, `bytecode` (1.30×) repeats its
+dispatch test in every handler and indexes 16-byte records with a shift,
+and `particles` (1.19×) copies its structure through the stack, which the
+bcc optimizer leaves.
+
+Validation: every native test runs the checker on every function (debug
+builds). The difftest native oracle passed its default sweep and the
+500-case sweep (`--include-ignored`) after every change, as did the native
+end-to-end programs (B0 and B1 against the interpreter, wide floats against
+the LLVM back end) and the ABI conformance tests that link native objects
+with Clang's in both directions. The GCC torture survey was not run: its
+corpus is not on the Linux host used. Release builds skip the checker, so
+the survey's "checker clean on the whole torture corpus" criterion needs a
+debug build of bcc-rust (or a release build with debug assertions) on a
+host with the corpus.

@@ -376,7 +376,7 @@ impl fmt::Debug for PRegSet {
 }
 
 /// A register operand: physical (precolored) or virtual.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 #[expect(
     variant_size_differences,
     reason = "Both variants fit eight bytes; packing them into one word would obscure every match \
@@ -427,17 +427,40 @@ impl Width {
     }
 }
 
-/// A memory operand, `disp(base)`.
+/// A memory operand, `disp(base)` or `disp(base, index, scale)`. Only a
+/// register or frame base takes an index; RIP-relative operands cannot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Mem {
-    pub(crate) base: Base,
-    pub(crate) disp: i32,
+    pub(crate) base:  Base,
+    pub(crate) index: Option<Index>,
+    pub(crate) disp:  i32,
 }
 
 impl Mem {
     pub(crate) const fn new(base: Base, disp: i32) -> Self {
-        Self { base, disp }
+        Self {
+            base,
+            index: None,
+            disp,
+        }
     }
+
+    /// The same operand `disp` bytes further on.
+    #[must_use]
+    pub(crate) const fn offset(self, disp: i32) -> Self {
+        Self {
+            disp: self.disp + disp,
+            ..self
+        }
+    }
+}
+
+/// The scaled index register of a memory operand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Index {
+    pub(crate) reg:   Reg,
+    /// 1, 2, 4 or 8.
+    pub(crate) scale: u8,
 }
 
 /// What a memory operand is relative to.
@@ -1194,6 +1217,119 @@ impl MInst {
             | _ => false,
         }
     }
+
+    /// The source operand the instruction may read from memory instead of
+    /// a register: where a spilled value can be used in its slot without a
+    /// reload. (`xorps` would need 16 aligned bytes.)
+    pub(crate) const fn memory_source(&mut self) -> Option<&mut Operand> {
+        match self {
+            | Self::Mov { src, .. }
+            | Self::Extend { src, .. }
+            | Self::XMov { src, .. }
+            | Self::Alu { src, .. }
+            | Self::Cmp { rhs: src, .. } => Some(src),
+            | Self::XAlu { op, src, .. } if !matches!(op, XOp::Xor) => Some(src),
+            | _ => None,
+        }
+    }
+
+    /// The instruction's memory operand, if it has one; no instruction has
+    /// two.
+    pub(crate) const fn memory_operand(&mut self) -> Option<&mut Mem> {
+        match self {
+            | Self::Mov {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Extend {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::XMov {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Alu {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::XAlu {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Cmp {
+                rhs: Operand::Mem(mem),
+                ..
+            }
+            | Self::Store { dst: mem, .. }
+            | Self::XStore { dst: mem, .. }
+            | Self::Lea { addr: mem, .. }
+            | Self::Move128 { mem, .. }
+            | Self::X87Load { mem, .. }
+            | Self::X87Store { mem, .. }
+            | Self::X87ControlWord { mem, .. } => Some(mem),
+            | _ => None,
+        }
+    }
+
+    /// The virtual register the memory source reads, when the instruction
+    /// names it nowhere else.
+    pub(crate) fn memory_source_vreg(&self) -> Option<VReg> {
+        let mut inst = *self;
+        let Some(&mut Operand::Reg(Reg::Virt(vreg))) = inst.memory_source() else {
+            return None;
+        };
+        let mut count = 0;
+        inst.visit_registers(|reg, _| count += usize::from(*reg == Reg::Virt(vreg)));
+        (count == 1).then_some(vreg)
+    }
+
+    /// Whether removing the instruction changes nothing but the virtual
+    /// register it defines and the flags: integer arithmetic on registers
+    /// and immediates.
+    pub(crate) fn is_pure_but_flags(&self) -> bool {
+        match self {
+            | Self::Alu { dst, src, .. } =>
+                matches!(dst, Reg::Virt(_)) && !matches!(src, Operand::Mem(_)),
+            | Self::Shift { dst, .. } | Self::Unary { dst, .. } | Self::BitScan { dst, .. } =>
+                matches!(dst, Reg::Virt(_)),
+            | _ => false,
+        }
+    }
+
+    /// Whether the instruction reads the flags, and whether it certainly
+    /// overwrites all of them (a shift by `%cl` may leave them alone).
+    pub(crate) const fn flags(&self) -> (bool, bool) {
+        match self {
+            | Self::Jcc { .. } | Self::Setcc { .. } | Self::Cmov { .. } => (true, false),
+            | Self::Alu {
+                op: AluOp::Adc | AluOp::Sbb,
+                ..
+            } => (true, true),
+            | Self::Alu { .. }
+            | Self::Imul3 { .. }
+            | Self::Cmp { .. }
+            | Self::Test { .. }
+            | Self::Ucomi { .. }
+            | Self::BitScan { .. }
+            | Self::Div { .. }
+            | Self::MulWide { .. }
+            | Self::Call { .. }
+            | Self::X87Compare
+            | Self::Unary {
+                op: UnaryOp::Neg, ..
+            }
+            | Self::Shift {
+                amount: ShiftAmount::Imm(1..),
+                ..
+            }
+            | Self::ShiftDouble {
+                amount: ShiftAmount::Imm(1..),
+                ..
+            } => (false, true),
+            | _ => (false, false),
+        }
+    }
 }
 
 /// Visits the registers of a source operand, which are all read.
@@ -1205,9 +1341,12 @@ fn operand(operand: &mut Operand, visit: &mut impl FnMut(&mut Reg, Role)) {
     }
 }
 
-/// Visits the base register of a memory operand, if it has one.
+/// Visits the base and index registers of a memory operand.
 fn memory(mem: &mut Mem, visit: &mut impl FnMut(&mut Reg, Role)) {
     if let Base::Reg(reg) = &mut mem.base {
         visit(reg, Role::Use);
+    }
+    if let Some(index) = &mut mem.index {
+        visit(&mut index.reg, Role::Use);
     }
 }

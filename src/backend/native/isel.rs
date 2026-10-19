@@ -14,8 +14,9 @@
 //!   thread-local global is no leaf: it is computed where it is taken.
 //! - *Address folding*: a load or store through a leaf address or a `ptr_add`
 //!   of a register and a small constant uses one memory operand.
-//! - *Compare fusion*: an `icmp` whose only use is the `brif` or `select` of
-//!   its own block is emitted right before that user's `jcc` or `cmov`.
+//! - *Compare fusion*: an `icmp` whose every use is the condition of a `brif`
+//!   or `select`, in any block, is emitted again right before each user's `jcc`
+//!   or `cmov`; its operands dominate every user, so they are available there.
 //!
 //! [`select`] classifies every value first, in reverse post-order so that
 //! operands are classified before their users, then selects the blocks.
@@ -54,6 +55,7 @@ use super::{
         Cond,
         FrameObject,
         FrameSlotData,
+        Index,
         MBlock,
         MFunction,
         MInst,
@@ -136,6 +138,10 @@ pub(crate) fn select<'a>(
     for block in body.blocks() {
         if tree.is_reachable(block) {
             selector.find_fusions(block);
+        }
+    }
+    for block in body.blocks() {
+        if tree.is_reachable(block) {
             selector.block_map[block.index()] = Some(selector.func.block(arena));
         }
     }
@@ -160,6 +166,7 @@ pub(crate) fn select<'a>(
             }
         }
     }
+    selector.load_bases();
     Ok(selector.func)
 }
 
@@ -191,42 +198,47 @@ pub(super) enum AddrBase {
 
 /// The selection state of one function.
 pub(super) struct Selector<'a, 'm, 'ir> {
-    pub(super) module:    &'m Module<'ir>,
-    pub(super) function:  &'m Function<'ir>,
-    pub(super) body:      &'m Body<'ir>,
-    pub(super) signature: Signature<'ir>,
-    pub(super) conv:      CallConv,
-    pub(super) target:    Target,
+    pub(super) module:     &'m Module<'ir>,
+    pub(super) function:   &'m Function<'ir>,
+    pub(super) body:       &'m Body<'ir>,
+    pub(super) signature:  Signature<'ir>,
+    pub(super) conv:       CallConv,
+    pub(super) target:     Target,
     /// The `-ftls-model`: local-exec also reaches declared thread-locals
     /// at a link-time offset.
-    pub(super) tls_model: TlsModel,
-    pub(super) arena:     &'a Bump,
-    pub(super) func:      MFunction<'a>,
+    pub(super) tls_model:  TlsModel,
+    pub(super) arena:      &'a Bump,
+    pub(super) func:       MFunction<'a>,
     /// Each value's representation.
-    pub(super) values:    ArenaVec<'a, ValueKind>,
+    pub(super) values:     ArenaVec<'a, ValueKind>,
     /// Each value's number of uses in reachable code.
-    pub(super) uses:      ArenaVec<'a, u32>,
+    pub(super) uses:       ArenaVec<'a, u32>,
+    /// How many of those are the condition of a `brif` or `select`.
+    pub(super) conditions: ArenaVec<'a, u32>,
     /// Instructions with nothing to emit at their position: leaves,
     /// aliases, and compares fused into their user.
-    pub(super) skipped:   ArenaVec<'a, bool>,
+    pub(super) skipped:    ArenaVec<'a, bool>,
     /// Compares fused into their user.
-    pub(super) fused:     ArenaVec<'a, bool>,
+    pub(super) fused:      ArenaVec<'a, bool>,
     /// Each reachable IR block's machine block.
-    pub(super) block_map: ArenaVec<'a, Option<MBlock>>,
+    pub(super) block_map:  ArenaVec<'a, Option<MBlock>>,
     /// The block instructions are appended to.
-    pub(super) current:   MBlock,
+    pub(super) current:    MBlock,
     /// How `return` hands back a structure result.
-    pub(super) result:    calls::ResultArea,
+    pub(super) result:     calls::ResultArea,
     /// What `va_start` stores, prepared by the entry sequence.
-    pub(super) va_start:  calls::VaStart,
+    pub(super) va_start:   calls::VaStart,
     /// For each labeled IR block, the block its address names and where
     /// its incoming registers start in [`Self::incoming`].
-    pub(super) labeled:   ArenaVec<'a, Option<edges::LabelTarget>>,
+    pub(super) labeled:    ArenaVec<'a, Option<edges::LabelTarget>>,
     /// The registers an `indirect_br` assigns a labeled block's parameters
     /// through, one per parameter, in block order.
-    pub(super) incoming:  ArenaVec<'a, ValueKind>,
+    pub(super) incoming:   ArenaVec<'a, ValueKind>,
     /// The frame slot of [`Self::scratch`], once a sequence needs it.
-    pub(super) scratch:   Option<u32>,
+    pub(super) scratch:    Option<u32>,
+    /// The symbols indexed operands use as a base, with the register the
+    /// entry block loads each address into.
+    pub(super) bases:      ArenaVec<'a, (Symbol, Reg)>,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -250,6 +262,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             func: MFunction::new_in(arena),
             values: filled(arena, body.value_count(), ValueKind::Unknown),
             uses: filled(arena, body.value_count(), 0),
+            conditions: filled(arena, body.value_count(), 0),
             skipped: filled(arena, body.inst_count(), false),
             fused: filled(arena, body.inst_count(), false),
             block_map: filled(arena, body.block_count(), None),
@@ -259,6 +272,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             labeled: filled(arena, body.block_count(), None),
             incoming: ArenaVec::new_in(arena),
             scratch: None,
+            bases: ArenaVec::new_in(arena),
         }
     }
 
@@ -448,31 +462,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             let uses = &mut self.uses;
             self.body
                 .visit_operands(inst, |value| uses[value.index()] += 1);
+            if let InstData::Brif { cond, .. }
+            | InstData::Select {
+                args: [cond, ..], ..
+            } = *self.body.inst(inst)
+            {
+                self.conditions[cond.index()] += 1;
+            }
         }
     }
 
-    /// Marks the compares of `block` whose only use is the block's `brif`
-    /// condition or a later `select` condition in the block.
+    /// Marks the compares of `block` whose every use is the condition of
+    /// a `brif` or `select`; each user emits the comparison itself.
     fn find_fusions(&mut self, block: Block) {
-        let insts = self.body.block_insts(block);
-        for &user in insts {
-            let (InstData::Brif { cond, .. }
-            | InstData::Select {
-                args: [cond, ..], ..
-            }) = *self.body.inst(user)
-            else {
-                continue;
-            };
-            if self.uses[cond.index()] != 1 {
+        for &compare in self.body.block_insts(block) {
+            if !matches!(self.body.inst(compare), InstData::IntCompare { .. })
+                || self.skipped[compare.index()]
+            {
                 continue;
             }
-            let ValueDef::Result(compare) = self.body.value_def(cond) else {
+            let Some(result) = self.body.inst_result(compare) else {
                 continue;
             };
-            if matches!(self.body.inst(compare), InstData::IntCompare { .. })
-                && !self.skipped[compare.index()]
-                && insts.contains(&compare)
-            {
+            let uses = self.uses[result.index()];
+            if uses > 0 && self.conditions[result.index()] == uses {
                 self.fused[compare.index()] = true;
                 self.skipped[compare.index()] = true;
             }
@@ -588,7 +601,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                     | Opcode::Shl => self.shift(ShiftOp::Shl, ty, dst, args),
                     | Opcode::Lshr => self.shift(ShiftOp::Shr, ty, dst, args),
                     | Opcode::Ashr => self.shift(ShiftOp::Sar, ty, dst, args),
-                    | Opcode::PtrAdd => self.alu(AluOp::Add, Type::I64, dst, args, true),
+                    | Opcode::PtrAdd => self.pointer_add(inst, dst, args),
                     | Opcode::UaddOverflow => self.add_overflow(ty, dst, args),
                     | Opcode::UmulOverflow => self.mul_overflow(ty, dst, args),
                     | _ => return Err(Construct::Opcode(opcode)),
@@ -818,6 +831,17 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         }
     }
 
+    /// `dst = base + offset` for a `ptr_add`: one `lea` of the address its
+    /// chain folds into, else an addition.
+    fn pointer_add(&mut self, inst: Inst, dst: Reg, args: [Value; 2]) {
+        let value = self.body.inst_result(inst).expect("a ptr_add has a result");
+        if let Some(addr) = self.folded_address(value) {
+            self.emit(MInst::Lea { dst, addr });
+            return;
+        }
+        self.alu(AluOp::Add, Type::I64, dst, args, true);
+    }
+
     /// `dst = lhs * rhs`, with the three-operand form for a constant.
     fn multiply(&mut self, ty: Type, dst: Reg, [lhs, rhs]: [Value; 2]) {
         let width = op_width(ty);
@@ -837,6 +861,24 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 if ty == Type::I1 {
                     self.canonical_bool(dst);
                 }
+                return;
+            }
+            // A 64-bit product by 3, 5 or 9 is one `lea` of the value and
+            // its scaled self.
+            if width == Width::B64 && matches!(imm, 3 | 5 | 9) {
+                self.emit(MInst::Lea {
+                    dst,
+                    addr: Mem {
+                        base:  Base::Reg(src),
+                        index: Some(Index {
+                            reg:   src,
+                            #[expect(clippy::cast_possible_truncation, reason = "At most 8.")]
+                            #[expect(clippy::cast_sign_loss, reason = "The factor is positive.")]
+                            scale: (imm - 1) as u8,
+                        }),
+                        disp:  0,
+                    },
+                });
                 return;
             }
             self.emit(MInst::Imul3 {
@@ -860,6 +902,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         dst: Reg,
         [lhs, rhs]: [Value; 2],
     ) {
+        if let ValueKind::Const(bits) = self.kind(rhs)
+            && self.divide_by_power_of_two(signed, remainder, ty, dst, lhs, bits)
+        {
+            return;
+        }
         let width = op_width(ty);
         let lhs = self.extended(lhs, signed);
         let divisor = self.extended(rhs, signed);
@@ -884,6 +931,101 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         });
         let result = if remainder { PReg::Rdx } else { PReg::Rax };
         self.copy(dst, Reg::Phys(result));
+    }
+
+    /// Division and remainder by a positive power of two `2^k`, which need
+    /// no `div`: unsigned ones shift or mask; a signed one first adds `2^k -
+    /// 1` to a negative dividend (the sign shifted down), so the quotient
+    /// rounds toward zero as `sdiv` does, and its remainder subtracts the
+    /// rounded-down multiple. Whether it applied: an immediate that does
+    /// not fit falls back to `div`.
+    fn divide_by_power_of_two(
+        &mut self,
+        signed: bool,
+        remainder: bool,
+        ty: Type,
+        dst: Reg,
+        lhs: Value,
+        bits: u64,
+    ) -> bool {
+        let divisor = if signed {
+            sign_extend(bits, ty)
+        } else {
+            bits & mask(ty)
+        };
+        if ty == Type::I1 || divisor == 0 || !divisor.is_power_of_two() || divisor.cast_signed() < 0
+        {
+            return false;
+        }
+        let width = op_width(ty);
+        #[expect(clippy::cast_possible_truncation, reason = "The exponent is below 64.")]
+        let k = divisor.trailing_zeros() as u8;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Widths are at most 64 bits."
+        )]
+        let bits_of_width = width.bits() as u8;
+        let low_mask = i32::try_from(divisor - 1).ok();
+        let multiple_mask = i32::try_from(-divisor.cast_signed()).ok();
+        match (signed, remainder) {
+            | (false, false) => {
+                let x = self.extended(lhs, false);
+                self.copy(dst, x);
+                if k > 0 {
+                    self.shift_imm(ShiftOp::Shr, width, dst, k);
+                }
+            },
+            | (false, true) => {
+                let Some(low_mask) = low_mask else {
+                    return false;
+                };
+                let x = self.extended(lhs, false);
+                self.copy(dst, x);
+                self.emit(MInst::Alu {
+                    op: AluOp::And,
+                    width,
+                    dst,
+                    src: Operand::Imm(low_mask),
+                });
+            },
+            | (true, _) if k == 0 =>
+                if remainder {
+                    self.emit(MInst::Mov {
+                        width: Width::B32,
+                        dst,
+                        src: Operand::Imm(0),
+                    });
+                } else {
+                    let x = self.extended(lhs, true);
+                    self.copy(dst, x);
+                },
+            | (true, _) => {
+                if remainder && multiple_mask.is_none() {
+                    return false;
+                }
+                let x = self.extended(lhs, true);
+                // bias = 2^k - 1 for a negative dividend, else 0.
+                let biased = self.vreg();
+                self.copy(biased, x);
+                self.shift_imm(ShiftOp::Sar, width, biased, bits_of_width - 1);
+                self.shift_imm(ShiftOp::Shr, width, biased, bits_of_width - k);
+                self.alu_reg(AluOp::Add, width, biased, x);
+                if remainder {
+                    self.emit(MInst::Alu {
+                        op: AluOp::And,
+                        width,
+                        dst: biased,
+                        src: Operand::Imm(multiple_mask.expect("checked above")),
+                    });
+                    self.copy(dst, x);
+                    self.alu_reg(AluOp::Sub, width, dst, biased);
+                } else {
+                    self.shift_imm(ShiftOp::Sar, width, biased, k);
+                    self.copy(dst, biased);
+                }
+            },
+        }
+        true
     }
 
     /// The value in a register whose bits above its type are its sign

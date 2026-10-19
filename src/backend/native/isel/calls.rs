@@ -363,7 +363,7 @@ impl Selector<'_, '_, '_> {
     /// is a pointer to the next 8-byte slot.
     pub(super) fn va_start(&mut self, list: Value) {
         let mem = self.address(list);
-        let at = |disp: i32| Mem::new(mem.base, mem.disp + disp);
+        let at = |disp: i32| mem.offset(disp);
         match self.va_start {
             | VaStart::SystemV { gp, fp, stack } => {
                 let overflow = self.vreg();
@@ -517,13 +517,13 @@ impl Selector<'_, '_, '_> {
                         i32::try_from(registers.second_offset).expect("a part offset is small");
                     self.emit(MInst::X87Store {
                         format: X87Format::F80,
-                        mem:    Mem::new(mem.base, mem.disp + offset),
+                        mem:    mem.offset(offset),
                     });
                 }
                 return Ok(());
             }
             for (offset, ty, register) in result_registers(registers) {
-                let dst = Mem::new(mem.base, mem.disp + offset);
+                let dst = mem.offset(offset);
                 if ty.is_float() {
                     self.emit(MInst::XStore {
                         width: width(ty),
@@ -722,7 +722,7 @@ impl Selector<'_, '_, '_> {
                         i32::try_from(registers.second_offset).expect("a part offset is small");
                     self.emit(MInst::X87Load {
                         format: X87Format::F80,
-                        mem:    Mem::new(area.base, area.disp + offset),
+                        mem:    area.offset(offset),
                     });
                 }
                 self.emit(MInst::X87Load {
@@ -733,7 +733,7 @@ impl Selector<'_, '_, '_> {
             | ResultArea::Registers { area, registers } => {
                 for (offset, ty, register) in result_registers(registers) {
                     let ty = if ty == Type::Ptr { Type::I64 } else { ty };
-                    let mem = Mem::new(area.base, area.disp + offset);
+                    let mem = area.offset(offset);
                     self.load(ty, Reg::Phys(register), mem);
                     uses = uses.with(register);
                 }
