@@ -606,7 +606,7 @@ fn benchmark_native_object_emission() {
 }
 
 #[test]
-fn coff_option_keeps_text_unwind_comdats_refptr_and_exports() {
+fn coff_option_preserves_unwind_comdats_refptr_and_exports() {
     let text =
         ".text\n.def f;\n.scl 2;\n.type 32;\n.endef\n.globl f\nf:\n.seh_proc f\npushq \
          %rbx\n.seh_pushreg %rbx\nsubq $48,%rsp\n.seh_stackalloc 48\nmovaps \
@@ -615,7 +615,7 @@ fn coff_option_keeps_text_unwind_comdats_refptr_and_exports() {
          %rbx\nretq\n.seh_endproc\n.section .rdata$.refptr.ext,\"dr\",discard,.refptr.ext\n.globl \
          .refptr.ext\n.refptr.ext:\n.quad ext\n.section .data,\"dw\",discard,choice\n.globl \
          choice\nchoice:\n.long 1\n.section .drectve,\"yni\"\n.ascii \" /EXPORT:f\"\n";
-    let directory = TempDir::new("native-coff-fallback");
+    let directory = TempDir::new("native-coff-object");
     let assembly = directory.join("reference.s");
     let reference = directory.join("reference.obj");
     let native = directory.join("native.obj");
@@ -630,10 +630,7 @@ fn coff_option_keeps_text_unwind_comdats_refptr_and_exports() {
         )
         .unwrap();
     super::super::build_object(text, &native, Target::WindowsMsvc, OutputKind::Object).unwrap();
-    assert_eq!(
-        std::fs::read(&native).unwrap(),
-        std::fs::read(&reference).unwrap()
-    );
+    super::object_coff::equivalent(text, Target::WindowsMsvc).unwrap();
     let dump = required_objdump(Command::new("objdump").args(["-x", "-dr"]).arg(&native)).unwrap();
     {
         assert!(dump.status.success(), "{dump:?}");
@@ -1309,7 +1306,7 @@ fn equivalence_rejects_section_header_mutations() {
     );
 }
 
-fn required_objdump(command: &mut Command) -> io::Result<std::process::Output> {
+pub(super) fn required_objdump(command: &mut Command) -> io::Result<std::process::Output> {
     command.output().map_err(|error| {
         io::Error::new(
             error.kind(),

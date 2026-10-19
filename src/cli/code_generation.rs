@@ -321,8 +321,7 @@ pub(super) struct CodeGeneration {
     /// support yet.
     #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
     pub(super) backend:              BackEnd,
-    /// Emit ELF objects in process with the native back end. COFF targets
-    /// retain clang assembly until the direct COFF writer is implemented.
+    /// Emit ELF or COFF objects in process with the native back end.
     #[arg(long, requires = "back_end")]
     pub(super) native_object:        bool,
 }

@@ -4,6 +4,7 @@
 mod allocation;
 mod end_to_end;
 pub(crate) mod object;
+pub(crate) mod object_coff;
 mod operands;
 mod programs;
 mod selection;
@@ -45,6 +46,8 @@ fn assembly(ir: &str, target: Target) -> String {
     emit_assembly(&module, target, &mut text).unwrap_or_else(|error| panic!("{error}\n{ir}"));
     if matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
         object::equivalent(&text).unwrap();
+    } else {
+        object_coff::equivalent(&text, target).unwrap();
     }
     text
 }

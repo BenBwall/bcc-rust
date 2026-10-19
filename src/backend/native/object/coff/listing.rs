@@ -1,0 +1,407 @@
+//! The private COFF directive vocabulary; ELF section interpretation stays
+//! separate.
+
+use super::{
+    super::{
+        Item,
+        Kind,
+        encoder,
+        listing::{
+            expression,
+            symbol_name,
+            unquote,
+            unsigned,
+        },
+    },
+    Coff,
+    Error,
+    Result,
+    UnwindSections,
+};
+use crate::util::bump::Bump;
+
+pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Coff<'a>> {
+    let mut coff = Coff::new(arena, gnu);
+    for (name, flags) in [
+        (".text", 0x6000_0020),
+        (".data", 0xC000_0040),
+        (".bss", 0xC000_0080),
+    ] {
+        _ = coff.section(name, flags, None, 0)?;
+    }
+    let mut section = 0;
+    let mut definition = None;
+    for line in text.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        // .def/.scl/.type/.endef may share a line in hand-written fixtures.
+        // Semicolons inside quoted symbol names and strings remain literal.
+        let mut quoted = false;
+        let mut escaped = false;
+        for statement in line
+            .split(|ch| {
+                if ch == '"' && !escaped {
+                    quoted = !quoted;
+                }
+                let separator = ch == ';' && !quoted;
+                escaped = ch == '\\' && !escaped;
+                separator
+            })
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let object = &mut coff.object;
+            let kind = if let Some(name) = statement.strip_suffix(':') {
+                symbol_name(name)?;
+                let id = object.symbol(name);
+                if object.symbols[id].section.is_some() || object.symbols[id].alias.is_some() {
+                    return Err(Error("duplicate COFF symbol definition"));
+                }
+                object.symbols[id].section = Some(section);
+                Kind::Label(id)
+            } else if let Some((name, target)) = assignment(statement) {
+                symbol_name(name)?;
+                symbol_name(target)?;
+                let id = object.symbol(name);
+                if object.symbols[id].section.is_some() || object.symbols[id].alias.is_some() {
+                    return Err(Error("duplicate COFF alias definition"));
+                }
+                object.symbols[id].alias = Some(object.symbol(target));
+                continue;
+            } else {
+                let (name, args) = statement
+                    .split_once(char::is_whitespace)
+                    .map_or((statement, ""), |(a, b)| (a, b.trim()));
+                let mut parts = split(args);
+                let first = parts.next().unwrap_or("");
+                match name {
+                    | ".text" | ".data" | ".bss" => {
+                        arity(args, 0, 0)?;
+                        section = match name {
+                            | ".text" => 0,
+                            | ".data" => 1,
+                            | _ => 2,
+                        };
+                        continue;
+                    },
+                    | ".section" => {
+                        section = parse_section(&mut coff, args)?;
+                        continue;
+                    },
+                    | ".globl" | ".weak" => {
+                        arity(args, 1, 1)?;
+                        symbol_name(args)?;
+                        let id = object.symbol(args);
+                        if object.symbols[id].name.starts_with(".L") {
+                            return Err(Error("unsupported COFF temporary symbol attributes"));
+                        }
+                        if name == ".globl" && object.symbols[id].binding == 2 {
+                            return Err(Error("global binding after weak binding"));
+                        }
+                        object.symbols[id].binding = if name == ".weak" { 2 } else { 1 };
+                        continue;
+                    },
+                    | ".def" => {
+                        arity(args, 1, 1)?;
+                        symbol_name(args)?;
+                        if definition.is_some() {
+                            return Err(Error("nested COFF symbol definition"));
+                        }
+                        definition = Some(object.symbol(args));
+                        continue;
+                    },
+                    | ".scl" | ".type" => {
+                        arity(args, 1, 1)?;
+                        let id = definition.ok_or(Error("COFF symbol attribute outside .def"))?;
+                        match (name, unsigned(args)?) {
+                            | (".scl", 2) => object.symbols[id].binding = 1,
+                            | (".scl", 3) => object.symbols[id].binding = 0,
+                            | (".type", 32) => object.symbols[id].kind = 2,
+                            | (".type", 0) => object.symbols[id].kind = 0,
+                            | _ => return Err(Error("unsupported COFF symbol attribute")),
+                        }
+                        continue;
+                    },
+                    | ".endef" => {
+                        arity(args, 0, 0)?;
+                        if definition.take().is_none() {
+                            return Err(Error("COFF .endef without .def"));
+                        }
+                        continue;
+                    },
+                    | ".p2align" => {
+                        arity(args, 1, 2)?;
+                        let power = u32::try_from(unsigned(first)?)
+                            .map_err(|_| Error("COFF alignment too large"))?;
+                        if power > 13 {
+                            return Err(Error("COFF alignment exceeds 8192"));
+                        }
+                        let align = 1_u64 << power;
+                        object.sections[section].align = object.sections[section].align.max(align);
+                        let fill = parts
+                            .next()
+                            .map(|n| {
+                                u8::try_from(unsigned(n)?)
+                                    .map_err(|_| Error("COFF fill exceeds byte"))
+                            })
+                            .transpose()?;
+                        Kind::Align {
+                            align,
+                            fill,
+                            max: align,
+                        }
+                    },
+                    | ".zero" => {
+                        arity(args, 1, 1)?;
+                        Kind::Zero(unsigned(args)?)
+                    },
+                    | ".byte" | ".short" | ".long" | ".quad" | ".rva" | ".secrel32" | ".secidx" => {
+                        arity(args, 1, usize::MAX)?;
+                        let width = match name {
+                            | ".byte" => 1,
+                            | ".short" | ".secidx" => 2,
+                            | ".quad" => 8,
+                            | _ => 4,
+                        };
+                        let reloc = match name {
+                            | ".rva" => 0x0001_0003,
+                            | ".secrel32" => 0x0001_000B,
+                            | ".secidx" => 0x0001_000A,
+                            | _ => 0,
+                        };
+                        for value in split(args) {
+                            _ = expression(value)?;
+                            object.items.push(Item {
+                                section,
+                                offset: 0,
+                                kind: if reloc == 0 {
+                                    Kind::Value(width, value)
+                                } else {
+                                    Kind::CoffValue(width, value, reloc)
+                                },
+                            });
+                        }
+                        continue;
+                    },
+                    | ".ascii" => {
+                        arity(args, 1, 1)?;
+                        let bytes = ascii(args, arena)?;
+                        Kind::Bytes(bytes)
+                    },
+                    | ".seh_proc" => {
+                        arity(args, 1, 1)?;
+                        symbol_name(args)?;
+                        if !coff.unwind.iter().any(|u| u.text == section) {
+                            // MinGW streams xdata, including discardable
+                            // subsections. MSVC defers associative COMDAT
+                            // unwind sections to EOF.
+                            let xdata = if gnu || coff.object.sections[section].group.is_none() {
+                                Some(coff.unwind_section(section, ".xdata")?)
+                            } else {
+                                None
+                            };
+                            coff.unwind.push(UnwindSections {
+                                text: section,
+                                xdata,
+                                pdata: None,
+                            });
+                        }
+                        Kind::Cfi(name, args)
+                    },
+                    | name if name.starts_with(".seh_") => {
+                        match name {
+                            | ".seh_endproc" | ".seh_endprologue" => arity(args, 0, 0)?,
+                            | ".seh_pushreg" | ".seh_stackalloc" => arity(args, 1, 1)?,
+                            | ".seh_savexmm" | ".seh_setframe" | ".seh_savereg" =>
+                                arity(args, 2, 2)?,
+                            | _ => return Err(Error("unknown SEH directive")),
+                        }
+                        Kind::Cfi(name, args)
+                    },
+                    | name if name.starts_with('.') =>
+                        return Err(Error("unknown COFF object directive")),
+                    | "jmp" => {
+                        symbol_name(args)?;
+                        Kind::Branch {
+                            condition: None,
+                            target:    object.symbol(args),
+                            near:      false,
+                        }
+                    },
+                    | name if name.starts_with('j') && name != "jmpq" => {
+                        symbol_name(args)?;
+                        Kind::Branch {
+                            condition: Some(encoder::condition(&name[1..])?),
+                            target:    object.symbol(args),
+                            near:      false,
+                        }
+                    },
+                    | _ => {
+                        let code = encoder::instruction(name, args)?;
+                        if code.fixup.is_some_and(|f| {
+                            matches!(f.kind, 9 | 22 | 23 | 41 | 42)
+                                || f.expression.ends_with("@PLT")
+                        }) {
+                            return Err(Error("unsupported ELF relocation in COFF listing"));
+                        }
+                        Kind::Code(code)
+                    },
+                }
+            };
+            coff.object.items.push(Item {
+                section,
+                offset: 0,
+                kind,
+            });
+        }
+    }
+    if definition.is_some() {
+        return Err(Error("unterminated COFF symbol definition"));
+    }
+    Ok(coff)
+}
+
+fn parse_section<'a>(coff: &mut Coff<'a>, args: &'a str) -> Result<usize> {
+    arity(args, 1, 4)?;
+    let mut parts = split(args);
+    let name = unquote(parts.next().ok_or(Error("missing COFF section"))?);
+    if name.is_empty()
+        || name
+            .bytes()
+            .any(|b| !b.is_ascii_alphanumeric() && !matches!(b, b'_' | b'.' | b'$' | b'-'))
+    {
+        return Err(Error("unsupported COFF section name"));
+    }
+    if matches!(name, ".xdata" | ".pdata")
+        || name.starts_with(".xdata$")
+        || name.starts_with(".pdata$")
+    {
+        return Err(Error(
+            "user section conflicts with generated COFF unwind section",
+        ));
+    }
+    let flags = parts.next().map(unquote);
+    let mut characteristics = match name {
+        | ".text" => 0x6000_0020,
+        | ".bss" => 0xC000_0080,
+        | _ => 0xC000_0040,
+    };
+    if let Some(flags) = flags {
+        characteristics = 0x4000_0000;
+        for flag in flags.bytes() {
+            characteristics |= match flag {
+                | b'b' => 0x80,
+                | b'd' => 0x40,
+                | b'x' => 0x6000_0020,
+                | b'r' | b'y' => 0,
+                | b'w' => 0x8000_0000,
+                | b'n' => 0x800,
+                | b'i' => 0x200,
+                | b's' => 0x1000_0000,
+                | _ => return Err(Error("unknown COFF section flag")),
+            };
+        }
+        if flags.contains('y') {
+            characteristics &= !0x4000_0000;
+        }
+        if characteristics & 0xE0 == 0 && characteristics & 0x200 == 0 {
+            characteristics |= 0x40;
+        }
+    }
+    let mut group = None;
+    let mut selection = 0;
+    if let Some(kind) = parts.next() {
+        selection = match kind {
+            | "discard" => 2,
+            | "one_only" => 1,
+            | "same_size" => 3,
+            | "same_contents" => 4,
+            | "largest" => 6,
+            | "newest" => 7,
+            | _ => return Err(Error("unknown COFF COMDAT selection")),
+        };
+        let signature = parts.next().ok_or(Error("missing COFF COMDAT signature"))?;
+        symbol_name(signature)?;
+        group = Some(coff.object.symbol(signature));
+        characteristics |= 0x1000;
+    }
+    if flags.is_none()
+        && group.is_none()
+        && let Some(id) = coff
+            .object
+            .sections
+            .iter()
+            .position(|s| s.name == name && s.group.is_none())
+    {
+        return Ok(id);
+    }
+    coff.section(name, characteristics, group, selection)
+}
+
+fn arity(args: &str, min: usize, max: usize) -> Result<()> {
+    let valid = if args.is_empty() {
+        min == 0
+    } else {
+        (min..=max).contains(&split(args).count()) && split(args).all(|s| !s.is_empty())
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(Error("unsupported COFF directive operands"))
+    }
+}
+
+fn assignment(line: &str) -> Option<(&str, &str)> {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (at, ch) in line.char_indices() {
+        if ch == '"' && !escaped {
+            quoted = !quoted;
+        }
+        if ch == '=' && !quoted {
+            return Some((line[..at].trim(), line[at + 1..].trim()));
+        }
+        escaped = ch == '\\' && !escaped;
+    }
+    None
+}
+
+fn ascii<'a>(text: &str, arena: &'a Bump) -> Result<&'a str> {
+    use crate::util::bump::ArenaString;
+    let text = text
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .ok_or(Error("invalid COFF string"))?;
+    let mut out = ArenaString::new_in(arena);
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        out.push(if ch == '\\' {
+            match chars.next() {
+                | Some('"') => '"',
+                | Some('\\') => '\\',
+                | _ => return Err(Error("unsupported COFF string escape")),
+            }
+        } else if ch == '"' || !ch.is_ascii() {
+            return Err(Error("unsupported COFF string character"));
+        } else {
+            ch
+        });
+    }
+    Ok(out.into_str())
+}
+
+// COFF export strings contain escaped quotes around punctuation-bearing names.
+fn split(text: &str) -> impl Iterator<Item = &str> {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut depth = 0_u32;
+    text.split(move |ch| {
+        match ch {
+            | '"' if !escaped => quoted = !quoted,
+            | '(' if !quoted => depth += 1,
+            | ')' if !quoted => depth = depth.saturating_sub(1),
+            | _ => {},
+        }
+        escaped = ch == '\\' && !escaped;
+        ch == ',' && !quoted && depth == 0
+    })
+    .map(str::trim)
+}

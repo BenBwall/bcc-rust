@@ -42,7 +42,7 @@ impl<'a> Object<'a> {
                         changed = true;
                     }
                     self.symbols[id].size = to.size;
-                    if self.symbols[id].kind == 0 {
+                    if !self.coff && self.symbols[id].kind == 0 {
                         self.symbols[id].kind = to.kind;
                     }
                 }
@@ -71,6 +71,7 @@ impl<'a> Object<'a> {
     /// correction computes. Returns whether any offset changed.
     fn pass(&mut self, defined_at: &[usize], relax: bool) -> Result<bool> {
         let Self {
+            coff,
             sections,
             symbols,
             items,
@@ -109,8 +110,9 @@ impl<'a> Object<'a> {
                 },
                 | Kind::Align { align, max, .. } => padding(item.offset, *align, *max),
                 | Kind::Zero(count) => *count,
+                | Kind::Bytes(bytes) => bytes.len() as u64,
                 | Kind::Code(code) => u64::from(code.len),
-                | Kind::Value(width, _) => u64::from(*width),
+                | Kind::Value(width, _) | Kind::CoffValue(width, _, _) => u64::from(*width),
                 | Kind::Branch {
                     condition,
                     target,
@@ -121,7 +123,8 @@ impl<'a> Object<'a> {
                         if symbol.binding == 0 && symbol.alias.is_some() {
                             return Err(Error("unsupported branch to local alias"));
                         }
-                        let local = symbol.binding == 0 && symbol.section == Some(item.section);
+                        let local =
+                            resolvable(*coff, symbol) && symbol.section == Some(item.section);
                         let from = if defined_at[*target] > index {
                             previous
                         } else {
@@ -162,6 +165,14 @@ impl<'a> Object<'a> {
             let section = item.section;
             let offset = item.offset;
             match &item.kind {
+                | Kind::Bytes(bytes) => {
+                    if self.sections[section].kind == 8 {
+                        return Err(Error("string in a NOBITS section"));
+                    }
+                    let start = usize::try_from(offset).map_err(|_| Error("section too large"))?;
+                    self.sections[section].data[start..start + bytes.len()]
+                        .copy_from_slice(bytes.as_bytes());
+                },
                 | Kind::Code(code) => {
                     if self.sections[section].kind == 8 {
                         return Err(Error("instruction in a NOBITS section"));
@@ -181,19 +192,23 @@ impl<'a> Object<'a> {
                         )?;
                     }
                 },
-                | Kind::Value(width, expression) => {
+                | Kind::Value(width, expression) | Kind::CoffValue(width, expression, _) => {
                     let (width, expression) = (*width, *expression);
                     self.fixup(
                         section,
                         offset,
                         width,
                         expression,
-                        match width {
-                            | 8 => 1,
-                            | 4 => 10,
-                            | 2 => 12,
-                            | 1 => 14,
-                            | _ => return Err(Error("unsupported data relocation width")),
+                        if let Kind::CoffValue(_, _, kind) = item.kind {
+                            kind
+                        } else {
+                            match width {
+                                | 8 => 1,
+                                | 4 => 10,
+                                | 2 => 12,
+                                | 1 => 14,
+                                | _ => return Err(Error("unsupported data relocation width")),
+                            }
                         },
                         0,
                     )?;
@@ -207,7 +222,7 @@ impl<'a> Object<'a> {
                         return Err(Error("branch in a NOBITS section"));
                     }
                     let target = *target;
-                    let local = self.symbols[target].binding == 0
+                    let local = resolvable(self.coff, self.symbols[target])
                         && self.symbols[target].section == Some(section);
                     let mut code = [0; 6];
                     let len = if *near {
@@ -286,6 +301,9 @@ impl<'a> Object<'a> {
         kind: u32,
         bias: i64,
     ) -> Result<()> {
+        if !self.coff && kind >= 0x0001_0000 {
+            return Err(Error("COFF relocation in ELF listing"));
+        }
         let explicit_plt = expression.ends_with("@PLT") && kind == 4;
         let expression = listing::expression(if explicit_plt {
             expression
@@ -312,7 +330,7 @@ impl<'a> Object<'a> {
                 }
                 value += i128::from(symbol.value) - i128::from(base.value);
             } else if matches!(kind, 2 | 4)
-                && symbol.binding == 0
+                && resolvable(self.coff, symbol)
                 && !explicit_plt
                 && symbol.section == Some(section)
             {
@@ -411,4 +429,15 @@ impl<'a> Object<'a> {
 fn padding(offset: u64, align: u64, max: u64) -> u64 {
     let count = offset.wrapping_neg() & (align - 1);
     if count > max { 0 } else { count }
+}
+
+// COFF function-typed and weak symbols retain linker fixups even within a
+// section; ordinary labels (including globals) can be resolved by the
+// assembler.
+fn resolvable(coff: bool, symbol: Symbol<'_>) -> bool {
+    if coff {
+        symbol.binding != 2 && symbol.kind != 2
+    } else {
+        symbol.binding == 0
+    }
 }

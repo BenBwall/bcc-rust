@@ -1,17 +1,19 @@
 //! In-process object emission for the native emitter's private vocabulary.
 //!
 //! `encode` reads the emitter's listing once, lays out sections while promoting
-//! out-of-range branches, resolves local fixups, then writes ELF64. Sharing
-//! this vocabulary keeps prologues, CFI and symbol attributes in `emit.rs`,
-//! without coupling the encoder to register allocation. This is deliberately
-//! not a general-purpose assembler: unknown forms fail before the caller writes
-//! output.
+//! out-of-range branches, resolves local fixups, then writes ELF64 or AMD64
+//! COFF. Sharing this vocabulary keeps prologues, CFI and symbol attributes in
+//! `emit.rs`, without coupling the encoder to register allocation. This is
+//! deliberately not a general-purpose assembler: unknown forms fail before the
+//! caller writes output.
 //!
 //! Read `encode`, `listing::parse`, `encoder::instruction`, then `elf::write`.
 //! `layout` resolves section offsets and fixups. `unwind` implements DWARF
 //! call-frame instructions (LSB 5.0 §10.6); `elf` implements the ELF gABI and
-//! AMD64 psABI §4.4 relocations.
+//! AMD64 psABI §4.4 relocations. For Windows, read `coff::encode`, then its
+//! listing, unwind and writer modules (Microsoft PE format and x64 EH).
 
+mod coff;
 mod elf;
 mod encoder;
 mod layout;
@@ -33,6 +35,15 @@ pub(super) fn encode<'a>(text: &'a str, arena: &'a Bump) -> Result<ArenaVec<'a, 
     elf::write(&object)
 }
 
+/// Encodes the private Windows listing as an AMD64 COFF object.
+pub(super) fn encode_coff<'a>(
+    text: &'a str,
+    target: crate::target::Target,
+    arena: &'a Bump,
+) -> Result<ArenaVec<'a, u8>> {
+    coff::encode(text, target == crate::target::Target::WindowsGnu, arena)
+}
+
 /// A closed failure path for vocabulary the encoder cannot represent.
 #[derive(Debug, thiserror::Error)]
 #[error("native object emission: {0}")]
@@ -42,6 +53,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 struct Object<'a> {
     arena:    &'a Bump,
+    coff:     bool,
     sections: ArenaVec<'a, Section<'a>>,
     symbols:  ArenaVec<'a, Symbol<'a>>,
     names:    ArenaMap<'a, &'a str, usize>,
@@ -90,6 +102,8 @@ enum Kind<'a> {
     Zero(u64),
     Code(encoder::Code<'a>),
     Value(u8, &'a str),
+    CoffValue(u8, &'a str, u32),
+    Bytes(&'a str),
     Branch {
         condition: Option<u8>,
         target:    usize,

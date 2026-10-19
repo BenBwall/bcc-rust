@@ -17,6 +17,7 @@ use crate::util::bump::{
 pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
     let mut object = Object {
         arena,
+        coff: false,
         sections: ArenaVec::new_in(arena),
         symbols: ArenaVec::new_in(arena),
         names: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),

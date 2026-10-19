@@ -33,6 +33,11 @@ pub(crate) fn assemble(
         super::tests::object::equivalent(text)?;
         return build_object(text, out_path, target, kind);
     }
+    #[cfg(test)]
+    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) {
+        super::tests::object_coff::equivalent(text, target)?;
+        return build_object(text, out_path, target, kind);
+    }
     let toolchain = Toolchain::bundled(target)?;
     let arena = Bump::new();
     let (assembly, mut file) = TemporaryObject::create(out_path, "s", &arena)?;
@@ -41,7 +46,7 @@ pub(crate) fn assemble(
     toolchain.assemble(assembly.path(), out_path, target, kind)
 }
 
-/// Builds direct ELF bytes, retaining the text assembler for COFF targets.
+/// Builds direct ELF or COFF bytes from the private emitter listing.
 /// All encoding succeeds before the output file is opened.
 pub(crate) fn build_object(
     text: &str,
@@ -49,14 +54,16 @@ pub(crate) fn build_object(
     target: Target,
     kind: OutputKind,
 ) -> io::Result<()> {
-    if !matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
-        return assemble(text, out_path, target, kind);
-    }
     if kind == OutputKind::SharedLibrary {
         return Err(io::Error::other(super::NativeError::SharedLibraryCode));
     }
     let arena = Bump::new();
-    let bytes = super::object::encode(text, &arena).map_err(io::Error::other)?;
+    let bytes = match target {
+        | Target::LinuxGnu | Target::LinuxMusl => super::object::encode(text, &arena),
+        | Target::WindowsGnu | Target::WindowsMsvc =>
+            super::object::encode_coff(text, target, &arena),
+    }
+    .map_err(io::Error::other)?;
     if kind == OutputKind::Object {
         return std::fs::write(out_path, &bytes);
     }
