@@ -576,6 +576,63 @@ int calls(char *buf, unsigned long size) {{
     }
 }
 
+/// Multiple addressable overloads need the pointer target to select the symbol,
+/// including static relocations when another overload has a private inline
+/// body.
+#[test]
+fn overload_addresses_follow_the_target_type() {
+    let source = include_str!("../../../tests/fixtures/overloadable/address.c");
+    for target in [Target::LinuxGnu, Target::WindowsMsvc] {
+        let (int_symbol, double_symbol) = if target == Target::WindowsMsvc {
+            ("\"?o@@$$J0YAHH@Z\"", "\"?o@@$$J0YAHN@Z\"")
+        } else {
+            ("_Z1oi", "_Z1od")
+        };
+        let text = lower_for(source, target).unwrap();
+        for (global, symbol) in [
+            ("global_int", int_symbol),
+            ("global_double", double_symbol),
+            ("global_decay_double", double_symbol),
+        ] {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&format!("global @{global} ")))
+                .unwrap();
+            assert!(line.ends_with(&format!("relocs [0: @{symbol}]")), "{text}");
+        }
+        for (suffix, symbol) in [("int", int_symbol), ("double", double_symbol)] {
+            let static_global = text
+                .lines()
+                .find(|line| {
+                    line.starts_with("global @") && line.contains(&format!("static_{suffix}"))
+                })
+                .unwrap();
+            assert!(
+                static_global.ends_with(&format!("relocs [0: @{symbol}]")),
+                "{text}"
+            );
+            for form in ["automatic", "assignment", "cast", "argument"] {
+                let body = text
+                    .split(&format!("function @{form}_{suffix}("))
+                    .nth(1)
+                    .unwrap()
+                    .split("\nfunction ")
+                    .next()
+                    .unwrap();
+                let addresses: Vec<_> = body
+                    .lines()
+                    .filter(|line| line.contains("func_addr @"))
+                    .collect();
+                assert_eq!(addresses.len(), 1, "{text}");
+                assert!(
+                    addresses[0].ends_with(&format!("func_addr @{symbol}")),
+                    "{text}"
+                );
+            }
+        }
+    }
+}
+
 /// SQLite stores fortify wrappers in a generic syscall table using an explicit
 /// function-pointer cast. Resolve the sole addressable overload before casting.
 #[test]
