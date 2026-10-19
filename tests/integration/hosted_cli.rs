@@ -1,11 +1,6 @@
 //! The execution environment, header search order, resource-header chaining
 //! and compiler identity, exercised through the CLI.
 
-#![expect(
-    unused_crate_dependencies,
-    reason = "CLI integration tests exercise the compiled binary."
-)]
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

@@ -1,9 +1,4 @@
 #![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "Integration tests exercise the CLI."
-)]
-#![expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,
     clippy::disallowed_methods,

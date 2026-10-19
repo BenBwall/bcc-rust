@@ -1,9 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "Integration tests exercise the compiler and its pinned Clang oracle."
-)]
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -237,7 +231,7 @@ mod tests {
     #[test]
     fn issue49_static_function_designator_initializer_matches_clang_policy() {
         let source = include_str!(
-            "../docs/research/conformance-reproducers-2026-10-13/\
+            "../../docs/research/conformance-reproducers-2026-10-13/\
              function_to_void_pointer_initializer.c"
         );
         for (flags, error, tag) in [

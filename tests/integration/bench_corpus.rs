@@ -4,11 +4,6 @@
 //! output either way. `scripts/compare_optimizers.py` times the full-size
 //! programs.
 
-#![expect(
-    unused_crate_dependencies,
-    reason = "Integration tests exercise the compiled CLI."
-)]
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

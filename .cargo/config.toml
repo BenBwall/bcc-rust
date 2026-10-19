@@ -10,7 +10,8 @@ target = "host-tuple"
 # compiler_builtins object that references `rust_eh_personality`: signed
 # 128-bit division, 128-bit float arithmetic and `lgamma`. Recheck it when the
 # toolchain changes: run `llvm-nm -u` over the rlib's members.
-# tests/late_builtins.rs fails to link if the list stops covering division.
+# tests/integration/late_builtins.rs fails to link if the list stops covering
+# division.
 #
 # Tests run C programs bcc compiled; one that crashes would make Windows open an
 # error dialog. The runner suppresses those dialogs for every binary Cargo runs

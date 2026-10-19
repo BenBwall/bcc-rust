@@ -1,5 +1,4 @@
 //! Startup definitions, undefinitions and forced includes through the CLI.
-#![expect(unused_crate_dependencies, reason = "Integration tests run the CLI.")]
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,

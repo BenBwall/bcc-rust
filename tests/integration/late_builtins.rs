@@ -4,11 +4,6 @@
 //! `.cargo/config.toml` makes the linker fetch them before LTO. If that list
 //! stops covering an operation, this test binary fails to link.
 
-#![expect(
-    unused_crate_dependencies,
-    reason = "Integration tests inherit package dependencies they do not use."
-)]
-
 #[cfg(test)]
 mod tests {
     use std::hint::black_box;

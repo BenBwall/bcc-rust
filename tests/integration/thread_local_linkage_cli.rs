@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "Integration tests exercise the compiled CLI."
-)]
-
-#[path = "support/native.rs"]
-mod native;
-
 /// The relocation models (`-fpic`, `-fPIC`, `-fpie`, `-fPIE`, `-fno-pic`),
 /// `-ftls-model` and the `-shared`, `-pie` and `-no-pie` link kinds, with
 /// thread-local storage (issue #65). Thread-local objects of shared
@@ -37,7 +28,7 @@ mod tests {
         },
     };
 
-    use super::native::run_native;
+    use crate::native::run_native;
 
     /// A library's thread-local objects: an exported definition, an
     /// internal and a hidden one (which LLVM reaches with local-dynamic in

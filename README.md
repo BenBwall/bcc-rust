@@ -248,8 +248,9 @@ Under this combination, code generation can introduce calls to
 division and `f128` arithmetic are examples. The linker would then fail with
 `undefined symbol: rust_eh_personality`. The Windows GNU and Linux flags in
 [`.cargo/config.toml`](.cargo/config.toml) therefore force those objects in
-before LTO, and [`tests/late_builtins.rs`](tests/late_builtins.rs) fails to link
-if the list stops covering them.
+before LTO, and
+[`tests/integration/late_builtins.rs`](tests/integration/late_builtins.rs)
+fails to link if the list stops covering them.
 
 Cargo selects the source-built linker directly from `target/llvm/bin/`.
 The C compiler, archiver, libclang, and linker all come from that pinned
@@ -500,8 +501,8 @@ not parser time. Use the parser benchmark groups for parser measurements.
 
 ### External torture corpus
 
-`cargo test --test torture_regressions` runs the reduced regressions found in
-the corpus, including literal values, macro expansion, native long-double
+`cargo test --test integration torture_regressions` runs the reduced
+regressions found in the corpus, including literal values, macro expansion, native long-double
 conversion, and bounded recovery. The parser unit tests also check that long
 syntax lists retain source provenance with linear storage growth.
 
@@ -697,7 +698,8 @@ CPU and `--high-priority` raises their priority on Windows. Nothing here isolate
 Windows run shows trends only; take final generated-code numbers on native
 Linux, as the methodology note's section 4.2 says. Run the harness's tests
 with `python -m unittest discover -s scripts -p "test_compare_optimizers.py"`;
-`cargo test --test bench_corpus` runs the reduced programs in the interpreter.
+`cargo test --test integration bench_corpus` runs the reduced programs in the
+interpreter.
 
 ### Branch cleanup
 

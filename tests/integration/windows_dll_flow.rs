@@ -1,6 +1,5 @@
 //! DLL storage follows generated references, including Clang's -O0 control
 //! flow choices, on both Windows ABIs.
-#![expect(unused_crate_dependencies, reason = "Tests run compiler processes.")]
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,

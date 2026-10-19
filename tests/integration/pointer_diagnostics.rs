@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "Integration tests exercise the compiled CLI."
-)]
-
-#[path = "support/native.rs"]
-mod native;
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -278,7 +269,7 @@ mod tests {
                 } else {
                     Command::new(&executable)
                 };
-                let output = super::native::run_native(&mut command).unwrap();
+                let output = crate::native::run_native(&mut command).unwrap();
                 assert_eq!(output.status.code(), Some(0), "{output:?}");
             }
         }

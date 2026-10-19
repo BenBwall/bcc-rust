@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "CLI emission regressions."
-)]
-
-#[path = "support/native.rs"]
-mod native;
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -21,7 +12,7 @@ mod tests {
         process::Command,
     };
 
-    use super::native::run_native;
+    use crate::native::run_native;
 
     #[test]
     fn emitted_symbols_match_clang_o0() {

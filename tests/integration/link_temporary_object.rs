@@ -1,12 +1,3 @@
-#![expect(
-    missing_docs,
-    unused_crate_dependencies,
-    reason = "CLI regression tests."
-)]
-
-#[path = "support/native.rs"]
-mod native;
-
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -52,7 +43,7 @@ mod tests {
         let output = cleanup.0.join("app.exe");
         let sentinel = cleanup.0.join("app.exe.bcc.o");
         std::fs::write(&sentinel, b"user-owned object").unwrap();
-        let built = super::native::run_native(
+        let built = crate::native::run_native(
             Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                 .args(["--target", target, "--input", source, "-o"])
                 .arg(&output),
