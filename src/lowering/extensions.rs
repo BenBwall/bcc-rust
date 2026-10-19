@@ -4,6 +4,7 @@
 //! C99: §6.2.2p2, p. 30; PDF p. 42; §6.9p3-5, p. 140; PDF p. 152.
 use super::{
     Construct,
+    ENTITY_FACTS,
     LoweringError,
     module_items::Unit,
 };
@@ -52,33 +53,15 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     }
 
     pub(super) fn binding_identity(&self, binding: usize) -> StringCacheId {
-        let entity = self.sema.entity(binding);
-        debug_assert!(
-            entity.is_some(),
-            "Unit::new rejects missing entity facts for functions and linked/static objects; \
-             symbol queries only receive these bindings"
-        );
-        entity.unwrap().identity
+        self.sema.entity(binding).expect(ENTITY_FACTS).identity
     }
 
     pub(super) fn symbol_request(&self, binding: usize) -> Option<SymbolRequest<'tu>> {
-        let entity = self.sema.entity(binding);
-        debug_assert!(
-            entity.is_some(),
-            "Unit::new rejects missing entity facts for functions and linked/static objects; \
-             symbol queries only receive these bindings"
-        );
-        entity.unwrap().symbol
+        self.sema.entity(binding).expect(ENTITY_FACTS).symbol
     }
 
     pub(super) fn symbol_name(&self, binding: usize) -> &'a str {
-        let entity = self.sema.entity(binding);
-        debug_assert!(
-            entity.is_some(),
-            "Unit::new rejects missing entity facts for functions and linked/static objects; \
-             symbol queries only receive these bindings"
-        );
-        let entity = entity.unwrap();
+        let entity = self.sema.entity(binding).expect(ENTITY_FACTS);
         entity.symbol.map_or_else(
             || self.context.string_cache.at(entity.abi_name),
             |request| request.name,

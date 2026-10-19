@@ -124,7 +124,7 @@ impl Unit<'_, '_, '_> {
             self.module.function_mut(func).returns_twice = self
                 .sema
                 .entity(binding)
-                .expect("entity facts checked by Unit::new")
+                .expect(super::ENTITY_FACTS)
                 .returns_twice;
         }
         let Some(&attributes) = self.sema.entity_attributes(binding) else {

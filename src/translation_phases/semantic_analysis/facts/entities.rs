@@ -573,8 +573,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fmt::Write,
+        path::Path,
+    };
+
     use super::*;
 
+    // Host layouts; the arenas already require a 64-bit host.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn retained_entity_record_sizes() {
         assert_eq!(size_of::<EntityRecord<'_>>(), 72);
@@ -582,5 +589,71 @@ mod tests {
         assert_eq!(size_of::<FunctionPolicy>(), 2);
         assert_eq!(size_of::<(usize, FunctionPolicy)>(), 16);
         assert_eq!(size_of::<SymbolRequest<'_>>(), 24);
+    }
+
+    /// Plain declarations stay in the dense hot table. Only definitions,
+    /// assembler requests and returns-twice policy allocate cold records, so
+    /// a path that makes every record cold fails here rather than only
+    /// showing up as retained memory.
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "The test builds its generated input and expected names with std types."
+    )]
+    fn plain_declarations_do_not_allocate_cold_records() {
+        const PLAIN: usize = 500;
+        let mut source = String::new();
+        for i in 0..PLAIN {
+            writeln!(source, "extern int x{i}; int p{i}(int); extern int x{i};").unwrap();
+        }
+        // Each of these declarations needs exactly one cold record.
+        source.push_str(
+            "int defined = 1;\nint tentative;\nstatic int internal;\nint labelled(void) \
+             __asm__(\"renamed\");\n__attribute__((returns_twice)) int twice(void);\nint \
+             body(void) { return x0 + p0(defined); }\n",
+        );
+        let tu = Bump::new();
+        let mut context = Context::with_configuration(
+            &tu,
+            crate::configuration::CompilerConfiguration::default(),
+        );
+        let unit = crate::pipeline::parse_translation_unit(
+            &mut context,
+            Path::new("<cold>"),
+            tu.alloc_str(&source),
+            crate::headers::HeaderSearch::default(),
+        );
+        let sema = super::super::super::analyze(&mut context, &unit);
+        assert_eq!(sema.errors, 0);
+        let records = &*sema.entities.records;
+        let name = |r: &EntityRecord<'_>| context.string_cache.at(sema.bindings[r.id.0].name.name);
+        // Predefined bindings may add records, so count the fixture's own.
+        let plain = records
+            .iter()
+            .filter(|r| {
+                let n = name(r);
+                (n.starts_with('x') || n.starts_with('p')) && n[1..].parse::<usize>().is_ok()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(plain.len(), 2 * PLAIN);
+        assert!(plain.iter().all(|r| r.cold.is_none()));
+        let cold: Vec<_> = records
+            .iter()
+            .filter(|r| r.cold.is_some())
+            .map(name)
+            .collect();
+        assert_eq!(
+            cold,
+            [
+                "defined",
+                "tentative",
+                "internal",
+                "labelled",
+                "twice",
+                "body",
+                // The defined static that `body` implicitly declares.
+                "__func__"
+            ]
+        );
     }
 }
