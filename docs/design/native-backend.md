@@ -1322,6 +1322,15 @@ check equivalence and link/run the direct ELF object. The latter also covers
 the difftest native oracle and native ABI conformance tests. Boundary fixtures
 exercise short/near jumps, alignment, register widths, immediates, displacements,
 SSE/x87, TLS and symbol attributes.
+After stage 4 the listing also carries `disp(base,index,scale)` operands and
+the allocator's `lea` forms; a fixture encodes them for every base and index
+that needs a SIB byte or a displacement, beside every `cmov` condition and the
+shifts and masks of power-of-two division, and refuses a `%rsp` index, other
+scales, RIP-relative indexing and 32-bit address registers. Integrated on
+stage 4, the direct and text paths gave identical objects for all 266 corpus
+inputs (`benches/c` and `tests/fixtures`, B0 and B1) the back end accepts, with
+no direct-only refusal, and the native tests check every program with every
+value spilled through the direct path as well.
 Every supported instruction validates operand count, kind and width before
 encoding. Unsupported suffixes, oversized fields, duplicate definitions,
 conflicting bindings, unsupported size expressions and alignment max-skip

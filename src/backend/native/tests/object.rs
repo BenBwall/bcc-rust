@@ -793,6 +793,67 @@ fn operand_counts_classes_and_widths_are_checked() {
     }
 }
 
+/// The allocator's operands: `disp(base,index,scale)` for every base and
+/// index whose low three bits need a SIB byte or a displacement (`%rsp`,
+/// `%rbp`, `%r12`, `%r13`), as loads, stores, ALU and SSE sources, x87
+/// operands and `lea`, including the `lea` into `%r11` that addresses a
+/// store whose base, index and value are all spilled. Also the `cmov` of
+/// every condition from fused compares and the shifts and masks of a
+/// division by a power of two.
+#[test]
+fn indexed_operands_and_allocator_forms_match_clang() {
+    let mut text = String::from(".text\n");
+    for base in ["rax", "rsp", "rbp", "r11", "r12", "r13"] {
+        for index in ["rcx", "rbp", "r10", "r12", "r13", "r15"] {
+            for scale in [1, 2, 4, 8] {
+                for disp in ["", "-8", "127", "128", "-2147483648"] {
+                    let m = format!("{disp}(%{base},%{index},{scale})");
+                    write!(
+                        &mut text,
+                        "movq {m},%r9\nmovl %esi,{m}\nmovb %sil,{m}\nmovq $-1,{m}\nleaq \
+                         {m},%r11\naddq {m},%rdx\ncmpl {m},%r8d\nmovzbl {m},%eax\nmovslq \
+                         {m},%r14\nmovsd {m},%xmm9\nmovss %xmm2,{m}\naddsd {m},%xmm1\nfldt \
+                         {m}\nfstpt {m}\n"
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+    text.push_str(
+        "leaq (%r11,%r10,8),%r11\nmovq %r10,(%r11)\nleaq 16(%rsp,%r10,4),%r11\nleaq \
+         (%rax,%rax,2),%rcx\nleaq (%r13,%r13,8),%r13\nleaq 3(%rbp,%rbp,4),%rbp\n",
+    );
+    for cond in [
+        "o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g",
+    ] {
+        write!(
+            &mut text,
+            "cmov{cond}l %ecx,%r9d\ncmov{cond}q %r10,%rax\ncmov{cond}q \
+             8(%rsp,%rcx,8),%rdx\nset{cond} %r11b\n"
+        )
+        .unwrap();
+    }
+    text.push_str(
+        "sarl $31,%ecx\nshrl $30,%ecx\naddl %eax,%ecx\nandl $-4,%ecx\nsarl $2,%eax\nandl \
+         $3,%edx\nsarq $63,%r9\nshrq $62,%r9\nandq $-4,%r9\nshrl $2,%r15d\nandq $7,%r14\n",
+    );
+    equivalent(&text).unwrap();
+    for text in [
+        "movq (%rax,%rsp,8),%rcx",
+        "movq (%rax,%rcx,3),%rdx",
+        "movq (%rax,%rcx,16),%rdx",
+        "movq x(%rip,%rcx,8),%rdx",
+        "movq (%rax,%ecx,8),%rdx",
+        "movq (%eax,%rcx,8),%rdx",
+        "leal (%rax,%rcx,4),%edx",
+        "leaq (%rax,%rcx,4),%edx",
+        "leaq (%rax,%rcx,4)",
+    ] {
+        refuses(text, "native object emission");
+    }
+}
+
 #[test]
 fn oversized_immediates_and_displacements_are_refused() {
     for text in [
