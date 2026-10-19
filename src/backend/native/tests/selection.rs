@@ -1508,3 +1508,46 @@ block0(v0: i64):
     );
     assert!(function_text(&text, "f").contains("subq\t$"), "{text}");
 }
+
+#[test]
+fn loop_tops_are_aligned_to_16_bytes() {
+    let ir = "abi lowered
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 slt v2, v0
+    brif v4, block2, block3
+block2:
+    v5 = iadd.i32 v3, v2
+    v6 = iconst.i32 1
+    v7 = iadd.i32 v2, v6
+    jump block1(v7, v5)
+block3:
+    return v3
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let f = function_text(&text, "f");
+        let aligned: Vec<&str> = f
+            .split("\t.p2align\t4\n")
+            .skip(1)
+            .map(|rest| rest.split_once(":\n").expect("a label follows").0)
+            .collect();
+        assert!(!aligned.is_empty(), "{f}");
+        for label in aligned {
+            let at = f.find(&format!("{label}:\n")).unwrap();
+            assert!(
+                f[at..].contains(&format!("\t{label}\n")),
+                "{label} is the target of a back edge:\n{f}"
+            );
+        }
+    }
+    let text = assembly(ADD, Target::LinuxGnu);
+    assert!(
+        !function_text(&text, "add").contains(".p2align"),
+        "straight-line code is not aligned:\n{text}"
+    );
+}

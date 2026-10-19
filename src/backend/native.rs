@@ -270,7 +270,7 @@ fn emit<'m>(
                     construct,
                 }
             })?;
-            emitter.function(id, &func, &frame)?;
+            emitter.function(id, &func, &frame, arena)?;
         }
         scratch.reset();
     }
