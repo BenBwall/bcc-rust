@@ -234,9 +234,18 @@ Peaks below are the maximum observed across each version’s seven runs.
 
 All 126 compiler runs exited zero. The reported local-binding regression now
 stays below 0.5% over M6 peak RSS, meeting the requested few-percent target;
-minimum times are 1.67–2.19% over M6. The distinct-label input remains a measured
-limitation: every object needs a retained symbol record, so its semantic-only
-peak is 15.34% over M6 (round 1 was 30.86%), and minimum time is 14.08% higher.
+minimum times are 1.67–2.19% over M6. Files dominated by declarations remain a
+measured limitation, and asm labels play no part in it: every file-scope
+declaration with linkage or static storage keeps a symbol record of about 550
+bytes. The distinct-label input above is one such file. Its semantic-only peak
+is 15.34% over M6 (round 1 was 30.86%), and minimum time is 14.08% higher. The
+round-2 review measured 30k plain `extern int x;` or `static int s;`
+declarations at +18%. The cost grows linearly, levelling off near +23%. Real
+inputs stay small:
+- a 50-header glibc file with `_FORTIFY_SOURCE=2` (about 2.3k declarations):
+  +1.9–2.6%;
+- sqlite3: +0.4–0.8%;
+- a 4.4 MB generated declaration-heavy file: +3.7%.
 Repeated declarations add 1.12% peak RSS; repeated labeled declarations are shown
 separately above. This follow-up does not claim a universal memory/time bound for
 translation units dominated by symbols, or that 136-byte payloads describe
