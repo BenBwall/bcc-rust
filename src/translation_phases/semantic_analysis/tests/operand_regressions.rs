@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-fn steps(source: &str) -> [usize; 3] {
+fn steps(source: &str) -> [usize; 4] {
     let tu = Bump::new();
     let scratch = Bump::new();
     let source = tu.alloc_str(&format!("{source}\n"));

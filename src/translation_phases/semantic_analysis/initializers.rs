@@ -5,11 +5,18 @@
 //! written, for Clang's `-Winitializer-overrides`.
 
 mod overrides;
+mod plan;
 
 use overrides::{
     Step,
     Write,
     Writes,
+};
+use plan::{
+    Completion,
+    Container,
+    PlanBuilder,
+    Site,
 };
 use rustc_hash::FxBuildHasher;
 
@@ -22,6 +29,7 @@ use super::{
     Linkage,
     ScopeKind,
     SemanticErrorKind,
+    Subobject,
     expressions::{
         ConstantClass,
         ConversionKind,
@@ -63,7 +71,7 @@ use crate::{
     },
 };
 
-impl<'tu> Analyzer<'_, 'tu, '_> {
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Applies scalar assignment conversion and aggregate current-object rules.
     /// The returned type completes an array of unknown size from its highest
     /// initialized index. C99: §6.7.8p11-22, pp. 126-127; PDF pp. 138-139.
@@ -110,23 +118,50 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut flexible: Option<FlexibleExtent> = None;
         let mut writes = Writes::new_in(self.scratch, initializer.source_vectors);
         let mut leaves = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut plan = PlanBuilder::new_in(self.scratch);
         let mut count = 0;
         let before = self.semantic_errors;
         let mut unmodeled = false;
-        work.push(InitWork::Value(ty, initializer, false, Writes::ROOT));
+        work.push(InitWork::Value(
+            ty,
+            initializer,
+            Writes::ROOT,
+            Site::root(initializer.source_vectors),
+        ));
         while let Some(task) = work.pop() {
+            #[cfg(test)]
+            self.review_step(3);
             match task {
-                | InitWork::Value(target, init, bit_field, node) => {
-                    if init.recovered || self.initializer_unanalyzed(target, &mut leaves) {
+                | InitWork::Value(target, init, node, site) => {
+                    if init.recovered {
                         continue;
                     }
+                    let destination = site.destination(target);
+                    if self.initializer_unanalyzed(target, &mut leaves) {
+                        plan.unmodeled(destination, site.source);
+                        continue;
+                    }
+                    let bit_field = site.bits.is_some();
+                    let completion =
+                        self.completion(target, std::ptr::eq(init, initializer), &site);
                     match init.kind {
                         | InitializerType::AssignmentExpression(e) => {
                             let info = self.expression_info(e);
                             if self.types.unanalyzed(info.ty) {
+                                if self.aggregate(target) {
+                                    plan.invalidate();
+                                } else {
+                                    plan.store(
+                                        e,
+                                        destination,
+                                        site.bits,
+                                        site.scalar_source.unwrap_or(e.source_vectors),
+                                    );
+                                }
                                 continue;
                             }
                             if let Some(extent) = self.initialize_string(target, e) {
+                                plan.string(e, destination, completion);
                                 if std::ptr::eq(init, initializer) {
                                     count = count.max(extent);
                                 } else if let Some(flexible) = &mut flexible
@@ -159,54 +194,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 continue;
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
+                            // C99 §6.7.8p13: a structure or union initialized
+                            // by an expression of its type is copied whole.
+                            if matches!(
+                                self.types.nodes[self.types.non_atomic(target).index],
+                                TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
+                            ) {
+                                plan.copy(e, destination, self.enclosing_unions(&site));
+                            } else {
+                                plan.store(
+                                    e,
+                                    destination,
+                                    site.bits,
+                                    site.scalar_source.unwrap_or(e.source_vectors),
+                                );
+                            }
                             if static_storage {
-                                let address = info.constant == ConstantClass::Address
-                                    || (info.static_address
-                                        && matches!(
-                                            self.types.nodes[info.ty.index],
-                                            TypeKind::Array(..) | TypeKind::Function { .. }
-                                        ));
-                                let valid = if matches!(
-                                    // C99 §6.3.1.2p1 and §6.6p7: address constants
-                                    // initialize bool, including C11 atomic bool.
-                                    self.types.nodes[self.types.non_atomic(target).index],
-                                    TypeKind::Scalar(Scalar::Bool)
-                                ) && address
-                                {
-                                    true
-                                } else if self.arithmetic(target) {
-                                    (info.constant == ConstantClass::Arithmetic
-                                        && (info.integer.is_some()
-                                            || info.floating.is_some()
-                                            || info.unfolded_binary128))
-                                        // GNU extension: GCC "Labels as
-                                        // Values"; as in Clang, not into a
-                                        // bit-field.
-                                        || (info.constant == ConstantClass::LabelDifference
-                                            && !bit_field
-                                            && self.label_difference_fits(target, info.ty))
-                                        || (address && self.pointer_width_integer(target))
-                                } else {
-                                    address
-                                        || self.null_pointer_constant(info)
-                                        || (matches!(
-                                            self.types.nodes[self.types.non_atomic(target).index],
-                                            TypeKind::Pointer(_)
-                                        ) && info.ice
-                                            && info.integer.is_some())
-                                };
-                                if !valid {
-                                    self.error(
-                                        if info.constant == ConstantClass::Arithmetic {
-                                            SemanticErrorKind::ConstantOverflow
-                                        } else {
-                                            SemanticErrorKind::NonConstantInitializer
-                                        },
-                                        e.source_vectors,
-                                        None,
-                                        None,
-                                    );
-                                }
+                                self.check_static_initializer(target, info, e, bit_field);
                             }
                         },
                         | InitializerType::InitializerList(list) => {
@@ -225,8 +229,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 work.push(InitWork::Value(
                                     target,
                                     element.initializer,
-                                    false,
                                     node,
+                                    Site {
+                                        scalar_source: Some(
+                                            site.scalar_source.unwrap_or(site.source),
+                                        ),
+                                        ..site
+                                    },
                                 ));
                                 continue;
                             }
@@ -242,6 +251,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 && self.braced_string_fits(target, e)
                                 && let Some(extent) = self.initialize_string(target, e)
                             {
+                                plan.string(e, destination, completion);
                                 if std::ptr::eq(init, initializer) {
                                     count = count.max(extent);
                                 } else if let Some(flexible) = &mut flexible
@@ -251,27 +261,77 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 }
                                 continue;
                             }
+                            // A brace pair around a scalar's initializer is
+                            // part of it (§6.7.8p11): the scalar is its only
+                            // subobject, with the outer pair's provenance.
+                            let (zero, scalar) = if self.aggregate(target) {
+                                (plan.zero(destination, completion, site.source), None)
+                            } else {
+                                if list.elements.as_slice().is_empty() {
+                                    plan.empty_scalar(destination, init.source_vectors);
+                                }
+                                (
+                                    PlanBuilder::NO_SCOPE,
+                                    Some(Site {
+                                        scalar_source: Some(
+                                            site.scalar_source.unwrap_or(site.source),
+                                        ),
+                                        ..site
+                                    }),
+                                )
+                            };
+                            let container = self.plan_container(&site, target);
                             let current = self.scratch.alloc(Current {
                                 container:  target,
                                 index:      self.first_subobject(target),
                                 parent:     None,
                                 root_index: 0,
+                                at:         container,
                             });
-                            work.push(InitWork::List(
-                                target,
+                            work.push(InitWork::List(ListWork {
+                                root: target,
                                 list,
-                                0,
-                                current,
-                                std::ptr::eq(init, initializer),
-                                node,
-                            ));
+                                position: 0,
+                                cursor: current,
+                                infer: std::ptr::eq(init, initializer),
+                                base: node,
+                                container,
+                                zero,
+                                close: 0,
+                                scalar,
+                            }));
                         },
                     }
                 },
-                | InitWork::List(root, list, position, cursor, infer, base) => {
+                | InitWork::List(task) => {
+                    let ListWork {
+                        root,
+                        list,
+                        position,
+                        cursor,
+                        infer,
+                        base,
+                        container,
+                        zero,
+                        close,
+                        scalar,
+                    } = task;
+                    // The previous element is checked, with every range
+                    // designator it repeated over.
+                    plan.close_repeats(close);
                     let Some(element) = list.elements.as_slice().get(position) else {
+                        plan.close_zero(zero);
                         continue;
                     };
+                    let next_task = |cursor, close| {
+                        InitWork::List(ListWork {
+                            position: position + 1,
+                            cursor,
+                            close,
+                            ..task
+                        })
+                    };
+                    let source = scalar.map_or(element.source_vectors, |site| site.source);
                     let mut cursor = *cursor;
                     // The step of the designation's last range designator
                     // and its lower bound: the element writes every element
@@ -279,8 +339,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let mut range = None;
                     // Where writes inside each designated subobject begin.
                     let mut starts = ArenaVec::new_in(self.scratch);
+                    // The range designators whose elements the plan repeats
+                    // this element's operations for.
+                    let mut repeats = 0;
                     if let Some(designation) = element.designation {
                         let mut selected = root;
+                        let mut selected_at = container;
                         let mut parent = None;
                         let mut valid = true;
                         let mut unknown_designator = false;
@@ -362,6 +426,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             path.push(index);
                             let steps = path.len();
                             for (step, &index) in path.iter().enumerate() {
+                                #[cfg(test)]
+                                self.review_step(3);
                                 let Some(child) = self.subobject(selected, index) else {
                                     valid = false;
                                     break;
@@ -372,11 +438,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     parent,
                                     root_index: parent
                                         .map_or(index, |p: &Current<'_>| p.root_index),
+                                    at: selected_at,
                                 };
                                 if flexible_designator.is_none()
                                     && let Some(member) = self.flexible_member(selected, index)
                                 {
                                     flexible_designator = Some((ordinal, member, cursor));
+                                }
+                                self.plan_container_entry(
+                                    &mut plan,
+                                    &cursor,
+                                    zero,
+                                    designator.source_vectors,
+                                );
+                                if let Some(lower) = lower {
+                                    match self.subobject_stride(selected) {
+                                        | Some(stride) => plan.open_repeat(lower, index, stride),
+                                        | None => plan.invalidate(),
+                                    }
+                                    repeats += 1;
+                                }
+                                match self.plan_child(selected, &selected_at, index, child) {
+                                    | Some(at) => selected_at = at,
+                                    | None => plan.invalidate(),
                                 }
                                 parent = Some(&*self.scratch.alloc(cursor));
                                 selected = child;
@@ -414,14 +498,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     None,
                                 );
                             }
-                            work.push(InitWork::List(
-                                root,
-                                list,
-                                position + 1,
-                                self.scratch.alloc(cursor),
-                                infer,
-                                base,
-                            ));
+                            work.push(next_task(self.scratch.alloc(cursor), repeats));
                             continue;
                         }
                         // As in GCC and Clang, a designator may name a
@@ -431,13 +508,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         if let Some((at, member, at_member)) = flexible_designator
                             && self.flexible_designation(designators, at, member, element)
                         {
-                            work.push(InitWork::List(
-                                root,
-                                list,
-                                position + 1,
+                            work.push(next_task(
                                 self.scratch.alloc(self.advance_current(at_member)),
-                                infer,
-                                base,
+                                repeats,
                             ));
                             continue;
                         }
@@ -449,19 +522,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             None,
                             None,
                         );
-                        work.push(InitWork::List(
-                            root,
-                            list,
-                            position + 1,
-                            self.scratch.alloc(cursor),
-                            infer,
-                            base,
-                        ));
+                        work.push(next_task(self.scratch.alloc(cursor), repeats));
                         continue;
                     };
                     if infer {
                         count = count.max(cursor.root_index.saturating_add(1));
                     }
+                    let mut own_flexible = false;
                     if self
                         .flexible_member(cursor.container, cursor.index)
                         .is_some()
@@ -470,6 +537,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         // member at the outermost level.
                         let own =
                             infer && cursor.parent.is_none() && cursor.container.index == ty.index;
+                        own_flexible = own && static_object;
                         let (empty, whole) = match element.initializer.kind {
                             | InitializerType::InitializerList(list) =>
                                 (list.elements.as_slice().is_empty(), true),
@@ -478,18 +546,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         };
                         self.enter_flexible_array(
                             target,
-                            own && static_object,
+                            own_flexible,
                             empty,
                             whole,
                             element.source_vectors,
                             &mut flexible,
                         );
+                    } else if element.designation.is_none() {
+                        self.plan_container_entry(&mut plan, &cursor, zero, source);
                     }
                     // Without explicit braces, descend until an expression can
                     // initialize the complete current subobject or a scalar
                     // leaf.
                     if let InitializerType::AssignmentExpression(e) = element.initializer.kind {
                         while self.aggregate(target) && !self.whole_object_expression(target, e) {
+                            #[cfg(test)]
+                            self.review_step(3);
                             let next_index = self.first_subobject(target);
                             let Some(child) = self.subobject(target, next_index) else {
                                 break;
@@ -504,51 +576,135 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     &mut flexible,
                                 );
                             }
-                            cursor = Current {
-                                container:  target,
-                                index:      next_index,
-                                parent:     Some(self.scratch.alloc(cursor)),
-                                root_index: cursor.root_index,
-                            };
+                            cursor = self.plan_descent(
+                                &mut plan,
+                                cursor,
+                                (target, next_index),
+                                zero,
+                                (source, e.source_vectors),
+                            );
                             target = child;
                         }
                     }
-                    // Brace elision may have descended into an element, so
-                    // the member's own position is on the cursor's path.
                     if let Some(flexible) = &mut flexible {
-                        let mut path = Some(&cursor);
-                        while let Some(current) = path {
-                            if self.flexible_array_type(current.container, ty) {
-                                flexible.extend(current.index.saturating_add(1));
-                                break;
-                            }
-                            path = current.parent;
-                        }
+                        self.extend_flexible(flexible, &cursor, ty);
                     }
                     let node =
                         self.record_write(&mut writes, base, &cursor, &starts, range, element);
+                    // A braced scalar's element initializes the scalar itself.
+                    let site = match scalar {
+                        | Some(site) => site,
+                        | None =>
+                            match self.plan_site(cursor.container, &cursor.at, cursor.index, source)
+                            {
+                                | Some(site) => Site {
+                                    own_flexible,
+                                    ..site
+                                },
+                                | None => {
+                                    plan.invalidate();
+                                    Site::root(source)
+                                },
+                            },
+                    };
                     let next = self.advance_current(cursor);
-                    work.push(InitWork::List(
-                        root,
-                        list,
-                        position + 1,
-                        self.scratch.alloc(next),
-                        infer,
-                        base,
-                    ));
-                    let bit_field = self.bit_field_member(cursor.container, cursor.index);
-                    work.push(InitWork::Value(
-                        target,
-                        element.initializer,
-                        bit_field,
-                        node,
-                    ));
+                    work.push(next_task(self.scratch.alloc(next), repeats));
+                    work.push(InitWork::Value(target, element.initializer, node, site));
                 },
             }
         }
         if unmodeled {
             return (self.types.unknown(), None);
         }
+        let (ty, flexible) =
+            match self.complete_initialized_type(ty, initializer, count, flexible, before) {
+                | Ok(completed) => completed,
+                | Err(rejected) => return rejected,
+            };
+        if self.semantic_errors == before
+            && let Some(plan) = plan.finish(self.types.tu, ty, flexible.map(|array| array.written))
+        {
+            _ = self
+                .initializers
+                .plans
+                .insert(std::ptr::from_ref(initializer).addr(), plan);
+        }
+        (ty, flexible)
+    }
+
+    /// An initializer of an object with static storage duration is a
+    /// constant expression: an arithmetic constant, an address constant or
+    /// a null pointer constant fitting the target type.
+    /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §6.6 paragraphs 7-9,
+    /// pp. 95-96; PDF pp. 107-108.
+    fn check_static_initializer(
+        &mut self,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        e: &'tu Expression<'tu>,
+        bit_field: bool,
+    ) {
+        let address = info.constant == ConstantClass::Address
+            || (info.static_address
+                && matches!(
+                    self.types.nodes[info.ty.index],
+                    TypeKind::Array(..) | TypeKind::Function { .. }
+                ));
+        let valid = if matches!(
+            // C99 §6.3.1.2p1 and §6.6p7: address constants
+            // initialize bool, including C11 atomic bool.
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Scalar(Scalar::Bool)
+        ) && address
+        {
+            true
+        } else if self.arithmetic(target) {
+            (info.constant == ConstantClass::Arithmetic
+                && (info.integer.is_some()
+                    || info.floating.is_some()
+                    || info.unfolded_binary128))
+                // GNU extension: GCC "Labels as
+                // Values"; as in Clang, not into a
+                // bit-field.
+                || (info.constant == ConstantClass::LabelDifference
+                    && !bit_field
+                    && self.label_difference_fits(target, info.ty))
+                || (address && self.pointer_width_integer(target))
+        } else {
+            address
+                || self.null_pointer_constant(info)
+                || (matches!(
+                    self.types.nodes[self.types.non_atomic(target).index],
+                    TypeKind::Pointer(_)
+                ) && info.ice
+                    && info.integer.is_some())
+        };
+        if !valid {
+            self.error(
+                if info.constant == ConstantClass::Arithmetic {
+                    SemanticErrorKind::ConstantOverflow
+                } else {
+                    SemanticErrorKind::NonConstantInitializer
+                },
+                e.source_vectors,
+                None,
+                None,
+            );
+        }
+    }
+
+    /// The object type an initializer completes and the flexible array
+    /// member it fills; `Err` holds the result to return without a plan,
+    /// when the initializer left the type incomplete or too large.
+    /// C99: §6.7.8 paragraph 22, p. 127; PDF p. 139.
+    fn complete_initialized_type(
+        &mut self,
+        ty: TypeId,
+        initializer: &'tu Initializer<'tu>,
+        count: u64,
+        flexible: Option<FlexibleExtent>,
+        before: usize,
+    ) -> Result<(TypeId, Option<FlexibleArray>), (TypeId, Option<FlexibleArray>)> {
         let flexible = match flexible {
             | Some(extent) if self.semantic_errors == before => {
                 if extent.written > 0
@@ -558,7 +714,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         initializer.source_vectors,
                     )
                 {
-                    return (self.types.unknown(), None);
+                    return Err((self.types.unknown(), None));
                 }
                 let mut array = |elements| {
                     self.types.intern(TypeKind::Array(
@@ -573,26 +729,132 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | _ => None,
         };
-        if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index] {
-            if count == 0 {
-                return if self.semantic_errors > before {
-                    (self.types.unknown(), None)
-                } else {
-                    (ty, None)
-                };
-            }
-            // C99 §6.7.8p22, p. 127; PDF p. 139: completion produces an
-            // object type subject to the same size limit as a declared bound.
-            if !self.validate_array_size(element, i128::from(count), initializer.source_vectors) {
-                return (self.types.unknown(), None);
-            }
-            (
-                self.types
-                    .intern(TypeKind::Array(element, ArrayBound::Constant(count))),
-                None,
-            )
+        Ok(
+            if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index] {
+                if count == 0 {
+                    return Err(if self.semantic_errors > before {
+                        (self.types.unknown(), None)
+                    } else {
+                        (ty, None)
+                    });
+                }
+                // C99 §6.7.8p22, p. 127; PDF p. 139: completion produces an
+                // object type subject to the same size limit as a declared
+                // bound.
+                if !self.validate_array_size(element, i128::from(count), initializer.source_vectors)
+                {
+                    return Err((self.types.unknown(), None));
+                }
+                (
+                    self.types
+                        .intern(TypeKind::Array(element, ArrayBound::Constant(count))),
+                    None,
+                )
+            } else {
+                (ty, flexible)
+            },
+        )
+    }
+
+    /// Only the root array of unknown size (`root`) and the object's own
+    /// flexible array member are completed by their initializers; any other
+    /// flexible array member takes only an empty list, which stores nothing.
+    /// GNU extension: GCC manual, "Arrays of Length Zero".
+    fn completion(&self, target: TypeId, root: bool, site: &Site<'_>) -> Completion {
+        if !matches!(
+            self.types.nodes[target.index],
+            TypeKind::Array(_, ArrayBound::Incomplete)
+        ) {
+            Completion::Complete
+        } else if root {
+            Completion::Root
+        } else if site.own_flexible {
+            Completion::Flexible
         } else {
-            (ty, flexible)
+            Completion::Skip
+        }
+    }
+
+    /// Brace elision may have descended into an element of the flexible
+    /// array member of an object of type `root`, so the member's own
+    /// position is on the cursor's path.
+    fn extend_flexible(&self, flexible: &mut FlexibleExtent, cursor: &Current<'_>, root: TypeId) {
+        let mut path = Some(cursor);
+        while let Some(current) = path {
+            if self.flexible_array_type(current.container, root) {
+                flexible.extend(current.index.saturating_add(1));
+                break;
+            }
+            path = current.parent;
+        }
+    }
+
+    /// Brace elision descends from `cursor` into its subobject `container`,
+    /// whose subobject `index` the element initializes next. A vector's
+    /// lanes are not placed by the plan. `sources` are the element's and its
+    /// expression's provenance.
+    /// C99: §6.7.8 paragraph 20, p. 127; PDF p. 139.
+    fn plan_descent(
+        &self,
+        plan: &mut PlanBuilder<'tu, 's>,
+        cursor: Current<'s>,
+        (container, index): (TypeId, u64),
+        zero: u32,
+        (source, expression): (
+            crate::translation_phases::SourceVectors,
+            crate::translation_phases::SourceVectors,
+        ),
+    ) -> Current<'s> {
+        let at = self
+            .plan_child(cursor.container, &cursor.at, cursor.index, container)
+            .unwrap_or_else(|| {
+                plan.invalidate();
+                cursor.at
+            });
+        if self.vector(container).is_some() {
+            plan.unmodeled(
+                Subobject {
+                    offset: at.offset,
+                    ty:     container.qualified(cursor.at.qualifiers),
+                },
+                expression,
+            );
+        }
+        let cursor = Current {
+            container,
+            index,
+            parent: Some(self.scratch.alloc(cursor)),
+            root_index: cursor.root_index,
+            at,
+        };
+        self.plan_container_entry(plan, &cursor, zero, source);
+        cursor
+    }
+
+    /// The checker's current subobject is subobject `cursor.index` of
+    /// `cursor.container`: if that is a union, the element selects that
+    /// member (§6.7.8p17), within the list whose zero scope is `zero`.
+    fn plan_container_entry(
+        &self,
+        plan: &mut PlanBuilder<'tu, 's>,
+        cursor: &Current<'s>,
+        zero: u32,
+        source: crate::translation_phases::SourceVectors,
+    ) {
+        let destination = Subobject {
+            offset: cursor.at.offset,
+            ty:     cursor.container.qualified(cursor.at.qualifiers),
+        };
+        if self.union_type(cursor.container) {
+            plan.select(destination, cursor.index, zero, source);
+        }
+    }
+
+    /// The size of an element of the array `ty`.
+    fn subobject_stride(&self, ty: TypeId) -> Option<u64> {
+        match self.types.nodes[ty.index] {
+            | TypeKind::Array(element, _) => self.types.layout(element).map(|layout| layout.size),
+            | _ => None,
         }
     }
 
@@ -1048,18 +1310,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7.8 paragraphs 2-3, p. 125; PDF p. 137.
     /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
     /// C99: §6.7.8 paragraph 9, p. 126; PDF p. 138.
-    /// Whether subobject `index` of `ty` is a bit-field member.
-    fn bit_field_member(&self, ty: TypeId, index: u64) -> bool {
-        match self.types.nodes[ty.index] {
-            | TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum => self.types.tags[id]
-                .members
-                .get()
-                .get(usize::try_from(index).unwrap_or(usize::MAX))
-                .is_some_and(|member| member.width.is_some()),
-            | _ => false,
-        }
-    }
-
     fn subobject(&self, ty: TypeId, index: u64) -> Option<TypeId> {
         match self.types.nodes[ty.index] {
             | TypeKind::Vector { element, count, .. } => (index < count).then_some(element),
@@ -1084,7 +1334,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Advances the current object in member/element order after
     /// initialization.
     /// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
-    fn advance_current<'s>(&self, mut cursor: Current<'s>) -> Current<'s> {
+    fn advance_current(&self, mut cursor: Current<'s>) -> Current<'s> {
         loop {
             let mut next = cursor.index.saturating_add(1);
             if let TypeKind::Tag(id) = self.types.nodes[cursor.container.index]
@@ -1158,6 +1408,8 @@ struct Current<'s> {
     index:      u64,
     parent:     Option<&'s Current<'s>>,
     root_index: u64,
+    /// Where `container` is in the plan.
+    at:         Container<'s>,
 }
 
 /// Resumable brace-list and current-object initialization tasks. Each
@@ -1165,17 +1417,30 @@ struct Current<'s> {
 /// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
 #[derive(Clone, Copy)]
 enum InitWork<'tu, 's> {
-    /// A target type, its initializer, and whether the target is a
-    /// bit-field member.
-    Value(TypeId, &'tu Initializer<'tu>, bool, u32),
-    List(
-        TypeId,
-        &'tu BracedInitializerList<'tu>,
-        usize,
-        &'s Current<'s>,
-        bool,
-        u32,
-    ),
+    /// A target type, its initializer, its node, and where the plan places
+    /// it.
+    Value(TypeId, &'tu Initializer<'tu>, u32, Site<'s>),
+    List(ListWork<'tu, 's>),
+}
+
+/// The next element of a brace-enclosed list for an object of type `root`.
+#[derive(Clone, Copy)]
+struct ListWork<'tu, 's> {
+    root:      TypeId,
+    list:      &'tu BracedInitializerList<'tu>,
+    position:  usize,
+    cursor:    &'s Current<'s>,
+    /// The list is the declared object's own, whose array it completes.
+    infer:     bool,
+    /// The [`Writes`] node of the list's object.
+    base:      u32,
+    /// Where the list's object is in the plan, and its zero scope.
+    container: Container<'s>,
+    zero:      u32,
+    /// Range repeats the previous element opened.
+    close:     u32,
+    /// For a braced scalar, the scalar's site.
+    scalar:    Option<Site<'s>>,
 }
 
 /// The extents of the flexible array member a static object's own

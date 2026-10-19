@@ -23,6 +23,7 @@ mod diagnostic_parity;
 mod effects;
 mod float128;
 mod fortify;
+mod initializer_plans;
 mod int128;
 mod labels_as_values;
 mod library_modes;

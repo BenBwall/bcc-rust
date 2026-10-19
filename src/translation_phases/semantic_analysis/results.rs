@@ -88,6 +88,16 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// (GNU extension; C99 §6.7.2.1p16, p. 103; PDF p. 115). See
     /// [`Self::flexible_array`].
     pub(super) flexible_arrays:      ArenaMap<'tu, usize, FlexibleArray>,
+    /// Accepted initializers' placement plans, which lowering stores by.
+    /// C99: §6.7.8 paragraphs 17-22, pp. 126-127; PDF pp. 138-139.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "M8 switches lowering to retained plans in its next step"
+        )
+    )]
+    pub(crate) initializers:         super::InitializerFacts<'tu>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
     pub(crate) conversions:          &'tu [Conversion<'tu>],

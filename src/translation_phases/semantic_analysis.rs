@@ -280,6 +280,7 @@ pub(crate) fn analyze<'tu>(
         expression_indices: index.expressions,
         string_initializers: analyzer.string_initializers,
         flexible_arrays: analyzer.flexible_arrays,
+        initializers: analyzer.initializers,
         conversions: index.conversions,
         conversion_starts: index.conversion_starts,
         types: analyzer.types.finish(),
@@ -1791,9 +1792,9 @@ struct Analyzer<'a, 'tu, 's> {
     declarator_functions:    ArenaVec<'tu, Option<usize>>,
     references:              ArenaVec<'tu, EntityReference>,
     // Deterministic scaling-test counts: VM ancestors, offset members,
-    // initializer type nodes. They are absent from production compilation.
+    // initializer type nodes, initializer plan steps. They are absent from production compilation.
     #[cfg(test)]
-    review_steps:            Cell<[usize; 3]>,
+    review_steps:            Cell<[usize; 4]>,
     context:                 &'a mut Context<'tu>,
     scratch:                 &'s Bump,
     types:                   TypeInterner<'tu, 's>,
@@ -1848,6 +1849,7 @@ struct Analyzer<'a, 'tu, 's> {
     expression_indices:      ArenaMap<'s, usize, usize>,
     string_initializers:     ArenaMap<'tu, usize, TypeId>,
     flexible_arrays:         ArenaMap<'tu, usize, FlexibleArray>,
+    initializers:            InitializerFacts<'tu>,
     /// Unions whose definition requests `transparent_union`, until their
     /// completion decides whether they qualify.
     transparent_unions:      ArenaMap<'s, usize, SourceVectors>,
