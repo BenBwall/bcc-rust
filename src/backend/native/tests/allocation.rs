@@ -337,6 +337,8 @@ block3:
         // Only the result's copy into %eax may remain.
         assert!(moves <= 1, "{target:?}:\n{f}");
         assert!(f.contains("addl\t$1, %"), "{target:?}:\n{f}");
+        // The back edge tests the condition itself.
+        assert!(!f.contains("\tjmp\t"), "{target:?}:\n{f}");
     }
 }
 

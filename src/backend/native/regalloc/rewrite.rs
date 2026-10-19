@@ -56,8 +56,9 @@ use crate::{
 };
 
 /// Replaces every virtual register of `func` by its location, inserts the
-/// allocation's moves, deletes the copies between a register and itself
-/// and threads the jumps left alone in their blocks. Debug builds first
+/// allocation's moves, deletes the copies between a register and itself,
+/// threads the jumps left alone in their blocks and copies short tests over
+/// the jumps to them. Debug builds first
 /// prove the rewritten function with the symbolic checker (`checker.rs`).
 pub(crate) fn rewrite<'a>(func: &mut MFunction<'a>, allocation: &Allocation<'_>, arena: &'a Bump) {
     if cfg!(debug_assertions) {
@@ -68,6 +69,9 @@ pub(crate) fn rewrite<'a>(func: &mut MFunction<'a>, allocation: &Allocation<'_>,
         rewrite_blocks(func, allocation, None, arena);
     }
     remove_identity_copies(func);
+    edges::thread_jumps(func, arena);
+    edges::duplicate_tests(func, arena);
+    // A test every jump to which was copied is left unreachable.
     edges::thread_jumps(func, arena);
 }
 

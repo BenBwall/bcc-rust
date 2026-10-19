@@ -14,7 +14,9 @@
 //! After the rewrite, most of these blocks (and the selector's edge blocks
 //! whose copies coalescing removed) hold nothing but a `jmp`. Branches to
 //! them go straight to their target, and blocks no branch reaches any more
-//! are dropped, keeping the layout of the rest.
+//! are dropped, keeping the layout of the rest. Then a `jmp` to a short
+//! block that ends in a conditional branch, typically a loop's back edge
+//! to its test, takes a copy of that block instead.
 
 use crate::{
     backend::native::mir::{
@@ -169,6 +171,39 @@ pub(super) fn thread_jumps<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
     let mut order = ArenaVec::with_capacity_in(blocks, arena);
     order.extend((0..blocks).filter(|&block| reached[block]));
     relayout(func, &order, arena);
+}
+
+/// The most instructions a block may have to be copied over a `jmp` to it.
+const DUPLICATED: usize = 8;
+
+/// Replaces each `jmp` to a short block that ends in a conditional branch
+/// by a copy of that block, unless the jump falls through to it anyway. A
+/// loop whose test is at the top then branches back from its bottom on the
+/// copied test instead of jumping to the top and testing there (loop
+/// rotation), and an `if` that joins before another test branches on it
+/// directly. The copied instructions use allocated registers only, so the
+/// copy computes what the jump's target did; blocks with calls stay.
+pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
+    let mut copy = ArenaVec::new_in(arena);
+    for block in 0..func.blocks.len() {
+        let Some(&MInst::Jmp { target }) = func.blocks[block].insts.last() else {
+            continue;
+        };
+        let insts = &func.blocks[target.index()].insts;
+        if target.index() == block + 1
+            || target.index() == block
+            || insts.len() > DUPLICATED
+            || !matches!(insts.last(), Some(MInst::Jcc { .. }))
+            || insts.iter().any(|inst| matches!(inst, MInst::Call { .. }))
+        {
+            continue;
+        }
+        copy.clear();
+        copy.extend_from_slice(insts);
+        let data = &mut func.blocks[block].insts;
+        _ = data.pop();
+        data.extend_from_slice(&copy);
+    }
 }
 
 /// Puts the blocks in `order` (old indices; blocks left out must be
