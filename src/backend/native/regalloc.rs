@@ -30,7 +30,8 @@
 //! 6. `rewrite.rs` replaces virtual registers by locations and inserts the
 //!    moves; in debug builds `checker.rs` then proves the result against the
 //!    virtual-register program. Identity copies go, and `edges.rs` removes the
-//!    blocks that only jump.
+//!    blocks that only jump and copies short tests over the jumps to them
+//!    (loop rotation).
 //!
 //! Read [`allocate`], then the files in that order.
 
@@ -62,7 +63,10 @@ pub(crate) use self::{
 };
 use self::{
     liveness::Liveness,
-    scan::Scan,
+    scan::{
+        Layout,
+        Scan,
+    },
 };
 use super::{
     conv::CallConv,
@@ -119,14 +123,27 @@ pub(crate) fn allocate<'a>(
     mark_unsplittable(func, &liveness, &rep, &mut intervals);
     let mut block_starts = ArenaVec::with_capacity_in(func.blocks.len() + 1, arena);
     block_starts.extend((0..=func.blocks.len()).map(|block| liveness.block_start(block)));
+    let mut loops = ArenaVec::new_in(arena);
+    for block in 0..func.blocks.len() {
+        for successor in func.successors(MBlock::new(block)) {
+            if successor.index() <= block {
+                loops.push((block_starts[successor.index()], block_starts[block + 1]));
+            }
+        }
+    }
+    loops.sort_unstable();
+    let layout = Layout {
+        depth:        &depth,
+        block_starts: &block_starts,
+        loops:        &loops,
+    };
     let mut scan = Scan::new(
         intervals,
         &fixed,
         conv,
         func.dynamic,
         &rep_hints,
-        &depth,
-        &block_starts,
+        &layout,
         arena,
     );
     scan::run(&mut scan);

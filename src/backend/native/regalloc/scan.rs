@@ -72,10 +72,8 @@ pub(super) struct Scan<'s, 'a> {
     copy_hints:           &'s [Option<VReg>],
     /// Each representative's latest register.
     last_register:        ArenaVec<'a, Option<PReg>>,
-    /// The loop depth of each block and the position each block starts
-    /// at, then the end of the function.
-    depth:                &'s [u32],
-    block_starts:         &'s [u32],
+    /// Where blocks start and how deep in loops they are.
+    layout:               &'s Layout<'s>,
     /// A binary min-heap of `(start, id)`.
     queue:                ArenaVec<'a, (u32, u32)>,
     active:               ArenaVec<'a, usize>,
@@ -86,18 +84,13 @@ pub(super) struct Scan<'s, 'a> {
 }
 
 impl<'s, 'a> Scan<'s, 'a> {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The scan's inputs are distinct analyses."
-    )]
     pub(super) fn new(
         intervals: ArenaVec<'a, Interval<'a>>,
         fixed: &'s FixedRanges<'a>,
         conv: CallConv,
         frame_pointer: bool,
         copy_hints: &'s [Option<VReg>],
-        depth: &'s [u32],
-        block_starts: &'s [u32],
+        layout: &'s Layout<'s>,
         arena: &'a Bump,
     ) -> Self {
         let mut last_register = ArenaVec::with_capacity_in(intervals.len(), arena);
@@ -109,8 +102,7 @@ impl<'s, 'a> Scan<'s, 'a> {
             frame_pointer,
             copy_hints,
             last_register,
-            depth,
-            block_starts,
+            layout,
             queue: ArenaVec::new_in(arena),
             active: ArenaVec::new_in(arena),
             inactive: ArenaVec::new_in(arena),
@@ -242,11 +234,21 @@ impl<'s, 'a> Scan<'s, 'a> {
         let evict_at = position & !1;
         let mut next_use = [u32::MAX; PReg::COUNT];
         let mut block = [u32::MAX; PReg::COUNT];
+        // An occupant used in the innermost loop around this position and
+        // live around its back edge is needed again by the loop's end, even
+        // when its next use in layout order lies beyond the loop.
+        let around = self.layout.innermost_loop(evict_at);
         let need = |interval: &Interval<'_>| {
             if interval.unsplittable {
-                0
-            } else {
-                interval.next_use(evict_at).unwrap_or(u32::MAX)
+                return 0;
+            }
+            let next = interval.next_use(evict_at).unwrap_or(u32::MAX);
+            match around {
+                | Some((start, end))
+                    if interval.covers(end - 1)
+                        && interval.next_use(start).is_some_and(|at| at < end) =>
+                    next.min(end),
+                | _ => next,
             }
         };
         for &other in &self.active {
@@ -341,7 +343,16 @@ impl<'s, 'a> Scan<'s, 'a> {
     /// in the queue for a register.
     fn evict(&mut self, id: usize, at: u32) {
         let spilled = if self.intervals[id].start() < at {
-            let child = self.intervals[id].split(at, self.arena);
+            // Leave the register as early after the last use as a shallower
+            // block boundary allows, so a loop that does not use the value
+            // does not store it on every iteration.
+            let interval = &self.intervals[id];
+            let used = interval.uses.partition_point(|&position| position < at);
+            let last = used.checked_sub(1).map_or(interval.start(), |index| {
+                interval.uses[index].max(interval.start())
+            });
+            let early = self.split_position(last, at).unwrap_or(at);
+            let child = self.intervals[id].split(early, self.arena);
             self.intervals.push(child);
             self.intervals.len() - 1
         } else {
@@ -351,14 +362,18 @@ impl<'s, 'a> Scan<'s, 'a> {
         let start = self.intervals[spilled].start();
         match self.intervals[spilled].next_use(start) {
             | None => self.intervals[spilled].loc = Loc::Spill,
-            | Some(next) => match self.reload_position(start, next) {
+            // The reload comes after `at`, so the scan, which has reached
+            // it, still meets the reloaded piece in order.
+            | Some(next) => match self.reload_position(start.max(at), next) {
                 | Some(reload) => {
                     let child = self.intervals[spilled].split(reload, self.arena);
                     self.push(child);
                     self.intervals[spilled].loc = Loc::Spill;
                 },
-                // Live again only where it is used: it waits whole.
+                // Live again only where it is used, after `at`: it waits
+                // whole.
                 | None => {
+                    debug_assert!(start > at, "a piece waits only after the scan's position");
                     self.intervals[spilled].loc = Loc::None;
                     self.enqueue(spilled);
                 },
@@ -398,15 +413,20 @@ impl<'s, 'a> Scan<'s, 'a> {
     /// The latest block start in `(start, latest]` whose loop is shallower
     /// than `latest`'s, or `latest`.
     fn shallowest(&self, start: u32, latest: u32) -> u32 {
-        let block_of = |position: u32| self.block_starts.partition_point(|&at| at <= position) - 1;
+        let Layout {
+            depth,
+            block_starts,
+            ..
+        } = *self.layout;
+        let block_of = |position: u32| block_starts.partition_point(|&at| at <= position) - 1;
         let mut best = latest;
-        let mut best_depth = self.depth[block_of(latest)];
-        let first = self.block_starts.partition_point(|&at| at <= start);
-        let last = self.block_starts.partition_point(|&at| at <= latest);
+        let mut best_depth = depth[block_of(latest)];
+        let first = block_starts.partition_point(|&at| at <= start);
+        let last = block_starts.partition_point(|&at| at <= latest);
         for block in (first..last).rev() {
-            if self.depth[block] < best_depth {
-                best = self.block_starts[block];
-                best_depth = self.depth[block];
+            if depth[block] < best_depth {
+                best = block_starts[block];
+                best_depth = depth[block];
             }
         }
         best
@@ -457,5 +477,28 @@ impl<'s, 'a> Scan<'s, 'a> {
             top
         };
         Some(top.1 as usize)
+    }
+}
+
+/// The block structure the split heuristics read.
+#[derive(Clone, Copy)]
+pub(super) struct Layout<'s> {
+    /// The loop depth of each block.
+    pub(super) depth:        &'s [u32],
+    /// The position each block starts at, then the end of the function.
+    pub(super) block_starts: &'s [u32],
+    /// Each loop's positions, `[header start, latch end)`, by start.
+    pub(super) loops:        &'s [(u32, u32)],
+}
+
+impl Layout<'_> {
+    /// The smallest loop around `position`.
+    fn innermost_loop(&self, position: u32) -> Option<(u32, u32)> {
+        self.loops
+            .iter()
+            .take_while(|&&(start, _)| start <= position)
+            .filter(|&&(_, end)| position < end)
+            .min_by_key(|&&(start, end)| end - start)
+            .copied()
     }
 }
