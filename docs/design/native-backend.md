@@ -1308,26 +1308,50 @@ changes and remember/restore state; instruction offsets come from final layout.
 No LLVM encoding or object-writing API is involved.
 
 `native/tests/object.rs` compares direct objects against pinned clang assembly:
-section contents and metadata (including unwind bytes), symbol properties,
-RELA tuples and COMDAT membership, allowing table ordering and file offsets to
-differ. It also compares disassembly with `llvm-objdump` when installed or GNU
-`objdump` otherwise. Native selection helpers check their ELF listings, and
-native assembly/run helpers check equivalence and link/run the direct ELF
-object. The latter also covers the difftest native oracle and native ABI
-conformance tests. Boundary fixtures exercise short/near jumps, alignment,
-register widths, immediates, displacements, SSE/x87, TLS and symbol attributes.
+section contents and full section headers in order (including unwind bytes,
+links, info and entry sizes), symbol properties, RELA tuples and COMDAT membership.
+File offsets, string-table packing and symbol order within the local/global
+partitions may differ; `sh_info` must identify the exact partition boundary.
+Mutation tests cover the boundary, section order, links, info and entry sizes.
+The writer places each group before its members and each RELA section after its
+target. The tests also require disassembly with adjacent `llvm-objdump` or GNU
+`objdump`; COFF section checks require GNU `objdump`. A missing tool fails with
+an installation diagnostic instead of silently skipping verification. Native
+selection helpers check their ELF listings, and native assembly/run helpers
+check equivalence and link/run the direct ELF object. The latter also covers
+the difftest native oracle and native ABI conformance tests. Boundary fixtures
+exercise short/near jumps, alignment, register widths, immediates, displacements,
+SSE/x87, TLS and symbol attributes.
+Every supported instruction validates operand count, kind and width before
+encoding. Unsupported suffixes, oversized fields, duplicate definitions,
+conflicting bindings, unsupported size expressions and alignment max-skip
+arguments refuse explicitly. Section names infer GNU/LLVM flags and types;
+byte/short relocations use their own widths, and interposable references retain
+relocations. The CLI object test uses fresh paths and links/runs each result.
 An object-level COFF fixture pins the text fallback, including unwind sections,
 stubs, COMDATs and exports; it does not claim direct COFF equivalence. The pinned
 install on this Linux host lacks LLVM objdump/readobj, so verification used GNU
 objdump 2.46 and the structured ELF comparison above. No Windows host or
 external GCC torture corpus was available for this stage 5 run.
 
-Validation on 2026-10-19: the full all-target test gate passed **2,372 tests,
-0 failed, 8 ignored** across 30 test binaries. The focused native suite passed
-52 tests (one timing test ignored), the allocation gate passed all 31 tests,
-and Clippy passed with and without `benchmarking-internals`. The final gate
+Round 1 validation on 2026-10-19: the full all-target test gate passed
+**2,372 tests, 0 failed, 8 ignored** across 30 test binaries. The focused native
+suite passed 52 tests (one timing test ignored), the allocation gate passed all
+31 tests, and Clippy passed with and without `benchmarking-internals`. The final gate
 used the normal system temporary directory; the earlier host-mounted scratch
 TMPDIR could not represent a preprocessing fixture's backslash filename.
+
+Round 2 cross-review validation on 2026-10-19: **2,382 tests passed,
+0 failed, 8 ignored** across 30 binaries, including 20 passing object tests
+(one additional timing test ignored). The allocation-feature gate passed all
+31 tests, and Clippy passed with and without `benchmarking-internals`; formatting
+and whitespace checks passed. An independent ELF corpus check attempted every
+benchmark and fixture C source at B0/B1: all 17 benchmarks and 116 compilable
+fixtures per arm produced **266 equivalent object pairs**, with no new
+direct-emission refusal.
+The other 364 fixtures per arm were refused by the text compiler, including
+intentional diagnostic inputs. This covers all 114 distinct fixture sources
+in the review's saved 228-comparison sweep.
 
 The ignored `benchmark_native_object_emission` test measures the post-ABI IR to
 object phase of both paths with 20 interleaved samples (one warm-up), including
