@@ -496,9 +496,15 @@ classic `offsetof` macro: the address of a member or element reached from an
 integer-valued pointer constant carries that integer plus the byte offset, and
 converting it to an integer type yields an arithmetic constant. Reading a
 static-duration, const, non-volatile integer object with a constant initializer
-also folds to that value. Strict modes
-keep the integer-constant-expression constraint, so such an array bound is
-variable length.
+also folds to that value. Absolute pointer-to-integer casts and address
+differences retain a separate non-ICE marker in every language mode, matching
+Clang's additional constant forms (§6.6p10). File-scope arrays, static local
+arrays and members fold these bounds with `-Wgnu-folding-constant`; automatic
+local arrays and abstract type names retain VLA bounds. Consequently a sizeof
+of such a type name is runtime-valued and cannot size a file-scope array.
+Switch cases retain the same folded values that ICE evaluation accepted,
+including their dispatch edges. Other folded arithmetic in strict modes keeps
+the integer-constant-expression constraint.
 
 `conversions` retains the syntax expression, destination type and conversion
 kind: lvalue conversion, array/function decay, arithmetic conversion, assignment
@@ -2173,9 +2179,10 @@ families for both semantic analysis and native emission. Externally emitted
 and explicitly used function definitions receive `BssFunction`; omitted static
 and inline-only bodies remain valid. After entity completion supplies inherited sections,
 `initializers/bss.rs` walks retained initializer operations backwards and
-reports each object's first surviving nonzero or relocated leaf at its
-initializer. A fixed-depth interval radix tree records later writes; scalar GNU
-ranges remain periodic queries and one coverage interval, independent of their
+reports each emitted object's first surviving nonzero or relocated leaf at its
+initializer. Like BssFunction, the early check skips internal objects without
+`used`; backend guards validate any that evaluated references keep. A fixed-depth
+interval radix tree records later writes; scalar GNU ranges remain periodic queries and one coverage interval, independent of their
 extent. Assignment conversion, negative floating zero, overwritten initializers,
 union selections and bit-fields affect the final contents. Complex ranges use
 sparse replay with a work budget linear in the written plan; budget exhaustion
@@ -2183,9 +2190,9 @@ conservatively defers to backend final-content validation. Nonzero aggregate,
 string and bit-field GNU ranges commonly exhaust this budget from roughly
 32–128 elements onward; nested ranges and partly overwritten pointer ranges
 can do so too. These refusals lose the early source label, but cannot emit
-invalid BSS data. Unmodeled initializers retain their existing capability refusals; native
-emission also checks raw IR, and LLVM error diagnostics prevent output from
-being written.
+invalid BSS data. Unmodeled initializers retain their existing capability
+refusals; native emission also checks raw IR, and LLVM error diagnostics prevent
+output from being written.
 
 The constructor/destructor priority operand is parsed as an expression, as
 `aligned`'s is, so the ordinary constant evaluator checks it. GNU extension:

@@ -1775,3 +1775,14 @@ replay its original reproducer, retain a function relocation in the static table
 and call through the stored address in interpreter and native execution.
 `tests/integration/diagnostic_parity.rs` compares constraints, warnings, modes
 and locations with the pinned Clang; semantic and pipeline tests cover the retained facts.
+
+## Folded pointer constants (issues #83 / #88, 2026-10-19)
+
+Absolute pointer arithmetic retains its byte value for static initializers,
+including zero-valued BSS data without relocations. Pointer-to-integer casts
+and address differences remain non-ICEs. As in Clang 23.1.1, file-scope, static
+local and member array bounds fold with `-Wgnu-folding-constant`; automatic
+arrays and abstract type names remain variably modified. Cases accept the
+folded values, with the same warning group enabled explicitly or by pedantic.
+Addition to a null pointer uses `-Wgnu-null-pointer-arithmetic`, off by default
+and enabled by pedantic. Both groups support suppression and error promotion.

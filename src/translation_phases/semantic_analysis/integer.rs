@@ -45,7 +45,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             // GCC folds arithmetic constants that are not integer constant
             // expressions (§6.6p6) wherever one is required.
-            if !info.ice && !self.tainted {
+            if !info.ice && !self.tainted && info.folded_address() {
+                // Bounds apply their folding policy in ArrayDone. An abstract
+                // type-name bound remains a VLA even if its value is known.
+                let group = crate::configuration::DiagnosticGroup::GnuFoldingConstant;
+                if !self.runtime_bound
+                    && (self.context.configuration.extension_policy()
+                        != crate::configuration::ExtensionPolicy::Allow
+                        || self.context.configuration.diagnostic_requested(group))
+                {
+                    self.error(
+                        super::SemanticErrorKind::FoldedIntegerConstant,
+                        expression.source_vectors,
+                        None,
+                        None,
+                    );
+                }
+            } else if !info.ice && !self.tainted {
                 self.context.report_extension(
                     crate::configuration::Feature::ConstantFolding,
                     "folded integer constant expression",

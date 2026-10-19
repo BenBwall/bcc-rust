@@ -301,12 +301,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         direct: &'tu DirectDeclarator<'tu>,
         source: SourceVectors,
         parameter: bool,
+        fold_bounds: bool,
     ) {
         let base = self.take_type();
         match *direct {
             | DirectDeclarator::Parenthesized(p) =>
                 self.work
-                    .push(Work::Declarator(p.declarator, base, parameter)),
+                    .push(Work::Declarator(p.declarator, base, parameter, fold_bounds)),
             | DirectDeclarator::Array {
                 type_qualifiers,
                 is_static,
@@ -350,6 +351,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         expression,
                         source,
                         self.semantic_errors,
+                        fold_bounds,
                     ));
                     // A bound whose evaluation is exceptional is not an
                     // integer constant expression, so it is a variable length

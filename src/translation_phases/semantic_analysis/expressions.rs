@@ -547,7 +547,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => false,
             };
             if folded_address {
-                info.folding = ConstantFolding::AddressDifference;
+                info.folding = ConstantFolding::Address;
             }
         }
         if let E::StatementExpression(block) = e.kind {
