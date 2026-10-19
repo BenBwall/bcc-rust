@@ -41,9 +41,14 @@ mod tests {
         }
         let source = r"
 #include <unistd.h>
+#include <string.h>
 #if __USE_FORTIFY_LEVEL != 2
 #error fortify wrappers must be enabled
 #endif
+char *(*cat_value)(char *, const char *) = strcat;
+char *(*cat_indirect)(char *, const char *) = *strcat;
+char *(*cat_twice)(char *, const char *) = **strcat;
+char *(*cat_conditional)(char *, const char *) = 1 ? strcat : strcpy;
 char *(*cwd_value)(char *, size_t) = getcwd;
 char *(*cwd_address)(char *, size_t) = &getcwd;
 ssize_t (*read_value)(int, void *, size_t) = read;
@@ -54,6 +59,8 @@ int main(void) {
     char *(*cwd_local)(char *, size_t) = &getcwd;
     ssize_t (*read_local)(int, void *, size_t) = read;
     char buf[4096];
+    if (cat_value != strcat || cat_indirect != strcat
+        || cat_twice != strcat || cat_conditional != strcat) return 3;
     if (cwd_value != cwd_address || cwd_local != cwd_static || cwd_local != getcwd
         || read_value != read_address || read_local != read
         || syscalls[0] != (void (*)(void))getcwd || syscalls[1] != (void (*)(void))read)
@@ -90,6 +97,10 @@ int main(void) {
         assert!(output.status.success(), "{}", text(&output.stderr));
         for llvm in [text(&reference.stdout), text(&output.stdout)] {
             for (global, symbol) in [
+                ("cat_value", "strcat"),
+                ("cat_indirect", "strcat"),
+                ("cat_twice", "strcat"),
+                ("cat_conditional", "strcat"),
                 ("cwd_value", "getcwd"),
                 ("cwd_address", "getcwd"),
                 ("read_value", "read"),
