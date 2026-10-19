@@ -41,6 +41,31 @@ pub(super) fn is_input(input: &Path, output: &Path) -> io::Result<bool> {
     }
 }
 
+/// A failed object compile removes stale output too, after `is_input` has
+/// protected the source and its aliases. Devices, directories and FIFOs are
+/// not object files; inspecting them never opens a potentially blocking file.
+/// This is the CLI compile-job policy, not a backend API ownership rule.
+pub(super) fn remove_failed_object(output: &Path) {
+    let result = fs::metadata(output).and_then(|metadata| {
+        if metadata.is_file() {
+            fs::remove_file(output)
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(error) = result
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        drop(io::Write::write_fmt(
+            &mut io::stderr().lock(),
+            format_args!(
+                "error: cannot remove failed output '{}': {error}\n",
+                output.display()
+            ),
+        ));
+    }
+}
+
 /// Windows' stable Rust metadata API does not expose file identity yet.
 /// Read the volume serial and 64-bit file index from the open handle instead.
 #[cfg(windows)]

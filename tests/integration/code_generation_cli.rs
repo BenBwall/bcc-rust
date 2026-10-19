@@ -1658,6 +1658,7 @@ int main(void) { printf("main\n"); return zero; }
                       x+1; }\nstatic __attribute__((noinline,section(\".bss.second\"))) int h(int \
                       x) { return x+2; }\nint g(int x) { return f(x) + h(x); }\n";
         let object = temporary("llvm-diagnostic-refused.o");
+        std::fs::write(&object, b"stale object").unwrap();
         let output = bcc(
             source,
             &[
@@ -1710,6 +1711,7 @@ int main(void) { printf("main\n"); return zero; }
             &["--backend=native", "--native-object"][..],
         ] {
             let object = temporary("bss-refused.o");
+            std::fs::write(&object, b"stale object").unwrap();
             let output_path = object.to_str().unwrap();
             let mut flags = vec!["--target=x86_64-unknown-linux-gnu", "-c", "-o", output_path];
             flags.extend_from_slice(backend);
@@ -1734,6 +1736,68 @@ int main(void) { printf("main\n"); return zero; }
                 "{stderr}"
             );
             assert!(stderr.contains(":1:") && stderr.contains(":2:"), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn failed_compilation_removes_stale_object_files() {
+        let cases = [
+            ("preprocessing", "#error deliberate failure\n"),
+            ("parsing", "int value = ;\n"),
+            ("semantics", "int value = not_declared;\n"),
+            ("lowering", "int value(void) { __asm__(\"\"); return 0; }\n"),
+            (
+                "backend",
+                "static __attribute__((noinline,section(\".bss.fn\"))) int f(int x) { return x+1; \
+                 } int g(int x) { return f(x); }\n",
+            ),
+        ];
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for (kind, source) in cases {
+                let object = temporary("stale-object.o");
+                std::fs::write(&object, b"stale object").unwrap();
+                let mut flags = vec![
+                    "--target=x86_64-unknown-linux-gnu",
+                    "-c",
+                    "-o",
+                    object.to_str().unwrap(),
+                ];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert_eq!(
+                    output.status.code(),
+                    Some(1),
+                    "{kind} {backend:?}: {}",
+                    text(&output.stderr)
+                );
+                assert!(!object.exists(), "{kind} {backend:?} left stale output");
+            }
+        }
+    }
+
+    #[test]
+    fn front_end_failure_preserves_stale_executable_like_clang() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let executable = temporary("stale-executable");
+            std::fs::write(&executable, b"existing executable").unwrap();
+            let mut flags = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-o",
+                executable.to_str().unwrap(),
+            ];
+            flags.extend_from_slice(backend);
+            let output = bcc("int value = not_declared;", &flags);
+            assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+            assert_eq!(std::fs::read(&executable).unwrap(), b"existing executable");
+            std::fs::remove_file(executable).unwrap();
         }
     }
 

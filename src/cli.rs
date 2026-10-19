@@ -156,13 +156,23 @@ pub fn run() -> Result<i32, MainError> {
     if args.output.tokens {
         print_preprocessor_output(&mut context, source_filename, input_string, search);
     } else if args.code_generation.requested() {
-        return Ok(generate_code(
+        let status = generate_code(
             &mut context,
             source_filename,
             input_string,
             search,
             &args.code_generation,
-        ));
+        );
+        // The failed compile job owns its requested object, even if it never
+        // opened it. A front-end failure in link mode owns only a temporary
+        // object; preserve the final executable as Clang does.
+        if status != 0
+            && args.code_generation.object
+            && let Some(output) = &args.code_generation.output_path
+        {
+            output_file::remove_failed_object(output);
+        }
+        return Ok(status);
     } else {
         print_parser_output(
             &mut context,
