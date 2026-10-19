@@ -146,18 +146,63 @@ __asm__(\"# last \\\"block\\\"\");
         );
     }
 
+    /// Forms Clang rejects get Clang's diagnostic, not the note that calls
+    /// unsupported code valid C, and produce no output.
     #[test]
-    fn file_scope_asm_clang_rejects_is_refused_not_dropped() {
-        let refused = bcc(
-            "__asm__ volatile(\"nop\");\nint x;\n",
-            &[LINUX, "--emit=llvm"],
-        );
-        assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr));
-        assert!(
-            text(&refused.stderr).contains("file-scope assembly with qualifiers"),
-            "{}",
-            text(&refused.stderr)
-        );
+    fn file_scope_asm_clang_rejects_is_diagnosed_as_invalid() {
+        for (source, message) in [
+            (
+                "__asm__ volatile(\"nop\");",
+                "error: meaningless 'volatile' on asm outside function",
+            ),
+            (
+                "__asm__ inline(\"nop\");",
+                "error: meaningless 'inline' on asm outside function",
+            ),
+            (
+                "__asm__(\"nop\" : );",
+                "error: file-scope asm cannot have operands, clobbers or labels",
+            ),
+            (
+                "__asm__(L\"nop\");",
+                "error: cannot use wide string literal in 'asm'",
+            ),
+            (
+                "__asm__(u8\"nop\");",
+                "error: cannot use unicode string literal in 'asm'",
+            ),
+        ] {
+            let source = format!("{source}\nint x;\n");
+            let refused = bcc(&source, &[LINUX, "-std=gnu11", "--emit=llvm"]);
+            let stderr = text(&refused.stderr);
+            assert_eq!(refused.status.code(), Some(1), "{source}: {stderr}");
+            assert!(refused.stdout.is_empty(), "{source}");
+            assert!(stderr.contains(message), "{source}: {stderr}");
+            assert!(!stderr.contains("valid C"), "{source}: {stderr}");
+        }
+    }
+
+    /// Clang fails the build when its assembler reports an error in module
+    /// asm and leaves no object or executable; so must the LLVM back end.
+    #[test]
+    #[ignore = "needs #88 (codex/issue-83-section-parity)"]
+    fn llvm_assembler_errors_in_file_scope_asm_fail_the_build() {
+        let source = "__asm__(\".error \\\"file scope boom\\\"\");\nint main(void) { return 0; }\n";
+        for flags in [&["-c"][..], &[][..]] {
+            let output = temporary("asm-error-llvm.out");
+            let built = bcc(
+                source,
+                &[
+                    &[LINUX, "--backend=llvm", "-o", output.to_str().unwrap()][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            let stderr = text(&built.stderr);
+            assert!(!built.status.success(), "{flags:?}: {stderr}");
+            assert!(stderr.contains("file scope boom"), "{flags:?}: {stderr}");
+            assert!(!output.exists(), "{flags:?}: the failed build left output");
+        }
     }
 
     fn bcc(source: &str, flags: &[&str]) -> Output {

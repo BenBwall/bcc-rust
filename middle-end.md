@@ -452,9 +452,9 @@ File-scope GNU basic assembly (`__asm__("...")` outside a function) is kept as
 module assembly: one text block per `asm`, in source order. It prints as
 `module asm "text"` lines after the target lines, with backslashes, quotes
 (`\u{22}`) and controls such as newlines (`\u{a}`) escaped so each block stays
-on one line. Lowering refuses, at its syntax, a block with qualifiers,
-operands, or a template that is not narrow text without NUL (Clang rejects the
-first three). The LLVM back end appends each block to the module's inline
+on one line. Lowering reports qualifiers, operands and wide or Unicode
+templates as invalid, in Clang's words, and refuses a template with NUL or
+bytes that are not UTF-8 as unsupported, each at its syntax. The LLVM back end appends each block to the module's inline
 assembly; the native listing writes the blocks verbatim after its first
 `.text`, before every function and object, as Clang's output places them, then
 `.att_syntax`. `--native-object` on Linux refuses such a module (its encoder

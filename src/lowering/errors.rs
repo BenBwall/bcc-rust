@@ -53,6 +53,8 @@ pub(crate) enum LoweringErrorKind {
     #[cfg(test)]
     CallDiagnostic(crate::util::string_cache::StringCacheId),
     UnmodeledType(UnmodeledType),
+    /// File-scope assembly in a form GCC's grammar and Clang reject.
+    InvalidFileScopeAsm(FileScopeAsmFault),
     /// A fact lowering relies on is missing from the semantic results: a
     /// compiler bug, reported rather than turned into wrong code.
     MissingFact(&'static str),
@@ -68,7 +70,8 @@ pub(crate) enum Construct {
     VariableLengthArray,
     LabelAddress,
     InlineAssembly,
-    /// File-scope assembly other than one plain narrow template.
+    /// A file-scope assembly template with NUL or bytes that are not
+    /// UTF-8, which Clang accepts.
     FileScopeAssembly,
     AssemblerLabel,
     /// An attribute semantic analysis accepted whose meaning code generation
@@ -133,8 +136,7 @@ impl Construct {
             | Self::LabelAddress => "label addresses",
             | Self::InlineAssembly => "inline assembly",
             | Self::FileScopeAssembly =>
-                "file-scope assembly with qualifiers, operands, or a template that is not a narrow \
-                 string without NUL",
+                "file-scope assembly templates containing NUL or bytes that are not UTF-8",
             | Self::AssemblerLabel => "assembler labels",
             | Self::Attribute(attribute) => attribute.description(),
             | Self::StructuredExceptionHandling => "structured exception handling",
@@ -151,6 +153,37 @@ impl Construct {
     }
 }
 
+/// Why a file-scope `asm` is invalid: basic assembly outside a function
+/// takes one narrow string literal and nothing else.
+/// GNU extension: GCC manual, "Basic Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Basic-Asm.html>
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FileScopeAsmFault {
+    Volatile,
+    Inline,
+    Goto,
+    /// Output or input operands, clobbers, goto labels or their colons.
+    Operands,
+    /// An `L`, `u` or `U` template.
+    WideTemplate,
+    /// A `u8` template.
+    UnicodeTemplate,
+}
+
+impl FileScopeAsmFault {
+    /// The diagnostic message, in Clang's wording where Clang has one.
+    pub(crate) const fn message(self) -> &'static str {
+        match self {
+            | Self::Volatile => "meaningless 'volatile' on asm outside function",
+            | Self::Inline => "meaningless 'inline' on asm outside function",
+            | Self::Goto => "meaningless 'goto' on asm outside function",
+            | Self::Operands => "file-scope asm cannot have operands, clobbers or labels",
+            | Self::WideTemplate => "cannot use wide string literal in 'asm'",
+            | Self::UnicodeTemplate => "cannot use unicode string literal in 'asm'",
+        }
+    }
+}
+
 impl LoweringErrorKind {
     fn message(self) -> &'static str {
         match self {
@@ -162,6 +195,7 @@ impl LoweringErrorKind {
                 "not yet supported by lowering: a type built from an extension semantic analysis \
                  does not model",
             | Self::MissingFact(_) => "internal error: lowering is missing a semantic fact",
+            | Self::InvalidFileScopeAsm(fault) => fault.message(),
         }
     }
 }
@@ -201,6 +235,9 @@ impl ToDiagnostic for LoweringError {
             | LoweringErrorKind::UnmodeledType(_) => explanation
                 .label("this expression or object uses the unsupported construct")
                 .note("semantic analysis does not yet model this construct"),
+            | LoweringErrorKind::InvalidFileScopeAsm(_) => explanation
+                .label("invalid file-scope asm")
+                .note("asm outside a function takes exactly one narrow string literal"),
             | _ => explanation,
         };
         explanation.at(ErrorSeverity::Error, source)
