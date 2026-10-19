@@ -1313,8 +1313,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
 
     /// The symbol and byte offset an address constant designates: a static
     /// object, function, string literal or, as a GNU extension, label,
-    /// optionally with a constant subscript, member offset or integer added.
+    /// optionally selected by a constant conditional or with a constant
+    /// subscript, member offset or integer added.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    /// C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91.
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
     fn address_constant(
         &mut self,
         mut expression: &'tu Expression<'tu>,
@@ -1361,9 +1364,38 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | ExpressionType::Unary {
                     operator: UnaryOperator::Indirection,
                     operand_expression,
-                } if place => {
+                } if place
+                    || matches!(self.sema.types.kind(info.ty), TypeKind::Function { .. }) =>
+                {
+                    // Function indirection designates the same function; an
+                    // object indirection in value context would require a load.
                     expression = operand_expression;
                     place = false;
+                },
+                | ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c)
+                    if !place && info.constant == ConstantClass::Address =>
+                {
+                    let condition = self
+                        .sema
+                        .expression_info(c.condition_expression)
+                        .ok_or_else(unsupported)?;
+                    if condition.constant != ConstantClass::Arithmetic {
+                        return Err(unsupported());
+                    }
+                    let truth = condition
+                        .integer
+                        .map(|value| value.value != 0)
+                        .or_else(|| {
+                            condition
+                                .floating
+                                .map(|value| !value.real.is_zero() || !value.imag.is_zero())
+                        })
+                        .ok_or_else(unsupported)?;
+                    expression = if truth {
+                        c.then_expression
+                    } else {
+                        c.else_expression
+                    };
                 },
                 | ExpressionType::Parenthesized { expression: inner }
                 | ExpressionType::Unary {
