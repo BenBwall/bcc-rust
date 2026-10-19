@@ -88,7 +88,7 @@ use crate::{
 /// and `--interpret` with the program's status.
 #[doc(hidden)]
 pub fn run() -> Result<i32, MainError> {
-    let arguments = normalize_language_arguments(std::env::args_os());
+    let arguments = normalize_language_arguments(std::env::args_os())?;
     // Clap would demand an input for this flag, so it is answered before
     // parsing; the declaration below only documents it in `--help`.
     if arguments.len() == 2 && arguments[1] == "--print-default-passes" {

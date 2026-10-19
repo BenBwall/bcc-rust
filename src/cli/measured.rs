@@ -43,12 +43,15 @@ pub fn compile_file_with_arguments_measured(
     out: &mut dyn Write,
     measure: impl FnMut(CompileStep, &mut dyn FnMut()),
 ) -> io::Result<()> {
-    let args = Cli::try_parse_from(normalize_language_arguments(
-        ["bcc-rust", "--input", ""]
-            .into_iter()
-            .chain(arguments.iter().copied())
-            .map(std::ffi::OsString::from),
-    ))
+    let args = Cli::try_parse_from(
+        normalize_language_arguments(
+            ["bcc-rust", "--input", ""]
+                .into_iter()
+                .chain(arguments.iter().copied())
+                .map(std::ffi::OsString::from),
+        )
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+    )
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     compile_file_configured_measured(path, args.configuration(), out, measure, |context| {
         args.configure_preprocessing(context);

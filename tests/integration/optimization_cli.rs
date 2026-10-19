@@ -16,7 +16,7 @@ mod tests {
 
     fn check_macros(flags: &[&str], expected: &BTreeSet<String>) {
         let mut source = String::new();
-        for name in ["__OPTIMIZE__", "__OPTIMIZE_SIZE__"] {
+        for name in ["__OPTIMIZE__", "__OPTIMIZE_SIZE__", "__NO_INLINE__"] {
             if expected.contains(&format!("#define {name} 1")) {
                 write!(
                     source,
@@ -27,13 +27,14 @@ mod tests {
                 write!(source, "#ifdef {name}\n#error {name}\n#endif\n").unwrap();
             }
         }
+        source.push_str("int macro_probe;\n");
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(flags)
             .args(["--input", &source])
             .output()
             .unwrap();
         assert!(
-            output.status.success(),
+            output.status.success() && !String::from_utf8_lossy(&output.stderr).contains("error:"),
             "{flags:?}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -52,6 +53,12 @@ mod tests {
             vec!["-O1"],
             vec!["-O2"],
             vec!["-O3"],
+            vec!["-O4"],
+            vec!["-O5"],
+            vec!["-O99"],
+            vec!["-O-1"],
+            vec!["-O01"],
+            vec!["-O02"],
             vec!["-Os"],
             vec!["-Oz"],
             vec!["-Og"],
@@ -77,7 +84,10 @@ mod tests {
             let expected = String::from_utf8(output.stdout)
                 .unwrap()
                 .lines()
-                .filter(|line| line.starts_with("#define __OPTIMIZE"))
+                .filter(|line| {
+                    line.starts_with("#define __OPTIMIZE")
+                        || line.starts_with("#define __NO_INLINE__")
+                })
                 .map(str::to_owned)
                 .collect();
             check_macros(&flags, &expected);
@@ -103,7 +113,44 @@ mod tests {
             vec!["--llvm-opt=none"],
             vec!["-O2", "--opt=none", "--llvm-opt=none"],
         ] {
-            check_macros(&flags, &BTreeSet::new());
+            check_macros(
+                &flags,
+                &BTreeSet::from(["#define __NO_INLINE__ 1".to_owned()]),
+            );
+        }
+    }
+
+    #[test]
+    fn extended_optimization_warnings_match_clang() {
+        for (flag, warning) in [
+            ("-O4", "warning: -O4 is equivalent to -O3 [-Wdeprecated]"),
+            (
+                "-O5",
+                "warning: optimization level '-O5' is not supported; using '-O3' instead",
+            ),
+            (
+                "-O99",
+                "warning: optimization level '-O99' is not supported; using '-O3' instead",
+            ),
+            (
+                "-O-1",
+                "warning: optimization level '-O-1' is not supported; using '-O3' instead",
+            ),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([flag, "--input", "int x;"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), warning);
+        }
+        for flag in ["-O01", "-O02"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([flag, "--input", "int x;"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty(), "{output:?}");
         }
     }
 
@@ -111,17 +158,20 @@ mod tests {
     fn optimization_flags_select_working_codegen_pipelines() {
         for level in ["-O0", "-O1", "-O2", "-O3", "-Os", "-Oz", "-Og"] {
             for backend in ["llvm", "native"] {
-                let emit = if backend == "llvm" {
-                    "--emit=llvm"
-                } else {
-                    "--emit=asm"
-                };
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("target")
+                    .join(format!(
+                        "optimization-{}-{level}-{backend}.o",
+                        std::process::id()
+                    ));
                 let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                     .args([
                         level,
                         "--backend",
                         backend,
-                        emit,
+                        "-c",
+                        "-o",
+                        path.to_str().unwrap(),
                         "--input",
                         "int main(void) { return 0; }",
                     ])
@@ -132,6 +182,8 @@ mod tests {
                     "{level} {backend}: {}",
                     String::from_utf8_lossy(&output.stderr)
                 );
+                assert!(std::fs::metadata(&path).unwrap().len() > 0);
+                std::fs::remove_file(path).unwrap();
             }
         }
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
@@ -139,5 +191,8 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("invalid integral value 'invalid' in '-Oinvalid'"));
+        assert!(!stderr.contains("--optimization"));
     }
 }

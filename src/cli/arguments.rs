@@ -54,7 +54,7 @@ use crate::{
 )]
 pub(super) fn normalize_language_arguments(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
-) -> Vec<std::ffi::OsString> {
+) -> Result<Vec<std::ffi::OsString>, clap::Error> {
     let mut normalized = Vec::new();
     let mut opaque_value = true; // argv[0]
     let mut positional = false;
@@ -92,7 +92,7 @@ pub(super) fn normalize_language_arguments(
         } else if text == "-O" {
             normalized.push("--optimization=O1".into());
         } else if let Some(value) = text.strip_prefix("-O") {
-            normalized.push(format!("--optimization=O{value}").into());
+            normalized.push(format!("--optimization=O{}", optimization_level(value)?).into());
         } else if let Some(value) = text.strip_prefix("-ftls-model=") {
             normalized.push(format!("--tls-model={value}").into());
         } else if let Some(flag) = SINGLE_DASH_LINK_FLAGS
@@ -149,7 +149,45 @@ pub(super) fn normalize_language_arguments(
             normalized.push(argument);
         }
     }
-    normalized
+    Ok(normalized)
+}
+
+/// Clang's numeric aliases are driver policy, before clap sees the internal
+/// optimization option. Invalid values retain the spelling the user supplied.
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Startup option diagnostics format owned clap errors and warnings."
+)]
+fn optimization_level(value: &str) -> Result<&str, clap::Error> {
+    if matches!(value, "s" | "z" | "g") {
+        return Ok(value);
+    }
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    let level = (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse::<i32>().ok())
+        .flatten()
+        .ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidValue,
+                format!("invalid integral value '{value}' in '-O{value}'"),
+            )
+        })?;
+    Ok(match level {
+        | 0 => "0",
+        | 1 => "1",
+        | 2 => "2",
+        | 3 => "3",
+        | 4 if value == "4" => {
+            eprintln!("warning: -O4 is equivalent to -O3 [-Wdeprecated]");
+            "3"
+        },
+        | _ => {
+            eprintln!(
+                "warning: optimization level '-O{value}' is not supported; using '-O3' instead"
+            );
+            "3"
+        },
+    })
 }
 
 impl Cli {

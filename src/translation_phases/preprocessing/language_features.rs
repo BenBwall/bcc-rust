@@ -995,6 +995,8 @@ pub(super) fn with_identity_macros<'a>(
     let (optimized, size) = configuration.optimization();
     if optimized {
         out.push_str("#define __OPTIMIZE__ 1\n");
+    } else {
+        out.push_str("#define __NO_INLINE__ 1\n");
     }
     if size {
         out.push_str("#define __OPTIMIZE_SIZE__ 1\n");

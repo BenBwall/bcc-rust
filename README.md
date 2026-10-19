@@ -58,6 +58,16 @@ target is `x86_64-unknown-linux-gnu`). `--opt=bcc` runs the bcc optimizer
 each function to stderr after every pass, each implying `--opt=bcc`.
 `bcc-rust --print-default-passes` prints the default pass list in `--passes`
 syntax (it needs no input file), so scripts need not keep a copy.
+
+`-O`/`-O1`, `-O2`, `-O3`, `-Os`, `-Oz` and `-Og` enable bcc's optimizer
+and select the corresponding LLVM pipeline (`-Og` uses O1). `-O0` disables
+both by default. The last `-O` wins; explicit `--opt` and `--llvm-opt`
+override their respective defaults. Numeric levels accept leading zeros;
+`-O4` and larger levels use O3 with Clang-compatible warning text.
+`__OPTIMIZE__` is 1 when either optimizer is enabled, `__OPTIMIZE_SIZE__`
+is 1 for size optimization, and `__NO_INLINE__` is 1 when optimization is
+disabled. `-Ofast` and fast-math policy remain unsupported.
+
 `--llvm-opt=none|O0|O1|O2|O3` selects the LLVM IR pipeline and code-generation level and `--llvm-codegen-only`
 runs no LLVM IR passes, so `--opt=bcc --llvm-opt=O2
 --llvm-codegen-only` is comparison arm A1 of

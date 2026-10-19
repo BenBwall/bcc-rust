@@ -1164,7 +1164,7 @@ backend work before they can be enabled.
 | `__MEMORY_SCOPE_WVFRNT` | Scoped atomic operations and memory scopes are not implemented. |
 | `__OPTIMIZE__` | Defined by the identity macro builder when optimization is enabled. |
 | `__OPTIMIZE_SIZE__` | Defined by the identity macro builder for `-Os` and `-Oz`. |
-| `__NO_INLINE__` | Code generation, relocation and optimization policy are not implemented. |
+| `__NO_INLINE__` | Defined by the identity macro builder when optimization is disabled. |
 | `__NO_MATH_ERRNO__` | Code generation, relocation and optimization policy are not implemented. |
 | `__OBJC_BOOL_IS_BOOL` | Objective-C and CoreFoundation string intrinsics are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Scoped atomic operations and memory scopes are not implemented. |
