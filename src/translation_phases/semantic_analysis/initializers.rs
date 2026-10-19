@@ -1282,9 +1282,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 None,
             );
         }
-        _ = self
-            .string_initializers
-            .insert(std::ptr::from_ref(e).addr(), element.unqualified());
         Some(count)
     }
 

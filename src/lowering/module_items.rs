@@ -1063,7 +1063,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         flexible: Option<TypeId>,
     ) -> Result<(ArenaVec<'a, u8>, ArenaVec<'a, Relocation>), LoweringError> {
         let tables = self.tables;
-        let (leaves, _) = initializers::leaves(self.sema, ty, initializer, flexible, tables)?;
+        let (leaves, _) = initializers::leaves(self.sema, ty, initializer, tables)?;
         let length = usize::try_from(size).map_err(|_| {
             LoweringError::unsupported(Construct::StaticInitializer, initializer.source_vectors)
         })?;

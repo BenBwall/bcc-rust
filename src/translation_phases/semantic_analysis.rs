@@ -278,7 +278,6 @@ pub(crate) fn analyze<'tu>(
         function_extensions: analyzer.function_extensions,
         expressions: analyzer.expressions.leak(),
         expression_indices: index.expressions,
-        string_initializers: analyzer.string_initializers,
         flexible_arrays: analyzer.flexible_arrays,
         initializers: analyzer.initializers,
         conversions: index.conversions,
@@ -1847,7 +1846,6 @@ struct Analyzer<'a, 'tu, 's> {
     next_parameter:          usize,
     function_controls:       ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
     expression_indices:      ArenaMap<'s, usize, usize>,
-    string_initializers:     ArenaMap<'tu, usize, TypeId>,
     flexible_arrays:         ArenaMap<'tu, usize, FlexibleArray>,
     initializers:            InitializerFacts<'tu>,
     /// Unions whose definition requests `transparent_union`, until their
