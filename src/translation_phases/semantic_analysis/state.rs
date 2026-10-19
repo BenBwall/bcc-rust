@@ -88,6 +88,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             flexible_arrays: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             initializers: super::facts::InitializerFacts::new(tu),
+            initializer_buffers: None,
             transparent_unions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conversions: ArenaVec::new_in(scratch),
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

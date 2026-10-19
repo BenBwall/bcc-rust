@@ -251,15 +251,23 @@ impl<'s> Writes<'s> {
         index
     }
 
-    pub(super) fn new_in(scratch: &'s Bump, source: SourceVectors) -> Self {
-        let mut writes = Self {
+    /// Empty storage; [`Self::reset`] readies it for an initializer.
+    pub(super) fn new_in(scratch: &'s Bump) -> Self {
+        Self {
             scratch,
             nodes: ArenaVec::new_in(scratch),
             children: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             edges: ArenaVec::new_in(scratch),
-        };
-        _ = writes.node(State::Written, source);
-        writes
+        }
+    }
+
+    /// Forgets every write and starts the initializer at `source` with only
+    /// its object's own node, keeping the storage's capacity.
+    pub(super) fn reset(&mut self, source: SourceVectors) {
+        self.nodes.clear();
+        self.children.clear();
+        self.edges.clear();
+        _ = self.node(State::Written, source);
     }
 }
 

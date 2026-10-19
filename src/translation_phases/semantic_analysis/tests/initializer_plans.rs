@@ -293,6 +293,17 @@ fn compound_literals_and_rejected_initializers() {
 
 /// The plan work (`review_steps[3]`) and operations of `source`.
 fn plan_work(source: &str) -> (usize, usize) {
+    analyze(source, |analyzer, _| {
+        (
+            analyzer.review_steps.get()[3],
+            analyzer.initializers.totals().1,
+        )
+    })
+}
+
+/// Analyzes `source`, which must be accepted, and inspects the analyzer
+/// and its scratch arena.
+fn analyze<R>(source: &str, inspect: impl FnOnce(&Analyzer<'_, '_, '_>, &Bump) -> R) -> R {
     let tu = Bump::new();
     let scratch = Bump::new();
     let source = tu.alloc_str(&format!("{source}\n"));
@@ -311,10 +322,37 @@ fn plan_work(source: &str) -> (usize, usize) {
         analyzer.step(work);
     }
     assert_accepted(analyzer.context, source);
-    (
-        analyzer.review_steps.get()[3],
-        analyzer.initializers.totals().1,
-    )
+    inspect(&analyzer, &scratch)
+}
+
+/// The scratch bytes analysis uses for `functions` functions of `locals`
+/// initialized automatic scalars each.
+fn initialized_locals_scratch(functions: usize, locals: usize) -> usize {
+    let mut source = String::new();
+    for f in 0..functions {
+        write!(source, "int f{f}(int p) {{").unwrap();
+        for v in 0..locals {
+            write!(source, " int v{v} = p + {v};").unwrap();
+        }
+        source.push_str(" return v0; }\n");
+    }
+    analyze(&source, |_, scratch| scratch.used())
+}
+
+#[test]
+fn scalar_initializers_reuse_the_checker_storage() {
+    // Issue #92: the scratch arena lives for the whole translation unit, so
+    // working storage the checker made per initializer was never freed, and
+    // peak memory for local-heavy files rose about 15% with M8's plans.
+    // Each further initializer now costs only the analysis of its
+    // expression and declaration, not a fresh set of checker buffers.
+    let small = initialized_locals_scratch(20, 50);
+    let large = initialized_locals_scratch(40, 50);
+    let per_initializer = (large - small) / (20 * 50);
+    assert!(
+        per_initializer <= 1_800,
+        "{per_initializer} scratch bytes per initializer"
+    );
 }
 
 #[test]
