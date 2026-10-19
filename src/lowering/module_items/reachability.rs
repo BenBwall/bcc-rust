@@ -130,7 +130,7 @@ impl<'a> Unit<'a, '_, '_> {
     /// calls stay calls; lowering declares `always_inline` bodies in it.
     /// References are visited in source order, which is the order Clang
     /// emits the expressions that name them. Indexed by binding.
-    pub(super) fn clang_creation_order(&self) -> ArenaVec<'a, Option<u32>> {
+    pub(super) fn clang_creation_order(&self) -> ArenaVec<'a, Option<usize>> {
         let canonical = self.canonical_bindings();
         // References grouped by owner, in source order.
         let mut starts = ArenaVec::new_in(self.tables);
@@ -231,7 +231,7 @@ impl<'a> Unit<'a, '_, '_> {
 
 /// [`Unit::clang_creation_order`]'s state.
 struct Creation<'a> {
-    ranks:   ArenaMap<'a, usize, u32>,
+    ranks:   ArenaMap<'a, usize, usize>,
     /// Deferred definitions seen so far.
     defined: ArenaSet<'a, usize>,
     queued:  ArenaSet<'a, usize>,
@@ -243,7 +243,7 @@ impl Creation<'_> {
     /// A reference creates the entity's LLVM value, and makes a deferred
     /// definition already seen pending.
     fn touch(&mut self, entity: usize, deferred: &ArenaSet<'_, usize>) {
-        let next = self.ranks.len() as u32;
+        let next = self.ranks.len();
         _ = self.ranks.entry(entity).or_insert(next);
         if deferred.contains(&entity)
             && self.defined.contains(&entity)
