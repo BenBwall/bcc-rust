@@ -475,6 +475,13 @@ fn minimum_count(storage: Storage) -> u64 {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::missing_const_for_thread_local,
+        reason = "The initializers are const blocks; Clippy misreads their expansion."
+    )
+)]
 thread_local! {
     /// Replay steps on this thread, for the scaling tests.
     pub(in crate::lowering) static STEPS: std::cell::Cell<usize> = const {
