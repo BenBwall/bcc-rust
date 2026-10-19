@@ -91,8 +91,7 @@ __asm__(\"# last \\\"block\\\"\");
     }
 
     /// The assembler sees the text: its `.error` reaches the diagnostics.
-    /// The native back end fails the build. The LLVM back end prints the
-    /// error but, until #88 makes LLVM errors fail the build, may exit 0.
+    /// Both back ends fail the build.
     #[test]
     fn assembler_errors_in_file_scope_asm_are_reported() {
         let source = "__asm__(\".error \\\"file scope boom\\\"\");\nint x;\n";
@@ -107,9 +106,11 @@ __asm__(\"# last \\\"block\\\"\");
                 "{backend}: {}",
                 text(&built.stderr)
             );
-            if backend == "--backend=native" {
-                assert!(!built.status.success(), "{}", text(&built.stderr));
-            }
+            assert!(
+                !built.status.success(),
+                "{backend}: {}",
+                text(&built.stderr)
+            );
             if object.exists() {
                 std::fs::remove_file(object).unwrap();
             }
@@ -185,7 +186,6 @@ __asm__(\"# last \\\"block\\\"\");
     /// Clang fails the build when its assembler reports an error in module
     /// asm and leaves no object or executable; so must the LLVM back end.
     #[test]
-    #[ignore = "needs #88 (codex/issue-83-section-parity)"]
     fn llvm_assembler_errors_in_file_scope_asm_fail_the_build() {
         let source = "__asm__(\".error \\\"file scope boom\\\"\");\nint main(void) { return 0; }\n";
         for flags in [&["-c"][..], &[][..]] {
