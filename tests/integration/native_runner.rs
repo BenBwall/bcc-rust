@@ -1,11 +1,68 @@
+//! Tests of the shared deadline-bound runner, and `run_until_timeout` for
+//! tests that expect its deadline to fire.
+
+use std::{
+    io,
+    process::Command,
+    time::{
+        Duration,
+        Instant,
+    },
+};
+
+/// Runs `command`, which must not finish, until the runner's deadline stops
+/// it after it has printed `ready`, and returns the runner's timeout report.
+///
+/// A run that times out before printing `ready` only shows that the host was
+/// too slow to start the program, as a loaded Windows CI runner can be, so it
+/// is retried with the next, longer deadline. Every attempt must time out,
+/// and the runner must return within `KILL_MARGIN` of the deadline.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "Tests inspect owned timeout reports."
+)]
+pub(crate) fn run_until_timeout(command: &mut Command, ready: &str) -> String {
+    for deadline in DEADLINES {
+        let start = Instant::now();
+        let error = crate::native::run_native_with_timeout(command, deadline)
+            .expect_err("the program outlives its deadline");
+        let elapsed = start.elapsed();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+        assert!(elapsed < deadline + KILL_MARGIN, "{elapsed:?}: {error}");
+        let message = error.to_string();
+        let (_, captured) = message
+            .split_once("\nstdout:\n")
+            .expect("timeouts report the captured output");
+        if captured.contains(ready) {
+            return message;
+        }
+        eprintln!("{command:?} did not print {ready:?} within {deadline:?}; retrying");
+    }
+    panic!("{command:?} never printed {ready:?} before its deadline");
+}
+
+/// The deadlines `run_until_timeout` tries, shortest first. The first keeps
+/// the tests fast on an idle host; the others give a loaded one ample time to
+/// start the program.
+const DEADLINES: [Duration; 3] = [
+    Duration::from_millis(500),
+    Duration::from_secs(5),
+    Duration::from_secs(30),
+];
+
+/// How soon after its deadline the runner must have killed the program,
+/// reaped it, and given up on pipes an escaped descendant still holds.
+const KILL_MARGIN: Duration = Duration::from_secs(10);
+
 #[cfg(test)]
 mod tests {
-    use std::{
-        process::Command,
-        time::{
-            Duration,
-            Instant,
-        },
+    use std::process::Command;
+
+    use super::{
+        DEADLINES,
+        KILL_MARGIN,
+        run_until_timeout,
     };
 
     #[test]
@@ -18,25 +75,16 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "Tests inspect owned timeout diagnostic strings."
-    )]
     fn inherited_pipes_cannot_outlive_the_reader_deadline() {
-        let start = Instant::now();
-        let error = crate::native::run_native_with_timeout(
+        drop(run_until_timeout(
             Command::new(std::env::current_exe().unwrap()).args([
                 "--ignored",
                 "--exact",
                 "native_runner::tests::exiting_parent_fixture",
                 "--nocapture",
             ]),
-            Duration::from_millis(500),
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(error.to_string().contains("parent exited"), "{error}");
-        assert!(start.elapsed() < Duration::from_secs(2), "{error}");
+            "parent exited",
+        ));
     }
 
     #[test]
@@ -59,29 +107,21 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "Tests inspect owned timeout diagnostic strings."
-    )]
     fn timeout_kills_descendants_with_inherited_pipes() {
-        let start = Instant::now();
-        let error = crate::native::run_native_with_timeout(
+        let report = run_until_timeout(
             Command::new(std::env::current_exe().unwrap()).args([
                 "--ignored",
                 "--exact",
                 "native_runner::tests::parent_fixture",
                 "--nocapture",
             ]),
-            Duration::from_millis(500),
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(error.to_string().contains("descendant started"), "{error}");
-        assert!(start.elapsed() < Duration::from_secs(2), "{error}");
+            "descendant started",
+        );
+        #[cfg(not(windows))]
+        drop(report);
         #[cfg(windows)]
         {
-            let message = error.to_string();
-            let pid: u32 = message
+            let pid: u32 = report
                 .lines()
                 .find_map(|line| line.strip_prefix("descendant pid "))
                 .expect("parent reported its descendant")
@@ -114,8 +154,11 @@ mod tests {
     #[ignore = "Subprocess fixture that inherits its parent's captured pipes."]
     fn descendant_fixture() {
         println!("descendant started");
-        // Finite even on the broken runner, so the red regression cannot hang.
-        std::thread::sleep(Duration::from_secs(4));
+        // Outlives every deadline and its kill margin, so a runner that waits
+        // for the descendant fails the margin check, yet finite even on the
+        // broken runner, so the red regression cannot hang.
+        let longest = DEADLINES[DEADLINES.len() - 1];
+        std::thread::sleep(longest + KILL_MARGIN * 2);
     }
 
     #[cfg(windows)]

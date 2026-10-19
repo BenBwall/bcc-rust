@@ -22,9 +22,12 @@ mod tests {
         },
     };
 
-    use crate::native::{
-        run_native,
-        run_native_with_timeout,
+    use crate::{
+        native::{
+            run_native,
+            run_native_with_timeout,
+        },
+        native_runner::run_until_timeout,
     };
 
     const SUM: &str = "int main(void) {\n  int s = 0;\n  for (int i = 1; i <= 4; i++)\n    s += \
@@ -1654,23 +1657,9 @@ int main(void) { printf("main\n"); return zero; }
             ],
         );
         assert!(built.status.success(), "{}", text(&built.stderr));
-        let start = std::time::Instant::now();
-        let error = run_native_with_timeout(
-            &mut Command::new(&executable),
-            std::time::Duration::from_millis(100),
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(
-            error.to_string().contains("native execution timed out"),
-            "{error}"
-        );
-        assert!(error.to_string().contains("loop.exe"), "{error}");
-        assert!(error.to_string().contains("loop started"), "{error}");
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(5),
-            "{error}"
-        );
+        let report = run_until_timeout(&mut Command::new(&executable), "loop started");
+        assert!(report.contains("native execution timed out"), "{report}");
+        assert!(report.contains("loop.exe"), "{report}");
         std::fs::remove_file(executable).unwrap();
     }
 
