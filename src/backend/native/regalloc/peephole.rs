@@ -1,13 +1,17 @@
 //! Peepholes on the allocated function, where registers are known: a copy
-//! followed by an addition to the copy becomes one `lea`, and an addition
-//! to the result of a `lea` folds into it.
+//! followed by an addition to the copy becomes one `lea`, an addition to
+//! the result of a `lea` folds into it, and a copy straight back after a
+//! copy goes.
 //!
 //! Coalescing already turns `mov d, a; add d, b` into one `add` when `a`
 //! dies there; when `a` lives on, the copy stays, and a three-operand `lea`
 //! does both. An `add` sets the flags and a `lea` does not, so a pair is
 //! combined only where no later instruction reads the flags before another
-//! one sets them. Only 64-bit additions are combined: a 32-bit `add` also
-//! clears the upper half of its register, which a 64-bit `lea` does not.
+//! one sets them. A 32-bit `add` also clears the upper half of its register,
+//! which a 64-bit `lea` does not; a 32-bit addition computes a value of at
+//! most 32 bits, whose upper bits are unspecified (see "Narrow integer
+//! representation" in `docs/design/native-backend.md`), and an `i1` sum is
+//! masked with `andl $1` right after, so that half is never read.
 
 use crate::backend::native::mir::{
     AluOp,
@@ -20,12 +24,17 @@ use crate::backend::native::mir::{
     Width,
 };
 
-/// Combines the copy-and-add and `lea`-and-add pairs of `func`.
+/// Combines the copy-and-add and `lea`-and-add pairs of `func` and deletes
+/// copies back.
 pub(super) fn combine(func: &mut MFunction<'_>) {
     for block in &mut func.blocks {
         let insts = &mut block.insts;
         let mut index = 0;
         while index + 1 < insts.len() {
+            if copies_back(insts[index], insts[index + 1]) {
+                _ = insts.remove(index + 1);
+                continue;
+            }
             if let Some(lea) = combined(insts[index], insts[index + 1])
                 && !flags_read_after(&insts[index + 2..])
             {
@@ -43,7 +52,7 @@ pub(super) fn combine(func: &mut MFunction<'_>) {
 fn combined(first: MInst, second: MInst) -> Option<MInst> {
     let MInst::Alu {
         op: op @ (AluOp::Add | AluOp::Sub),
-        width: Width::B64,
+        width: Width::B32 | Width::B64,
         dst,
         src,
     } = second
@@ -77,6 +86,37 @@ fn combined(first: MInst, second: MInst) -> Option<MInst> {
         | _ => return None,
     };
     Some(MInst::Lea { dst, addr })
+}
+
+/// Whether `second` copies back what `first` copied: `mov b, a; mov a, b`.
+fn copies_back(first: MInst, second: MInst) -> bool {
+    match (first, second) {
+        | (
+            MInst::Mov {
+                width: Width::B64,
+                dst,
+                src: Operand::Reg(src),
+            },
+            MInst::Mov {
+                width: Width::B64,
+                dst: back,
+                src: Operand::Reg(from),
+            },
+        )
+        | (
+            MInst::XMov {
+                width: Width::B64,
+                dst,
+                src: Operand::Reg(src),
+            },
+            MInst::XMov {
+                width: Width::B64,
+                dst: back,
+                src: Operand::Reg(from),
+            },
+        ) => back == src && from == dst,
+        | _ => false,
+    }
 }
 
 /// Whether an instruction of `rest` reads the flags before one overwrites

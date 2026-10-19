@@ -53,7 +53,8 @@ block2:
         Target::LinuxGnu,
     );
     let f = function_text(&text, "f");
-    assert!(f.contains("addl\t$5, "), "{f}");
+    // `v0` lives on, so the addition is a `lea` rather than `mov` and `add`.
+    assert!(f.contains("leaq\t5(%rdi), "), "{f}");
     assert!(f.contains("cmpl\t$100, "), "{f}");
     assert!(f.contains("\tjl\t") || f.contains("\tjge\t"), "{f}");
     assert!(!f.contains("setl"), "the branch compare is fused:\n{f}");
@@ -1366,4 +1367,24 @@ block0(v0: i64, v1: i64):
     assert!(f.contains("leaq\t1(%rdi,%rdi,2), %"), "{f}");
     assert!(f.contains("leaq\t1(%rsi), %"), "{f}");
     assert!(!f.contains("imulq\t$3"), "{f}");
+}
+
+#[test]
+fn copies_and_32_bit_additions_become_lea() {
+    // `i + 1` while `i` lives on: one `lea` in place of `mov` and `add`.
+    let text = assembly(
+        "abi lowered
+function @f(i32, ptr) -> i32 external {
+block0(v0: i32, v1: ptr):
+    v2 = iconst.i32 1
+    v3 = iadd.i32 v0, v2
+    store.i32 v3, v1, align 4
+    v4 = imul.i32 v0, v3
+    return v4
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("leaq\t1(%rdi), %"), "{f}");
 }
