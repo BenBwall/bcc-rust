@@ -38,7 +38,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         let mut analyzer = Self {
             references: ArenaVec::new_in(tu),
             #[cfg(test)]
-            review_steps: Cell::new([0; 3]),
+            review_steps: Cell::new([0; 4]),
             context,
             scratch,
             types: TypeInterner::new(tu, scratch, &target),
@@ -86,8 +86,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             next_parameter: 0,
             function_controls: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            string_initializers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             flexible_arrays: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            initializers: super::facts::InitializerFacts::new(tu),
             transparent_unions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conversions: ArenaVec::new_in(scratch),
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

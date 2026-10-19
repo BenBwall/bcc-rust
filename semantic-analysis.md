@@ -644,6 +644,42 @@ incompatible scalar values and invalid designators have structured diagnostics.
 Narrow/wide strings initialize their matching character arrays, with optional
 braces and the permitted omitted terminator in an exactly sized array.
 
+#### Initializer placement plans
+
+**M8 is complete.** The same traversal emits the placement it accepts:
+`facts/initializer_plans.rs` retains one `InitializerPlan` per accepted
+initializer of an object definition, automatic declaration or compound
+literal, keyed by the initializer's syntax identity
+(`SemanticTranslationUnit::initializers.plan`); `initializers/plan.rs` builds
+it while the checker's cursors move. Each cursor carries its container's
+absolute offset, accumulated qualifiers and enclosing unions, so no layout is
+searched again. A plan lists, in source order:
+
+- `Zero` for each brace pair around an aggregate, with the exclusive index
+  where its list ends (omitted bytes are zero, §6.7.8p21, and the pair
+  replaces earlier writes, §6.7.8p19);
+- `Select` whenever an element enters a union member (designated, positional
+  or by brace elision), with the scope of the list containing the element;
+- `Store` (scalar, with its bit range), `Copy` (a whole structure or union,
+  §6.7.8p13, with the union types that contain it) and `String`;
+- `Repeat { count, stride, length }` for a GNU range designator, one per range
+  in a designation, over the operations of its element stored at the range's
+  first element; operations before the range step (selections of containing
+  unions) stay outside, so nested ranges repeat inside each other;
+- `EmptyScalar` for `{}` around a scalar and `Unmodeled` where brace elision
+  descends into a vector or an unanalyzable type, which lowering refuses.
+
+Values are `InitValueId`s of the initializer occurrence; a value inside a
+repeat with more than one element is marked `repeated`, so it is evaluated
+once. A root array of unknown size and the object's own flexible array member
+get their completed (respectively written) array types when the checker
+finishes; another flexible array member's empty list stores nothing. Rejected
+or unmodeled initializers retain no plan. A plan's size follows the written
+initializer and its designators, never an array's extent or a range's length;
+`tests/initializer_plans.rs` pins plan shapes and counts the producer's work
+(`review_steps[3]`) for deep, sparse and overlapping-range initializers. See
+the [M8 receipt](docs/research/semantic-facts-m8.md).
+
 An incomplete outer array records the greatest initialized top-level index and
 completes its canonical type before following expressions resolve its binding
 (§6.7.8p22). This includes nested designators and brace elision. Recovered or

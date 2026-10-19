@@ -9,7 +9,9 @@
 //! effects-only evaluation recipes. `symbols` retains entity attributes,
 //! aliases, constructor and destructor registrations and attribute
 //! capability refusals. `entities` completes linked entities, symbol requests
-//! and function policy after attribute and definition finalization. Regions
+//! and function policy after attribute and definition finalization.
+//! `initializer_plans` retains the subobject placement the current-object
+//! checker accepted for each initializer. Regions
 //! distinguish lexical scope, VM declaration protection, GNU cleanup
 //! declarations and GNU block expressions; transitions are compact parent-chain
 //! runs, never ancestor lists. C99: §6.2.1, pp. 29-30; PDF pp. 41-42; §6.2.4p6,
@@ -24,6 +26,7 @@ pub(super) mod correspondence;
 pub(super) mod effects;
 pub(super) mod entities;
 mod function_extensions;
+mod initializer_plans;
 mod parameters;
 pub(super) mod resolved;
 mod sizes;
@@ -63,6 +66,7 @@ pub(crate) use entities::{
     FunctionPolicy,
 };
 pub(crate) use function_extensions::*;
+pub(crate) use initializer_plans::*;
 pub(crate) use resolved::{
     CallFacts,
     Callee,

@@ -13,7 +13,6 @@ use super::{
     types::{
         Field,
         TypeId,
-        TypeKind,
         Types,
     },
 };
@@ -72,14 +71,14 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// Syntax identity (the node's address) to its ordinal in
     /// `expressions`; see [`Self::expression_index`].
     pub(super) expression_indices:  ArenaMap<'tu, usize, usize>,
-    /// String initializer syntax to its destination element type, independent
-    /// of array completion. C99: §6.7.8p14-15, p. 126; PDF p. 138.
-    pub(super) string_initializers: ArenaMap<'tu, usize, TypeId>,
     /// A static object's binding to the flexible array member its
     /// initializer initializes, which extends the object past its structure
     /// (GNU extension; C99 §6.7.2.1p16, p. 103; PDF p. 115). See
     /// [`Self::flexible_array`].
     pub(super) flexible_arrays:     ArenaMap<'tu, usize, FlexibleArray>,
+    /// Accepted initializers' placement plans, which lowering stores by.
+    /// C99: §6.7.8 paragraphs 17-22, pp. 126-127; PDF pp. 138-139.
+    pub(crate) initializers:        super::InitializerFacts<'tu>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
     pub(crate) conversions:         &'tu [Conversion<'tu>],
@@ -356,18 +355,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         let member = self.types.tag(ty)?.members.get().last()?;
         let end = member.offset.checked_add(self.types.layout(array)?.size)?;
         Some(size.max(end))
-    }
-
-    /// Whether analysis classified this expression as initializing the whole
-    /// array, including braced literals and arrays completed from the string.
-    /// C99: §6.7.8p14-15, p. 126; PDF p. 138.
-    pub(crate) fn string_initializes(&self, expression: &Expression<'tu>, ty: TypeId) -> bool {
-        let TypeKind::Array(element, _) = self.types.kind(ty) else {
-            return false;
-        };
-        self.string_initializers
-            .get(&std::ptr::from_ref(expression).addr())
-            == Some(&element.unqualified())
     }
 
     /// The ordinal of an expression's record, in expected O(1). Parentheses

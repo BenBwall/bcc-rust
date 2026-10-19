@@ -645,6 +645,22 @@ type), never an external symbol. Lowering's
 keyword scheduling still matches the keyword of a varargs, offsetof or
 `choose_expr` form.
 
+**M8 is complete.** Automatic and static initializers store by the
+`InitializerPlan` semantic analysis retained for each accepted initializer
+(`sema.initializers.plan`). `initializers/plan.rs` replays its operations as
+source-ordered leaves at absolute offsets: a range `Repeat` runs once per
+element with an explicit cursor, a changed union `Select` becomes the reset
+zero leaf `CoverageIndex` expects, and a whole `Copy` forgets the selections
+inside it. Automatic emission keeps the coverage-indexed zero gaps and
+evaluates each ranged `InitValueId` once, remembering its converted value;
+static emission maps the same leaves to bytes and relocations. The second
+current-object machine (`Walker`, `leaves`, its field-name designator search,
+braced-scalar and whole-copy classification) and the expression-address
+counting that chose which range values to remember are deleted. Lowering
+refuses a plan operation whose destination it cannot represent (a vector,
+binary128, an unmodeled type, an empty scalar brace pair) with the refusal
+the walker gave.
+
 **M5 is complete.** Effects-only evaluation (an overflow predicate's third operand
 and the statements of a GNU block inside it) interprets retained
 `EffectRecipe`s: nothing, evaluate-and-discard, the node's type-site actions and
@@ -656,16 +672,17 @@ block, the same shape short circuits already had; an omitted conditional, or a
 conditional with one effect-free arm, now takes that shape too. A missing summary
 or recipe is a provenance-bearing `MissingFact`.
 
-Initializer placement plans, symbolic constants and final symbol/function
-policies remain later migration work.
+Symbolic constants and final symbol/function policies remain later migration
+work.
 Some consumers therefore still inspect syntax in those families. See
 [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and the
 [M1 receipt](docs/research/semantic-facts-m1.md),
 [M2 receipt](docs/research/semantic-facts-m2.md),
 [M3 receipt](docs/research/semantic-facts-m3.md),
 [M4 receipt](docs/research/semantic-facts-m4.md),
-[M5 receipt](docs/research/semantic-facts-m5.md) and
-[M6 receipt](docs/research/semantic-facts-m6.md) for checks and corpus comparisons.
+[M5 receipt](docs/research/semantic-facts-m5.md),
+[M6 receipt](docs/research/semantic-facts-m6.md) and
+[M8 receipt](docs/research/semantic-facts-m8.md) for checks and corpus comparisons.
 
 ### Atomic execution
 
@@ -1408,9 +1425,9 @@ VLA declarations retain their element and declaration alignment (C11
 
 Packed member reads, writes and aggregate initializers use their guaranteed
 alignment. GNU union casts materialize a temporary union and write the selected
-member. Range initializers use explicit Cartesian cursors and save each selected
-initializer expression once, including aggregate values. The runtime and static
-walkers share the same flattened initializer leaves.
+member. Range initializers save each selected initializer expression once, including
+aggregate values. The runtime and static paths share the same flattened
+initializer leaves (since M8, replayed from the retained semantic plan).
 
 Static file-scope compound literals are memoized as internal globals and filled
 from an iterative queue. Constant pointer values emit bytes; addresses of compound
