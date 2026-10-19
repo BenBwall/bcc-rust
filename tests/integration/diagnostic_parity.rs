@@ -54,6 +54,9 @@ mod tests {
     fn absolute_pointer_constant_contexts_match_clang() {
         let cases = [
             "int a[sizeof(char[(unsigned char)(long)(char *)260])];",
+            "int arr[8]; int *p = (int[&arr[4] - &arr[0]]){0};",
+            "int arr[8]; int f(void){int *p = (int[&arr[4] - &arr[0]]){0};return p[0];}",
+            "int *p = (int[(long)(char *)4]){0};",
             "int a[(long)((char *)0 + 4)];",
             "void f(void){static int a[(long)((char *)0 + 4)];}",
             "struct S { int a[(long)((char *)0 + 4)]; };",

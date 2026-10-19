@@ -209,14 +209,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     operand_expression,
                     expression.source_vectors,
                 ));
-                self.work.push(Work::TypeName(target_type));
+                self.work.push(Work::TypeName(target_type, false));
             },
             | E::SizeofType(name) | E::AlignofType(name) => {
                 self.work.push(Work::SizeofDone(
                     matches!(expression.kind, E::AlignofType(_)),
                     expression.source_vectors,
                 ));
-                self.work.push(Work::TypeName(name));
+                self.work.push(Work::TypeName(name, false));
             },
             | E::Builtin(_)
             | E::Call { .. }

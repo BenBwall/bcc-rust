@@ -104,11 +104,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.work.push(Work::Expression(operand_expression));
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(target_type));
+                self.work.push(Work::TypeName(target_type, false));
             },
             | E::SizeofType(name) | E::AlignofType(name) => {
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(name));
+                self.work.push(Work::TypeName(name, false));
             },
             | E::CompoundLiteral {
                 type_name,
@@ -117,7 +117,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 _ = self.work.pop();
                 self.work.push(Work::CompoundInitializer(e, initializer));
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(type_name));
+                // Clang recovers folded bounds here, where C99 §6.5.2.5p1
+                // requires a non-VLA type (p. 75; PDF p. 87).
+                self.work.push(Work::TypeName(type_name, true));
             },
             | E::Call {
                 function_expression,

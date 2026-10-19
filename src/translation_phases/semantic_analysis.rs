@@ -697,15 +697,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.values.push(ty);
             },
-            | Work::TypeName(name) => {
+            | Work::TypeName(name, fold_bounds) => {
                 if let Some(site) = self.type_name_sites.get(&type_name_identity(name)) {
                     self.values.push(site.ty);
                     return;
                 }
-                self.work.push(Work::TypeNameBase(name));
+                self.work.push(Work::TypeNameBase(name, fold_bounds));
                 self.spec(name.declaration_specifiers, false);
             },
-            | Work::TypeNameBase(name) => {
+            | Work::TypeNameBase(name, fold_bounds) => {
                 let base = self.take_type();
                 self.work
                     .push(Work::TypeNameDone(name, self.types.runtime_bounds.len()));
@@ -719,7 +719,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     microsoft_object: false,
                 }));
                 if let Some(d) = name.declarator {
-                    self.work.push(Work::Declarator(d, base, false, false));
+                    self.work
+                        .push(Work::Declarator(d, base, false, fold_bounds));
                 } else {
                     self.values.push(base);
                 }
@@ -1711,8 +1712,8 @@ enum Work<'tu, 's> {
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     SpecDone(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),
-    TypeName(&'tu TypeName<'tu>),
-    TypeNameBase(&'tu TypeName<'tu>),
+    TypeName(&'tu TypeName<'tu>, bool),
+    TypeNameBase(&'tu TypeName<'tu>, bool),
     TypeNameDone(&'tu TypeName<'tu>, usize),
     Declarator(Declarator<'tu>, TypeId, bool, bool),
     DeclaratorDone(Declarator<'tu>, TypeId, bool, bool),

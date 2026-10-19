@@ -236,7 +236,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::Extended(extended) => {
                 if let super::ExtendedType::Atomic(name) = *extended {
                     self.work.push(Work::Atomic(source));
-                    self.work.push(Work::TypeName(name));
+                    self.work.push(Work::TypeName(name, false));
                     return;
                 }
                 let reason = match *extended {
@@ -1451,7 +1451,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Expression(expression)),
             | super::SyntaxOperand::Type(name) => {
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(name));
+                self.work.push(Work::TypeName(name, false));
             },
         }
     }
