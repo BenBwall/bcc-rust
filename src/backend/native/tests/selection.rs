@@ -1251,3 +1251,30 @@ block0(v0: f32):
         }
     }
 }
+
+#[test]
+fn division_by_a_power_of_two_shifts() {
+    let text = assembly(
+        "abi lowered
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iconst.i32 4
+    v3 = sdiv.i32 v0, v2
+    v4 = srem.i32 v1, v2
+    v5 = udiv.i32 v0, v2
+    v6 = urem.i32 v1, v2
+    v7 = iadd.i32 v3, v4
+    v8 = iadd.i32 v5, v6
+    v9 = iadd.i32 v7, v8
+    return v9
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(!f.contains("div"), "{f}");
+    assert!(f.contains("sarl\t$2, "), "{f}");
+    assert!(f.contains("shrl\t$2, "), "{f}");
+    assert!(f.contains("andl\t$3, "), "{f}");
+    assert!(f.contains("andl\t$-4, "), "{f}");
+}

@@ -51,6 +51,31 @@ int main(void) {
 }"#,
     },
     Program {
+        name:   "division_by_powers_of_two",
+        source: r#"int printf(const char *, ...);
+int values[] = {0, 1, -1, 7, -7, 8, -8, 100, -100, 2147483647, -2147483647 - 1, 12345, -12345};
+long long wide[] = {0, 1, -1, 1000000000007LL, -1000000000007LL, 9223372036854775807LL, -9223372036854775807LL - 1};
+int main(void) {
+    for (unsigned i = 0; i < sizeof values / sizeof values[0]; i++) {
+        int x = values[i];
+        unsigned u = (unsigned)x;
+        signed char c = (signed char)x;
+        short h = (short)x;
+        printf("%d %d %d %d %d %d %d %d | ", x / 1, x / 2, x / 4, x / 16, x / 1073741824, x % 1, x % 2, x % 8);
+        printf("%d %d %d | ", x % 1073741824, c / 4, c % 4);
+        printf("%d %d | ", h / 8, h % 8);
+        printf("%u %u %u %u %u\n", u / 2, u / 2147483648u, u % 16, u % 2147483648u, (unsigned char)u / 4u);
+    }
+    for (unsigned i = 0; i < sizeof wide / sizeof wide[0]; i++) {
+        long long x = wide[i];
+        unsigned long long u = (unsigned long long)x;
+        printf("%lld %lld %lld %lld %lld | ", x / 2, x / 2147483648LL, x / 4611686018427387904LL, x % 1024, x % 4294967296LL);
+        printf("%llu %llu %llu\n", u / 8, u / 9223372036854775808ULL, u % 4294967296ULL);
+    }
+    return 0;
+}"#,
+    },
+    Program {
         name:   "comparisons",
         source: r#"int printf(const char *, ...);
 int cmp(int a, int b) {

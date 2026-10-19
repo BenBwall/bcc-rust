@@ -860,6 +860,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         dst: Reg,
         [lhs, rhs]: [Value; 2],
     ) {
+        if let ValueKind::Const(bits) = self.kind(rhs)
+            && self.divide_by_power_of_two(signed, remainder, ty, dst, lhs, bits)
+        {
+            return;
+        }
         let width = op_width(ty);
         let lhs = self.extended(lhs, signed);
         let divisor = self.extended(rhs, signed);
@@ -884,6 +889,101 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         });
         let result = if remainder { PReg::Rdx } else { PReg::Rax };
         self.copy(dst, Reg::Phys(result));
+    }
+
+    /// Division and remainder by a positive power of two `2^k`, which need
+    /// no `div`: unsigned ones shift or mask; a signed one first adds `2^k -
+    /// 1` to a negative dividend (the sign shifted down), so the quotient
+    /// rounds toward zero as `sdiv` does, and its remainder subtracts the
+    /// rounded-down multiple. Whether it applied: an immediate that does
+    /// not fit falls back to `div`.
+    fn divide_by_power_of_two(
+        &mut self,
+        signed: bool,
+        remainder: bool,
+        ty: Type,
+        dst: Reg,
+        lhs: Value,
+        bits: u64,
+    ) -> bool {
+        let divisor = if signed {
+            sign_extend(bits, ty)
+        } else {
+            bits & mask(ty)
+        };
+        if ty == Type::I1 || divisor == 0 || !divisor.is_power_of_two() || divisor.cast_signed() < 0
+        {
+            return false;
+        }
+        let width = op_width(ty);
+        #[expect(clippy::cast_possible_truncation, reason = "The exponent is below 64.")]
+        let k = divisor.trailing_zeros() as u8;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Widths are at most 64 bits."
+        )]
+        let bits_of_width = width.bits() as u8;
+        let low_mask = i32::try_from(divisor - 1).ok();
+        let multiple_mask = i32::try_from(-divisor.cast_signed()).ok();
+        match (signed, remainder) {
+            | (false, false) => {
+                let x = self.extended(lhs, false);
+                self.copy(dst, x);
+                if k > 0 {
+                    self.shift_imm(ShiftOp::Shr, width, dst, k);
+                }
+            },
+            | (false, true) => {
+                let Some(low_mask) = low_mask else {
+                    return false;
+                };
+                let x = self.extended(lhs, false);
+                self.copy(dst, x);
+                self.emit(MInst::Alu {
+                    op: AluOp::And,
+                    width,
+                    dst,
+                    src: Operand::Imm(low_mask),
+                });
+            },
+            | (true, _) if k == 0 =>
+                if remainder {
+                    self.emit(MInst::Mov {
+                        width: Width::B32,
+                        dst,
+                        src: Operand::Imm(0),
+                    });
+                } else {
+                    let x = self.extended(lhs, true);
+                    self.copy(dst, x);
+                },
+            | (true, _) => {
+                if remainder && multiple_mask.is_none() {
+                    return false;
+                }
+                let x = self.extended(lhs, true);
+                // bias = 2^k - 1 for a negative dividend, else 0.
+                let biased = self.vreg();
+                self.copy(biased, x);
+                self.shift_imm(ShiftOp::Sar, width, biased, bits_of_width - 1);
+                self.shift_imm(ShiftOp::Shr, width, biased, bits_of_width - k);
+                self.alu_reg(AluOp::Add, width, biased, x);
+                if remainder {
+                    self.emit(MInst::Alu {
+                        op: AluOp::And,
+                        width,
+                        dst: biased,
+                        src: Operand::Imm(multiple_mask.expect("checked above")),
+                    });
+                    self.copy(dst, x);
+                    self.alu_reg(AluOp::Sub, width, dst, biased);
+                } else {
+                    self.shift_imm(ShiftOp::Sar, width, biased, k);
+                    self.copy(dst, biased);
+                }
+            },
+        }
+        true
     }
 
     /// The value in a register whose bits above its type are its sign
