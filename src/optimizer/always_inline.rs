@@ -89,9 +89,9 @@ pub(crate) fn resolve_inline_copies(module: &mut Module<'_>, scratch: &Bump) {
             if !viable(module, callee, body, names_callee) {
                 continue;
             }
-            for &caller in &*ids {
-                if !names_callee(caller) {
-                    expand_calls(module, caller, callee, names_callee, &function_scratch);
+            for &user in &*ids {
+                if !names_callee(user) {
+                    expand_calls(module, user, callee, names_callee, &function_scratch);
                     function_scratch.reset();
                 }
             }
@@ -144,15 +144,15 @@ fn viable(
     })
 }
 
-/// Expands every call of `callee` in `caller`'s body.
+/// Expands every call of `callee` in `user`'s body.
 fn expand_calls(
     module: &mut Module<'_>,
-    caller: FuncId,
+    user: FuncId,
     callee: FuncId,
     names_callee: impl Fn(FuncId) -> bool,
     scratch: &Bump,
 ) {
-    let calls = module.function(caller).body.as_ref().is_some_and(|body| {
+    let calls = module.function(user).body.as_ref().is_some_and(|body| {
         body.blocks().any(|block| {
             body.block_insts(block)
                 .iter()
@@ -162,7 +162,7 @@ fn expand_calls(
     if !calls {
         return;
     }
-    let Some(body) = module.function_mut(caller).body.take() else {
+    let Some(body) = module.function_mut(user).body.take() else {
         return;
     };
     let mut draft = Draft::lift(&body, scratch);
@@ -194,5 +194,5 @@ fn expand_calls(
             inline::expand(&mut draft, callee_body, block, position, call);
         }
     }
-    draft.lower(module, caller);
+    draft.lower(module, user);
 }

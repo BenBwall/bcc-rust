@@ -24,8 +24,7 @@ fn function<'t>(text: &'t str, name: &str) -> &'t str {
     rest.find("\n\n").map_or(rest, |end| &rest[..end])
 }
 
-/// A copy of `name` that calls the function `callee` and returns `x * callee(x
-/// - 1)`.
+/// A copy of `name` returning `x * callee(x - 1)`.
 fn copy(name: &str, callee: &str, control: &str) -> String {
     format!(
         "\
