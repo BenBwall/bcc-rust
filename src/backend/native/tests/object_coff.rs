@@ -56,6 +56,9 @@ pub(crate) fn equivalent(text: &str, target: Target) -> io::Result<()> {
         disassemblies.push(
             listing
                 .lines()
+                // The header names the file, and a Windows path such as
+                // `C:\...\reference.obj` would parse as address `C`.
+                .filter(|line| !line.contains("file format"))
                 .filter_map(|line| {
                     let (address, rest) = line.trim_start().split_once(':')?;
                     if address.is_empty() || !address.bytes().all(|b| b.is_ascii_hexdigit()) {
