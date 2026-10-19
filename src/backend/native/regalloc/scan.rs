@@ -242,11 +242,11 @@ impl<'s, 'a> Scan<'s, 'a> {
             if interval.unsplittable {
                 return 0;
             }
-            let next = interval.next_use(evict_at).unwrap_or(u32::MAX);
+            let next = interval.next_any_use(evict_at).unwrap_or(u32::MAX);
             match around {
                 | Some((start, end))
                     if interval.covers(end - 1)
-                        && interval.next_use(start).is_some_and(|at| at < end) =>
+                        && interval.next_any_use(start).is_some_and(|at| at < end) =>
                     next.min(end),
                 | _ => next,
             }
@@ -285,22 +285,32 @@ impl<'s, 'a> Scan<'s, 'a> {
             self.fall_back(id);
             return;
         };
-        let first_use = self.intervals[id].next_use(position);
-        let Some(first_use) = first_use else {
+        let Some(first_use) = self.intervals[id].next_any_use(position) else {
             // Never read or written again: the slot will do.
             self.intervals[id].loc = Loc::Spill;
             return;
         };
-        if next_use[register.index()] < first_use
-            && let Some(at) = self.reload_position(position, first_use)
-        {
-            // Everyone else needs a register sooner.
-            let child = self.intervals[id].split(at, self.arena);
-            self.push(child);
-            self.intervals[id].loc = Loc::Spill;
-            return;
+        // When everyone else needs a register sooner, or no occupant can
+        // leave, the current interval waits in its slot until its first use
+        // that needs a register, reading the slot for the uses that can
+        // before it.
+        let evictable = next_use[register.index()] >= evict_at + 2;
+        if next_use[register.index()] < first_use || !evictable {
+            match self.intervals[id].next_use(position) {
+                | None => {
+                    self.intervals[id].loc = Loc::Spill;
+                    return;
+                },
+                | Some(needed) =>
+                    if let Some(at) = self.reload_position(position, needed) {
+                        let child = self.intervals[id].split(at, self.arena);
+                        self.push(child);
+                        self.intervals[id].loc = Loc::Spill;
+                        return;
+                    },
+            }
         }
-        if next_use[register.index()] < evict_at + 2 {
+        if !evictable {
             self.fall_back(id);
             return;
         }

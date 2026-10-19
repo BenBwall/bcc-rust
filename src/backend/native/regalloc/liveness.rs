@@ -230,7 +230,9 @@ impl<'a> Liveness<'a> {
                     {
                         let interval = &mut intervals[vreg.index()];
                         add(interval, start, position + 1);
-                        if in_memory != Some(vreg) {
+                        if in_memory == Some(vreg) {
+                            interval.weak.push(position);
+                        } else {
                             interval.uses.push(position);
                         }
                     }
@@ -241,6 +243,7 @@ impl<'a> Liveness<'a> {
             interval.ranges.reverse();
             interval.uses.reverse();
             interval.uses.dedup();
+            interval.weak.reverse();
         }
         (intervals, self.fixed_ranges(func, arena))
     }

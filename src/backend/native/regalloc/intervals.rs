@@ -35,6 +35,9 @@ pub(super) struct Interval<'a> {
     /// need it in a register, ascending: all but reads of a memory source
     /// operand, which can take the spill slot instead.
     pub(super) uses:         ArenaVec<'a, u32>,
+    /// The positions of reads through a memory source operand, which can
+    /// take the spill slot but are cheaper from a register, ascending.
+    pub(super) weak:         ArenaVec<'a, u32>,
     /// The position this piece starts holding the value from: 0 for a
     /// whole interval, the split position for a piece split off.
     pub(super) from:         u32,
@@ -67,6 +70,7 @@ impl<'a> Interval<'a> {
             class,
             ranges: ArenaVec::new_in(arena),
             uses: ArenaVec::new_in(arena),
+            weak: ArenaVec::new_in(arena),
             from: 0,
             loc: Loc::None,
             hint: None,
@@ -103,6 +107,15 @@ impl<'a> Interval<'a> {
         self.uses.get(index).copied()
     }
 
+    /// The first use of either kind at or after `position`.
+    pub(super) fn next_any_use(&self, position: u32) -> Option<u32> {
+        let index = self.weak.partition_point(|&at| at < position);
+        match (self.next_use(position), self.weak.get(index).copied()) {
+            | (Some(strong), Some(weak)) => Some(strong.min(weak)),
+            | (strong, weak) => strong.or(weak),
+        }
+    }
+
     /// The first position at or after `from` where both are live.
     pub(super) fn next_intersection(&self, other: &[Range], from: u32) -> Option<u32> {
         next_intersection(&self.ranges, other, from)
@@ -130,11 +143,16 @@ impl<'a> Interval<'a> {
         let mut uses = ArenaVec::with_capacity_in(self.uses.len() - first_use, arena);
         uses.extend_from_slice(&self.uses[first_use..]);
         self.uses.truncate(first_use);
+        let first_weak = self.weak.partition_point(|&position| position < at);
+        let mut weak = ArenaVec::with_capacity_in(self.weak.len() - first_weak, arena);
+        weak.extend_from_slice(&self.weak[first_weak..]);
+        self.weak.truncate(first_weak);
         Self {
             vreg: self.vreg,
             class: self.class,
             ranges,
             uses,
+            weak,
             from: at,
             loc: Loc::None,
             hint: match self.loc {
@@ -169,6 +187,12 @@ impl<'a> Interval<'a> {
         uses.sort_unstable();
         uses.dedup();
         self.uses = uses;
+        let mut weak = ArenaVec::with_capacity_in(self.weak.len() + other.weak.len(), arena);
+        weak.extend_from_slice(&self.weak);
+        weak.extend_from_slice(&other.weak);
+        weak.sort_unstable();
+        weak.dedup();
+        self.weak = weak;
         if self.hint.is_none() {
             self.hint = other.hint;
         }
