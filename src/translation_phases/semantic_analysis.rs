@@ -424,11 +424,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     d,
                     base,
                     false,
-                    self.scope == 0
-                        || matches!(
-                            spec.storage_class,
-                            Some(StorageClass::Static | StorageClass::Extern)
-                        ),
+                    // C99 §6.7.5.2p2: function declarations cannot have
+                    // variably modified types; do not recover return bounds.
+                    functions::function_derivation(d, self.scratch).is_none()
+                        && (self.scope == 0
+                            || matches!(
+                                spec.storage_class,
+                                Some(StorageClass::Static | StorageClass::Extern)
+                            )),
                 ));
             },
             | Work::Bind(d, s, initialized, bound_start) => {
