@@ -852,3 +852,50 @@ fn constant_arithmetic_retains_poison_flags_without_ir_passes() {
     assert!(text.contains("add nuw nsw i8 127, 1"), "{text}");
     assert!(!text.contains("phi"), "{text}");
 }
+
+#[test]
+fn llvm_mc_diagnostics_refuse_output_even_when_emission_returns_success() {
+    let arena = Bump::new();
+    let directory = TempDir::new("llvm-mc-diagnostic");
+    for section in [".bss.z", ".sbss.z", ".gnu.linkonce.tb.z"] {
+        let text = format!(
+            "global @a external size 4, align 4 section \"{section}\" = bytes \"04000000\"\n"
+        );
+        let module = parse_module(&arena, &text).unwrap();
+        let object = directory.join("refused.o");
+        let error = compile_module(
+            &module,
+            &object,
+            LlvmOptions {
+                opt:                 Some(OptLevel::O0),
+                disable_llvm_passes: false,
+                target:              Target::LinuxGnu,
+                kind:                OutputKind::Object,
+                code:                CodeOptions::default(),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("cannot have non-zero bytes"),
+            "{error}"
+        );
+        assert!(!object.exists());
+    }
+    // Diagnostics belong to their context; a failed session must not poison
+    // the next successful compilation.
+    let module = parse_module(&arena, "global @a external size 4, align 4 = zero\n").unwrap();
+    let object = directory.join("accepted.o");
+    compile_module(
+        &module,
+        &object,
+        LlvmOptions {
+            opt:                 None,
+            disable_llvm_passes: false,
+            target:              Target::LinuxGnu,
+            kind:                OutputKind::Object,
+            code:                CodeOptions::default(),
+        },
+    )
+    .unwrap();
+    assert!(object.exists());
+}

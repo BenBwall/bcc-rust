@@ -2167,6 +2167,18 @@ pass lives in `attributes.rs` and `attributes/`:
   could enter or leave one. Lowering marks cleanup variables address-taken and emits the
   calls from the same transitions that release VLA storage.
 
+On ELF targets, named BSS sections are checked before lowering, independently
+of the selected backend. `target/sections.rs` classifies BSS and TLS linkonce
+families for both semantic analysis and native emission. Externally emitted
+and explicitly used function definitions receive `BssFunction`; omitted static
+and inline-only bodies remain valid. After entity completion supplies inherited sections,
+`initializers/bss.rs` replays retained initializer plans into a sparse image and
+reports every nonzero or relocated object at its initializer. Assignment
+conversion, negative floating zero, overwritten initializers, union selections,
+bit-fields and range designators affect the final contents. Unmodeled
+initializers retain their existing capability refusals; native emission also
+checks raw IR, and LLVM error diagnostics prevent output from being written.
+
 The constructor/destructor priority operand is parsed as an expression, as
 `aligned`'s is, so the ordinary constant evaluator checks it. GNU extension:
 GCC manual, "Common Function Attributes" and "Common Variable Attributes";

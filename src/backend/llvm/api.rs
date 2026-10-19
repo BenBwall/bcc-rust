@@ -8,9 +8,11 @@
 mod call_diagnostics;
 
 use std::{
+    cell::RefCell,
     ffi::{
         CStr,
         c_char,
+        c_void,
     },
     fmt,
     marker::PhantomData,
@@ -20,6 +22,7 @@ use std::{
 
 use llvm_sys::{
     LLVMDLLStorageClass,
+    LLVMDiagnosticSeverity,
     LLVMIntPredicate,
     LLVMLinkage,
     LLVMOpcode,
@@ -84,6 +87,7 @@ use llvm_sys::{
         LLVMConstTrunc,
         LLVMContextCreate,
         LLVMContextDispose,
+        LLVMContextSetDiagnosticHandler,
         LLVMCreateBuilderInContext,
         LLVMCreateEnumAttribute,
         LLVMCreateMemoryBufferWithMemoryRange,
@@ -100,6 +104,8 @@ use llvm_sys::{
         LLVMGetBufferSize,
         LLVMGetBufferStart,
         LLVMGetDataLayoutStr,
+        LLVMGetDiagInfoDescription,
+        LLVMGetDiagInfoSeverity,
         LLVMGetEnumAttributeKindForName,
         LLVMGetFirstFunction,
         LLVMGetIntrinsicDeclaration,
@@ -157,6 +163,7 @@ use llvm_sys::{
         LLVMBasicBlockRef,
         LLVMBuilderRef,
         LLVMContextRef,
+        LLVMDiagnosticInfoRef,
         LLVMMemoryBufferRef,
         LLVMModuleRef,
         LLVMTypeRef,
@@ -211,13 +218,14 @@ use crate::{
 /// arena lifetime is needed. Owned text, object buffers and errors are
 /// unbranded.
 pub(super) struct Session<'id> {
-    builder: LLVMBuilderRef,
-    module:  LLVMModuleRef,
-    context: LLVMContextRef,
-    arena:   &'id Bump,
+    builder:     LLVMBuilderRef,
+    module:      LLVMModuleRef,
+    context:     LLVMContextRef,
+    arena:       &'id Bump,
+    diagnostics: &'id Diagnostics,
     /// The relocation and thread-local storage models.
-    code:    CodeOptions,
-    _brand:  PhantomData<fn(&'id ()) -> &'id ()>,
+    code:        CodeOptions,
+    _brand:      PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
 /// The non-default linkages the back end assigns.
@@ -271,8 +279,19 @@ impl Session<'_> {
         code: CodeOptions,
         body: impl for<'id> FnOnce(&Session<'id>) -> R,
     ) -> R {
+        // The handler's state has a stable address until after the session
+        // disposes its context, including on early returns and unwinding.
+        let diagnostics = Diagnostics::default();
         // SAFETY: Creates a new independently owned LLVM context.
         let context = unsafe { LLVMContextCreate() };
+        // SAFETY: The callback and its stack-owned state outlive this context.
+        unsafe {
+            LLVMContextSetDiagnosticHandler(
+                context,
+                Some(record_diagnostic),
+                (&raw const diagnostics).cast_mut().cast(),
+            );
+        }
         // SAFETY: The context is live and the module name is NUL terminated.
         let module = unsafe { LLVMModuleCreateWithNameInContext(c"bcc".as_ptr(), context) };
         // SAFETY: The context is live.
@@ -282,6 +301,7 @@ impl Session<'_> {
             module,
             context,
             arena,
+            diagnostics: &diagnostics,
             code,
             _brand: PhantomData,
         };
@@ -1417,6 +1437,7 @@ impl<'id> Session<'id> {
             )
         };
         let message = Message(error);
+        self.diagnostics.check()?;
         if failed != 0 { Err(message) } else { Ok(()) }
     }
 
@@ -1579,7 +1600,7 @@ impl<'id> Session<'id> {
         };
         // SAFETY: Verified live module and machine; outputs are separately
         // owned.
-        if unsafe {
+        let failed = unsafe {
             LLVMTargetMachineEmitToMemoryBuffer(
                 machine.0,
                 self.module,
@@ -1587,16 +1608,63 @@ impl<'id> Session<'id> {
                 &raw mut error,
                 &raw mut buffer,
             )
-        } != 0
-        {
-            return Err(Message(error));
+        };
+        let message = Message(error);
+        let buffer = (!buffer.is_null()).then(|| Buffer(buffer));
+        // MC can report errors through the context handler while the C API
+        // returns success and a corrupt object. Drop that buffer on any error.
+        self.diagnostics.check()?;
+        if failed != 0 {
+            return Err(message);
         }
-        Ok(Some(Buffer(buffer)))
+        Ok(buffer)
     }
 }
 
 fn count(length: usize) -> u32 {
     u32::try_from(length).expect("LLVM list fits u32")
+}
+
+/// The first LLVM error in one context. Keeping LLVM's owned description
+/// avoids allocating in Rust or retaining a borrowed diagnostic handle.
+#[derive(Default)]
+struct Diagnostics(RefCell<Option<Message>>);
+
+impl Diagnostics {
+    fn check(&self) -> Result<(), Message> {
+        self.0.borrow_mut().take().map_or(Ok(()), Err)
+    }
+}
+
+extern "C" fn record_diagnostic(info: LLVMDiagnosticInfoRef, state: *mut c_void) {
+    // SAFETY: LLVM supplies a live diagnostic for this callback invocation.
+    let severity = unsafe { LLVMGetDiagInfoSeverity(info) };
+    // The C callback receives optimization remarks even when the default
+    // handler would filter them. The CLI does not enable these remarks.
+    if severity == LLVMDiagnosticSeverity::LLVMDSRemark {
+        return;
+    }
+    // SAFETY: The description is copied to independently owned LLVM storage.
+    let message = Message(unsafe { LLVMGetDiagInfoDescription(info) });
+    // SAFETY: with_code keeps this state alive until the context is disposed;
+    // this context's synchronous compilation owns all accesses to it.
+    let diagnostics = unsafe { &*state.cast::<Diagnostics>() };
+    if severity == LLVMDiagnosticSeverity::LLVMDSError {
+        let mut first = diagnostics.0.borrow_mut();
+        if first.is_none() {
+            *first = Some(message);
+        }
+    } else {
+        let prefix = if severity == LLVMDiagnosticSeverity::LLVMDSWarning {
+            "warning"
+        } else {
+            "note"
+        };
+        drop(std::io::Write::write_fmt(
+            &mut std::io::stderr().lock(),
+            format_args!("{prefix}: {message}\n"),
+        ));
+    }
 }
 
 /// LLVM-owned IR text, kept distinct from external diagnostics.

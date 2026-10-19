@@ -486,6 +486,10 @@ pub(crate) enum SemanticErrorKind {
     SectionMismatch,
     /// GNU section extension: ELF NOBITS cannot contain function code.
     BssFunction,
+    /// GNU section extension: ELF NOBITS cannot contain initialized bytes.
+    BssInitializer,
+    /// GNU section extension: ELF NOBITS cannot contain address fixups.
+    BssFixups,
     /// Clang `-Wignored-attributes`: an unsupported visibility argument.
     InvalidVisibility,
     /// Clang: the cleanup argument names no function.
@@ -612,6 +616,8 @@ impl SemanticErrorKind {
             | Self::AliasTypeMismatch => "alias type differs from its target's",
             | Self::SectionMismatch => "different section",
             | Self::BssFunction => "function in a BSS section",
+            | Self::BssInitializer => "non-zero initializer in a BSS section",
+            | Self::BssFixups => "address initializer in a BSS section",
             | Self::InvalidVisibility => "unsupported visibility",
             | Self::CleanupNotFunction => "not a function",
             | Self::CleanupOverloadSet => "not a single function",
@@ -788,6 +794,8 @@ impl SemanticErrorKind {
             | Self::AliasTypeMismatch
             | Self::SectionMismatch
             | Self::BssFunction
+            | Self::BssInitializer
+            | Self::BssFixups
             | Self::InvalidVisibility
             | Self::CleanupNotFunction
             | Self::CleanupOverloadSet
@@ -1595,9 +1603,13 @@ impl SemanticErrorKind {
                 "section does not match previous declaration",
                 "Clang -Wsection: the latest section request applies",
             ),
-            | Self::BssFunction => (
+            | Self::BssFunction | Self::BssInitializer => (
                 "BSS section cannot have non-zero bytes",
                 "ELF NOBITS sections contain only zero-initialized storage",
+            ),
+            | Self::BssFixups => (
+                "BSS section cannot have fixups",
+                "ELF NOBITS sections cannot contain relocations",
             ),
             | Self::InvalidVisibility => (
                 "visibility argument not supported",
@@ -1749,11 +1761,21 @@ impl ToDiagnostic for SemanticError {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
             })
-        } else if self.kind == SemanticErrorKind::BssFunction {
+        } else if matches!(
+            self.kind,
+            SemanticErrorKind::BssFunction
+                | SemanticErrorKind::BssInitializer
+                | SemanticErrorKind::BssFixups
+        ) {
             format_in!(
                 arena,
-                "BSS section '{}' cannot have non-zero bytes",
-                self.name.map_or("", |name| context.string_cache.at(name))
+                "BSS section '{}' cannot have {}",
+                self.name.map_or("", |name| context.string_cache.at(name)),
+                if self.kind == SemanticErrorKind::BssFixups {
+                    "fixups"
+                } else {
+                    "non-zero bytes"
+                }
             )
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")

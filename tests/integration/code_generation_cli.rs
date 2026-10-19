@@ -1651,6 +1651,87 @@ int main(void) { printf("main\n"); return zero; }
     }
 
     #[test]
+    fn llvm_diagnostic_errors_fail_cli_without_an_output_file() {
+        // This static body is retained by a call, rather than `used`, so it
+        // reaches LLVM's MC diagnostics instead of the early semantic check.
+        let source = "static __attribute__((noinline,section(\".bss.z\"))) int f(int x) { return \
+                      x+1; }\nint g(int x) { return f(x); }\n";
+        let object = temporary("llvm-diagnostic-refused.o");
+        let output = bcc(
+            source,
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--opt=none",
+                "--llvm-opt=O0",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        assert!(
+            text(&output.stderr).contains("BSS section '.bss.z' cannot have non-zero bytes"),
+            "{}",
+            text(&output.stderr)
+        );
+        assert!(!object.exists(), "an LLVM error wrote an object");
+        // Installing the diagnostic callback must preserve LLVM's filtering
+        // of optimization remarks on ordinary successful compilations.
+        let valid = bcc(
+            "int value(void) { return 3; }",
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--opt=none",
+                "--llvm-opt=O0",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ],
+        );
+        assert!(valid.status.success(), "{}", text(&valid.stderr));
+        assert!(valid.stderr.is_empty(), "{}", text(&valid.stderr));
+        assert!(object.exists());
+        std::fs::remove_file(object).unwrap();
+    }
+
+    #[test]
+    fn bss_initializer_errors_fail_all_backends_without_an_output_file() {
+        let source = "int a __attribute__((section(\".bss.z\"))) = 4;\nint b \
+                      __attribute__((section(\".gnu.linkonce.tb.z\"))) = 5;\n";
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let object = temporary("bss-refused.o");
+            let output_path = object.to_str().unwrap();
+            let mut flags = vec!["--target=x86_64-unknown-linux-gnu", "-c", "-o", output_path];
+            flags.extend_from_slice(backend);
+            let output = bcc(source, &flags);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{backend:?}: {}",
+                text(&output.stderr)
+            );
+            assert!(
+                !object.exists(),
+                "a failed compilation wrote an object: {backend:?}"
+            );
+            let stderr = text(&output.stderr);
+            assert!(
+                stderr.contains("BSS section '.bss.z' cannot have non-zero bytes"),
+                "{stderr}"
+            );
+            assert!(
+                stderr.contains("BSS section '.gnu.linkonce.tb.z' cannot have non-zero bytes"),
+                "{stderr}"
+            );
+            assert!(stderr.contains(":1:") && stderr.contains(":2:"), "{stderr}");
+        }
+    }
+
+    #[test]
     fn windows_gnu_object_output_needs_no_mingw() {
         let object = temporary("no-mingw.o");
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))

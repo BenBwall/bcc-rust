@@ -296,6 +296,7 @@ pub(crate) fn analyze<'tu>(
         errors: analyzer.error_diagnostics,
     };
     result.entities = EntityFacts::retain(context, &result, &scratch, unit_arena, &symbol_requests);
+    initializers::bss::check(context, &mut result, &scratch);
     result
 }
 

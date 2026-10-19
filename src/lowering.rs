@@ -47,7 +47,8 @@
 //!   stack restores, and GNU cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
-//!   to IR types; `floats.rs` turns folded floating constants into IR bits.
+//!   to IR types; shared `crate::float_parsing::bits` turns folded floating
+//!   constants into IR bits.
 //! - Errors: `errors.rs`. Tests: `tests.rs` and `tests/`.
 //!
 //! C99: §5.1.2.3, pp. 13-15; PDF pp. 25-27 (program execution: lowering
@@ -79,7 +80,6 @@ mod work;
 
 // Construction
 mod emit;
-mod floats;
 mod ssa;
 mod types;
 
@@ -112,6 +112,7 @@ use work::{
 };
 
 use crate::{
+    float_parsing::bits as floats,
     ir::{
         Block,
         FuncId,

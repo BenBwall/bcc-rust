@@ -973,3 +973,113 @@ fn bss_function_checks_only_definitions_that_must_be_emitted() {
         }
     }
 }
+
+#[test]
+fn bss_initializers_report_every_object_with_source_locations() {
+    use std::fmt::Write;
+
+    use SemanticErrorKind as K;
+    let sections = [
+        ".bss",
+        ".bss.z",
+        ".sbss",
+        ".sbss.z",
+        ".tbss",
+        ".tbss.z",
+        ".gnu.linkonce.b.z",
+        ".llvm.linkonce.b.z",
+        ".gnu.linkonce.sb.z",
+        ".llvm.linkonce.sb.z",
+        ".gnu.linkonce.tb.z",
+        ".llvm.linkonce.tb.z",
+    ];
+    let mut source = String::new();
+    for (index, section) in sections.iter().enumerate() {
+        writeln!(
+            source,
+            "int a{index} __attribute__((section(\"{section}\"))) = 4;"
+        )
+        .unwrap();
+    }
+    for target in [Target::LinuxGnu, Target::LinuxMusl] {
+        with_configuration(&source, gnu(target), |context, sema| {
+            assert_eq!(sema.errors, sections.len());
+            assert!(!sema.lowerable(context));
+            let errors: Vec<_> = context
+                .take_pending_errors()
+                .into_iter()
+                .filter_map(|error| {
+                    if let TranslationError::Semantic(error) = error {
+                        Some(error)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(errors.len(), sections.len());
+            for (error, section) in errors.iter().zip(sections) {
+                assert_eq!(error.kind, K::BssInitializer);
+                assert!(error.source_vectors.length() > 0);
+                assert_eq!(context.string_cache.at(error.name.unwrap()), section);
+            }
+        });
+    }
+    for (declaration, expected) in [
+        ("int a = 4;", Some(K::BssInitializer)),
+        ("double a = -0.0;", Some(K::BssInitializer)),
+        ("double _Complex a = -0.0;", Some(K::BssInitializer)),
+        ("int *a = &other;", Some(K::BssFixups)),
+        ("int *a = &other + 1;", Some(K::BssFixups)),
+        ("_Bool a = &other;", Some(K::BssInitializer)),
+        ("_Bool a = (int *)0;", None),
+        ("_Bool a = (int *)1;", Some(K::BssInitializer)),
+        ("int a[2] = {[0] = 5, [0] = 0};", None),
+        ("int *a[1] = {[0] = &other, [0] = 0};", None),
+        ("unsigned char a = 256;", None),
+        ("int a = 0.5;", None),
+        ("float a = 0x1p-200;", None),
+        ("int *a = 0;", None),
+        ("double a = 0.0;", None),
+        ("char a[3] = \"hi\";", Some(K::BssInitializer)),
+        ("char a[3] = \"\\0\";", None),
+        ("int a[8] = {[0 ... 7] = 5, [0 ... 7] = 0};", None),
+        (
+            "int a[8] = {[0 ... 7] = 0, [3] = 5};",
+            Some(K::BssInitializer),
+        ),
+        ("struct { unsigned a:1, b:1; } a = {.a=2, .b=0};", None),
+        (
+            "struct { unsigned a:1, b:1; } a = {.a=2, .b=1};",
+            Some(K::BssInitializer),
+        ),
+        ("union { int a; long b; } a = {.a=5, .b=0};", None),
+        (
+            "struct { int n; int a[]; } a = {0, {5}};",
+            Some(K::BssInitializer),
+        ),
+        ("int a[1000000000] = {0};", None),
+    ] {
+        let source =
+            format!("extern int other; __attribute__((section(\".bss.z\"))) {declaration}");
+        let errors: Vec<_> = kinds(&source, Target::LinuxGnu)
+            .into_iter()
+            .filter(|k| matches!(k, K::BssInitializer | K::BssFixups))
+            .collect();
+        assert_eq!(errors, expected.into_iter().collect::<Vec<_>>(), "{source}");
+    }
+    assert_eq!(
+        kinds(
+            "void f(void) { static int a __attribute__((section(\".bss.z\"))) = 4; }",
+            Target::LinuxGnu
+        ),
+        [K::BssInitializer]
+    );
+    // A prior section declaration is inherited by the initialized definition.
+    assert_eq!(
+        kinds(
+            "extern int a __attribute__((section(\".sbss.z\"))); int a = 4;",
+            Target::LinuxGnu
+        ),
+        [K::BssInitializer]
+    );
+}

@@ -4,6 +4,7 @@
 //! stack. `overrides.rs` records which subobjects an initializer has
 //! written, for Clang's `-Winitializer-overrides`.
 
+pub(super) mod bss;
 mod overrides;
 mod plan;
 
