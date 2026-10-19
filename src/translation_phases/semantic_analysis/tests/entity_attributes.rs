@@ -1083,3 +1083,61 @@ fn bss_initializers_report_every_object_with_source_locations() {
         [K::BssInitializer]
     );
 }
+
+#[test]
+fn bss_initializers_scale_with_written_operations_not_range_extent() {
+    use super::super::initializers::bss::measured_contents;
+
+    let measure = |initializer: &str, expected: Option<bool>| {
+        let source =
+            format!("unsigned a[] __attribute__((section(\".bss.a\"))) = {{{initializer}}};");
+        let mut measured = None;
+        with_configuration(&source, gnu(Target::LinuxGnu), |context, sema| {
+            let plan = sema.initializers.plans.values().next().unwrap();
+            let arena = Bump::new();
+            let (result, steps) = measured_contents(
+                context,
+                sema,
+                plan,
+                sema.types.layout(plan.ty).unwrap().size,
+                &arena,
+            );
+            assert_eq!(result, expected);
+            assert_eq!(sema.errors, usize::from(expected.is_some()));
+            assert!(
+                steps <= 256 * plan.operations.len() + 1024,
+                "{} operations took {steps} steps",
+                plan.operations.len()
+            );
+            measured = Some((plan.operations.len(), steps));
+        });
+        measured.unwrap()
+    };
+    // The old sparse replay took 280 seconds on this ordinary written table.
+    let table = "0xffffffffu,".repeat(32_000);
+    let (operations, steps) = measure(&table, Some(false));
+    assert_eq!(operations, 32_001);
+    assert!(
+        steps < operations + 512,
+        "did not stop at the first surviving leaf: {steps}"
+    );
+    // A later endpoint replacement must not hide surviving middle elements.
+    let table = format!("{table}[0]=0,[31999]=0");
+    let _ = measure(&table, Some(false));
+    // Range length does not change the retained or executed work.
+    for value in ["0xffffffffu", "0"] {
+        let expected = (value != "0").then_some(false);
+        let small = measure(&format!("[0 ... 7] = {value}"), expected);
+        let large = measure(&format!("[0 ... 199999] = {value}"), expected);
+        let huge = measure(&format!("[0 ... 1999999999] = {value}"), expected);
+        assert_eq!(small.0, large.0);
+        assert_eq!(small.0, huge.0);
+        assert!(large.1 < small.1 + 256);
+        assert!(huge.1 < small.1 + 256);
+    }
+    let _ = measure("[0 ... 199999] = 0xffffffffu, [0 ... 199999] = 0", None);
+    let _ = measure(
+        "[0 ... 199999] = 0xffffffffu, [0] = 0, [199999] = 0",
+        Some(false),
+    );
+}

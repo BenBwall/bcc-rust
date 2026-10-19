@@ -2172,12 +2172,18 @@ of the selected backend. `target/sections.rs` classifies BSS and TLS linkonce
 families for both semantic analysis and native emission. Externally emitted
 and explicitly used function definitions receive `BssFunction`; omitted static
 and inline-only bodies remain valid. After entity completion supplies inherited sections,
-`initializers/bss.rs` replays retained initializer plans into a sparse image and
-reports every nonzero or relocated object at its initializer. Assignment
-conversion, negative floating zero, overwritten initializers, union selections,
-bit-fields and range designators affect the final contents. Unmodeled
-initializers retain their existing capability refusals; native emission also
-checks raw IR, and LLVM error diagnostics prevent output from being written.
+`initializers/bss.rs` walks retained initializer operations backwards and
+reports each object's first surviving nonzero or relocated leaf at its
+initializer. A fixed-depth interval radix tree records later writes; scalar GNU
+ranges remain periodic queries and one coverage interval, independent of their
+extent. Assignment conversion, negative floating zero, overwritten initializers,
+union selections and bit-fields affect the final contents. Complex ranges use
+sparse replay with a work budget linear in the written plan; budget exhaustion
+conservatively defers to backend final-content validation. Thus an unusually
+complex refusal may lack the early source label, but cannot emit invalid BSS
+data. Unmodeled initializers retain their existing capability refusals; native
+emission also checks raw IR, and LLVM error diagnostics prevent output from
+being written.
 
 The constructor/destructor priority operand is parsed as an expression, as
 `aligned`'s is, so the ordinary constant evaluator checks it. GNU extension:

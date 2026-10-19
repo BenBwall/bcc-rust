@@ -1,11 +1,22 @@
-//! Validate final BSS initializer contents before any backend runs. A sparse
-//! image retains only nonzero bits and fixups, so a large zero-filled object
-//! does not require storage proportional to its size. Plans are replayed in
-//! source order, including replacements, union selections and GNU ranges.
+//! Validate final BSS initializer contents before any backend runs. Walk the
+//! retained plan backwards, stopping at the first surviving nonzero leaf.
+//! `coverage.rs` records later writes and queries scalar ranges symbolically.
+//! Complicated ranges use a bounded sparse replay; if its linear work budget
+//! expires, the backend's final-content validation owns the refusal instead.
+//! Neither path allocates storage proportional to an object's extent.
 //!
 //! GNU section extension: ELF NOBITS contains zero-initialized storage only.
 //! C99: §6.7.8p11, p. 126; PDF p. 138 (assignment conversion), and p19-21,
 //! p. 127; PDF p. 139 (replacement and implicit zero initialization).
+
+mod backwards;
+mod coverage;
+
+use backwards::Scan;
+use coverage::{
+    Coverage,
+    Pattern,
+};
 
 use super::super::{
     BitRange,
@@ -106,13 +117,42 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
 /// contents and unmodeled operations return `None`. Existing semantic or
 /// backend refusals still own unmodeled initializers.
 fn contents<'tu>(
-    context: &Context<'tu>,
+    context: &Context<'_>,
     sema: &SemanticTranslationUnit<'tu>,
     plan: &InitializerPlan<'tu>,
     size: u64,
     arena: &Bump,
 ) -> Option<bool> {
-    let mut image = Image(ArenaVec::new_in(arena));
+    let mut work = Work::new(plan.operations.len());
+    contents_with_work(context, sema, plan, size, arena, &mut work)
+}
+
+fn contents_with_work<'tu>(
+    context: &Context<'_>,
+    sema: &SemanticTranslationUnit<'tu>,
+    plan: &InitializerPlan<'tu>,
+    size: u64,
+    arena: &Bump,
+    work: &mut Work,
+) -> Option<bool> {
+    match backwards::check(context, sema, plan, size, arena, work)? {
+        | Scan::Known(result) => result,
+        | Scan::Replay => replay(context, sema, plan, size, arena, work),
+    }
+}
+
+fn replay<'tu>(
+    context: &Context<'_>,
+    sema: &SemanticTranslationUnit<'tu>,
+    plan: &InitializerPlan<'tu>,
+    size: u64,
+    arena: &Bump,
+    budget: &mut Work,
+) -> Option<bool> {
+    let mut image = Image {
+        ranges: ArenaVec::new_in(arena),
+        work:   budget,
+    };
     let mut selected = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
     let mut work = ArenaVec::new_in(arena);
     work.push((0_usize, plan.operations.len(), 0_u64, 1_u64, 0_u64));
@@ -121,6 +161,7 @@ fn contents<'tu>(
             work.push((index, end, shift.checked_add(stride)?, count - 1, stride));
         }
         while index < end {
+            image.work.charge(1)?;
             let op = plan.operations[index];
             index += 1;
             match op {
@@ -140,7 +181,7 @@ fn contents<'tu>(
                 | InitOperation::EmptyScalar { destination, .. } => {
                     let start = destination.offset.checked_add(shift)?.checked_mul(8)?;
                     let width = sema.types.layout(destination.ty)?.size.checked_mul(8)?;
-                    image.clear(start, start.checked_add(width)?);
+                    image.clear(start, start.checked_add(width)?)?;
                 },
                 | InitOperation::Select {
                     destination,
@@ -158,7 +199,7 @@ fn contents<'tu>(
                             start.checked_add(
                                 sema.types.layout(destination.ty)?.size.checked_mul(8)?,
                             )?,
-                        );
+                        )?;
                     }
                 },
                 | InitOperation::Store {
@@ -180,43 +221,14 @@ fn contents<'tu>(
                     literal,
                     destination,
                 } => {
-                    let start = destination.offset.checked_add(shift)?.checked_mul(8)?;
-                    let width = sema.types.layout(destination.ty)?.size.checked_mul(8)?;
-                    image.clear(start, start.checked_add(width)?);
-                    let mut literal = literal;
-                    while let ExpressionType::Parenthesized { expression: inner } = literal.kind {
-                        literal = inner;
-                    }
-                    let (id, encoding, unit_width) = match literal.kind {
-                        | ExpressionType::StringLiteral(StringTokenType::String(id)) =>
-                            (id, LiteralEncoding::Utf8, 1),
-                        | ExpressionType::StringLiteral(StringTokenType::WideString(id)) =>
-                            (id, LiteralEncoding::Utf32, 4),
-                        | ExpressionType::StringLiteral(StringTokenType::EncodedString(
-                            id,
-                            encoding,
-                        )) => (
-                            id,
-                            encoding,
-                            match encoding {
-                                | LiteralEncoding::Utf8 => 1,
-                                | LiteralEncoding::Utf16 => 2,
-                                | LiteralEncoding::Utf32 => 4,
-                            },
-                        ),
-                        | _ => return None,
-                    };
-                    for (index, unit) in context.encoded_literal_units(id, encoding).enumerate() {
-                        let offset = index as u64 * unit_width * 8;
-                        if offset >= width {
-                            break;
-                        }
-                        image.bits(
-                            start + offset,
-                            (unit_width * 8).min(width - offset),
-                            u128::from(unit),
-                        );
-                    }
+                    string(
+                        &mut image,
+                        context,
+                        sema,
+                        literal,
+                        destination.ty,
+                        destination.offset.checked_add(shift)?,
+                    )?;
                 },
                 | InitOperation::Copy { .. } | InitOperation::Unmodeled { .. } => return None,
             }
@@ -224,15 +236,62 @@ fn contents<'tu>(
     }
     // GNU flexible-array replacement can shorten the final object.
     let size = size.checked_mul(8)?;
-    image.clear(size, u64::MAX);
-    (!image.0.is_empty()).then(|| image.0.iter().any(|r| r.fixup))
+    image.clear(size, u64::MAX)?;
+    (!image.ranges.is_empty()).then(|| image.ranges.iter().any(|r| r.fixup))
+}
+
+/// Store a literal's converted code units, truncated to the destination.
+/// C99: §6.7.8p14-15, p. 126; PDF p. 138.
+fn string<'tu>(
+    image: &mut Image<'_, '_>,
+    context: &Context<'_>,
+    sema: &SemanticTranslationUnit<'tu>,
+    mut literal: &Expression<'tu>,
+    ty: TypeId,
+    offset: u64,
+) -> Option<()> {
+    let start = offset.checked_mul(8)?;
+    let width = sema.types.layout(ty)?.size.checked_mul(8)?;
+    image.clear(start, start.checked_add(width)?)?;
+    while let ExpressionType::Parenthesized { expression: inner } = literal.kind {
+        image.work.charge(1)?;
+        literal = inner;
+    }
+    let (id, encoding, unit_width) = match literal.kind {
+        | ExpressionType::StringLiteral(StringTokenType::String(id)) =>
+            (id, LiteralEncoding::Utf8, 1),
+        | ExpressionType::StringLiteral(StringTokenType::WideString(id)) =>
+            (id, LiteralEncoding::Utf32, 4),
+        | ExpressionType::StringLiteral(StringTokenType::EncodedString(id, encoding)) => (
+            id,
+            encoding,
+            match encoding {
+                | LiteralEncoding::Utf8 => 1,
+                | LiteralEncoding::Utf16 => 2,
+                | LiteralEncoding::Utf32 => 4,
+            },
+        ),
+        | _ => return None,
+    };
+    for (index, unit) in context.encoded_literal_units(id, encoding).enumerate() {
+        let offset = index as u64 * unit_width * 8;
+        if offset >= width {
+            break;
+        }
+        image.bits(
+            start + offset,
+            (unit_width * 8).min(width - offset),
+            u128::from(unit),
+        )?;
+    }
+    Some(())
 }
 
 /// Convert a scalar before checking its object bits: numerical zero alone
 /// misses negative floating zero, and pre-conversion values can truncate to
 /// zero. Reuse lowering's exact target floating encoders.
 fn scalar<'tu>(
-    image: &mut Image<'_>,
+    image: &mut Image<'_, '_>,
     sema: &SemanticTranslationUnit<'tu>,
     expression: &Expression<'tu>,
     ty: TypeId,
@@ -288,7 +347,7 @@ fn scalar<'tu>(
             let (start, width) = field.map_or((start, width), |f| {
                 (start + u64::from(f.bit_offset), u64::from(f.width))
             });
-            image.bits(start, width, value as u128);
+            image.bits(start, width, value as u128)?;
             return Some(());
         }
         let (float, complex) = match s {
@@ -311,22 +370,22 @@ fn scalar<'tu>(
             }
         };
         let component = if complex { width / 2 } else { width };
-        image.bits(start, component, real);
+        image.bits(start, component, real)?;
         if complex {
             let imag = info
                 .floating
                 .map_or(Some(0), |value| bits::constant_bits(&value.imag, float))?;
-            image.bits(start + component, component, imag);
+            image.bits(start + component, component, imag)?;
         }
         return Some(());
     }
     if matches!(kind, TypeKind::Pointer(_) | TypeKind::Nullptr) {
         if matches!(sema.types.kind(info.ty), TypeKind::Nullptr) {
-            image.bits(start, width, 0);
+            image.bits(start, width, 0)?;
             return Some(());
         }
         if let Some(value) = integer {
-            image.bits(start, width, value.value as u128);
+            image.bits(start, width, value.value as u128)?;
             return Some(());
         }
         return fixup(image, start, width);
@@ -334,10 +393,10 @@ fn scalar<'tu>(
     None
 }
 
-fn fixup(image: &mut Image<'_>, start: u64, width: u64) -> Option<()> {
+fn fixup(image: &mut Image<'_, '_>, start: u64, width: u64) -> Option<()> {
     let end = start.checked_add(width)?;
-    image.clear(start, end);
-    image.0.push(Range {
+    image.clear(start, end)?;
+    image.ranges.push(Range {
         start,
         end,
         fixup: true,
@@ -345,43 +404,99 @@ fn fixup(image: &mut Image<'_>, start: u64, width: u64) -> Option<()> {
     Some(())
 }
 
-struct Image<'a>(ArenaVec<'a, Range>);
+/// Bound all analysis, including fallback overlap scans, by written plan size.
+/// Exhaustion conservatively defers to the backend's final-content guard;
+/// it never rejects valid zero data or lets an invalid object be emitted.
+struct Work {
+    remaining: usize,
+    #[cfg(test)]
+    steps:     usize,
+}
 
-impl Image<'_> {
-    fn clear(&mut self, start: u64, end: u64) {
-        let length = self.0.len();
+impl Work {
+    fn new(operations: usize) -> Self {
+        Self {
+            remaining:          operations.saturating_mul(2048).saturating_add(4096),
+            #[cfg(test)]
+            steps:              0,
+        }
+    }
+
+    fn charge(&mut self, cost: usize) -> Option<()> {
+        let remaining = self.remaining.checked_sub(cost);
+        #[cfg(test)]
+        {
+            self.steps += cost.min(self.remaining);
+        }
+        self.remaining = remaining.unwrap_or(0);
+        remaining.map(|_| ())
+    }
+}
+
+#[cfg(test)]
+pub(in crate::translation_phases::semantic_analysis) fn measured_contents<'tu>(
+    context: &Context<'_>,
+    sema: &SemanticTranslationUnit<'tu>,
+    plan: &InitializerPlan<'tu>,
+    size: u64,
+    arena: &Bump,
+) -> (Option<bool>, usize) {
+    let mut work = Work::new(plan.operations.len());
+    let result = contents_with_work(context, sema, plan, size, arena, &mut work);
+    (result, work.steps)
+}
+
+struct Image<'a, 'w> {
+    ranges: ArenaVec<'a, Range>,
+    work:   &'w mut Work,
+}
+
+impl Image<'_, '_> {
+    fn clear(&mut self, start: u64, end: u64) -> Option<()> {
+        let length = self.ranges.len();
+        self.work.charge(length + 1)?;
         for index in 0..length {
-            let range = self.0[index];
+            let range = self.ranges[index];
             if range.start >= end || range.end <= start {
                 continue;
             }
             if range.fixup {
                 // Any overlapping write discards a relocation as a whole.
-                self.0[index].end = range.start;
+                self.ranges[index].end = range.start;
             } else {
-                self.0[index].end = range.end.min(start).max(range.start);
+                self.ranges[index].end = range.end.min(start).max(range.start);
                 if range.end > end {
-                    self.0.push(Range {
+                    self.ranges.push(Range {
                         start: end.max(range.start),
                         ..range
                     });
                 }
             }
         }
-        self.0.retain(|range| range.start < range.end);
+        self.ranges.retain(|range| range.start < range.end);
+        Some(())
     }
 
-    fn bits(&mut self, start: u64, width: u64, value: u128) {
-        self.clear(start, start + width);
+    fn bits(&mut self, start: u64, width: u64, value: u128) -> Option<()> {
+        self.clear(start, start.checked_add(width)?)?;
+        self.work.charge(width.min(128) as usize)?;
         for bit in 0..width.min(128) {
             if value & (1_u128 << bit) != 0 {
-                self.0.push(Range {
-                    start: start + bit,
-                    end:   start + bit + 1,
-                    fixup: false,
-                });
+                if let Some(last) = self.ranges.last_mut()
+                    && !last.fixup
+                    && last.end == start + bit
+                {
+                    last.end += 1;
+                } else {
+                    self.ranges.push(Range {
+                        start: start + bit,
+                        end:   start + bit + 1,
+                        fixup: false,
+                    });
+                }
             }
         }
+        Some(())
     }
 }
 
