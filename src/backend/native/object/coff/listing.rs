@@ -278,34 +278,18 @@ fn parse_section<'a>(coff: &mut Coff<'a>, args: &'a str) -> Result<usize> {
             "user section conflicts with generated COFF unwind section",
         ));
     }
-    let flags = parts.next().map(unquote);
-    let mut characteristics = match name {
-        | ".text" => 0x6000_0020,
-        | ".bss" => 0xC000_0080,
-        | _ => 0xC000_0040,
-    };
-    if let Some(flags) = flags {
-        characteristics = 0x4000_0000;
-        for flag in flags.bytes() {
-            characteristics |= match flag {
-                | b'b' => 0x80,
-                | b'd' => 0x40,
-                | b'x' => 0x6000_0020,
-                | b'r' | b'y' => 0,
-                | b'w' => 0x8000_0000,
-                | b'n' => 0x800,
-                | b'i' => 0x200,
-                | b's' => 0x1000_0000,
-                | _ => return Err(Error("unknown COFF section flag")),
-            };
-        }
-        if flags.contains('y') {
-            characteristics &= !0x4000_0000;
-        }
-        if characteristics & 0xE0 == 0 && characteristics & 0x200 == 0 {
-            characteristics |= 0x40;
-        }
-    }
+    let flags = parts
+        .next()
+        .map(|text| {
+            text.strip_prefix('"')
+                .and_then(|text| text.strip_suffix('"'))
+                .ok_or(Error("COFF section flags must be quoted"))
+        })
+        .transpose()?;
+    let mut characteristics = flags
+        .map(|flags| super::flags::parse(name, flags))
+        .transpose()?
+        .unwrap_or(0xC000_0040);
     let mut group = None;
     let mut selection = 0;
     if let Some(kind) = parts.next() {
@@ -332,6 +316,11 @@ fn parse_section<'a>(coff: &mut Coff<'a>, args: &'a str) -> Result<usize> {
             .position(|s| s.name == name && s.group.is_none())
     {
         return Ok(id);
+    }
+    // MCContext pre-creates these sections; its interning keeps their
+    // attributes even when a later directive requests different flags.
+    if group.is_none() {
+        characteristics = super::flags::predefined(name).unwrap_or(characteristics);
     }
     coff.section(name, characteristics, group, selection)
 }
@@ -405,3 +394,4 @@ fn split(text: &str) -> impl Iterator<Item = &str> {
     })
     .map(str::trim)
 }
+

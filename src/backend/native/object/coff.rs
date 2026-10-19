@@ -6,6 +6,7 @@
 //! headers, implicit-addend relocations, symbols and auxiliary records. No
 //! external assembler or LLVM API participates in this path.
 
+mod flags;
 mod listing;
 mod sections;
 mod unwind;
