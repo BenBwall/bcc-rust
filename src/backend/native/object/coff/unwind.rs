@@ -17,7 +17,8 @@ use super::{
 use crate::util::bump::ArenaVec;
 
 pub(super) fn generate(coff: &mut Coff<'_>) -> Result<()> {
-    // MSVC emits ordinary pdata first, then associative xdata/pdata pairs.
+    // MSVC emits ordinary pdata, all associative xdata, then all associative
+    // pdata. Multiple COMDAT procedures must not interleave those sections.
     // MinGW's xdata already exists; its pdata follows procedure order.
     for comdat in [false, true] {
         for id in 0..coff.unwind.len() {
@@ -29,8 +30,13 @@ pub(super) fn generate(coff: &mut Coff<'_>) -> Result<()> {
                 let xdata = coff.unwind_section(text, ".xdata")?;
                 coff.unwind[id].xdata = Some(xdata);
             }
-            let pdata = coff.unwind_section(text, ".pdata")?;
-            coff.unwind[id].pdata = Some(pdata);
+        }
+        for id in 0..coff.unwind.len() {
+            let text = coff.unwind[id].text;
+            if (!coff.gnu && coff.object.sections[text].group.is_some()) == comdat {
+                let pdata = coff.unwind_section(text, ".pdata")?;
+                coff.unwind[id].pdata = Some(pdata);
+            }
         }
     }
     let object = &mut coff.object;

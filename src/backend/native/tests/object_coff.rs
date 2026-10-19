@@ -277,6 +277,30 @@ fn coff_symbol_resolution_and_all_relocation_widths_match_clang() {
 }
 
 #[test]
+fn coff_multiple_comdat_unwind_sections_match_clang() {
+    let text = ".section .text$x,\"xr\",discard,x\n.globl x\nx:\n.seh_proc \
+                x\n.seh_endprologue\nretq\n.seh_endproc\n.section \
+                .text$y,\"xr\",discard,y\n.globl y\ny:\n.seh_proc \
+                y\n.seh_endprologue\nretq\n.seh_endproc\n";
+    for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+        equivalent(text, target).unwrap();
+    }
+}
+
+#[test]
+fn coff_comdat_and_ordinary_unwind_sections_match_clang() {
+    let text = ".section .text$x,\"xr\",discard,x\n.globl x\nx:\n.seh_proc \
+                x\n.seh_endprologue\nretq\n.seh_endproc\n.text\nf:\n.seh_proc \
+                f\n.seh_endprologue\nretq\n.seh_endproc\n.section \
+                .text$y,\"xr\",discard,y\n.globl y\ny:\n.seh_proc \
+                y\n.seh_endprologue\nretq\n.seh_endproc\n.text\ng:\n.seh_proc \
+                g\n.seh_endprologue\nretq\n.seh_endproc\n";
+    for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+        equivalent(text, target).unwrap();
+    }
+}
+
+#[test]
 fn coff_large_and_framed_unwind_match_clang() {
     for offset in [16, 524_272, 524_288, 1_048_560, 1_048_576] {
         let text = format!(
@@ -403,8 +427,12 @@ fn coff_programs_match_both_targets_at_b0_and_b1() {
 #[test]
 fn coff_direct_objects_link_with_both_bundled_windows_linkers() {
     let directory = TempDir::new("coff-link");
-    let text = ".def entry;.scl 2;.type 32;.endef\n.globl entry\nentry:\n.seh_proc \
-                entry\n.seh_endprologue\nmovl choice(%rip),%eax\nretq\n.seh_endproc\n.section \
+    let text = ".section .text$entry,\"xr\",discard,entry\n.def entry;.scl 2;.type \
+                32;.endef\n.globl entry\nentry:\n.seh_proc entry\nsubq $40,%rsp\n.seh_stackalloc \
+                40\n.seh_endprologue\ncallq helper\naddq $40,%rsp\nretq\n.seh_endproc\n.section \
+                .text$helper,\"xr\",discard,helper\n.def helper;.scl 2;.type 32;.endef\n.globl \
+                helper\nhelper:\n.seh_proc helper\n.seh_endprologue\nmovl \
+                choice(%rip),%eax\nretq\n.seh_endproc\n.section \
                 .data,\"dw\",discard,choice\n.globl choice\nchoice:\n.long 42\n";
     let second = ".section .data,\"dw\",discard,choice\n.globl choice\nchoice:\n.long 99\n";
     for target in [Target::WindowsGnu, Target::WindowsMsvc] {
@@ -461,6 +489,9 @@ fn coff_direct_objects_link_with_both_bundled_windows_linkers() {
         assert_eq!(&image[..2], b"MZ");
         // The first selectany definition survives into the linked image.
         let pe = u32_at(&image, 0x3C) as usize;
+        // Both COMDAT procedures retain a RUNTIME_FUNCTION record in the
+        // linked image's exception directory (PE32+ data directory 3).
+        assert_eq!(u32_at(&image, pe + 24 + 112 + 3 * 8 + 4), 24);
         let count = usize::from(u16_at(&image, pe + 6));
         let sections = pe + 24 + usize::from(u16_at(&image, pe + 20));
         let data = (0..count)
