@@ -18,7 +18,10 @@ use super::{
     Result,
     UnwindSections,
 };
-use crate::util::bump::Bump;
+use crate::util::bump::{
+    ArenaMap,
+    Bump,
+};
 
 pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Coff<'a>> {
     let mut coff = Coff::new(arena, gnu);
@@ -31,6 +34,7 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
     }
     let mut section = 0;
     let mut definition = None;
+    let mut storage_classes = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
     for line in text.lines().map(str::trim).filter(|s| !s.is_empty()) {
         // .def/.scl/.type/.endef may share a line in hand-written fixtures.
         // Semicolons inside quoted symbol names and strings remain literal.
@@ -93,6 +97,9 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                         if object.symbols[id].name.starts_with(".L") {
                             return Err(Error("unsupported COFF temporary symbol attributes"));
                         }
+                        if name == ".weak" && storage_classes.get(&id) == Some(&3) {
+                            return Err(Error("unsupported static COFF weak symbol"));
+                        }
                         if name == ".globl" && object.symbols[id].binding == 2 {
                             return Err(Error("global binding after weak binding"));
                         }
@@ -112,8 +119,17 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                         arity(args, 1, 1)?;
                         let id = definition.ok_or(Error("COFF symbol attribute outside .def"))?;
                         match (name, unsigned(args)?) {
-                            | (".scl", 2) => object.symbols[id].binding = 1,
-                            | (".scl", 3) => object.symbols[id].binding = 0,
+                            // MC keeps weakness independent of storage class.
+                            // Static weak fallbacks need separate class metadata;
+                            // refuse them in either directive order for now.
+                            | (".scl", 3) if object.symbols[id].binding == 2 =>
+                                return Err(Error("unsupported static COFF weak symbol")),
+                            | (".scl", class @ (2 | 3)) => {
+                                if object.symbols[id].binding != 2 {
+                                    object.symbols[id].binding = u8::from(class == 2);
+                                }
+                                _ = storage_classes.insert(id, class);
+                            },
                             | (".type", 32) => object.symbols[id].kind = 2,
                             | (".type", 0) => object.symbols[id].kind = 0,
                             | _ => return Err(Error("unsupported COFF symbol attribute")),
@@ -395,3 +411,30 @@ fn split(text: &str) -> impl Iterator<Item = &str> {
     .map(str::trim)
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::{
+        backend::native::tests::object_coff::equivalent,
+        target::Target,
+    };
+
+    #[test]
+    fn coff_storage_class_preserves_weak_binding() {
+        for text in [
+            ".weak f\n.def f;.scl 2;.type 32;.endef\nf:\nretq\n.globl g\ng:\nretq\n",
+            ".def f;.scl 2;.type 32;.endef\n.weak f\nf:\nretq\n.globl g\ng:\nretq\n",
+            ".weak f\n.def f;.scl 2;.type 32;.endef\n.quad f\n",
+        ] {
+            for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+                equivalent(text, target).unwrap();
+            }
+        }
+        for text in [
+            ".weak f\n.def f;.scl 3;.type 32;.endef\nf:\nretq\n",
+            ".def f;.scl 3;.type 32;.endef\n.weak f\nf:\nretq\n",
+        ] {
+            let arena = crate::util::bump::Bump::new();
+            assert!(super::parse(text, false, &arena).is_err());
+        }
+    }
+}
