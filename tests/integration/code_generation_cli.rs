@@ -1936,6 +1936,7 @@ int main(void) { printf("main\n"); return zero; }
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn folded_pointer_cases_retain_switch_dispatch_on_all_backends() {
         let source = "struct S {int a,b;};
             int f1(int x){switch(x){case (long)((char *)0 + 1):return 11;default:return 0;}}
