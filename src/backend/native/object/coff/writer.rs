@@ -175,10 +175,18 @@ pub(super) fn write<'a>(coff: &Coff<'a>) -> Result<ArenaVec<'a, u8>> {
             return Err(Error("COFF COMDAT signature is outside its section"));
         }
     }
-    let default = object
-        .symbols
-        .iter()
-        .find(|s| s.binding == 1 && s.section.is_some())
+    // WinCOFFObjectWriter::setWeakDefaultNames prefers a defined external
+    // outside COMDAT, then retries allowing COMDAT if that is all we have.
+    let default = [false, true]
+        .into_iter()
+        .find_map(|allow_comdat| {
+            object.symbols.iter().find(|s| {
+                s.binding == 1
+                    && s.section.is_some_and(|id| {
+                        allow_comdat || coff.sections[id].characteristics & 0x1000 == 0
+                    })
+            })
+        })
         .map_or("", |s| s.name);
     for (id, symbol) in object.symbols.iter().enumerate() {
         let Some(index) = indices[id] else {

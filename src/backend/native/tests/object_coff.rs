@@ -541,3 +541,34 @@ retq
         equivalent(text, target).unwrap();
     }
 }
+
+#[test]
+fn coff_weak_defaults_prefer_non_comdat_externals() {
+    for source in [
+        "int __attribute__((selectany)) k = 1; __attribute__((weak)) extern int w; int *const p = \
+         &w;",
+        "int __attribute__((selectany)) k = 1; __attribute__((weak)) extern int w; static int \
+         f(void) { return w; } int (*q)(void) = f;",
+        // With no ordinary external, LLVM falls back to the COMDAT key.
+        "int __attribute__((selectany)) k = 1; __attribute__((weak)) extern int w; static int \
+         *const p __attribute__((used)) = &w;",
+    ] {
+        for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+            for optimize in [false, true] {
+                super::end_to_end::with_module(source, target, optimize, |module| {
+                    let mut text = String::new();
+                    super::super::emit_assembly(module, target, &mut text).unwrap();
+                    equivalent(&text, target).unwrap();
+                });
+            }
+        }
+    }
+    for text in [
+        ".section .data$k,\"dw\",discard,k\n.globl k\nk:\n.quad w\n.weak w\n",
+        ".weak w\n.quad w\n",
+    ] {
+        for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+            equivalent(text, target).unwrap();
+        }
+    }
+}
