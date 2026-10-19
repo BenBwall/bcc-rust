@@ -2179,9 +2179,11 @@ ranges remain periodic queries and one coverage interval, independent of their
 extent. Assignment conversion, negative floating zero, overwritten initializers,
 union selections and bit-fields affect the final contents. Complex ranges use
 sparse replay with a work budget linear in the written plan; budget exhaustion
-conservatively defers to backend final-content validation. Thus an unusually
-complex refusal may lack the early source label, but cannot emit invalid BSS
-data. Unmodeled initializers retain their existing capability refusals; native
+conservatively defers to backend final-content validation. Nonzero aggregate,
+string and bit-field GNU ranges commonly exhaust this budget from roughly
+32–128 elements onward; nested ranges and partly overwritten pointer ranges
+can do so too. These refusals lose the early source label, but cannot emit
+invalid BSS data. Unmodeled initializers retain their existing capability refusals; native
 emission also checks raw IR, and LLVM error diagnostics prevent output from
 being written.
 
