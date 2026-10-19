@@ -621,6 +621,18 @@ fn build_native(
         ));
         return FAILURE_STATUS;
     }
+    // Direct ELF encoding reads only the emitter's vocabulary; COFF
+    // targets assemble the listing with clang either way.
+    if options.native_object
+        && matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+        && !module.module_asm().is_empty()
+    {
+        report_stderr(format_args!(
+            "error: {}",
+            native::NativeError::ObjectModuleAsm
+        ));
+        return FAILURE_STATUS;
+    }
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
     if let Err(error) = native::emit_assembly_with(module, target, code, &mut text) {

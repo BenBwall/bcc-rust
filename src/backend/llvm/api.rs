@@ -1838,6 +1838,22 @@ const MODULE_FLAG_MAX: u64 = 7;
 const MODULE_FLAG_MIN: u64 = 8;
 
 impl Session<'_> {
+    /// Appends a file-scope assembly block to the module's inline assembly,
+    /// as Clang does for each top-level `asm`; LLVM ends each block with a
+    /// newline and assembles them, in order, before the functions.
+    /// GNU extension: GCC manual, "Basic Asm", outside functions.
+    pub(super) fn append_module_asm(&self, text: &str) {
+        // SAFETY: The module is live; LLVM copies `text.len()` bytes, which
+        // need no terminator.
+        unsafe {
+            llvm_sys::core::LLVMAppendModuleInlineAsm(
+                self.module,
+                text.as_ptr().cast(),
+                text.len(),
+            );
+        }
+    }
+
     /// Adds the integer module flag `key` with the merge `behavior`, as the
     /// `!{i32 behavior, !"key", i32 value}` operand of `llvm.module.flags`
     /// that `Module::addModuleFlag` creates; LLVM-C's `LLVMAddModuleFlag`

@@ -9,6 +9,7 @@
 //! All user symbol names, including GNU assembler labels, are reserved
 //! before generating those internal names.
 
+mod file_asm;
 mod reachability;
 
 use super::{
@@ -163,11 +164,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// p. 143; PDF p. 155.
     pub(super) fn declare_items(
         &mut self,
-        _syntax: &ParsedTranslationUnit<'tu>,
+        syntax: &ParsedTranslationUnit<'tu>,
         errors: &mut ArenaVec<'_, LoweringError>,
     ) -> ArenaVec<'a, (&'tu FunctionRecord<'tu>, Option<FuncId>)> {
         self.reachable = self.reachable_items();
         self.check_extensions(errors);
+        self.file_scope_asm(syntax, errors);
         // Reserve every user spelling before any initializer or body creates
         // internal storage (GNU labels extend C99 §6.2.2p2).
         for (index, binding) in self.sema.bindings.iter().enumerate() {

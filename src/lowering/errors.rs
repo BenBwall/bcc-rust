@@ -68,6 +68,8 @@ pub(crate) enum Construct {
     VariableLengthArray,
     LabelAddress,
     InlineAssembly,
+    /// File-scope assembly other than one plain narrow template.
+    FileScopeAssembly,
     AssemblerLabel,
     /// An attribute semantic analysis accepted whose meaning code generation
     /// lacks.
@@ -130,6 +132,9 @@ impl Construct {
             | Self::VariableLengthArray => "variable length arrays",
             | Self::LabelAddress => "label addresses",
             | Self::InlineAssembly => "inline assembly",
+            | Self::FileScopeAssembly =>
+                "file-scope assembly with qualifiers, operands, or a template that is not a narrow \
+                 string without NUL",
             | Self::AssemblerLabel => "assembler labels",
             | Self::Attribute(attribute) => attribute.description(),
             | Self::StructuredExceptionHandling => "structured exception handling",

@@ -204,3 +204,47 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     let message = refusal("_Thread_local int tls; __typeof__(int) ordinary; _BitInt(9) value;");
     assert!(message.ends_with("_BitInt types"), "{message}");
 }
+
+/// File-scope basic assembly reaches the module in source order, with
+/// concatenated literals joined, between whatever functions and objects
+/// surround it (GCC manual, "Basic Asm").
+#[test]
+fn file_scope_asm_reaches_the_module_in_source_order() {
+    let ir = lowered(
+        "__asm__(\".globl s\\ns: ret\");\nint f(void) { return 1; }\n__asm__(\"# two\" \" \
+         joined\");\nint x = 3;\n__asm__(\"# \\\"three\\\"\");",
+    );
+    let lines: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("module asm"))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "module asm \".globl s\\u{a}s: ret\"",
+            "module asm \"# two joined\"",
+            "module asm \"# \\u{22}three\\u{22}\"",
+        ],
+        "{ir}"
+    );
+}
+
+/// Clang rejects qualifiers, operands and wide templates at file scope; a
+/// template with NUL or bytes that are not text cannot reach the assembler
+/// as written. Each is refused at its syntax, never dropped.
+#[test]
+fn file_scope_asm_that_cannot_be_carried_is_refused() {
+    for source in [
+        "__asm__ volatile(\"nop\");",
+        "__asm__(\"nop\" : );",
+        "__asm__(L\"nop\");",
+        "__asm__(\"a\\0b\");",
+        "__asm__(\"\\xff\");",
+    ] {
+        let message = refusal(source);
+        assert!(
+            message.ends_with(Construct::FileScopeAssembly.description()),
+            "{source}: {message}"
+        );
+    }
+}

@@ -299,6 +299,13 @@ pub(crate) enum NativeError<'m> {
          --backend=llvm"
     )]
     SharedLibraryCode,
+    /// `--native-object` encodes only the emitter's own listing; file-scope
+    /// assembly is arbitrary assembler input.
+    #[error(
+        "--native-object cannot encode file-scope assembly yet; omit it to assemble the native \
+         listing with clang"
+    )]
+    ObjectModuleAsm,
 }
 
 impl<'m> From<Unsupported<'m>> for NativeError<'m> {

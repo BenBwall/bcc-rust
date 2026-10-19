@@ -92,6 +92,10 @@ use crate::{
     },
 };
 
+/// The comment that opens the file-scope assembly in a listing, as Clang
+/// writes it.
+pub(crate) const MODULE_ASM_START: &str = "# Start of file scope inline assembly";
+
 /// Writes one module's assembly.
 pub(crate) struct Emitter<'o, 'm, 'ir> {
     pub(crate) module: &'m Module<'ir>,
@@ -150,6 +154,22 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
         }
         writeln!(self.out, "\t.text")?;
+        // File-scope assembly follows verbatim, in source order and before
+        // every function and object as Clang places it, then AT&T syntax
+        // again. GNU extension: GCC manual, "Basic Asm".
+        let blocks = self.module.module_asm();
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        writeln!(self.out, "{MODULE_ASM_START}")?;
+        for text in blocks {
+            self.out.write_str(text)?;
+            if !text.ends_with('\n') {
+                writeln!(self.out)?;
+            }
+        }
+        writeln!(self.out, "# End of file scope inline assembly")?;
+        writeln!(self.out, "\t.att_syntax")?;
         Ok(())
     }
 
