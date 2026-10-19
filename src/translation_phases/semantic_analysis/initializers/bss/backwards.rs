@@ -63,14 +63,14 @@ pub(super) fn check<'tu>(
                 return Some(Scan::Replay);
             }
             operation = *plan.operations.get(index)?;
-            let destination = match operation {
-                | InitOperation::Store {
-                    destination,
-                    bit_field: None,
-                    ..
-                }
-                | InitOperation::EmptyScalar { destination, .. } => destination,
-                | _ => return Some(Scan::Replay),
+            let (InitOperation::Store {
+                destination,
+                bit_field: None,
+                ..
+            }
+            | InitOperation::EmptyScalar { destination, .. }) = operation
+            else {
+                return Some(Scan::Replay);
             };
             if n > 1 && sema.types.layout(destination.ty)?.size != step {
                 return Some(Scan::Replay);

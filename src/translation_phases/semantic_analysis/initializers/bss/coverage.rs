@@ -143,7 +143,7 @@ mod tests {
         let mut bits = [false; 128];
         for (start, end) in [(0, 3), (5, 8), (16, 32), (30, 47), (63, 65), (95, 96)] {
             coverage.cover(start, end, &mut work).unwrap();
-            bits[start as usize..end as usize].fill(true);
+            bits[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()].fill(true);
         }
         for start in 0..20 {
             for stride in 1..16 {
@@ -157,10 +157,10 @@ mod tests {
                         };
                         for covered in [false, true] {
                             let expected = (0..count).any(|index| {
-                                bits[(start + index * stride) as usize
-                                    ..(start + index * stride + width) as usize]
-                                    .iter()
-                                    .any(|&bit| bit == covered)
+                                let lower = usize::try_from(start + index * stride).unwrap();
+                                let upper =
+                                    usize::try_from(start + index * stride + width).unwrap();
+                                bits[lower..upper].contains(&covered)
                             });
                             assert_eq!(coverage.any(pattern, covered, &mut work), Some(expected));
                         }
