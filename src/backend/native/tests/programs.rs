@@ -848,4 +848,92 @@ int main(void) {
     return 0;
 }"#,
     },
+    Program {
+        // Each unsigned conversion that is in range raises no "invalid"
+        // exception, as C99 §F.4p1 has it: 2^63 and above too.
+        name:   "long_double_unsigned_conversions",
+        source: r#"int printf(const char *, ...);
+int feclearexcept(int);
+int fetestexcept(int);
+typedef long double ld;
+// FE_INVALID and FE_ALL_EXCEPT on x86 in glibc and MinGW.
+enum { invalid = 1, all = 0x3f };
+static unsigned long long u64(ld x) { return x; }
+static unsigned u32(ld x) { return x; }
+static unsigned short u16(ld x) { return x; }
+static unsigned char u8(ld x) { return x; }
+int main(void) {
+    volatile ld values[] = {
+        0x1p63L, 0x1p64L - 0x1p11L, 0.0L, 0x1p63L - 1, 0x1p64L - 1, 0.75L, 1e18L, 0x1p63L + 0x1p62L,
+    };
+    for (int i = 0; i < 8; i++) {
+        feclearexcept(all);
+        unsigned long long r = u64(values[i]);
+        int raised = fetestexcept(invalid) != 0;
+        printf("%llu %d\n", r, raised);
+    }
+    volatile ld narrow[] = { 0.0L, 255.5L, 65535.75L, 0x1p31L, 4294967295.0L };
+    for (int i = 0; i < 5; i++) {
+        feclearexcept(all);
+        unsigned r32 = u32(narrow[i]);
+        unsigned r16 = i < 3 ? u16(narrow[i]) : 0;
+        unsigned r8 = i < 2 ? u8(narrow[i]) : 0;
+        printf("%u %u %u %d\n", r32, r16, r8, fetestexcept(invalid) != 0);
+    }
+    return 0;
+}"#,
+    },
 ];
+
+/// Unsigned conversions from `double` and `float` that are in range, with
+/// whether each raised the "invalid" exception (C99 §F.4p1). The LLVM back
+/// end's conversions raise it for values at or above 2^63, so the output
+/// is checked against [`SSE_UNSIGNED_CONVERSIONS_OUTPUT`] instead.
+pub(super) const SSE_UNSIGNED_CONVERSIONS: Program = Program {
+    name:   "sse_unsigned_conversions",
+    source: r#"int printf(const char *, ...);
+int feclearexcept(int);
+int fetestexcept(int);
+// FE_INVALID and FE_ALL_EXCEPT on x86 in glibc and MinGW.
+enum { invalid = 1, all = 0x3f };
+static unsigned long long from_double(double x) { return x; }
+static unsigned long long from_float(float x) { return x; }
+static unsigned from_double32(double x) { return x; }
+int main(void) {
+    volatile double doubles[] = { 0x1p63, 0x1p64 - 0x1p11, 0.0, 0x1p63 - 0x1p10, 0.75, 1e18, 0x1p63 + 0x1p62 };
+    for (int i = 0; i < 7; i++) {
+        feclearexcept(all);
+        unsigned long long r = from_double(doubles[i]);
+        printf("%llu %d\n", r, fetestexcept(invalid) != 0);
+    }
+    volatile float floats[] = { 0x1p63f, 0x1p64f - 0x1p40f, 0.0f, 0x1p63f - 0x1p39f, 0.75f };
+    for (int i = 0; i < 5; i++) {
+        feclearexcept(all);
+        unsigned long long r = from_float(floats[i]);
+        printf("%llu %d\n", r, fetestexcept(invalid) != 0);
+    }
+    volatile double narrow = 4294967295.0;
+    feclearexcept(all);
+    unsigned r = from_double32(narrow);
+    printf("%u %d\n", r, fetestexcept(invalid) != 0);
+    return 0;
+}"#,
+};
+
+/// What [`SSE_UNSIGNED_CONVERSIONS`] prints: Clang's values, and no
+/// exception.
+pub(super) const SSE_UNSIGNED_CONVERSIONS_OUTPUT: &str = "\
+9223372036854775808 0
+18446744073709549568 0
+0 0
+9223372036854774784 0
+0 0
+1000000000000000000 0
+13835058055282163712 0
+9223372036854775808 0
+18446742974197923840 0
+0 0
+9223371487098961920 0
+0 0
+4294967295 0
+";

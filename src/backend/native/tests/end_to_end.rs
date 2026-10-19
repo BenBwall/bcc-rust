@@ -12,6 +12,8 @@ use std::{
 
 use super::programs::{
     PROGRAMS,
+    SSE_UNSIGNED_CONVERSIONS,
+    SSE_UNSIGNED_CONVERSIONS_OUTPUT,
     WIDE_FLOAT_PROGRAMS,
 };
 use crate::{
@@ -914,4 +916,38 @@ fn wide_float_programs_match_the_llvm_back_end() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// `double` and `float` values at or above 2^63 convert to unsigned
+/// without the "invalid" exception that converting them signed would
+/// raise. The links name `fetestexcept`, which WSL's link has no `-lm` for.
+#[test]
+fn sse_unsigned_conversions_raise_no_invalid_exception() {
+    let directory = TempDir::new("native-unsigned-conversions");
+    let program = SSE_UNSIGNED_CONVERSIONS;
+    for (target, runner) in targets() {
+        if runner != Runner::Native {
+            eprintln!("skipping {target:?}: the program links with the C library's fenv");
+            continue;
+        }
+        for optimize in [false, true] {
+            let name = format!("{}-{target:?}-{optimize}", program.name);
+            let run = with_module(program.source, target, optimize, |module| {
+                let mut text = String::new();
+                emit_assembly(module, target, &mut text).unwrap_or_else(|error| {
+                    panic!("{name}: {error}");
+                });
+                run_assembly(&text, target, runner, directory.path(), &name)
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                run,
+                Run {
+                    status: 0,
+                    stdout: SSE_UNSIGNED_CONVERSIONS_OUTPUT.to_owned(),
+                },
+                "{name}"
+            );
+        }
+    }
 }

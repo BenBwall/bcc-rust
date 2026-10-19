@@ -1191,3 +1191,63 @@ block0(v0: i32):
         );
     }
 }
+
+/// Unsigned 64-bit conversions compare with 2^63 and pick the adjustment
+/// before their only truncating conversion, so that an in-range value is
+/// never converted out of the signed range, which raises "invalid" (C99
+/// §F.4p1). The `long double` one matches Clang's `fcmov` sequence and
+/// leaves the x87 stack as it found it.
+#[test]
+fn unsigned_conversions_compare_before_their_only_conversion() {
+    let ir = "abi lowered
+function @from_wide(ptr) -> i64 external {
+block0(v0: ptr):
+    v1 = load.f80 v0, align 16
+    v2 = fptoui.i64 v1
+    return v2
+}
+function @from_double(f64) -> i64 external {
+block0(v0: f64):
+    v1 = fptoui.i64 v0
+    return v1
+}
+function @from_float(f32) -> i64 external {
+block0(v0: f32):
+    v1 = fptoui.i64 v0
+    return v1
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let wide = function_text(&text, "from_wide");
+        assert_eq!(wide.matches("fistpll").count(), 1, "{target:?}:\n{wide}");
+        let compare = wide.find("fucomip").expect("a comparison");
+        let pick = wide.find("cmovbeq").expect("a pick of the adjustment");
+        let convert = wide.find("fistpll").unwrap();
+        assert!(compare < pick && pick < convert, "{target:?}:\n{wide}");
+        assert!(
+            wide[pick..convert].contains("fildll") && wide[pick..convert].contains("fadd"),
+            "the adjustment is added before converting, {target:?}:\n{wide}"
+        );
+        assert!(wide[convert..].contains("xorq"), "{target:?}:\n{wide}");
+        let pushes = wide.matches("\tfldt\t").count() + wide.matches("\tfildll\t").count();
+        let pops = wide.matches("\tfucomip\t").count()
+            + wide.matches("\tfistpll\t").count()
+            + wide.matches("\tfstp\t%st(0)").count();
+        assert_eq!(pushes, 3, "{target:?}:\n{wide}");
+        assert_eq!(pops, pushes, "{target:?}:\n{wide}");
+        for (name, conversion, comparison, adjustment) in [
+            ("from_double", "cvttsd2si", "ucomisd", "cvtsi2sdq"),
+            ("from_float", "cvttss2si", "ucomiss", "cvtsi2ssq"),
+        ] {
+            let f = function_text(&text, name);
+            assert_eq!(f.matches(conversion).count(), 1, "{target:?}:\n{f}");
+            let compare = f.find(comparison).expect("a comparison");
+            let pick = f.find("cmovaeq").expect("a pick of the adjustment");
+            let convert = f.find(conversion).unwrap();
+            assert!(compare < pick && pick < convert, "{target:?}:\n{f}");
+            assert!(f[pick..convert].contains(adjustment), "{target:?}:\n{f}");
+            assert!(f[convert..].contains("xorq"), "{target:?}:\n{f}");
+        }
+    }
+}

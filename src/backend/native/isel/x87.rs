@@ -19,8 +19,10 @@
 //! and 64-bit integers, so narrower integers widen, unsigned 32-bit ones
 //! convert at 64 bits, and unsigned 64-bit ones add 2^64 after the signed
 //! load of a negative value, or subtract 2^63 before the signed store of a
-//! value at or above it, as Clang does. `frem` calls `fmodl`, and
-//! conversions with `i128` and `f128` call the runtime (`isel/quad.rs`).
+//! value at or above it, as Clang does: the value is compared first, so
+//! only the adjusted one is stored and an in-range value raises no
+//! "invalid" exception. `frem` calls `fmodl`, and conversions with `i128`
+//! and `f128` call the runtime (`isel/quad.rs`).
 //! Intel SDM Vol. 2: FLD, FILD, FSTP, FISTP, FUCOMI/FUCOMIP, FLDCW, FNSTCW.
 
 use super::{
@@ -351,40 +353,50 @@ impl Selector<'_, '_, '_> {
         }
     }
 
-    /// `fptoui` to `i64`: values at or above 2^63 convert after
-    /// subtracting it and get the top bit back.
+    /// `fptoui` to `i64`: one truncating conversion of the value plus
+    /// `adjust`, which is -2^63 when the value is at or above 2^63 and 0
+    /// otherwise, then `adjust` xored back in to set the top bit. The sum
+    /// is exact. Picking the adjustment before converting keeps an
+    /// in-range value out of reach of the "invalid" exception, which only
+    /// an out-of-range value raises; Clang picks it with `fcmov`.
+    /// C99: §F.4 paragraph 1, p. 447; PDF p. 459.
     fn x87_to_unsigned(&mut self, dst: Reg, arg: Value) {
-        let mem = self.scratch(INTEGER);
-        self.x87_push(arg, FIRST);
-        self.store_truncated(X87Format::I64, mem);
-        self.load_integer(X87Format::I64, dst, mem);
-        self.x87_push_constant(TWO_TO_63);
-        self.x87_push(arg, FIRST);
-        self.emit(MInst::X87Arith { op: X87Op::Sub });
-        self.store_truncated(X87Format::I64, mem);
-        self.emit(MInst::X87Pop);
-        let high = self.vreg();
-        self.load_integer(X87Format::I64, high, mem);
+        let adjust = self.vreg();
+        self.emit(MInst::Mov {
+            width: Width::B32,
+            dst:   adjust,
+            src:   Operand::Imm(0),
+        });
         let top = self.vreg();
         self.emit(MInst::MovImm64 {
             dst: top,
             imm: i64::MIN,
         });
-        self.emit(MInst::Alu {
-            op:    AluOp::Xor,
-            width: Width::B64,
-            dst:   high,
-            src:   Operand::Reg(top),
-        });
-        self.x87_push_constant(TWO_TO_63);
         self.x87_push(arg, FIRST);
+        self.x87_push_constant(TWO_TO_63);
+        // 2^63 <= value: CF or ZF set; `fucomip` pops 2^63.
         self.emit(MInst::X87Compare);
-        self.emit(MInst::X87Pop);
         self.emit(MInst::Cmov {
-            cond: Cond::Ae,
+            cond:  Cond::Be,
+            width: Width::B64,
+            dst:   adjust,
+            src:   top,
+        });
+        let mem = self.scratch(INTEGER);
+        self.store_integer(Width::B64, adjust, mem);
+        self.emit(MInst::X87Load {
+            format: X87Format::I64,
+            mem,
+        });
+        self.emit(MInst::X87Arith { op: X87Op::Add });
+        self.store_truncated(X87Format::I64, mem);
+        self.emit(MInst::X87Pop);
+        self.load_integer(X87Format::I64, dst, mem);
+        self.emit(MInst::Alu {
+            op: AluOp::Xor,
             width: Width::B64,
             dst,
-            src: high,
+            src: Operand::Reg(adjust),
         });
     }
 
