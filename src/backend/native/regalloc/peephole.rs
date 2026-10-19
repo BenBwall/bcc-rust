@@ -65,7 +65,10 @@ fn combined(first: MInst, second: MInst) -> Option<MInst> {
             dst: copy,
             src: Operand::Reg(from),
         } if copy == dst && from != dst => Mem::new(Base::Reg(from), 0),
-        | MInst::Lea { dst: result, addr } if result == dst => addr,
+        // A GOT entry's operand has no displacement to fold into.
+        | MInst::Lea { dst: result, addr }
+            if result == dst && !matches!(addr.base, Base::Got(_) | Base::GotTpoff(_)) =>
+            addr,
         | _ => return None,
     };
     let addr = match (op, src) {

@@ -1412,6 +1412,9 @@ block3:
         Target::LinuxGnu,
     );
     let f = function_text(&text, "f");
-    assert!(!f.contains("set"), "no compare result is materialized:\n{f}");
+    assert!(
+        !f.contains("set"),
+        "no compare result is materialized:\n{f}"
+    );
     assert!(f.matches("cmpl\t").count() >= 2, "{f}");
 }
