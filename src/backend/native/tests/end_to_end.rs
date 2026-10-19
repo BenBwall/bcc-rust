@@ -69,7 +69,7 @@ struct Run {
 
 /// Lowers `source` for `target` to the post-ABI IR, optionally through the
 /// bcc pipeline, and hands the module to `then`.
-fn with_module<R>(
+pub(super) fn with_module<R>(
     source: &str,
     target: Target,
     optimize: bool,

@@ -1344,7 +1344,12 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let target = format!("--target={target}");
         let path = |path: &Path| path.to_str().unwrap().to_owned();
         let executable = temporary("native-hello.exe");
-        for flags in [&[][..], &["--opt=bcc"][..]] {
+        for flags in [
+            &[][..],
+            &["--opt=bcc"][..],
+            &["--native-object"][..],
+            &["--native-object", "--opt=bcc"][..],
+        ] {
             let built = bcc(
                 HELLO,
                 &[
@@ -1367,14 +1372,45 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert!(built.status.success(), "{}", text(&built.stderr));
         let run = run_native(&mut Command::new(&pair)).unwrap();
         assert_eq!(run.status.code(), Some(42));
-        let object = temporary("native-hello.o");
-        let compiled = bcc(
-            HELLO,
-            &[&target, "--backend=native", "-c", "-o", &path(&object)],
-        );
-        assert!(compiled.status.success(), "{}", text(&compiled.stderr));
-        assert!(object.is_file());
-        for file in [executable, pair, object] {
+        for flags in [&[][..], &["--native-object"][..]] {
+            let object = temporary("native-hello.o");
+            let linked = temporary("native-object-hello.exe");
+            assert!(!object.exists());
+            let compiled = bcc(
+                HELLO,
+                &[
+                    &[&target[..], "--backend=native", "-c", "-o", &path(&object)][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            assert!(compiled.status.success(), "{}", text(&compiled.stderr));
+            let bytes = std::fs::read(&object).unwrap();
+            if target.contains("linux") {
+                assert!(bytes.starts_with(b"\x7fELF\x02\x01\x01"));
+                assert!(bytes.windows(6).any(|s| s == b".text\0"));
+                assert!(bytes.windows(5).any(|s| s == b"main\0"));
+            }
+            let clang = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+                "target/llvm/bin/clang.exe"
+            } else {
+                "target/llvm/bin/clang"
+            });
+            let result = Command::new(clang)
+                .arg(&target)
+                .arg(&object)
+                .arg("-o")
+                .arg(&linked)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{}", text(&result.stderr));
+            let run = run_native(&mut Command::new(&linked)).unwrap();
+            assert_eq!(run.status.code(), Some(3));
+            assert_eq!(text(&run.stdout), "answer 42\n");
+            std::fs::remove_file(object).unwrap();
+            std::fs::remove_file(linked).unwrap();
+        }
+        for file in [executable, pair] {
             drop(std::fs::remove_file(file));
         }
 
@@ -1405,6 +1441,45 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn native_named_array_and_bss_sections_run() {
+        let source = r#"int printf(const char *, ...);
+static void hello(void) { printf("ctor\n"); }
+static void goodbye(void) { printf("fini\n"); }
+__attribute__((section(".init_array"), used)) static void (*p)(void) = hello;
+__attribute__((section(".fini_array.101"), used)) static void (*q)(void) = goodbye;
+__attribute__((section(".bss.foo"))) int zero;
+int main(void) { printf("main\n"); return zero; }
+"#;
+        for flags in [
+            &[][..],
+            &["--opt=bcc"][..],
+            &["--native-object"][..],
+            &["--native-object", "--opt=bcc"][..],
+        ] {
+            let executable = temporary("native-named-sections.exe");
+            let built = bcc(
+                source,
+                &[
+                    &[
+                        "--target=x86_64-unknown-linux-gnu",
+                        "--backend=native",
+                        "-o",
+                        executable.to_str().unwrap(),
+                    ][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0));
+            assert_eq!(text(&run.stdout), "ctor\nmain\nfini\n");
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    #[test]
     fn native_assembly_and_option_conflicts() {
         let asm = bcc(
             SUM,
@@ -1428,6 +1503,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         );
         assert!(text(&asm.stdout).contains(".seh_proc\tmain"));
         for (flags, message) in [
+            (
+                &["--native-object", "--emit=ir"][..],
+                "error: --native-object requires --backend=native",
+            ),
             (
                 &["--emit=asm"][..],
                 "error: --emit=asm prints the native back end's assembly; add --backend=native",

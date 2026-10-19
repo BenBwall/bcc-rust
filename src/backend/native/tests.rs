@@ -3,6 +3,7 @@
 
 mod allocation;
 mod end_to_end;
+pub(crate) mod object;
 mod programs;
 mod selection;
 
@@ -41,6 +42,9 @@ fn assembly(ir: &str, target: Target) -> String {
     let module = parse_module(&arena, ir).unwrap_or_else(|error| panic!("{error}\n{ir}"));
     let mut text = String::new();
     emit_assembly(&module, target, &mut text).unwrap_or_else(|error| panic!("{error}\n{ir}"));
+    if matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
+        object::equivalent(&text).unwrap();
+    }
     text
 }
 
