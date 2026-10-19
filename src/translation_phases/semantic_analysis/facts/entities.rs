@@ -215,6 +215,11 @@ impl<'tu> EntityFacts<'tu> {
             let Some(binding) = function.binding else {
                 continue;
             };
+            // Recovered definitions can bind a typedef or another non-entity.
+            // Their existing semantic diagnostics already prevent lowering.
+            if !sema.bindings[binding].needs_entity_policy() {
+                continue;
+            }
             let entity = records
                 .get_mut(
                     &sema
