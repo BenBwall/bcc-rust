@@ -1,4 +1,3 @@
-abi lowered
 global @fmt internal constant size 11, align 1 = bytes "256c6c783a256c6c782000"
 global @nl internal constant size 2, align 1 = bytes "0a00"
 function @printf(ptr, ...) -> i32 external

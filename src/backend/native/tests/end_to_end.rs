@@ -799,8 +799,22 @@ int start(void) { return shared_value + shared_list[3]; }";
 /// every integer width, `i128` and the other floats, block parameters, and
 /// calls with more such arguments than registers. The interpreter does not
 /// run `f80` or `f128`, so the module's executable from the LLVM back end
-/// is the expected behaviour.
+/// is the expected behaviour. The module is written before ABI lowering,
+/// since Win64 passes its `i128` arguments by reference.
 const WIDE_FLOAT_IR: &str = include_str!("wide_floats.ir");
+
+/// [`WIDE_FLOAT_IR`] lowered for `target`'s ABI and verified.
+fn wide_float_ir(arena: &Bump, target: Target) -> Module<'_> {
+    let mut module = crate::ir::parse_module(arena, WIDE_FLOAT_IR).unwrap();
+    crate::abi::lower_abi(&mut module, target, &Bump::new()).unwrap();
+    let scratch = Bump::new();
+    let errors = crate::ir::verify_module(&module, Profile::PostAbi, &scratch)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{target:?}: {}", errors.join("\n"));
+    module
+}
 
 /// Builds `module` with the LLVM back end at `-O0` and runs it.
 fn run_llvm(
@@ -849,6 +863,29 @@ fn check_against_llvm(
     }
 }
 
+/// Every target's native back end compiles the wide-float programs,
+/// whichever targets the host runs.
+#[test]
+fn wide_float_programs_compile_for_every_target() {
+    for target in [Target::WindowsGnu, Target::LinuxGnu] {
+        for program in WIDE_FLOAT_PROGRAMS {
+            for optimize in [false, true] {
+                with_module(program.source, target, optimize, |module| {
+                    let mut text = String::new();
+                    emit_assembly(module, target, &mut text).unwrap_or_else(|error| {
+                        panic!("{}-{target:?}-{optimize}: {error}", program.name)
+                    });
+                });
+            }
+        }
+        let arena = Bump::new();
+        let module = wide_float_ir(&arena, target);
+        let mut text = String::new();
+        emit_assembly(&module, target, &mut text)
+            .unwrap_or_else(|error| panic!("wide-ir-{target:?}: {error}"));
+    }
+}
+
 #[test]
 fn wide_float_programs_match_the_llvm_back_end() {
     let directory = TempDir::new("native-wide-floats");
@@ -870,18 +907,7 @@ fn wide_float_programs_match_the_llvm_back_end() {
             }
         }
         let arena = Bump::new();
-        let module = crate::ir::parse_module(&arena, WIDE_FLOAT_IR).unwrap();
-        let scratch = Bump::new();
-        let errors = crate::ir::verify_module(&module, Profile::PostAbi, &scratch);
-        assert!(
-            errors.is_empty(),
-            "{}",
-            errors
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
+        let module = wide_float_ir(&arena, target);
         let name = format!("wide-ir-{target:?}");
         if let Err(failure) = check_against_llvm(&module, target, directory.path(), &name) {
             failures.push(failure);
