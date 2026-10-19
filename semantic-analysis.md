@@ -69,10 +69,10 @@ graph (`Types`, `TypeId`, `TypeKind`, `Tag`, `TagKind`, `Member`, `Field`,
 The semantic working arena (`'s`) owns continuations, value stacks, interning
 lookup, visible-binding lookup, linkage lookup and scope restoration lists. It
 is dropped before returning `SemanticTranslationUnit<'tu>`. Retained values have
-no destruction requirements. Lowering also receives vendor-modified declarators visited by
-type construction; it reads only their GNU assembler labels. Attribute and
-calling-convention meanings are retained as symbol facts and capability
-refusals (see [GNU entity attributes](#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
+no destruction requirements. Assembler labels are decoded and inherited in
+semantic completion; lowering receives finalized entity and symbol requests.
+Attribute and calling-convention meanings are retained as symbol facts and
+capability refusals (see [GNU entity attributes](#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
 Collections use the repository's arena-backed
 `ArenaMap`/`ArenaVec`; no compiler global allocator collections are introduced.
 
@@ -1803,8 +1803,9 @@ later composite binding types never replace the written call's type. M4
 retains checked scalar/library/varargs instances; M6 registered the remaining
 families, whose calls retain no instance. Overloaded builtins may lack an
 ordinary function type; ordinary lowerable calls require it.
-The existing known-definition/open-external ABI policy remains downstream until
-M7. Returns-twice and unsupported-builtin capability refusals are unchanged.
+M7 retains the entity's known definition; `unprototyped_external` combines it
+with the binding's point-of-use type. Returns-twice and unsupported-builtin
+capability refusals are unchanged.
 
 GNU implicit function declarations still precede identifier typing. Discovery
 forwards callee context through immediate parentheses/extension children on the
@@ -1874,8 +1875,8 @@ type/precision/layout rules. Existing semantic/diagnostic/IR goldens are unchang
 Exhaustive scalar/library agreement tests cover all current targets,
 strict/GNU modes and hosted/freestanding environments. M5 later consumed the
 registry's effect classes in the retained expression effects; M6 (below)
-registered the remaining families; the external/returns-twice symbol policy
-remains later work.
+registered the remaining families; M7 retains the effective external-symbol
+and returns-twice policy.
 
 C99 §6.5.2.2p7, p. 72 (PDF p. 84), §6.2.1p4, pp. 29-30
 (PDF pp. 41-42), §7.15.1, pp. 249-251 (PDF pp. 261-263),
@@ -2134,19 +2135,34 @@ GCC manual, "Common Function Attributes" and "Common Variable Attributes";
 Clang Attributes Reference. C99 §6.2.2p2, p. 30 (PDF p. 42); §6.2.4p5, p. 32
 (PDF p. 44); §6.8.6.1p1, p. 137 (PDF p. 149).
 
-**What remains of M7.** Assembler labels are still decoded and inherited in
-lowering (`extensions.rs::record_label`), and alias targets are resolved by C
-name, so aliases involving assembler labels are refused. The known-definition
-name set for open externals (`Unit::new`/`unprototyped_external`), the
-name-based `main` end policy, readonly/volatile object predicates and the
-shared external-signature catalog are unchanged. The returns-twice part of
-the external-symbol contract exists (`builtins/external.rs`, 2026-10-16):
-semantic analysis retains it as `EntityAttributes::returns_twice` for linked
-functions, merged with GNU `returns_twice`, and lowering consults the catalog
-itself only for an assembler label, which M7 moves into retained symbol
-requests. MSVC
-convention keywords other than `__vectorcall` remain accepted as the default
-convention without a retained `CallingConvention` on types.
+**M7 entity and symbol completion.** `facts/entities.rs` finalizes entities
+after definitions, DLL/inline attributes and overload ABI names. The retained
+record joins linked binding and occurrence IDs, final type, definition and
+initializer association and known function definition. Per-occurrence
+`FunctionPolicy` keeps body permission and end policy so a GNU inline body and
+its replacement definition can differ. Each binding keeps its point-of-use
+type; open-call policy queries that type and the entity's known definition.
+Lowering decides reachability and generated symbol names, and keys private inline bodies by semantic identity even when another
+entity's asm request names the same external symbol.
+
+Assembler labels retain decoded names and provenance, inherited by entity
+identity. Invalid requests retain capability refusals with the same lowering
+stage, text and function-emission filtering. Colliding IR definitions and
+aliases involving asm labels remain downstream refusals. `FunctionEnd` preserves
+the C-identifier-only `main` zero-result rule, including asm-renamed and private
+bodies; hosted and language-mode refinements are separate behavior changes.
+Convention occurrences retain the resolved target convention or unsupported
+request, source and owning function, including abstract callable type sites.
+Existing convention diagnostics and default C type identity are unchanged.
+
+The entity's effective returns-twice fact combines existing
+`EntityAttributes::returns_twice` with assembler requests through
+`builtins/external.rs`. That neutral catalog also exposes library signatures
+from the registry for independent host/textual-IR validation. `Types` provides
+whole-object readonly storage, retained VM classification and natural layout
+queries; `TypeId::is_volatile` is the canonical volatile-access predicate.
+Initializer placement and symbolic constant decomposition remain M8/M9 work.
+Validation and measurements: [M7 receipt](docs/research/semantic-facts-m7.md).
 
 #### Labels as values (2026-10-14)
 
