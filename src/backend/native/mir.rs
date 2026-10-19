@@ -798,8 +798,10 @@ impl Role {
     }
 }
 
-/// One machine instruction. The two-address forms (`Alu`, `Shift`,
-/// `Unary`, `Cmov`) read and write `dst`.
+/// One machine instruction. The two-address forms (`Alu`, `XAlu`, `Shift`,
+/// `Unary`, `Cmov`, `ShiftDouble`) read and write `dst`; the register
+/// allocator relies on that, and `tests/operands.rs` checks every form's
+/// operands and flags against x86.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MInst {
     /// `dst ← src`. A 64-bit move between registers is a copy, which the
@@ -1302,7 +1304,8 @@ impl MInst {
     }
 
     /// Whether the instruction reads the flags, and whether it certainly
-    /// overwrites all of them (a shift by `%cl` may leave them alone).
+    /// overwrites all of them (a shift by `%cl` may leave them alone, and a
+    /// rotate writes only CF and OF).
     pub(crate) const fn flags(&self) -> (bool, bool) {
         match self {
             | Self::Jcc { .. } | Self::Setcc { .. } | Self::Cmov { .. } => (true, false),
@@ -1324,6 +1327,7 @@ impl MInst {
                 op: UnaryOp::Neg, ..
             }
             | Self::Shift {
+                op: ShiftOp::Shl | ShiftOp::Shr | ShiftOp::Sar,
                 amount: ShiftAmount::Imm(1..),
                 ..
             }

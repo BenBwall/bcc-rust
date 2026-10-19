@@ -4,6 +4,7 @@
 mod allocation;
 mod end_to_end;
 pub(crate) mod object;
+mod operands;
 mod programs;
 mod selection;
 
