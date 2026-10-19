@@ -1171,7 +1171,7 @@ library is left to the linker to reject.
   A0-A3 for the host, running them side by side and comparing status and
   output with the interpreter. `tests/integration/code_generation_cli.rs`
   covers the command line.
-  Native test programs run with captured stdout/stderr and a 20-second
+  Native test programs run with captured stdout/stderr and a 120-second
   deadline; `BCC_TEST_TIMEOUT_MS` overrides it with a positive millisecond
   count. On timeout the shared runner kills the process tree (Windows) or
   process group (Unix), reaps the direct child and reports its command and

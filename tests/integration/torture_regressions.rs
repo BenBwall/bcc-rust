@@ -9,19 +9,14 @@
 mod tests {
     use std::{
         fmt::Write as _,
-        io::Read as _,
         path::PathBuf,
         process::{
             Command,
             Output,
-            Stdio,
-        },
-        thread,
-        time::{
-            Duration,
-            Instant,
         },
     };
+
+    use crate::native::run_native;
 
     struct TemporaryInput(PathBuf);
 
@@ -37,47 +32,11 @@ mod tests {
         run_command(&mut command)
     }
 
+    /// Runs the parser under the shared runner's deadline, which only stops a
+    /// hang: these regressions check that parsing terminates, not how fast.
     fn run_command(command: &mut Command) -> Output {
-        let mut child = command
-            .env_remove("CPATH")
-            .env_remove("C_INCLUDE_PATH")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the parser CLI must start");
-        let mut stdout = child.stdout.take().unwrap();
-        let mut stderr = child.stderr.take().unwrap();
-        let stdout_reader = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stdout.read_to_end(&mut bytes).unwrap();
-            bytes
-        });
-        let stderr_reader = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stderr.read_to_end(&mut bytes).unwrap();
-            bytes
-        });
-        let start = Instant::now();
-        let (status, timed_out) = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break (status, false);
-            }
-            if start.elapsed() >= Duration::from_secs(5) {
-                child.kill().expect("the stalled parser must be stopped");
-                break (child.wait().unwrap(), true);
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
-        let output = Output {
-            status,
-            stdout: stdout_reader.join().unwrap(),
-            stderr: stderr_reader.join().unwrap(),
-        };
-        assert!(
-            !timed_out,
-            "parser did not finish in five seconds: {command:?}"
-        );
-        output
+        run_native(command.env_remove("CPATH").env_remove("C_INCLUDE_PATH"))
+            .unwrap_or_else(|error| panic!("the parser did not finish: {error}"))
     }
 
     fn accepted(source: &str) -> String {

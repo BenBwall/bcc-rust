@@ -33,8 +33,9 @@ use std::{
     },
 };
 
-/// Runs a program with captured output and a 20-second deadline, overridden
-/// by `BCC_TEST_TIMEOUT_MS` (a positive integer number of milliseconds).
+/// Runs a program with captured output and the `DEFAULT_TIMEOUT` deadline,
+/// overridden by `BCC_TEST_TIMEOUT_MS` (a positive integer number of
+/// milliseconds).
 pub(crate) fn run_native(command: &mut Command) -> io::Result<Output> {
     let timeout = match std::env::var("BCC_TEST_TIMEOUT_MS") {
         | Ok(value) => value
@@ -48,11 +49,17 @@ pub(crate) fn run_native(command: &mut Command) -> io::Result<Output> {
                     "BCC_TEST_TIMEOUT_MS must be a positive integer",
                 )
             })?,
-        | Err(std::env::VarError::NotPresent) => Duration::from_secs(20),
+        | Err(std::env::VarError::NotPresent) => DEFAULT_TIMEOUT,
         | Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
     run_native_with_timeout(command, timeout)
 }
+
+/// How long `run_native` lets a program run. The deadline only stops hangs,
+/// so it is generous: a loaded Windows CI runner has taken more than 20
+/// seconds for a WSL `clang` link and for an `--emit=ir` run that finishes in
+/// well under a second on an idle machine.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Runs with an explicit deadline, kills and reaps a timed-out program, and
 /// reports its command and captured output. Both pipes drain concurrently so
