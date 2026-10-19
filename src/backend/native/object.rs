@@ -98,4 +98,6 @@ struct Reloc {
     symbol: usize,
     kind:   u32,
     addend: i64,
+    // An explicit @PLT request must retain the named local symbol.
+    named:  bool,
 }

@@ -19,18 +19,9 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
         len:   0,
         fixup: None,
     };
-    let mut operands = [Operand::Empty; 3];
-    if (args.starts_with('*') || name != "callq") && !args.is_empty() {
-        for (i, arg) in split(args).enumerate() {
-            if i >= 3 {
-                return Err(Error("too many instruction operands"));
-            }
-            operands[i] = operand(arg.trim_start_matches('*'))?;
-        }
-    }
-    let [a, b, d] = operands;
+    let [a, b, d] = operands(name, args)?;
     match name {
-        | "retq" => code.byte(0xC3)?,
+        | "retq" | "callq" | "jmpq" => code.control_transfer(name, args, a)?,
         | "ud2" => code.raw(&[0x0F, 0x0B])?,
         | "int3" => code.byte(0xCC)?,
         | "cltd" => code.byte(0x99)?,
@@ -40,29 +31,6 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
             | "stosb" => &[0xF3, 0xAA],
             | _ => return Err(Error("unknown repeat instruction")),
         })?,
-        | "callq" | "jmpq" =>
-            if args.starts_with('*') {
-                code.rm(
-                    &[],
-                    false,
-                    false,
-                    &[0xFF],
-                    if name == "callq" { 2 } else { 4 },
-                    a,
-                )?;
-            } else if name == "callq" {
-                let expression = args.strip_suffix("@PLT").unwrap_or(args);
-                code.byte(0xE8)?;
-                code.fixup = Some(Fixup {
-                    at: code.len,
-                    expression,
-                    kind: 4,
-                    bias: 0,
-                });
-                code.integer(0, 4)?;
-            } else {
-                return Err(Error("unknown direct jump"));
-            },
         | "pushq" | "popq" => {
             let r = a.reg()?;
             code.rex(false, 0, 0, r, false)?;
@@ -106,6 +74,9 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
                         0,
                         b,
                     )?;
+                }
+                if width == 64 {
+                    signed32(value)?;
                 }
                 code.integer(value, if width == 64 { 4 } else { width / 8 })?;
             } else if matches!(b, Operand::Reg(_)) {
@@ -270,17 +241,21 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
             };
             code.rm(&[], false, false, &[opcode], ext, a)?;
         },
-        | "fadd" | "fsub" | "fmul" | "fdiv" => code.raw(&[
-            0xD8,
-            match name {
-                | "fadd" => 0xC1,
-                | "fmul" => 0xC9,
-                | "fsub" => 0xE1,
-                | _ => 0xF1,
-            },
-        ])?,
-        | "fstp" => code.raw(&[0xDD, 0xD8])?,
-        | "fucomip" => code.raw(&[0xDF, 0xE9])?,
+        | "fadd" | "fsub" | "fmul" | "fdiv" => {
+            let source = a.st()?;
+            let dest = b.st()?;
+            code.raw(&[
+                if dest == 0 { 0xD8 } else { 0xDC },
+                (match name {
+                    | "fadd" => 0xC0,
+                    | "fmul" => 0xC8,
+                    | "fsub" => 0xE0,
+                    | _ => 0xF0,
+                }) + if dest == 0 { source } else { dest },
+            ])?;
+        },
+        | "fstp" => code.raw(&[0xDD, 0xD8 + a.st()?])?,
+        | "fucomip" => code.raw(&[0xDF, 0xE8 + a.st()?])?,
         | name if name.starts_with("set") => code.rm(
             &[],
             false,
@@ -303,6 +278,9 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
         | name if name.starts_with("imul") => {
             let bits = width(name)?;
             if let Operand::Imm(imm) = a {
+                if bits == 64 {
+                    signed32(imm)?;
+                }
                 let small = i8::try_from(imm).is_ok();
                 code.rm(
                     if bits == 16 { &[0x66] } else { &[] },
@@ -337,8 +315,8 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
             let left = name.starts_with("shld");
             let immediate = matches!(a, Operand::Imm(_));
             code.rm(
-                &[],
-                true,
+                if width(name)? == 16 { &[0x66] } else { &[] },
+                width(name)? == 64,
                 false,
                 &[
                     0x0F,
@@ -442,6 +420,9 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
             };
             let prefix = if bits == 16 { &[0x66][..] } else { &[][..] };
             if let Operand::Imm(imm) = a {
+                if bits == 64 {
+                    signed32(imm)?;
+                }
                 if ext == 8 {
                     return Err(Error("immediate test is not in emitter vocabulary"));
                 }
@@ -514,6 +495,241 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
     Ok(code)
 }
 
+fn operands<'a>(name: &str, args: &'a str) -> Result<[Operand<'a>; 3]> {
+    if !name.is_ascii() {
+        return Err(Error("unknown machine instruction"));
+    }
+    let mut operands = [Operand::Empty; 3];
+    let mut count = 0;
+    if name != "rep" && !args.is_empty() {
+        for (i, arg) in split(args).enumerate() {
+            if i >= 3 {
+                return Err(Error("too many instruction operands"));
+            }
+            if arg.starts_with('*') && (i != 0 || !matches!(name, "callq" | "jmpq")) {
+                return Err(Error("unsupported indirect operand"));
+            }
+            operands[i] = if name == "callq" && !args.starts_with('*') {
+                _ = super::listing::expression(arg.strip_suffix("@PLT").unwrap_or(arg))?;
+                Operand::Label
+            } else {
+                operand(arg.strip_prefix('*').unwrap_or(arg))?
+            };
+            count += 1;
+        }
+    }
+    validate(name, args, &operands[..count])?;
+    Ok(operands)
+}
+
+// Keep a closed table of operand forms in front of opcode selection. A new
+// emitter mnemonic must specify arity, register class and width here first.
+fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
+    use Shape::{
+        Count,
+        Imm,
+        Label,
+        Mem,
+        Reg,
+        Rm,
+        St,
+        Xm,
+        Xmm,
+    };
+    let form = |shapes: &[Shape]| -> Result<()> {
+        if shapes.len() != operands.len()
+            || !shapes
+                .iter()
+                .zip(operands)
+                .all(|(shape, op)| shape.accepts(*op))
+        {
+            return Err(Error(
+                "unsupported instruction operand count, kind or width",
+            ));
+        }
+        Ok(())
+    };
+    let a = operands.first().copied().unwrap_or(Operand::Empty);
+    let b = operands.get(1).copied().unwrap_or(Operand::Empty);
+    match name {
+        | "rep" =>
+            if matches!(args, "movsb" | "stosb") {
+                Ok(())
+            } else {
+                Err(Error("unknown repeat instruction"))
+            },
+        | "retq" =>
+            if operands.is_empty() {
+                form(&[])
+            } else {
+                form(&[Imm])?;
+                _ = u16::try_from(a.imm()?)
+                    .map_err(|_| Error("return adjustment exceeds 16 bits"))?;
+                Ok(())
+            },
+        | "ud2" | "int3" | "cltd" | "cqto" => form(&[]),
+        | "callq" | "jmpq" =>
+            if args.starts_with('*') {
+                form(&[Rm(64)])
+            } else if name == "callq" {
+                form(&[Label])
+            } else {
+                Err(Error("unsupported direct jump"))
+            },
+        | "pushq" | "popq" => form(&[Reg(64)]),
+        | "movabsq" => form(&[Imm, Reg(64)]),
+        | "movd" | "movq" if a.xmm() || b.xmm() => {
+            let bits = if name == "movq" { 64 } else { 32 };
+            if a.xmm() {
+                form(&[Xmm, Reg(bits)])
+            } else {
+                form(&[Reg(bits), Xmm])
+            }
+        },
+        | "movb" | "movw" | "movl" | "movq" => {
+            let bits = width(name)?;
+            if matches!(a, Operand::Imm(_)) {
+                form(&[Imm, Rm(bits)])
+            } else if matches!(b, Operand::Reg(_)) {
+                form(&[Rm(bits), Reg(bits)])
+            } else {
+                form(&[Reg(bits), Mem])
+            }
+        },
+        | "leaq" => form(&[Mem, Reg(64)]),
+        | "movzbl" | "movzwl" | "movsbl" | "movswl" | "movsbq" | "movswq" | "movslq" => {
+            let source = match name.as_bytes()[4] {
+                | b'b' => 8,
+                | b'w' => 16,
+                | _ => 32,
+            };
+            form(&[Rm(source), Reg(width(name)?)])
+        },
+        | "movaps" | "movups" | "movss" | "movsd" =>
+            if b.xmm() {
+                form(&[Xm, Xmm])
+            } else {
+                form(&[Xmm, Mem])
+            },
+        | "xorps" | "addss" | "addsd" | "subss" | "subsd" | "mulss" | "mulsd" | "divss"
+        | "divsd" | "ucomiss" | "ucomisd" | "cvtss2sd" | "cvtsd2ss" => form(&[Xm, Xmm]),
+        | "cvtsi2ssl" | "cvtsi2ssq" | "cvtsi2sdl" | "cvtsi2sdq" => form(&[Rm(width(name)?), Xmm]),
+        | "cvttss2si" | "cvttsd2si" => {
+            if !matches!(b.bits()?, 32 | 64) {
+                return Err(Error("unsupported integer conversion width"));
+            }
+            form(&[Xm, Reg(b.bits()?)])
+        },
+        | "flds" | "fldl" | "fldt" | "filds" | "fildl" | "fildll" | "fstps" | "fstpl" | "fstpt"
+        | "fistps" | "fistpl" | "fistpll" | "fnstcw" | "fldcw" => form(&[Mem]),
+        | "fstp" => form(&[St]),
+        | "fucomip" => {
+            form(&[St, St])?;
+            if b.st()? != 0 {
+                return Err(Error("x87 comparison requires st0 destination"));
+            }
+            Ok(())
+        },
+        | "fadd" | "fmul" | "fsub" | "fdiv" => {
+            form(&[St, St])?;
+            if a.st()? != 0 && b.st()? != 0 {
+                return Err(Error("x87 arithmetic requires st0"));
+            }
+            // Reverse subtract/divide spellings are outside the private
+            // listing.
+            if b.st()? != 0 && matches!(name, "fsub" | "fdiv") {
+                return Err(Error("unsupported reversed x87 arithmetic"));
+            }
+            Ok(())
+        },
+        | name if name.starts_with("set") => {
+            _ = condition(&name[3..])?;
+            form(&[Rm(8)])
+        },
+        | name if name.starts_with("cmov") && name.len() > 5 => {
+            _ = condition(&name[4..name.len() - 1])?;
+            let bits = width(name)?;
+            if bits == 8 {
+                return Err(Error("invalid conditional move width"));
+            }
+            form(&[Rm(bits), Reg(bits)])
+        },
+        | _ => {
+            let bits = width(name)?;
+            let stem = &name[..name.len() - 1];
+            match stem {
+                | "imul" if bits != 8 =>
+                    if matches!(a, Operand::Imm(_)) {
+                        form(&[Imm, Rm(bits), Reg(bits)])
+                    } else {
+                        form(&[Rm(bits), Reg(bits)])
+                    },
+                | "shld" | "shrd" if bits != 8 => form(&[Count, Reg(bits), Rm(bits)]),
+                | "shl" | "shr" | "sar" | "rol" => form(&[Count, Rm(bits)]),
+                | "neg" | "idiv" | "div" | "mul" => form(&[Rm(bits)]),
+                | "bswap" if matches!(bits, 32 | 64) => form(&[Reg(bits)]),
+                | "bsr" | "bsf" if bits != 8 => form(&[Rm(bits), Reg(bits)]),
+                | "add" | "or" | "adc" | "sbb" | "and" | "sub" | "xor" | "cmp" | "test" => {
+                    if matches!(a, Operand::Imm(_)) {
+                        form(&[Imm, Rm(bits)])
+                    } else if matches!(a, Operand::Reg(_)) {
+                        form(&[Reg(bits), Rm(bits)])
+                    } else {
+                        form(&[Mem, Reg(bits)])
+                    }
+                },
+                | _ => Err(Error("unknown machine instruction or width")),
+            }
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Shape {
+    Reg(u8),
+    Rm(u8),
+    Mem,
+    Imm,
+    Label,
+    Xmm,
+    Xm,
+    St,
+    Count,
+}
+
+impl Shape {
+    fn accepts(self, op: Operand<'_>) -> bool {
+        match self {
+            | Self::Reg(bits) =>
+                matches!(op, Operand::Reg(Register { bits: n, xmm: false, .. }) if n == bits),
+            | Self::Rm(bits) =>
+                matches!(op, Operand::Mem { .. })
+                    || matches!(op, Operand::Reg(Register { bits: n, xmm: false, .. }) if n == bits),
+            | Self::Mem => matches!(op, Operand::Mem { .. }),
+            | Self::Imm => matches!(op, Operand::Imm(_)),
+            | Self::Label => matches!(op, Operand::Label),
+            | Self::Xmm => op.xmm(),
+            | Self::Xm => op.xmm() || matches!(op, Operand::Mem { .. }),
+            | Self::St => matches!(op, Operand::St(_)),
+            | Self::Count => matches!(
+                op,
+                Operand::Imm(0..=255)
+                    | Operand::Reg(Register {
+                        id:   1,
+                        bits: 8,
+                        xmm:  false,
+                    })
+            ),
+        }
+    }
+}
+
+fn signed32(value: i64) -> Result<()> {
+    i32::try_from(value)
+        .map(|_| ())
+        .map_err(|_| Error("value exceeds signed 32-bit encoding field"))
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Code<'a> {
     pub(super) bytes: [u8; 15],
@@ -578,7 +794,9 @@ impl<'a> Code<'a> {
                     ..
                 })
             );
+        let before_rex = self.len;
         self.rex(wide, reg, index.unwrap_or(0), base.unwrap_or(0), force)?;
+        let has_rex = self.len != before_rex;
         self.raw(opcode)?;
         if let Operand::Reg(r) = rm {
             self.byte(0xC0 | ((reg & 7) << 3) | (r.id & 7))?;
@@ -598,12 +816,27 @@ impl<'a> Code<'a> {
         let (expr, kind) = if let Some(expr) = disp.strip_suffix("@TPOFF") {
             (expr, 23)
         } else if let Some(expr) = disp.strip_suffix("@GOTTPOFF") {
+            if !rip {
+                return Err(Error("GOTTPOFF requires RIP-relative addressing"));
+            }
             (expr, 22)
         } else if let Some(expr) = disp.strip_suffix("@GOTPCREL") {
-            (expr, if wide { 42 } else { 41 })
+            if !rip {
+                return Err(Error("GOTPCREL requires RIP-relative addressing"));
+            }
+            (expr, if has_rex { 42 } else { 41 })
         } else {
             (disp, if rip { 2 } else { 11 })
         };
+        if expr.contains('@') {
+            return Err(Error("unsupported relocation suffix"));
+        }
+        if !expr.is_empty() {
+            let parsed = super::listing::expression(expr)?;
+            if parsed.subtract.is_some() || disp.contains('@') && parsed.symbol.is_none() {
+                return Err(Error("unsupported displacement expression"));
+            }
+        }
         let constant = if expr.is_empty() {
             Some(0)
         } else {
@@ -640,6 +873,7 @@ impl<'a> Code<'a> {
             u8::from(mode == 1)
         };
         if let Some(value) = constant {
+            signed32(value)?;
             self.integer(value, bytes)?;
         } else {
             if bytes != 4 {
@@ -652,6 +886,47 @@ impl<'a> Code<'a> {
                 bias: 0,
             });
             self.integer(0, 4)?;
+        }
+        Ok(())
+    }
+
+    fn control_transfer(&mut self, name: &str, args: &'a str, a: Operand<'a>) -> Result<()> {
+        match name {
+            | "retq" =>
+                if matches!(a, Operand::Empty) {
+                    self.byte(0xC3)?;
+                } else {
+                    self.byte(0xC2)?;
+                    self.integer(a.imm()?, 2)?;
+                },
+            | "callq" | "jmpq" =>
+                if args.starts_with('*') {
+                    self.rm(
+                        &[],
+                        false,
+                        false,
+                        &[0xFF],
+                        if name == "callq" { 2 } else { 4 },
+                        a,
+                    )?;
+                } else if name == "callq" {
+                    let target =
+                        super::listing::expression(args.strip_suffix("@PLT").unwrap_or(args))?;
+                    if target.symbol.is_none() || target.subtract.is_some() {
+                        return Err(Error("unsupported call target expression"));
+                    }
+                    self.byte(0xE8)?;
+                    self.fixup = Some(Fixup {
+                        at:         self.len,
+                        expression: args,
+                        kind:       4,
+                        bias:       0,
+                    });
+                    self.integer(0, 4)?;
+                } else {
+                    return Err(Error("unknown direct jump"));
+                },
+            | _ => return Err(Error("unknown control transfer")),
         }
         Ok(())
     }
@@ -683,6 +958,13 @@ impl<'a> Code<'a> {
     }
 
     fn integer(&mut self, value: i64, bytes: u8) -> Result<()> {
+        if bytes < 8 {
+            let bits = u32::from(bytes) * 8;
+            let value = i128::from(value);
+            if value < -(1_i128 << bits.saturating_sub(1)) || value >= (1_i128 << bits) {
+                return Err(Error("integer does not fit encoding field"));
+            }
+        }
         self.raw(&value.to_le_bytes()[..usize::from(bytes)])
     }
 }
@@ -701,6 +983,7 @@ enum Operand<'a> {
         segment: Option<u8>,
     },
     Label,
+    St(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -711,6 +994,14 @@ struct Register {
 }
 
 impl Operand<'_> {
+    fn st(self) -> Result<u8> {
+        if let Self::St(index) = self {
+            Ok(index)
+        } else {
+            Err(Error("expected x87 register"))
+        }
+    }
+
     fn reg(self) -> Result<u8> {
         if let Self::Reg(r) = self {
             Ok(r.id)
@@ -754,8 +1045,15 @@ fn operand(text: &str) -> Result<Operand<'_>> {
             segment: Some(0x64),
         });
     }
-    if text.starts_with("%st") {
-        return Ok(Operand::Empty);
+    if text == "%st" {
+        return Ok(Operand::St(0));
+    }
+    if let Some(index) = text.strip_prefix("%st(").and_then(|s| s.strip_suffix(')')) {
+        let index: u8 = index.parse().map_err(|_| Error("invalid x87 register"))?;
+        if index > 7 {
+            return Err(Error("invalid x87 register"));
+        }
+        return Ok(Operand::St(index));
     }
     if text.starts_with('%') {
         return Ok(Operand::Reg(register(text)?));
@@ -771,14 +1069,24 @@ fn operand(text: &str) -> Result<Operand<'_>> {
         let base = if base.is_empty() || rip {
             None
         } else {
-            Some(register(base)?.id)
+            let r = register(base)?;
+            if r.bits != 64 || r.xmm {
+                return Err(Error("expected 64-bit address register"));
+            }
+            Some(r.id)
         };
         let index = parts
             .next()
             .filter(|s| !s.is_empty())
             .map(register)
             .transpose()?
-            .map(|r| r.id);
+            .map(|r| {
+                if r.bits != 64 || r.xmm {
+                    return Err(Error("expected 64-bit index register"));
+                }
+                Ok(r.id)
+            })
+            .transpose()?;
         if index == Some(4) || rip && index.is_some() {
             return Err(Error("invalid memory index register"));
         }
@@ -789,6 +1097,9 @@ fn operand(text: &str) -> Result<Operand<'_>> {
             | "8" => 3,
             | _ => return Err(Error("invalid index scale")),
         };
+        if parts.next().is_some() || index.is_none() && scale != 0 {
+            return Err(Error("unsupported memory operand"));
+        }
         return Ok(Operand::Mem {
             base,
             index,
@@ -798,6 +1109,7 @@ fn operand(text: &str) -> Result<Operand<'_>> {
             segment: None,
         });
     }
+    _ = super::listing::expression(text)?;
     Ok(Operand::Label)
 }
 

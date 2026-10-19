@@ -16,11 +16,7 @@ use super::{
 use crate::util::bump::ArenaVec;
 
 pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
-    if !object
-        .items
-        .iter()
-        .any(|i| matches!(i.kind, Kind::Cfi(".cfi_startproc", _)))
-    {
+    if !object.items.iter().any(|i| matches!(i.kind, Kind::Cfi(..))) {
         return Ok(());
     }
     if object
@@ -51,6 +47,7 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
     let mut start = 0;
     let mut location = 0;
     let mut record = 0;
+    let mut remembered = 0_u32;
     for item in &object.items {
         let Kind::Cfi(op, args) = item.kind else {
             continue;
@@ -61,6 +58,7 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
                     return Err(Error("nested CFI procedure"));
                 }
                 active = Some(item.section);
+                remembered = 0;
                 remaining -= 1;
                 start = item.offset;
                 location = start;
@@ -86,6 +84,7 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
                     offset: data.len() as u64,
                     symbol,
                     kind: 2,
+                    named: false,
                     addend: i64::try_from(start).map_err(|_| Error("function offset too large"))?,
                 });
                 data.extend_from_slice(&[0; 8]);
@@ -170,8 +169,18 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
                                 .map_err(|_| Error("negative CFA offset"))?,
                         );
                     },
-                    | ".cfi_remember_state" => data.push(0x0A),
-                    | ".cfi_restore_state" => data.push(0x0B),
+                    | ".cfi_remember_state" => {
+                        remembered = remembered
+                            .checked_add(1)
+                            .ok_or(Error("CFI state depth overflow"))?;
+                        data.push(0x0A);
+                    },
+                    | ".cfi_restore_state" => {
+                        remembered = remembered
+                            .checked_sub(1)
+                            .ok_or(Error("CFI restore without remembered state"))?;
+                        data.push(0x0B);
+                    },
                     | _ => return Err(Error("unknown CFI directive")),
                 }
             },

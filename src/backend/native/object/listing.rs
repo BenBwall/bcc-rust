@@ -25,15 +25,27 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
     let mut section = object.section(".text", 1, 6, None)?;
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let kind = if let Some(name) = line.strip_suffix(':') {
-            Kind::Label(object.symbol(name))
-        } else if let Some((name, target)) = assignment(line) {
+            symbol_name(name)?;
             let id = object.symbol(name);
+            if object.symbols[id].section.is_some() || object.symbols[id].alias.is_some() {
+                return Err(Error("duplicate label or symbol definition"));
+            }
+            object.symbols[id].section = Some(section);
+            Kind::Label(id)
+        } else if let Some((name, target)) = assignment(line) {
+            symbol_name(name)?;
+            symbol_name(target)?;
+            let id = object.symbol(name);
+            if object.symbols[id].section.is_some() || object.symbols[id].alias.is_some() {
+                return Err(Error("duplicate symbol definition"));
+            }
             object.symbols[id].alias = Some(object.symbol(target));
             continue;
         } else {
             let (name, args) = line
                 .split_once(char::is_whitespace)
                 .map_or((line, ""), |(a, b)| (a, b.trim()));
+            directive_operands(name, args)?;
             let mut parts = split(args);
             let first = parts.next().unwrap_or("");
             match name {
@@ -48,10 +60,16 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                 },
                 | ".section" => {
                     let name = unquote(first);
-                    let flags = parts
-                        .next()
-                        .map_or(if name == ".rodata" { "a" } else { "" }, unquote);
-                    let flags = flags.bytes().try_fold(0, |bits, ch| {
+                    if name.is_empty()
+                        || !name.bytes().all(|b| {
+                            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'$' | b'-')
+                        })
+                    {
+                        return Err(Error("unsupported section name"));
+                    }
+                    let (default_kind, default_flags) = section_defaults(name);
+                    let flags = parts.next().map_or("", unquote);
+                    let flags = flags.bytes().try_fold(default_flags, |bits, ch| {
                         Ok(bits
                             | match ch {
                                 | b'a' => 2,
@@ -62,16 +80,26 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                                 | _ => return Err(Error("unknown section flag")),
                             })
                     })?;
-                    let kind = match parts.next().unwrap_or("@progbits") {
-                        | "@progbits" => 1,
-                        | "@nobits" => 8,
-                        | "@init_array" => 14,
-                        | "@fini_array" => 15,
+                    let kind = match parts.next() {
+                        | None => default_kind,
+                        | Some("@progbits") => 1,
+                        | Some("@nobits") => 8,
+                        | Some("@note") => 7,
+                        | Some("@init_array") => 14,
+                        | Some("@fini_array") => 15,
+                        | Some("@preinit_array") => 16,
                         | _ => return Err(Error("unknown section type")),
                     };
+                    if matches!(default_kind, 8 | 14..=16) && kind != default_kind {
+                        return Err(Error("section type conflicts with reserved section name"));
+                    }
+                    if matches!(name, ".eh_frame" | ".gcc_except_table") && flags != 2 {
+                        return Err(Error("unsupported reserved section flags"));
+                    }
                     let group = if flags & 0x200 != 0 {
-                        let symbol =
-                            object.symbol(parts.next().ok_or(Error("missing COMDAT signature"))?);
+                        let signature = parts.next().ok_or(Error("missing COMDAT signature"))?;
+                        symbol_name(signature)?;
+                        let symbol = object.symbol(signature);
                         if parts.next() != Some("comdat") {
                             return Err(Error("unknown group selection"));
                         }
@@ -79,35 +107,60 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                     } else {
                         None
                     };
+                    if parts.next().is_some() {
+                        return Err(Error("unsupported section arguments"));
+                    }
                     section = object.section(name, kind, flags, group)?;
                     continue;
                 },
                 | ".globl" | ".weak" | ".hidden" | ".protected" | ".type" => {
+                    symbol_name(first)?;
                     let id = object.symbol(first);
                     let symbol = &mut object.symbols[id];
+                    if symbol.name.starts_with(".L") {
+                        return Err(Error("unsupported temporary symbol attributes"));
+                    }
                     match name {
                         | ".globl" =>
-                            if symbol.binding != 2 {
+                            if symbol.binding == 2 {
+                                return Err(Error("global binding after weak binding"));
+                            } else {
                                 symbol.binding = 1;
                             },
                         | ".weak" => symbol.binding = 2,
-                        | ".hidden" => symbol.visibility = 2,
-                        | ".protected" => symbol.visibility = 3,
-                        | _ =>
-                            symbol.kind = match parts.next() {
+                        | ".hidden" | ".protected" => {
+                            let visibility = if name == ".hidden" { 2 } else { 3 };
+                            if symbol.visibility != 0 && symbol.visibility != visibility {
+                                return Err(Error("conflicting symbol visibility"));
+                            }
+                            symbol.visibility = visibility;
+                        },
+                        | _ => {
+                            let kind = match parts.next() {
                                 | Some("@function") => 2,
                                 | Some("@object") => 1,
                                 | _ => return Err(Error("unknown symbol type")),
-                            },
+                            };
+                            if symbol.kind != 0 && symbol.kind != kind {
+                                return Err(Error("conflicting symbol type"));
+                            }
+                            symbol.kind = kind;
+                        },
                     }
                     continue;
                 },
                 | ".size" => {
+                    symbol_name(first)?;
                     let id = object.symbol(first);
                     let size = parts.next().ok_or(Error("missing symbol size"))?;
                     Kind::Size(
                         id,
-                        if size.starts_with(".-") {
+                        if let Some(base) = size.strip_prefix(".-") {
+                            if unquote(base) != unquote(first)
+                                || object.symbols[id].section != Some(section)
+                            {
+                                return Err(Error("unsupported symbol size expression"));
+                            }
                             None
                         } else {
                             Some(unsigned(size)?)
@@ -155,15 +208,21 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                 },
                 | name if name.starts_with(".cfi_") => Kind::Cfi(name, args),
                 | name if name.starts_with('.') => return Err(Error("unknown object directive")),
-                | "jmp" => Kind::Branch {
-                    condition: None,
-                    target:    object.symbol(args),
-                    near:      false,
+                | "jmp" => {
+                    symbol_name(args)?;
+                    Kind::Branch {
+                        condition: None,
+                        target:    object.symbol(args),
+                        near:      false,
+                    }
                 },
-                | name if name.starts_with('j') && name != "jmpq" => Kind::Branch {
-                    condition: Some(encoder::condition(&name[1..])?),
-                    target:    object.symbol(args),
-                    near:      false,
+                | name if name.starts_with('j') && name != "jmpq" => {
+                    symbol_name(args)?;
+                    Kind::Branch {
+                        condition: Some(encoder::condition(&name[1..])?),
+                        target:    object.symbol(args),
+                        near:      false,
+                    }
                 },
                 | _ => Kind::Code(encoder::instruction(name, args)?),
             }
@@ -209,7 +268,11 @@ pub(super) fn unsigned(text: &str) -> Result<u64> {
 
 pub(super) fn number(text: &str) -> Result<i64> {
     if let Some(negative) = text.strip_prefix('-') {
-        Ok((unsigned(negative)? as i64).wrapping_neg())
+        let magnitude = unsigned(negative)?;
+        if magnitude > 1_u64 << 63 {
+            return Err(Error("negative integer exceeds 64 bits"));
+        }
+        Ok((magnitude as i64).wrapping_neg())
     } else {
         Ok(unsigned(text)? as i64)
     }
@@ -263,6 +326,10 @@ pub(super) fn expression(text: &str) -> Result<Expression<'_>> {
     if symbol.is_empty() {
         return Err(Error("invalid symbol expression"));
     }
+    symbol_name(symbol)?;
+    if let Some(base) = subtract {
+        symbol_name(base)?;
+    }
     Ok(Expression {
         symbol: Some(unquote(symbol)),
         subtract,
@@ -281,4 +348,92 @@ fn assignment(line: &str) -> Option<(&str, &str)> {
         }
     }
     None
+}
+
+// GNU/LLVM ELF section-name defaults apply even with an explicit flag string.
+fn section_defaults(name: &str) -> (u32, u64) {
+    let family =
+        |stem: &str| name == stem || name.strip_prefix(stem).is_some_and(|s| s.starts_with('.'));
+    if family(".text") || matches!(name, ".init" | ".fini") {
+        (1, 6)
+    } else if family(".bss") {
+        (8, 3)
+    } else if family(".tbss") {
+        (8, 0x403)
+    } else if family(".tdata") {
+        (1, 0x403)
+    } else if family(".data") || name == ".data1" {
+        (1, 3)
+    } else if family(".rodata") || name == ".rodata1" || family(".gcc_except_table") {
+        (1, 2)
+    } else if family(".init_array") {
+        (14, 3)
+    } else if family(".fini_array") {
+        (15, 3)
+    } else if family(".preinit_array") {
+        (16, 3)
+    } else if name == ".eh_frame" {
+        (0x7000_0001, 2)
+    } else if family(".note") {
+        (7, 0)
+    } else {
+        (1, 0)
+    }
+}
+
+pub(super) fn symbol_name(name: &str) -> Result<()> {
+    if name.starts_with('"')
+        && name.ends_with('"')
+        && name.len() > 2
+        && !name[1..name.len() - 1]
+            .bytes()
+            .any(|b| matches!(b, b'"' | b'\\'))
+    {
+        return Ok(());
+    }
+    if name.is_empty()
+        || name == "."
+        || name.bytes().next().is_some_and(|b| b.is_ascii_digit())
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'$'))
+    {
+        return Err(Error("unsupported symbol expression or relocation suffix"));
+    }
+    Ok(())
+}
+
+fn directive_operands(name: &str, args: &str) -> Result<()> {
+    let count = if args.is_empty() {
+        0
+    } else {
+        split(args).count()
+    };
+    let valid = match name {
+        | ".text"
+        | ".data"
+        | ".bss"
+        | ".cfi_startproc"
+        | ".cfi_endproc"
+        | ".cfi_remember_state"
+        | ".cfi_restore_state" => count == 0,
+        | ".globl"
+        | ".weak"
+        | ".hidden"
+        | ".protected"
+        | ".zero"
+        | ".cfi_def_cfa_offset"
+        | ".cfi_def_cfa_register" => count == 1,
+        | ".size" | ".type" | ".cfi_offset" | ".cfi_def_cfa" => count == 2,
+        | ".p2align" => (1..=2).contains(&count),
+        | ".section" => (1..=5).contains(&count),
+        | ".byte" | ".short" | ".long" | ".quad" => count > 0,
+        | name if name.starts_with(".cfi_") => return Err(Error("unknown CFI directive")),
+        | _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(Error("unsupported directive operands"))
+    }
 }

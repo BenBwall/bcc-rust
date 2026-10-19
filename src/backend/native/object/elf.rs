@@ -15,38 +15,22 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
     headers.push(Header::default());
     let mut names = ArenaVec::new_in(arena);
     names.push(0);
-    for section in &object.sections {
-        headers.push(Header {
-            name: string(&mut names, section.name)?,
-            kind: section.kind,
-            flags: section.flags,
-            align: section.align,
-            size: section.size,
-            ..Header::default()
-        });
-    }
+    // LLVM shares symbol and section-name strings. Match its section order:
+    // string table first, each group before its members, each RELA after its
+    // target, and the symbol table last. Object section IDs stay independent.
+    let strtab = headers.len();
+    headers.push(Header {
+        name: string(&mut names, ".strtab")?,
+        kind: 3,
+        align: 1,
+        ..Header::default()
+    });
+    let shstrtab = strtab;
+    let mut section_indices = ArenaVec::new_in(arena);
     let mut relocation_sections = ArenaVec::new_in(arena);
     relocation_sections.resize(count, None);
-    for (i, section) in object.sections.iter().enumerate() {
-        if !section.relocs.is_empty() {
-            let name = u32::try_from(names.len()).map_err(|_| Error("string table too large"))?;
-            names.extend_from_slice(b".rela");
-            names.extend_from_slice(section.name.as_bytes());
-            names.push(0);
-            relocation_sections[i] = Some(headers.len());
-            headers.push(Header {
-                name,
-                kind: 4,
-                flags: 0x40 | (section.flags & 0x200),
-                align: 8,
-                entry: 24,
-                info: u32::try_from(i + 1).map_err(|_| Error("too many sections"))?,
-                ..Header::default()
-            });
-        }
-    }
     let mut groups = ArenaVec::new_in(arena);
-    for section in &object.sections {
+    for (i, section) in object.sections.iter().enumerate() {
         if let Some(signature) = section.group
             && !groups.iter().any(|&(s, _)| s == signature)
         {
@@ -59,6 +43,32 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
                 ..Header::default()
             });
         }
+        let index = headers.len();
+        section_indices.push(index);
+        headers.push(Header {
+            name: string(&mut names, section.name)?,
+            kind: section.kind,
+            flags: section.flags,
+            align: section.align,
+            size: section.size,
+            ..Header::default()
+        });
+        if !section.relocs.is_empty() {
+            let name = u32::try_from(names.len()).map_err(|_| Error("string table too large"))?;
+            names.extend_from_slice(b".rela");
+            names.extend_from_slice(section.name.as_bytes());
+            names.push(0);
+            relocation_sections[i] = Some(headers.len());
+            headers.push(Header {
+                name,
+                kind: 4,
+                flags: if section.group.is_some() { 0x200 } else { 0x40 },
+                align: 8,
+                entry: 24,
+                info: u32::try_from(index).map_err(|_| Error("too many sections"))?,
+                ..Header::default()
+            });
+        }
     }
     let symtab = headers.len();
     headers.push(Header {
@@ -68,25 +78,9 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
         entry: 24,
         ..Header::default()
     });
-    let strtab = headers.len();
-    headers.push(Header {
-        name: string(&mut names, ".strtab")?,
-        kind: 3,
-        align: 1,
-        ..Header::default()
-    });
-    let shstrtab = headers.len();
-    headers.push(Header {
-        name: string(&mut names, ".shstrtab")?,
-        kind: 3,
-        align: 1,
-        ..Header::default()
-    });
     if headers.len() >= 0xFF00 {
         return Err(Error("too many ELF sections"));
     }
-    let mut strings = ArenaVec::new_in(arena);
-    strings.push(0);
     let mut symbols = ArenaVec::new_in(arena);
     symbols.resize(24, 0);
     let mut indices = ArenaVec::new_in(arena);
@@ -99,6 +93,7 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
             let symbol = object.symbols[reloc.symbol];
             if symbol.binding == 0
                 && symbol.kind != 6
+                && !reloc.named
                 && let Some(target) = symbol.section
                 && section_symbols[target] == 0
             {
@@ -109,7 +104,8 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
                     0,
                     3,
                     0,
-                    u16::try_from(target + 1).map_err(|_| Error("too many sections"))?,
+                    u16::try_from(section_indices[target])
+                        .map_err(|_| Error("too many sections"))?,
                     0,
                     0,
                 );
@@ -130,10 +126,10 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
                 u32::try_from(symbols.len() / 24).map_err(|_| Error("symbol table too large"))?;
             symbol_record(
                 &mut symbols,
-                string(&mut strings, symbol.name)?,
+                string(&mut names, symbol.name)?,
                 (binding << 4) | symbol.kind,
                 symbol.visibility,
-                u16::try_from(symbol.section.map_or(0, |s| s + 1))
+                u16::try_from(symbol.section.map_or(0, |s| section_indices[s]))
                     .map_err(|_| Error("too many sections"))?,
                 symbol.value,
                 symbol.size,
@@ -149,7 +145,7 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
     out.resize(64, 0);
     for (i, section) in object.sections.iter().enumerate() {
         pad(&mut out, section.align)?;
-        headers[i + 1].offset = out.len() as u64;
+        headers[section_indices[i]].offset = out.len() as u64;
         if section.kind != 8 {
             out.extend_from_slice(&section.data);
         }
@@ -161,15 +157,18 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
             headers[id].link = u32::try_from(symtab).map_err(|_| Error("too many sections"))?;
             for reloc in &section.relocs {
                 let symbol = object.symbols[reloc.symbol];
-                let (index, addend) =
-                    if symbol.binding == 0 && symbol.kind != 6 && symbol.section.is_some() {
-                        (
-                            section_symbols[symbol.section.ok_or(Error("missing section"))?],
-                            reloc.addend.wrapping_add(symbol.value as i64),
-                        )
-                    } else {
-                        (indices[reloc.symbol], reloc.addend)
-                    };
+                let (index, addend) = if symbol.binding == 0
+                    && symbol.kind != 6
+                    && !reloc.named
+                    && symbol.section.is_some()
+                {
+                    (
+                        section_symbols[symbol.section.ok_or(Error("missing section"))?],
+                        reloc.addend.wrapping_add(symbol.value as i64),
+                    )
+                } else {
+                    (indices[reloc.symbol], reloc.addend)
+                };
                 if index == 0 {
                     return Err(Error("relocation has no symbol table entry"));
                 }
@@ -198,7 +197,7 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
             .filter(|(_, s)| s.group == Some(signature))
         {
             out.extend_from_slice(
-                &u32::try_from(i + 1)
+                &u32::try_from(section_indices[i])
                     .map_err(|_| Error("too many sections"))?
                     .to_le_bytes(),
             );
@@ -217,9 +216,6 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
     headers[symtab].offset = out.len() as u64;
     headers[symtab].size = symbols.len() as u64;
     out.extend_from_slice(&symbols);
-    headers[strtab].offset = out.len() as u64;
-    headers[strtab].size = strings.len() as u64;
-    out.extend_from_slice(&strings);
     headers[shstrtab].offset = out.len() as u64;
     headers[shstrtab].size = names.len() as u64;
     out.extend_from_slice(&names);

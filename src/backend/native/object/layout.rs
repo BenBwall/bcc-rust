@@ -32,8 +32,16 @@ impl<'a> Object<'a> {
                         0
                     },
                     | Kind::Size(id, size) => {
-                        self.symbols[*id].size =
-                            size.unwrap_or(item.offset - self.symbols[*id].value);
+                        self.symbols[*id].size = if let Some(size) = size {
+                            *size
+                        } else {
+                            if self.symbols[*id].section != Some(item.section) {
+                                return Err(Error("symbol size outside its section"));
+                            }
+                            item.offset
+                                .checked_sub(self.symbols[*id].value)
+                                .ok_or(Error("negative symbol size"))?
+                        };
                         0
                     },
                     | Kind::Align(align, _) => item.offset.wrapping_neg() & (align - 1),
@@ -59,11 +67,12 @@ impl<'a> Object<'a> {
             for item in &mut self.items {
                 if let Kind::Branch { target, near, .. } = &mut item.kind {
                     let symbol = self.symbols[*target];
-                    if symbol.section != Some(item.section) {
-                        return Err(Error("branch outside its section"));
+                    if symbol.binding == 0 && symbol.alias.is_some() {
+                        return Err(Error("unsupported branch to local alias"));
                     }
+                    let local = symbol.binding == 0 && symbol.section == Some(item.section);
                     let distance = i128::from(symbol.value) - i128::from(item.offset + 2);
-                    if !*near && i8::try_from(distance).is_err() {
+                    if !*near && (!local || i8::try_from(distance).is_err()) {
                         *near = true;
                         changed = true;
                     }
@@ -145,7 +154,13 @@ impl<'a> Object<'a> {
                         offset,
                         width,
                         expression,
-                        if width == 8 { 1 } else { 10 },
+                        match width {
+                            | 8 => 1,
+                            | 4 => 10,
+                            | 2 => 12,
+                            | 1 => 14,
+                            | _ => return Err(Error("unsupported data relocation width")),
+                        },
                         0,
                     )?;
                 },
@@ -154,6 +169,12 @@ impl<'a> Object<'a> {
                     target,
                     near,
                 } => {
+                    if self.sections[section].kind == 8 {
+                        return Err(Error("branch in a NOBITS section"));
+                    }
+                    let target = *target;
+                    let local = self.symbols[target].binding == 0
+                        && self.symbols[target].section == Some(section);
                     let mut code = [0; 6];
                     let len = if *near {
                         let at = if let Some(condition) = condition {
@@ -165,8 +186,11 @@ impl<'a> Object<'a> {
                             1
                         };
                         let len = at + 4;
-                        let distance = i128::from(self.symbols[*target].value)
-                            - i128::from(offset + len as u64);
+                        let distance = if local {
+                            i128::from(self.symbols[target].value) - i128::from(offset + len as u64)
+                        } else {
+                            0
+                        };
                         code[at..len].copy_from_slice(
                             &i32::try_from(distance)
                                 .map_err(|_| Error("branch exceeds rel32"))?
@@ -176,7 +200,7 @@ impl<'a> Object<'a> {
                     } else {
                         code[0] = condition.map_or(0xEB, |cond| 0x70 + cond);
                         code[1] = i8::try_from(
-                            i128::from(self.symbols[*target].value) - i128::from(offset + 2),
+                            i128::from(self.symbols[target].value) - i128::from(offset + 2),
                         )
                         .map_err(|_| Error("branch exceeds rel8"))?
                         .to_le_bytes()[0];
@@ -184,6 +208,15 @@ impl<'a> Object<'a> {
                     };
                     let start = usize::try_from(offset).map_err(|_| Error("section too large"))?;
                     self.sections[section].data[start..start + len].copy_from_slice(&code[..len]);
+                    if !local {
+                        self.sections[section].relocs.push(Reloc {
+                            offset: offset + len as u64 - 4,
+                            symbol: target,
+                            kind:   4,
+                            addend: -4,
+                            named:  false,
+                        });
+                    }
                 },
                 | Kind::Align(align, fill) => {
                     let count = offset.wrapping_neg() & (align - 1);
@@ -198,7 +231,9 @@ impl<'a> Object<'a> {
                                 .map_err(|_| Error("section too large"))?;
                             self.sections[section].data[start..end].fill(*fill);
                         }
-                    } else if self.sections[section].flags & 4 != 0 {
+                    } else if self.sections[section].kind != 8
+                        && self.sections[section].flags & 4 != 0
+                    {
                         encoder::nops(&mut self.sections[section].data, offset, count)?;
                     }
                 },
@@ -217,11 +252,21 @@ impl<'a> Object<'a> {
         kind: u32,
         bias: i64,
     ) -> Result<()> {
-        let expression = listing::expression(expression)?;
-        let mut value = expression.addend.wrapping_add(bias);
+        let explicit_plt = expression.ends_with("@PLT") && kind == 4;
+        let expression = listing::expression(if explicit_plt {
+            expression
+                .strip_suffix("@PLT")
+                .ok_or(Error("missing PLT suffix"))?
+        } else {
+            expression
+        })?;
+        let mut value = i128::from(expression.addend) + i128::from(bias);
         if let Some(name) = expression.symbol {
             let id = self.symbol(name);
             let symbol = self.symbols[id];
+            if symbol.binding == 0 && symbol.section.is_some() && matches!(kind, 9 | 41 | 42) {
+                return Err(Error("unsupported GOT reference to local symbol"));
+            }
             if matches!(kind, 22 | 23) {
                 self.symbols[id].kind = 6;
             }
@@ -231,16 +276,13 @@ impl<'a> Object<'a> {
                 if symbol.section.is_none() || symbol.section != base.section {
                     return Err(Error("label difference outside one section"));
                 }
-                value = value
-                    .wrapping_add(symbol.value as i64)
-                    .wrapping_sub(base.value as i64);
+                value += i128::from(symbol.value) - i128::from(base.value);
             } else if matches!(kind, 2 | 4)
                 && symbol.binding == 0
+                && !explicit_plt
                 && symbol.section == Some(section)
             {
-                value = value
-                    .wrapping_add(symbol.value as i64)
-                    .wrapping_sub(offset as i64);
+                value += i128::from(symbol.value) - i128::from(offset);
                 if i32::try_from(value).is_err() {
                     return Err(Error("PC-relative fixup exceeds rel32"));
                 }
@@ -252,7 +294,9 @@ impl<'a> Object<'a> {
                     offset,
                     symbol: id,
                     kind,
-                    addend: value,
+                    addend: i64::try_from(value)
+                        .map_err(|_| Error("relocation addend exceeds 64 bits"))?,
+                    named: explicit_plt,
                 });
                 value = 0;
             }
@@ -263,6 +307,10 @@ impl<'a> Object<'a> {
             } else {
                 Err(Error("nonzero value in a NOBITS section"))
             };
+        }
+        let field_bits = u32::from(width) * 8;
+        if value < -(1_i128 << (field_bits - 1)) || value >= (1_i128 << field_bits) {
+            return Err(Error("data value or label difference exceeds field width"));
         }
         let at = usize::try_from(offset).map_err(|_| Error("section too large"))?;
         self.sections[section].data[at..at + usize::from(width)]

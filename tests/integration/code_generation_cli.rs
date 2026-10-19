@@ -1372,8 +1372,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert!(built.status.success(), "{}", text(&built.stderr));
         let run = run_native(&mut Command::new(&pair)).unwrap();
         assert_eq!(run.status.code(), Some(42));
-        let object = temporary("native-hello.o");
         for flags in [&[][..], &["--native-object"][..]] {
+            let object = temporary("native-hello.o");
+            let linked = temporary("native-object-hello.exe");
+            assert!(!object.exists());
             let compiled = bcc(
                 HELLO,
                 &[
@@ -1383,9 +1385,32 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
                 .concat(),
             );
             assert!(compiled.status.success(), "{}", text(&compiled.stderr));
-            assert!(object.is_file());
+            let bytes = std::fs::read(&object).unwrap();
+            if target.contains("linux") {
+                assert!(bytes.starts_with(b"\x7fELF\x02\x01\x01"));
+                assert!(bytes.windows(6).any(|s| s == b".text\0"));
+                assert!(bytes.windows(5).any(|s| s == b"main\0"));
+            }
+            let clang = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+                "target/llvm/bin/clang.exe"
+            } else {
+                "target/llvm/bin/clang"
+            });
+            let result = Command::new(clang)
+                .arg(&target)
+                .arg(&object)
+                .arg("-o")
+                .arg(&linked)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{}", text(&result.stderr));
+            let run = run_native(&mut Command::new(&linked)).unwrap();
+            assert_eq!(run.status.code(), Some(3));
+            assert_eq!(text(&run.stdout), "answer 42\n");
+            std::fs::remove_file(object).unwrap();
+            std::fs::remove_file(linked).unwrap();
         }
-        for file in [executable, pair, object] {
+        for file in [executable, pair] {
             drop(std::fs::remove_file(file));
         }
 

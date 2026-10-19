@@ -1,7 +1,8 @@
 //! Byte-level ELF equivalence against the pinned clang assembler. Every
 //! native assembly/run helper and the native difftest oracle uses this check.
-//! Section and symbol ordering is immaterial; contents, flags, alignments,
-//! symbol properties, COMDAT membership and RELA tuples must agree exactly.
+//! Section header order and metadata, contents, symbol properties, COMDAT
+//! membership and RELA tuples must agree. File offsets, string-table packing
+//! and symbol order within the local/global partitions may differ.
 
 use std::{
     collections::BTreeMap,
@@ -34,6 +35,52 @@ pub(crate) fn equivalent(text: &str) -> io::Result<()> {
     let reference_bytes = std::fs::read(&reference)?;
     let expected = inspect(&reference_bytes);
     let actual = inspect(&direct);
+    assert_equivalent(&actual, &expected, text);
+    // Raw executable-section equality above also pins every encoded
+    // instruction. Require objdump's independent disassembly as well.
+    std::fs::write(&native, &direct)?;
+    let llvm = toolchain.clang().with_file_name(if cfg!(windows) {
+        "llvm-objdump.exe"
+    } else {
+        "llvm-objdump"
+    });
+    let objdump = if llvm.is_file() {
+        llvm
+    } else {
+        "objdump".into()
+    };
+    let expected = required_objdump(Command::new(&objdump).arg("-dr").arg(&reference))?;
+    {
+        assert!(
+            expected.status.success(),
+            "reference disassembly failed: {expected:?}"
+        );
+        let actual = required_objdump(Command::new(&objdump).arg("-dr").arg(&native))?;
+        assert!(
+            actual.status.success(),
+            "direct disassembly failed: {actual:?}"
+        );
+        let normalize = |bytes: &[u8]| {
+            String::from_utf8_lossy(bytes)
+                .lines()
+                .filter(|line| !line.contains("file format"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(
+            normalize(&actual.stdout),
+            normalize(&expected.stdout),
+            "disassembly differs:\n{text}"
+        );
+    }
+    Ok(())
+}
+
+fn assert_equivalent(actual: &View, expected: &View, text: &str) {
+    assert_eq!(
+        actual.headers, expected.headers,
+        "section headers differ:\n{text}"
+    );
     assert_eq!(
         actual.symbols, expected.symbols,
         "symbol tables differ:\n{text}"
@@ -66,56 +113,28 @@ pub(crate) fn equivalent(text: &str) -> io::Result<()> {
             difference.map(|at| &expected.3[at.saturating_sub(8)..(at + 16).min(expected.3.len())])
         );
     }
-    // Raw executable-section equality above also pins every encoded
-    // instruction. When objdump is installed, check its independent
-    // disassembly as well.
-    std::fs::write(&native, &direct)?;
-    let llvm = toolchain.clang().with_file_name(if cfg!(windows) {
-        "llvm-objdump.exe"
-    } else {
-        "llvm-objdump"
-    });
-    let objdump = if llvm.is_file() {
-        llvm
-    } else {
-        "objdump".into()
-    };
-    if let Ok(expected) = Command::new(&objdump)
-        .args(["-dr"])
-        .arg(&reference)
-        .output()
-    {
-        assert!(
-            expected.status.success(),
-            "reference disassembly failed: {expected:?}"
-        );
-        let actual = Command::new(&objdump).arg("-dr").arg(&native).output()?;
-        assert!(
-            actual.status.success(),
-            "direct disassembly failed: {actual:?}"
-        );
-        let normalize = |bytes: &[u8]| {
-            String::from_utf8_lossy(bytes)
-                .lines()
-                .filter(|line| !line.contains("file format"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        assert_eq!(
-            normalize(&actual.stdout),
-            normalize(&expected.stdout),
-            "disassembly differs:\n{text}"
-        );
-    }
-    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct View {
+    headers:     Vec<SectionHeader>,
     sections:    BTreeMap<String, (u32, u64, u64, Vec<u8>, u64)>,
     symbols:     Vec<(String, u8, u8, String, u64, u64)>,
     relocations: Vec<(String, u64, u32, String, i64)>,
     groups:      Vec<(String, Vec<String>)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SectionHeader {
+    name:       String,
+    kind:       u32,
+    flags:      u64,
+    address:    u64,
+    size:       u64,
+    link:       String,
+    info:       String,
+    align:      u64,
+    entry_size: u64,
 }
 
 fn inspect(bytes: &[u8]) -> View {
@@ -131,6 +150,7 @@ fn inspect(bytes: &[u8]) -> View {
         .map(|h| cstr(shstrings, usize::try_from(u32_at(h, 0)).unwrap()).to_owned())
         .collect::<Vec<_>>();
     let mut view = View {
+        headers:     Vec::new(),
         sections:    BTreeMap::new(),
         symbols:     Vec::new(),
         relocations: Vec::new(),
@@ -147,7 +167,7 @@ fn inspect(bytes: &[u8]) -> View {
         .iter()
         .collect::<Vec<_>>();
     // Equal section names in different COMDAT groups are distinct sections.
-    for header in &headers {
+    for (group_index, header) in headers.iter().enumerate() {
         if u32_at(header, 4) != 17 {
             continue;
         }
@@ -155,6 +175,7 @@ fn inspect(bytes: &[u8]) -> View {
         let signature = cstr(strings, usize::try_from(u32_at(signature, 0)).unwrap());
         for member in section_data(bytes, header)[4..].as_chunks::<4>().0 {
             let index = usize::try_from(u32_at(member, 0)).unwrap();
+            assert!(group_index < index, "ELF group must precede every member");
             write!(&mut names[index], " [{signature}]").unwrap();
         }
     }
@@ -166,10 +187,52 @@ fn inspect(bytes: &[u8]) -> View {
             cstr(strings, usize::try_from(u32_at(s, 0)).unwrap()).to_owned()
         }
     };
+    let first_global = usize::try_from(u32_at(headers[symtab], 44)).unwrap();
+    assert!(
+        first_global > 0 && first_global <= symbols.len(),
+        "invalid symtab sh_info"
+    );
+    for (i, s) in symbols.iter().enumerate() {
+        assert_eq!(
+            s[4] >> 4 == 0,
+            i < first_global,
+            "symtab sh_info must separate local and global symbols"
+        );
+    }
+    for (i, &h) in headers.iter().enumerate() {
+        let kind = u32_at(h, 4);
+        let link = usize::try_from(u32_at(h, 40)).unwrap();
+        let info = usize::try_from(u32_at(h, 44)).unwrap();
+        view.headers.push(SectionHeader {
+            name: if kind == 17 {
+                format!(".group [{}]", symbol_name(info))
+            } else {
+                names[i].clone()
+            },
+            kind,
+            flags: u64_at(h, 8),
+            address: u64_at(h, 16),
+            // Both string tables contain all compared names. Suffix sharing
+            // changes their byte size without changing any ELF meaning.
+            size: if kind == 3 { 0 } else { u64_at(h, 32) },
+            link: if link == 0 {
+                String::new()
+            } else {
+                names[link].clone()
+            },
+            info: match kind {
+                | 4 => names[info].clone(),
+                | 17 => symbol_name(info),
+                | _ => info.to_string(),
+            },
+            align: u64_at(h, 48),
+            entry_size: u64_at(h, 56),
+        });
+    }
     for (i, &h) in headers.iter().enumerate().skip(1) {
         let kind = u32_at(h, 4);
         match kind {
-            | 1 | 8 | 14 | 15 | 0x7000_0001 => {
+            | 1 | 7 | 8 | 14 | 15 | 16 | 0x7000_0001 => {
                 // clang may keep empty standard sections; they have no
                 // observables.
                 let size = u64_at(h, 32);
@@ -558,11 +621,8 @@ fn coff_option_keeps_text_unwind_comdats_refptr_and_exports() {
         std::fs::read(&native).unwrap(),
         std::fs::read(&reference).unwrap()
     );
-    let dump = Command::new("objdump")
-        .args(["-x", "-dr"])
-        .arg(&native)
-        .output();
-    if let Ok(dump) = dump {
+    let dump = required_objdump(Command::new("objdump").args(["-x", "-dr"]).arg(&native)).unwrap();
+    {
         assert!(dump.status.success(), "{dump:?}");
         let dump = String::from_utf8_lossy(&dump.stdout);
         for section in [".pdata", ".xdata", ".drectve", ".refptr.ext"] {
@@ -602,4 +662,397 @@ fn implicit_code_alignment_uses_canonical_nops() {
         write!(&mut text, ".p2align 5\n.zero {gap}\n").unwrap();
     }
     equivalent(&text).unwrap();
+}
+
+fn refuses(text: &str, diagnostic: &str) {
+    let arena = Bump::new();
+    let error = match super::super::object::encode(text, &arena) {
+        | Ok(_) => panic!("listing was silently accepted: {text}"),
+        | Err(error) => error,
+    };
+    assert!(error.to_string().contains(diagnostic), "{error}: {text}");
+}
+
+#[test]
+fn x87_register_indices_and_directions_are_preserved() {
+    let text = ".text\nfstp %st(1)\nfucomip %st(2),%st\nfadd %st,%st(1)\n";
+    let arena = Bump::new();
+    let bytes = super::super::object::encode(text, &arena).unwrap();
+    assert_eq!(
+        inspect(&bytes).sections[".text"].3,
+        [0xDD, 0xD9, 0xDF, 0xEA, 0xDC, 0xC1]
+    );
+    equivalent(text).unwrap();
+    for i in 0..8 {
+        equivalent(&format!(
+            "fstp %st({i})\nfucomip %st({i}),%st\nfadd %st({i}),%st\nfmul %st,%st({i})\n"
+        ))
+        .unwrap();
+    }
+    for text in [
+        "fstp %st(8)",
+        "fucomip %st(2)",
+        "fucomip %st(2),%st(1)",
+        "fadd %st(1),%st(2)",
+        "fsub %st,%st(1)",
+        "fstp %rax",
+    ] {
+        refuses(text, "native object emission");
+    }
+}
+
+#[test]
+fn operand_counts_classes_and_widths_are_checked() {
+    equivalent("retq $8\nshldl $3,%eax,%ebx\nshldw %cl,%ax,%bx\nshrdq %cl,%rax,%rbx\n").unwrap();
+    let arena = Bump::new();
+    let bytes = super::super::object::encode("retq $8\nshldl $3,%eax,%ebx\n", &arena).unwrap();
+    assert_eq!(
+        inspect(&bytes).sections[".text"].3,
+        [0xC2, 8, 0, 0x0F, 0xA4, 0xC3, 3]
+    );
+    for text in [
+        "negq %rax,%rbx",
+        "cmové %rax,%rbx",
+        "shlq %rdx,%rax",
+        "shldl $3,%rax,%rbx",
+        "movq %eax,%rbx",
+        "movsd %rax,%xmm0",
+        "leaq %rax,%rbx",
+        "fldt %rax",
+        "callq",
+        "movq %rax,%rbx,%rcx",
+        "movq *%rax,%rbx",
+        "movq (%eax),%rbx",
+        "movq (%xmm1),%rax",
+        "movq (%rax,%rcx,4,8),%rax",
+        "movq (%rax,,8),%rax",
+        "movq %rax,(%rax,%xmm1)",
+        "retq $65536",
+        "shlb $256,%al",
+        "bswapw %ax",
+        "cmoveb %al,%bl",
+    ] {
+        refuses(text, "native object emission");
+    }
+    // Each opcode family must reject both missing and surplus operands.
+    for text in [
+        "retq",
+        "ud2",
+        "int3",
+        "cltd",
+        "cqto",
+        "rep movsb",
+        "callq f",
+        "jmpq *%rax",
+        "pushq %rax",
+        "popq %rbx",
+        "movabsq $1,%rax",
+        "movq %rax,%xmm0",
+        "movd %eax,%xmm0",
+        "movb %al,%bl",
+        "leaq (%rax),%rbx",
+        "movzbl %al,%ebx",
+        "movaps %xmm0,%xmm1",
+        "addsd %xmm0,%xmm1",
+        "ucomiss %xmm0,%xmm1",
+        "cvtsi2ssl %eax,%xmm0",
+        "cvttsd2si %xmm0,%eax",
+        "cvtss2sd %xmm0,%xmm1",
+        "flds (%rax)",
+        "fstp %st(0)",
+        "fucomip %st(1),%st",
+        "fadd %st(1),%st",
+        "sete %al",
+        "cmoveq %rax,%rbx",
+        "imulq $3,%rax,%rbx",
+        "shldq $3,%rax,%rbx",
+        "bswapq %rax",
+        "bsrq %rax,%rbx",
+        "shlq %cl,%rax",
+        "negq %rax",
+        "addq %rax,%rbx",
+    ] {
+        refuses(&format!("{text},%rax"), "native object emission");
+        let mnemonic = text.split_whitespace().next().unwrap();
+        if !matches!(mnemonic, "retq" | "ud2" | "int3" | "cltd" | "cqto") {
+            refuses(mnemonic, "native object emission");
+        }
+    }
+}
+
+#[test]
+fn oversized_immediates_and_displacements_are_refused() {
+    for text in [
+        "movq $2147483648,%rax",
+        "addq $2147483648,%rax",
+        "imulq $2147483648,%rax,%rbx",
+        "movq 4294967296(%rax),%rax",
+        "movq -2147483649(%rax),%rax",
+        "movb $256,%al",
+        "movw $65536,%ax",
+        "movl $4294967296,%eax",
+        "movq $-18446744073709551615,%rax",
+    ] {
+        refuses(text, "native object emission");
+    }
+    equivalent("movabsq $2147483648,%rax\nmovl $4294967295,%eax\nmovw $65535,%ax\nmovb $255,%al\n")
+        .unwrap();
+}
+
+#[test]
+fn unknown_relocation_suffixes_are_refused() {
+    for text in [
+        "leaq x@TLSGD(%rip),%rdi",
+        "movq x@DTPOFF(%rax),%rax",
+        ".quad y@DTPOFF",
+        ".long f@PLT",
+        "callq f@TLSGD",
+        "movq x@PLT(%rip),%rax",
+    ] {
+        refuses(text, "native object emission");
+    }
+    equivalent(
+        "sf:\nretq\ncallq sf@PLT\ncallq external@PLT\nmovl x@GOTPCREL(%rip),%r8d\nleaq \
+         x@GOTPCREL(%rip),%rax\naddq x@GOTPCREL(%rip),%rax\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn narrow_data_relocations_use_matching_widths() {
+    equivalent(".data\n.byte ext\n.byte 42\n.short ext+1\n.short 42\n.long ext+2\n.quad ext+3\n")
+        .unwrap();
+}
+
+#[test]
+fn section_names_infer_flags_and_types() {
+    for section in [
+        ".data.rel.ro.local",
+        ".bss.x",
+        ".tbss.x",
+        ".tdata.x",
+        ".rodata.x",
+        ".text.x",
+        ".init_array.101",
+        ".fini_array.101",
+        ".preinit_array.x",
+        "custom",
+        ".init",
+        ".fini",
+        ".eh_frame",
+        ".gcc_except_table",
+        ".data1",
+        ".rodata1",
+        ".note.foo",
+        ".note.GNU-stack",
+        ".ctors",
+        ".bssfoo",
+    ] {
+        for flags in ["", ",\"\"", ",\"aw\"", ",\"awx\""] {
+            let text = format!(".section {section}{flags}\n.zero 8\n");
+            if matches!(section, ".eh_frame" | ".gcc_except_table") && flags.contains('w') {
+                refuses(&text, "section flags");
+            } else {
+                equivalent(&text).unwrap();
+            }
+        }
+    }
+    refuses(".section .bss.x,\"aw\",@progbits\n.zero 1", "conflicts");
+}
+
+#[test]
+fn invalid_directives_and_overflowing_differences_are_refused() {
+    for (text, diagnostic) in [
+        ("a:\na:\n", "duplicate"),
+        (".weak w\n.globl w\n", "binding"),
+        (".p2align 4,0x90,3", "directive operands"),
+        ("f:\ng:\n.size f,.-g", "size expression"),
+        (".size f,.-f\n.zero 8\nf:", "size expression"),
+        (
+            ".La:\n.zero 300\n.Lb:\n.byte .Lb-.La",
+            "exceeds field width",
+        ),
+        (
+            ".La:\n.zero 129\n.Lb:\n.byte .La-.Lb",
+            "exceeds field width",
+        ),
+        (
+            ".La:\n.zero 65536\n.Lb:\n.short .Lb-.La",
+            "exceeds field width",
+        ),
+        (".byte 256", "exceeds field width"),
+        (
+            ".La:\n.zero 300\n.Lb:\n.quad .La-.Lb-9223372036854775808",
+            "exceeds field width",
+        ),
+        ("callq \"escaped\\\\symbol\"", "symbol expression"),
+        (
+            ".globl .Lglobal\n.Lglobal:\nretq",
+            "temporary symbol attributes",
+        ),
+        (
+            "local:\nretq\nmovq local@GOTPCREL(%rip),%rax",
+            "GOT reference to local",
+        ),
+        (
+            "local:\nretq\nalias = local\njmp alias",
+            "branch to local alias",
+        ),
+        (".hidden f\n.protected f", "conflicting symbol visibility"),
+        (
+            ".type f,@object\n.type f,@function",
+            "conflicting symbol type",
+        ),
+        (
+            ".section x,\"awG\",@progbits,g@TLSGD,comdat",
+            "symbol expression",
+        ),
+        (".cfi_unknown", "unknown CFI"),
+        (".cfi_def_cfa_offset 8", "outside procedure"),
+        (
+            ".cfi_startproc\n.cfi_restore_state\n.cfi_endproc",
+            "without remembered state",
+        ),
+        (".text extra", "directive operands"),
+        (".section x,\"a\",@progbits,ignored", "section arguments"),
+    ] {
+        refuses(text, diagnostic);
+    }
+    equivalent(".La:\n.zero 255\n.Lb:\n.byte .Lb-.La\n.short .La-.Lb\n").unwrap();
+}
+
+#[test]
+fn global_branches_calls_and_data_remain_interposable() {
+    for binding in [
+        ".globl gf",
+        ".weak gf",
+        ".globl gf\n.hidden gf",
+        ".globl gf\n.protected gf",
+    ] {
+        equivalent(&format!(
+            "{binding}\ngf:\njmp gf\nje gf\ncallq gf\nleaq gf(%rip),%rax\n.Lbase:\n.long \
+             gf-.Lbase\n"
+        ))
+        .unwrap();
+    }
+    equivalent(
+        "local:\njmp local\ncallq local\n.text\njmp external\nje external\ncallq \
+         external\n.data\nother:\n.quad 0\n.text\njmp other\ncallq other\ncallq other@PLT\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn equivalence_rejects_section_header_mutations() {
+    let arena = Bump::new();
+    let direct = super::super::object::encode(
+        "local:\nretq\n.globl f\nf:\ncallq ext\n.data\n.quad f\n.section \
+         group,\"awG\",@progbits,g,comdat\n.weak g\ng:\n.quad f\n",
+        &arena,
+    )
+    .unwrap();
+    let base = inspect(&direct);
+    let shoff = usize::try_from(u64_at(&direct, 40)).unwrap();
+    let count = usize::from(u16_at(&direct, 60));
+    let header = |kind| {
+        (0..count)
+            .find(|&i| u32_at(&direct, shoff + i * 64 + 4) == kind)
+            .unwrap()
+    };
+    for (index, field, value) in [
+        (header(2), 44, 1_u32), // the reviewer's previously undetected sh_info mutation
+        (header(2), 40, 0),     // sh_link
+        (header(4), 44, 0),     // relocation sh_info
+        (header(4), 56, 8),     // sh_entsize
+        (header(17), 40, 0),
+    ] {
+        let mut mutated = direct.to_vec();
+        let at = shoff + index * 64 + field;
+        mutated[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        let detected = std::panic::catch_unwind(|| {
+            assert_equivalent(&inspect(&mutated), &base, "header mutation");
+        });
+        assert!(
+            detected.is_err(),
+            "header mutation {index}:{field} escaped comparison"
+        );
+    }
+    let mut reordered = direct.to_vec();
+    let first_index = 2;
+    let second_index = 4;
+    let first = shoff + first_index * 64;
+    let second = shoff + second_index * 64;
+    for n in 0..64 {
+        reordered.swap(first + n, second + n);
+    }
+    let remap = |index| {
+        if index == first_index {
+            second_index
+        } else if index == second_index {
+            first_index
+        } else {
+            index
+        }
+    };
+    // Preserve every reference while swapping headers: the mutation changes
+    // order alone, so a section-set comparison would still accept this object.
+    for index in 0..count {
+        let at = shoff + index * 64;
+        let link = remap(usize::try_from(u32_at(&reordered, at + 40)).unwrap());
+        reordered[at + 40..at + 44].copy_from_slice(&u32::try_from(link).unwrap().to_le_bytes());
+        let kind = u32_at(&reordered, at + 4);
+        if kind == 4 {
+            let info = remap(usize::try_from(u32_at(&reordered, at + 44)).unwrap());
+            reordered[at + 44..at + 48]
+                .copy_from_slice(&u32::try_from(info).unwrap().to_le_bytes());
+        } else if kind == 2 {
+            let offset = usize::try_from(u64_at(&reordered, at + 24)).unwrap();
+            let size = usize::try_from(u64_at(&reordered, at + 32)).unwrap();
+            for symbol in (offset..offset + size).step_by(24) {
+                let section = remap(usize::from(u16_at(&reordered, symbol + 6)));
+                reordered[symbol + 6..symbol + 8]
+                    .copy_from_slice(&u16::try_from(section).unwrap().to_le_bytes());
+            }
+        } else if kind == 17 {
+            let offset = usize::try_from(u64_at(&reordered, at + 24)).unwrap();
+            let size = usize::try_from(u64_at(&reordered, at + 32)).unwrap();
+            for member in (offset + 4..offset + size).step_by(4) {
+                let section = remap(usize::try_from(u32_at(&reordered, member)).unwrap());
+                reordered[member..member + 4]
+                    .copy_from_slice(&u32::try_from(section).unwrap().to_le_bytes());
+            }
+        }
+    }
+    let reordered = inspect(&reordered);
+    assert_eq!(reordered.sections, base.sections);
+    assert_eq!(reordered.symbols, base.symbols);
+    assert_eq!(reordered.relocations, base.relocations);
+    assert_eq!(reordered.groups, base.groups);
+    assert!(
+        std::panic::catch_unwind(|| assert_equivalent(&reordered, &base, "section order mutation"))
+            .is_err(),
+        "section order mutation escaped comparison"
+    );
+}
+
+fn required_objdump(command: &mut Command) -> io::Result<std::process::Output> {
+    command.output().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "required objdump {:?} could not run: {error}; install llvm-objdump or GNU \
+                 binutils (COFF checks require GNU objdump)",
+                command.get_program()
+            ),
+        )
+    })
+}
+
+#[test]
+fn missing_objdump_is_an_explicit_failure() {
+    let directory = TempDir::new("missing-objdump");
+    let error = required_objdump(&mut Command::new(directory.join("absent-objdump"))).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert!(error.to_string().contains("required objdump"));
+    assert!(error.to_string().contains("install"));
 }
