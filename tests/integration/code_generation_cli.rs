@@ -1655,7 +1655,8 @@ int main(void) { printf("main\n"); return zero; }
         // This static body is retained by a call, rather than `used`, so it
         // reaches LLVM's MC diagnostics instead of the early semantic check.
         let source = "static __attribute__((noinline,section(\".bss.z\"))) int f(int x) { return \
-                      x+1; }\nint g(int x) { return f(x); }\n";
+                      x+1; }\nstatic __attribute__((noinline,section(\".bss.second\"))) int h(int \
+                      x) { return x+2; }\nint g(int x) { return f(x) + h(x); }\n";
         let object = temporary("llvm-diagnostic-refused.o");
         let output = bcc(
             source,
@@ -1671,6 +1672,11 @@ int main(void) { printf("main\n"); return zero; }
         assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
         assert!(
             text(&output.stderr).contains("BSS section '.bss.z' cannot have non-zero bytes"),
+            "{}",
+            text(&output.stderr)
+        );
+        assert!(
+            text(&output.stderr).contains("BSS section '.bss.second' cannot have non-zero bytes"),
             "{}",
             text(&output.stderr)
         );

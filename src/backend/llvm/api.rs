@@ -207,7 +207,10 @@ use crate::{
         Target,
         TlsModel,
     },
-    util::bump::Bump,
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 /// A session owns a context, module and builder in disposal order.
@@ -222,7 +225,7 @@ pub(super) struct Session<'id> {
     module:      LLVMModuleRef,
     context:     LLVMContextRef,
     arena:       &'id Bump,
-    diagnostics: &'id Diagnostics,
+    diagnostics: &'id dyn DiagnosticStatus,
     /// The relocation and thread-local storage models.
     code:        CodeOptions,
     _brand:      PhantomData<fn(&'id ()) -> &'id ()>,
@@ -281,7 +284,7 @@ impl Session<'_> {
     ) -> R {
         // The handler's state has a stable address until after the session
         // disposes its context, including on early returns and unwinding.
-        let diagnostics = Diagnostics::default();
+        let diagnostics = Diagnostics(RefCell::new(ArenaString::new_in(arena)));
         // SAFETY: Creates a new independently owned LLVM context.
         let context = unsafe { LLVMContextCreate() };
         // SAFETY: The callback and its stack-owned state outlive this context.
@@ -1625,14 +1628,26 @@ fn count(length: usize) -> u32 {
     u32::try_from(length).expect("LLVM list fits u32")
 }
 
-/// The first LLVM error in one context. Keeping LLVM's owned description
-/// avoids allocating in Rust or retaining a borrowed diagnostic handle.
-#[derive(Default)]
-struct Diagnostics(RefCell<Option<Message>>);
+/// All LLVM errors in one context, copied before their diagnostic handles
+/// expire. The caller prints the complete set before failing compilation.
+struct Diagnostics<'a>(RefCell<ArenaString<'a>>);
 
-impl Diagnostics {
+trait DiagnosticStatus {
+    fn check(&self) -> Result<(), Message>;
+}
+
+impl DiagnosticStatus for Diagnostics<'_> {
     fn check(&self) -> Result<(), Message> {
-        self.0.borrow_mut().take().map_or(Ok(()), Err)
+        let mut errors = self.0.borrow_mut();
+        if errors.is_empty() {
+            return Ok(());
+        }
+        errors.push('\0');
+        // SAFETY: The collected descriptions contain no interior NUL and the
+        // appended terminator stays live while LLVM copies the text.
+        let message = Message(unsafe { LLVMCreateMessage(errors.as_ptr().cast()) });
+        errors.clear();
+        Err(message)
     }
 }
 
@@ -1648,12 +1663,13 @@ extern "C" fn record_diagnostic(info: LLVMDiagnosticInfoRef, state: *mut c_void)
     let message = Message(unsafe { LLVMGetDiagInfoDescription(info) });
     // SAFETY: with_code keeps this state alive until the context is disposed;
     // this context's synchronous compilation owns all accesses to it.
-    let diagnostics = unsafe { &*state.cast::<Diagnostics>() };
+    let diagnostics = unsafe { &*state.cast::<Diagnostics<'_>>() };
     if severity == LLVMDiagnosticSeverity::LLVMDSError {
-        let mut first = diagnostics.0.borrow_mut();
-        if first.is_none() {
-            *first = Some(message);
+        let mut errors = diagnostics.0.borrow_mut();
+        if !errors.is_empty() {
+            errors.push_str("\nerror: ");
         }
+        errors.push_str(message.text());
     } else {
         let prefix = if severity == LLVMDiagnosticSeverity::LLVMDSWarning {
             "warning"

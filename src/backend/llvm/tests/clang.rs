@@ -881,6 +881,30 @@ fn llvm_mc_diagnostics_refuse_output_even_when_emission_returns_success() {
         );
         assert!(!object.exists());
     }
+    let module = parse_module(
+        &arena,
+        "global @a external size 4, align 4 section \".bss.a\" = bytes \"04000000\"\nglobal @b \
+         external size 4, align 4 section \".bss.b\" = bytes \"05000000\"\n",
+    )
+    .unwrap();
+    let object = directory.join("multiple-refused.o");
+    let error = compile_module(
+        &module,
+        &object,
+        LlvmOptions {
+            opt:                 None,
+            disable_llvm_passes: false,
+            target:              Target::LinuxGnu,
+            kind:                OutputKind::Object,
+            code:                CodeOptions::default(),
+        },
+    )
+    .unwrap_err();
+    let errors = error.to_string();
+    assert!(errors.contains("BSS section '.bss.a'"), "{errors}");
+    assert!(errors.contains("BSS section '.bss.b'"), "{errors}");
+    assert_eq!(errors.matches("cannot have non-zero bytes").count(), 2);
+    assert!(!object.exists());
     // Diagnostics belong to their context; a failed session must not poison
     // the next successful compilation.
     let module = parse_module(&arena, "global @a external size 4, align 4 = zero\n").unwrap();
