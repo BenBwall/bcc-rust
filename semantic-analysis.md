@@ -675,7 +675,9 @@ once. A root array of unknown size and the object's own flexible array member
 get their completed (respectively written) array types when the checker
 finishes; another flexible array member's empty list stores nothing. Rejected
 or unmodeled initializers retain no plan. A plan's size follows the written
-initializer and its designators, never an array's extent or a range's length;
+initializer and its designators, never an array's extent or a range's length
+(lowering copies a range's first element into the rest where it can; see
+`middle-end.md`);
 `tests/initializer_plans.rs` pins plan shapes and counts the producer's work
 (`review_steps[3]`) for deep, sparse and overlapping-range initializers. See
 the [M8 receipt](docs/research/semantic-facts-m8.md).

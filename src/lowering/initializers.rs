@@ -5,8 +5,9 @@
 //! with its completed qualified type, the brace pairs whose omitted bytes are
 //! zero, the union members selected and the GNU ranges repeated
 //! (`facts/initializer_plans.rs`). `plan.rs` replays the plan as source-ordered
-//! leaves; this file schedules their automatic stores, evaluating each value
-//! once and zeroing only the bytes no later leaf of its scope covers
+//! leaves, ending a range whose elements all get the first's bytes with one
+//! copy of them; this file schedules their automatic stores, evaluating each
+//! value once and zeroing only the bytes no later leaf of its scope covers
 //! (`coverage.rs`), and `module_items.rs` maps the same leaves to a static
 //! object's bytes and relocations. Lowering never chooses a subobject itself.
 //!
@@ -16,11 +17,18 @@ mod coverage;
 mod plan;
 
 use coverage::CoverageIndex;
+pub(super) use plan::Storage;
+#[cfg(test)]
+pub(super) use plan::{
+    MINIMUM as REPLICATION_MINIMUM,
+    STEPS as REPLAY_STEPS,
+};
 
 use super::{
     Construct,
     FunctionLowerer,
     LoweringError,
+    LoweringErrorKind,
     module_items::{
         at,
         peel,
@@ -43,6 +51,7 @@ use crate::{
         InstFlags,
         Opcode,
         Type,
+        Value,
     },
     translation_phases::{
         SourceVectors,
@@ -56,6 +65,7 @@ use crate::{
             SemanticTranslationUnit,
             TypeId,
             TypeKind,
+            Types,
         },
     },
     util::bump::{
@@ -107,15 +117,69 @@ pub(super) enum Leaf<'tu> {
         /// The plan value `expression` evaluates.
         value:      InitValueId,
     },
+    /// The later elements of a GNU range: the `size` bytes at `offset`,
+    /// which the leaves before it wrote into the first element, copied
+    /// `stride`, `2 * stride`, ... up to `count * stride` bytes further on.
+    Replicate {
+        offset: u64,
+        size:   u64,
+        stride: u64,
+        count:  u64,
+        /// The type of the first leaf it copies.
+        ty:     TypeId,
+        /// Every copied byte is zero.
+        zero:   bool,
+    },
 }
 
-/// The stores of `initializer` for an object of type `ty`, in source order,
-/// from the placement plan semantic analysis retained for it, and that plan.
+impl Leaf<'_> {
+    const fn ty(self) -> TypeId {
+        match self {
+            | Self::Zero { ty, .. }
+            | Self::Scalar { ty, .. }
+            | Self::String { ty, .. }
+            | Self::Copy { ty, .. }
+            | Self::Replicate { ty, .. } => ty,
+        }
+    }
+
+    /// The bits the leaf writes, from the object's start. A replication
+    /// whose copies are not adjacent reports none.
+    fn bits(self, table: &Types<'_>) -> Result<(u64, u64), LoweringErrorKind> {
+        Ok(match self {
+            | Self::Zero { offset, size, .. } | Self::String { offset, size, .. } =>
+                (8 * offset, 8 * (offset + size)),
+            | Self::Scalar {
+                offset,
+                bit_field: Some(bits),
+                ..
+            } => {
+                let start = 8 * offset + u64::from(bits.bit_offset);
+                (start, start + u64::from(bits.width))
+            },
+            | Self::Scalar { offset, ty, .. } | Self::Copy { offset, ty, .. } =>
+                (8 * offset, 8 * (offset + types::layout(table, ty)?.size)),
+            | Self::Replicate {
+                offset,
+                size,
+                stride,
+                count,
+                ..
+            } if size == stride => (8 * (offset + size), 8 * (offset + (count + 1) * size)),
+            | Self::Replicate { offset, .. } => (8 * offset, 8 * offset),
+        })
+    }
+}
+
+/// The stores of `initializer` for an object of type `ty` and `storage`
+/// duration, in source order, from the placement plan semantic analysis
+/// retained for it, and that plan.
 /// C99: §6.7.8 paragraphs 14-19, pp. 126-127; PDF pp. 138-139.
 pub(super) fn leaves<'a, 'tu, 's>(
     sema: &'a SemanticTranslationUnit<'tu>,
     ty: TypeId,
     initializer: &'tu Initializer<'tu>,
+    storage: Storage,
     arena: &'s Bump,
 ) -> Result<(ArenaVec<'s, Leaf<'tu>>, &'a InitializerPlan<'tu>), LoweringError> {
     let plan = sema.initializers.plan(initializer).ok_or_else(|| {
@@ -125,7 +189,7 @@ pub(super) fn leaves<'a, 'tu, 's>(
         )
     })?;
     debug_assert_eq!(plan.ty, ty, "the plan completes the object's type");
-    Ok((plan::plan_leaves(sema, plan, arena)?, plan))
+    Ok((plan::plan_leaves(sema, plan, storage, arena)?, plan))
 }
 
 // Storing into automatic objects
@@ -142,7 +206,13 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         ty: TypeId,
         initializer: &'tu Initializer<'tu>,
     ) -> Result<(), LoweringError> {
-        let (leaves, plan) = leaves(self.unit.sema, ty, initializer, self.scratch)?;
+        let (leaves, plan) = leaves(
+            self.unit.sema,
+            ty,
+            initializer,
+            Storage::Automatic,
+            self.scratch,
+        )?;
         let coverage = CoverageIndex::new(
             &leaves,
             self.unit.sema,
@@ -317,6 +387,21 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                     size,
                     literal,
                 }),
+                | Leaf::Replicate {
+                    offset,
+                    size,
+                    stride,
+                    count,
+                    zero,
+                    ..
+                } => tasks.push(Task::InitializeCopies {
+                    object,
+                    offset,
+                    size,
+                    stride,
+                    count,
+                    zero,
+                }),
             }
         }
         // The first leaf runs first.
@@ -368,21 +453,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         ty: TypeId,
         mask: u8,
     ) -> Result<(), LoweringError> {
-        let base = match object {
-            | Object::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
-            | Object::Local(binding) => match self.local(
-                binding,
-                self.unit.sema.bindings[binding].name.source_vectors,
-            )? {
-                | Local::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
-                | Local::Address(address) => address,
-                | Local::Variable(_) =>
-                    return Err(LoweringError::missing(
-                        "an aggregate has no address",
-                        SourceVectors::empty(),
-                    )),
-            },
-        };
+        let base = self.object_address(object)?;
         let address = self.offset_address(base, offset);
         if mask != u8::MAX {
             let flags = self.initialization_flags(ty);
@@ -423,6 +494,80 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             None,
         );
         Ok(())
+    }
+
+    /// Gives the later elements of a GNU range the first element's `size`
+    /// bytes at `offset`: one zero fill when they are zero, otherwise
+    /// copies that double the initialized elements each time, so at most
+    /// 64. Copies that are not adjacent are made one at a time.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
+    pub(super) fn initialize_copies(
+        &mut self,
+        object: Object,
+        offset: u64,
+        size: u64,
+        stride: u64,
+        count: u64,
+        zero: bool,
+    ) -> Result<(), LoweringError> {
+        let base = self.object_address(object)?;
+        let first = self.offset_address(base, offset);
+        if size != stride {
+            for copy in 1..=count {
+                let destination = self.offset_address(first, copy * stride);
+                let length = self.iconst(Type::I64, i128::from(size));
+                self.memory_range(Opcode::Copy, [destination, first, length]);
+            }
+            return Ok(());
+        }
+        if zero {
+            let destination = self.offset_address(first, stride);
+            let byte = self.iconst(Type::I8, 0);
+            let length = self.iconst(Type::I64, i128::from(count * stride));
+            self.memory_range(Opcode::Fill, [destination, byte, length]);
+            return Ok(());
+        }
+        let mut done = 1_u64;
+        while done <= count {
+            let doubled = done.min(count + 1 - done);
+            let destination = self.offset_address(first, done * stride);
+            let length = self.iconst(Type::I64, i128::from(doubled * stride));
+            self.memory_range(Opcode::Copy, [destination, first, length]);
+            done += doubled;
+        }
+        Ok(())
+    }
+
+    /// A `copy` or `fill` of bytes no volatile object holds.
+    fn memory_range(&mut self, opcode: Opcode, args: [Value; 3]) {
+        _ = self.draft.push(
+            self.memory_op(InstData::MemoryRange {
+                opcode,
+                flags: InstFlags::empty(),
+                align: Align::BYTE,
+                args,
+            }),
+            None,
+        );
+    }
+
+    /// The address of an aggregate being initialized.
+    fn object_address(&mut self, object: Object) -> Result<Value, LoweringError> {
+        Ok(match object {
+            | Object::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
+            | Object::Local(binding) => match self.local(
+                binding,
+                self.unit.sema.bindings[binding].name.source_vectors,
+            )? {
+                | Local::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
+                | Local::Address(address) => address,
+                | Local::Variable(_) =>
+                    return Err(LoweringError::missing(
+                        "an aggregate has no address",
+                        SourceVectors::empty(),
+                    )),
+            },
+        })
     }
 
     /// Stores the value on top of the stack into an object being
