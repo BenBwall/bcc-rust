@@ -21,15 +21,12 @@ use crate::{
         Scalar,
         Target,
     },
-    translation_phases::{
-        parsing::declaration_syntax::TypeQualifiers,
-        semantic_analysis::{
-            ArrayBound,
-            TagKind,
-            TypeId,
-            TypeKind,
-            Types,
-        },
+    translation_phases::semantic_analysis::{
+        ArrayBound,
+        TagKind,
+        TypeId,
+        TypeKind,
+        Types,
     },
     util::bump::{
         ArenaSet,
@@ -236,7 +233,7 @@ pub(super) fn align(layout: Layout) -> Align {
 }
 
 pub(super) fn is_volatile(ty: TypeId) -> bool {
-    ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+    ty.is_volatile()
 }
 
 /// The facts calling conventions classify a structure or union by, for a

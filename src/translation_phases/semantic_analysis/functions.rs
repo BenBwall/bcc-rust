@@ -573,14 +573,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         for owner in self
-            .declarator_functions
+            .attributes
+            .refusals
             .iter_mut()
-            .chain(
-                self.attributes
-                    .refusals
-                    .iter_mut()
-                    .map(|refusal| &mut refusal.owner),
-            )
+            .map(|refusal| &mut refusal.owner)
             .chain(
                 self.attributes
                     .conventions

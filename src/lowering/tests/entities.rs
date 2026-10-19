@@ -1,149 +1,26 @@
-//! M7 compares retained policy with the unchanged lowering derivations before
-//! switching consumers. The shared test entry exercises all existing fixtures.
+//! M7 retained policy snapshot, checked against the legacy lowering before
+//! switching consumers; fixtures keep the symbol and call capability gates.
 use super::*;
-use crate::translation_phases::semantic_analysis::{
-    BodyEmission,
-    FunctionEnd,
-    TypeKind,
-};
-
-pub(super) fn compare_legacy<'tu>(
-    context: &Context<'tu>,
-    sema: &SemanticTranslationUnit<'tu>,
-    target: Target,
-) {
-    if !sema.lowerable(context) {
-        return;
-    }
-    let tables = Bump::new();
-    let arena = Bump::new();
-    let Ok(mut unit) = Unit::new(context, sema, target, &arena, &tables) else {
-        return;
-    };
-    let errors = unit.prepare_symbol_names();
-    assert_eq!(errors.len(), sema.entities.refusals.len());
-    for ((index, old), new) in errors.iter().zip(sema.entities.refusals) {
-        assert_eq!(old.source, Some(new.source));
-        assert_eq!(
-            matches!(old.kind, LoweringErrorKind::MissingFact(_)),
-            new.missing_occurrence
-        );
-        assert_eq!(sema.declarator_functions[*index], new.owner);
-    }
-    for (binding, data) in sema.bindings.iter().enumerate() {
-        let fact = sema
-            .entity(binding)
-            .expect("every binding has entity policy");
-        assert_eq!(unit.binding_identity(binding), fact.identity);
-        assert!(fact.bindings.contains(&binding));
-        let mut ty = data.ty;
-        let old_readonly = loop {
-            if ty.qualifiers.contains(
-                crate::translation_phases::parsing::declaration_syntax::TypeQualifiers::CONST,
-            ) {
-                break !types::is_volatile(ty);
-            }
-            match sema.types.kind(ty) {
-                | TypeKind::Array(element, _) => ty = element,
-                | _ => break false,
-            }
-        };
-        assert_eq!(old_readonly, sema.types.readonly_object(data.ty));
-        let name = fact
-            .symbol
-            .map_or_else(|| context.string_cache.at(fact.abi_name), |r| r.name);
-        assert_eq!(unit.symbol_name(binding), name);
-        if let Some(request) = fact.symbol {
-            assert!(sema.declarators.iter().any(|d| d.kind.iter().any(|direct| matches!(direct, crate::translation_phases::parsing::declaration_syntax::DirectDeclarator::AsmLabel(label) if label.source_vectors == request.source))));
-        }
-        let returns_twice = sema
-            .entity_attributes(binding)
-            .is_some_and(|a| a.returns_twice)
-            || data.kind == crate::translation_phases::semantic_analysis::BindingKind::Function
-                && data.linkage != crate::translation_phases::semantic_analysis::Linkage::None
-                && fact.symbol.is_some()
-                && crate::builtins::returns_twice(name);
-        assert_eq!(fact.returns_twice, returns_twice);
-        assert_eq!(
-            unit.unprototyped_external(binding),
-            sema.unprototyped_external(binding).unwrap()
-        );
-        let entity_id = sema.correspondence.entity_of(binding, *data);
-        let definition = sema
-            .definitions
-            .iter()
-            .filter(|d| {
-                sema.correspondence
-                    .entity_of(d.binding, sema.bindings[d.binding])
-                    == entity_id
-            })
-            .last();
-        assert_eq!(
-            fact.definition.map(|d| (d.binding, d.kind)),
-            definition.map(|d| (d.binding, d.kind))
-        );
-        if let Some(definition) = definition {
-            assert_eq!(fact.ty, sema.bindings[definition.binding].ty);
-            let initializer = sema
-                .correspondence
-                .declarations
-                .iter()
-                .filter(|d| d.binding == Some(definition.binding))
-                .last()
-                .and_then(|d| d.initializer);
-            assert_eq!(
-                fact.initializer.map(std::ptr::from_ref),
-                initializer.map(std::ptr::from_ref)
-            );
-        }
-        let own = sema
-            .correspondence
-            .declarations
-            .iter()
-            .filter(|d| d.entity == Some(sema.correspondence.entity_of(binding, *data)))
-            .map(|d| d.id)
-            .collect::<Vec<_>>();
-        assert_eq!(fact.occurrences, own);
-        if matches!(sema.types.kind(data.ty), TypeKind::Function { .. }) {
-            assert_eq!(
-                unit.private_inline(binding),
-                sema.function_policy(binding)
-                    .is_some_and(|policy| policy.body == BodyEmission::PrivateInline)
-            );
-        }
-    }
-    for function in sema.functions {
-        if let Some(binding) = function.binding {
-            let end = context.string_cache.at(sema.bindings[binding].name.name) == "main";
-            assert_eq!(
-                sema.function_policy(binding).unwrap().end == FunctionEnd::MainZero,
-                end
-            );
-            assert_eq!(
-                matches!(
-                    sema.function_policy(binding).unwrap().body,
-                    BodyEmission::InlineOnly | BodyEmission::PrivateInline
-                ),
-                sema.definitions.iter().any(|d| d.binding == binding
-                    && d.kind
-                        == crate::translation_phases::semantic_analysis::DefinitionKind::Inline)
-            );
-        }
-    }
-}
 
 #[test]
-fn m7_entity_policy_matches_legacy_on_linked_and_asm_fixtures() {
-    let sources = SOURCES;
+fn m7_linked_and_asm_policy_fixtures_keep_lowering() {
     for target in [
         Target::LinuxGnu,
         Target::LinuxMusl,
         Target::WindowsGnu,
         Target::WindowsMsvc,
     ] {
-        for &source in sources {
-            // Some fixtures intentionally end at the lowering refusal gate.
-            drop(lower_for(source, target));
+        for (case, &source) in SOURCES.iter().enumerate() {
+            let lowered = lower_for(source, target);
+            if case == 7 {
+                let errors = lowered.unwrap_err();
+                assert!(
+                    errors.iter().all(|error| error.contains("assembler label")),
+                    "{errors:?}"
+                );
+            } else {
+                drop(lowered.unwrap_or_else(|errors| panic!("case={case} {target:?}: {errors:?}")));
+            }
         }
     }
 }
@@ -200,7 +77,6 @@ fn m7_retained_policy_snapshot() {
                 HeaderSearch::default(),
             );
             let sema = analyze_translation_unit(&mut context, &syntax);
-            compare_legacy(&context, &sema, target);
             writeln!(
                 snapshot,
                 "{target:?} case={case} errors={} refusals={}",
@@ -210,6 +86,9 @@ fn m7_retained_policy_snapshot() {
             .unwrap();
             for (binding, data) in sema.bindings.iter().enumerate() {
                 let entity = sema.entity(binding).unwrap();
+                if let Some(request) = entity.symbol {
+                    assert_ne!(context.get_source_vectors(request.source), []);
+                }
                 writeln!(
                     snapshot,
                     "  {binding}: {} identity={} abi={} asm={:?} definition={:?} function={:?} \
@@ -323,5 +202,69 @@ fn m7_object_predicates_distinguish_readonly_volatile_and_vm() {
         assert_eq!(sema.types.readonly_object(data.ty), readonly, "{name}");
         assert_eq!(data.ty.is_volatile(), volatile, "{name}");
         assert_eq!(sema.types.variably_modified(data.ty), vm, "{name}");
+    }
+}
+
+#[test]
+fn m7_missing_entity_and_function_policy_fail_with_provenance() {
+    for remove_function in [false, true] {
+        let tu = Bump::new();
+        let mut context = Context::new(&tu);
+        let syntax = parse_translation_unit(
+            &mut context,
+            Path::new("<m7-missing>"),
+            tu.alloc_str("int main(void){}\n"),
+            HeaderSearch::default(),
+        );
+        let mut sema = analyze_translation_unit(&mut context, &syntax);
+        assert!(sema.lowerable(&context));
+        let function = &sema.functions[0];
+        let binding = function.binding.unwrap();
+        let source = if remove_function {
+            sema.entities.remove_function(binding);
+            function.syntax.source_vectors
+        } else {
+            let id = sema
+                .correspondence
+                .entity_of(binding, sema.bindings[binding]);
+            sema.entities.remove_entity(id);
+            sema.bindings[binding].name.source_vectors
+        };
+        let arena = Bump::new();
+        let mut scratch = Bump::new();
+        let errors = lower_translation_unit(
+            &context,
+            &syntax,
+            &sema,
+            Target::LinuxGnu,
+            &arena,
+            &mut scratch,
+        )
+        .unwrap_err();
+        assert!(errors.errors.iter().any(|error| matches!(
+            error.kind,
+            LoweringErrorKind::MissingFact(_)
+        ) && error.source == Some(source)));
+    }
+}
+
+#[test]
+fn m7_main_end_policy_follows_c_identifier_across_asm_renaming() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        let renamed = lower_for(
+            "int main(void) __asm__(\"other\"); int main(void){}",
+            target,
+        )
+        .unwrap();
+        assert!(renamed.contains("function @other()"), "{renamed}");
+        assert!(renamed.contains("iconst.i32 0"), "{renamed}");
+        let alias = lower_for("int f(void) __asm__(\"main\"); int f(void){}", target).unwrap();
+        assert!(alias.contains("function @main()"), "{alias}");
+        assert!(alias.contains("poison.i32"), "{alias}");
     }
 }

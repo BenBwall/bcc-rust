@@ -1120,20 +1120,32 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// C99: §5.1.2.2.3 paragraph 1, p. 13; PDF p. 25.
     pub(super) fn finish_body(&mut self) -> Result<(), LoweringError> {
         let source = self.record.syntax.source_vectors;
-        let value =
-            match repr(&self.unit.sema.types, self.result).map_err(|kind| at(kind, source))? {
-                | Repr::Void | Repr::Aggregate | Repr::Complex { .. } => None,
-                | representation => {
-                    let ty = representation.value_type().ok_or_else(|| {
-                        LoweringError::missing("a result has no value type", source)
-                    })?;
-                    Some(if self.name == "main" {
+        let value = match repr(&self.unit.sema.types, self.result)
+            .map_err(|kind| at(kind, source))?
+        {
+            | Repr::Void | Repr::Aggregate | Repr::Complex { .. } => None,
+            | representation => {
+                let ty = representation
+                    .value_type()
+                    .ok_or_else(|| LoweringError::missing("a result has no value type", source))?;
+                Some(
+                    if self
+                        .record
+                        .binding
+                        .and_then(|binding| self.unit.sema.function_policy(binding))
+                        .ok_or_else(|| {
+                            LoweringError::missing("function end policy is not retained", source)
+                        })?
+                        .end
+                        == crate::translation_phases::semantic_analysis::FunctionEnd::MainZero
+                    {
                         self.iconst(ty, 0)
                     } else {
                         self.draft.poison(ty)
-                    })
-                },
-            };
+                    },
+                )
+            },
+        };
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
         for index in 0..self.draft.blocks.len() {

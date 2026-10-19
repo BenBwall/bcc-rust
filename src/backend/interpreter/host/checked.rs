@@ -77,29 +77,6 @@ pub(crate) fn va_list_operand(name: &str) -> Option<usize> {
     }
 }
 
-/// The IR signature of a checked function: `size_t` is `i64` and `int` is
-/// `i32` on every supported target, and a `va_list` operand is a pointer.
-pub(super) fn signature(name: &str) -> Option<(&'static [Type], Option<Type>, bool)> {
-    use Type::{
-        I32,
-        I64,
-        Ptr,
-    };
-    Some(match name {
-        | "__memcpy_chk" | "__memmove_chk" | "__mempcpy_chk" | "__strncpy_chk"
-        | "__stpncpy_chk" | "__strncat_chk" => (&[Ptr, Ptr, I64, I64], Some(Ptr), false),
-        | "__memset_chk" => (&[Ptr, I32, I64, I64], Some(Ptr), false),
-        | "__strcpy_chk" | "__stpcpy_chk" | "__strcat_chk" => (&[Ptr, Ptr, I64], Some(Ptr), false),
-        | "__sprintf_chk" => (&[Ptr, I32, I64, Ptr], Some(I32), true),
-        | "__snprintf_chk" => (&[Ptr, I64, I32, I64, Ptr], Some(I32), true),
-        | "__vsprintf_chk" => (&[Ptr, I32, I64, Ptr, Ptr], Some(I32), false),
-        | "__vsnprintf_chk" => (&[Ptr, I64, I32, I64, Ptr, Ptr], Some(I32), false),
-        | "__vprintf_chk" => (&[I32, Ptr, Ptr], Some(I32), false),
-        | "__vfprintf_chk" => (&[Ptr, I32, Ptr, Ptr], Some(I32), false),
-        | _ => return None,
-    })
-}
-
 impl DefaultHost<'_> {
     /// Runs a checked function, or `None` for another name.
     pub(super) fn checked(

@@ -267,7 +267,6 @@ pub(crate) fn analyze<'tu>(
     let symbol_requests = analyzer.symbol_requests;
     let mut result = SemanticTranslationUnit {
         entities: EntityFacts::empty(analyzer.types.tu),
-        declarator_functions: analyzer.declarator_functions.leak(),
         references: analyzer.references.leak(),
         resolved: analyzer.resolved.retain(),
         correspondence: analyzer.correspondence.retain(),
@@ -276,7 +275,6 @@ pub(crate) fn analyze<'tu>(
         control: analyzer.control.retain(analyzer.types.tu),
         effects: analyzer.effects.retain(),
         expression_actions: analyzer.expression_actions,
-        declarators: analyzer.declarators.leak(),
         symbols,
         function_extensions: analyzer.function_extensions,
         expressions: analyzer.expressions.leak(),
@@ -769,23 +767,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::DeclaratorDone(d, mut base, parameter) => {
                 self.record_symbol_requests(d);
-                if d.pointer
-                    .levels
-                    .iter()
-                    .any(|level| level.attributes.is_some())
-                    || d.kind.iter().any(|direct| {
-                        matches!(
-                            direct,
-                            DirectDeclarator::Attributes(_)
-                                | DirectDeclarator::MsModifier(..)
-                                | DirectDeclarator::AsmLabel(_)
-                        )
-                    })
-                {
-                    self.declarators.push(d);
-                    self.declarator_functions
-                        .push(self.functions.reference_function);
-                }
                 for level in d.pointer.levels {
                     if !(level.qualifiers
                         - (TypeQualifiers::CONST
@@ -1794,7 +1775,6 @@ enum Work<'tu, 's> {
 }
 
 struct Analyzer<'a, 'tu, 's> {
-    declarator_functions:    ArenaVec<'tu, Option<usize>>,
     references:              ArenaVec<'tu, EntityReference>,
     // Deterministic scaling-test counts: VM ancestors, offset members,
     // initializer type nodes. They are absent from production compilation.
@@ -1805,8 +1785,7 @@ struct Analyzer<'a, 'tu, 's> {
     types:                   TypeInterner<'tu, 's>,
     pack_alignments:         &'s [(usize, u32)],
     bindings:                ArenaVec<'tu, Binding>,
-    declarators:             ArenaVec<'tu, Declarator<'tu>>,
-    symbol_requests:         ArenaVec<'s, facts::entities::PendingSymbolRequest<'tu>>,
+    symbol_requests:         ArenaVec<'s, entities::PendingSymbolRequest<'tu>>,
     definitions:             ArenaVec<'tu, Definition>,
     /// Indexed by the function definition's traversal id.
     function_records:        ArenaVec<'tu, FunctionRecord<'tu>>,

@@ -22,9 +22,11 @@ fn m2_missing_occurrences_bounds_and_formulas_fail_with_provenance() {
             | 1 => sema.runtime_bounds = &[],
             | 2 => sema.sizes.formulas = &[],
             | 3 => {
-                let declarations = tu.alloc_slice_copy(sema.correspondence.declarations);
-                declarations[0].initializer = None;
-                sema.correspondence.declarations = declarations;
+                let binding = sema.correspondence.declarations[0].binding.unwrap();
+                let id = sema
+                    .correspondence
+                    .entity_of(binding, sema.bindings[binding]);
+                sema.entities.clear_initializer(id);
             },
             | _ => {
                 let functions = tu.alloc_slice_copy(sema.functions);

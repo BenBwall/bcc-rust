@@ -16,7 +16,6 @@ use super::{
     LoweringError,
     LoweringErrorKind,
     address_taken,
-    extensions::SymbolNames,
     floats,
     initializers::{
         self,
@@ -58,10 +57,7 @@ use crate::{
         SourceVectors,
         parsing::{
             ParsedTranslationUnit,
-            declaration_syntax::{
-                Initializer,
-                TypeQualifiers,
-            },
+            declaration_syntax::Initializer,
             syntax::{
                 BinaryOperator,
                 Expression,
@@ -76,10 +72,10 @@ use crate::{
             StringTokenType,
         },
         semantic_analysis::{
+            BodyEmission,
             ConstantClass,
             DefinitionKind,
             FunctionRecord,
-            Inlining,
             Integer,
             LabelId,
             Linkage,
@@ -113,16 +109,11 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) call_diagnostics: ArenaVec<'ir, super::CallDiagnostic>,
     pub(super) tables: &'a Bump,
     pub(super) target: Target,
-    pub(super) names: SymbolNames<'a>,
-    definitions: ArenaMap<'a, usize, DefinitionKind>,
     /// Completed types of linked object definitions, including tentative ones,
     /// indexed by emitted symbol name after applying GNU assembler labels.
     /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
     /// p. 143; PDF p. 155.
     defined_objects: ArenaMap<'a, &'a str, usize>,
-    /// Definitions share their linked name across separate semantic bindings.
-    /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42.
-    defined_functions: ArenaSet<'a, StringCacheId>,
     /// Bindings whose address is taken, which therefore live in memory.
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
@@ -153,9 +144,6 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// with an assembler label (glibc's `__REDIRECT`) and must still call
     /// the external definition.
     private_bodies: ArenaMap<'a, StringCacheId, FuncId>,
-    /// The inline-only definitions lowered as private bodies
-    /// ([`Unit::private_inline`]).
-    private_inline: ArenaSet<'a, usize>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -170,27 +158,20 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         _syntax: &ParsedTranslationUnit<'tu>,
         errors: &mut ArenaVec<'_, LoweringError>,
     ) -> ArenaVec<'a, (&'tu FunctionRecord<'tu>, Option<FuncId>)> {
-        let alias_errors = self.prepare_symbol_names();
         self.reachable = self.reachable_items();
         self.check_extensions(errors);
-        for (index, error) in alias_errors {
-            if self.sema.declarator_functions[index].is_none_or(|owner| self.emits_function(owner))
-            {
-                errors.push(error);
-            }
-        }
         // Reserve every user spelling before any initializer or body creates
         // internal storage (GNU labels extend C99 §6.2.2p2).
         for (index, binding) in self.sema.bindings.iter().enumerate() {
             let name = if binding.linkage == Linkage::None {
-                self.names.local(index)
+                self.symbol_request(index).map(|r| r.name)
             } else {
                 Some(self.symbol_name(index))
             };
             if let Some(name) = name {
                 _ = self.reserved_names.insert(name);
                 if binding.origin.is_intrinsic()
-                    && self.names.linked(self.binding_identity(index)).is_none()
+                    && self.symbol_request(index).is_none()
                     && let Some(runtime) = binding.origin.library()
                 {
                     _ = self.reserved_names.insert(runtime);
@@ -248,13 +229,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
             functions.push((record, func));
         }
-        let mut initializers: ArenaMap<'_, usize, Option<&'tu Initializer<'tu>>> =
-            ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
-        for fact in self.sema.correspondence.declarations {
-            if let Some(binding) = fact.binding {
-                _ = initializers.insert(binding, fact.initializer);
-            }
-        }
         for definition in self.sema.definitions {
             let binding = self.sema.bindings[definition.binding];
             if !matches!(
@@ -271,13 +245,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             {
                 continue;
             }
-            let Some(&initializer) = initializers.get(&definition.binding) else {
-                errors.push(LoweringError::missing(
-                    "object definition occurrence is not retained",
-                    binding.name.source_vectors,
-                ));
-                continue;
-            };
+            let initializer = self
+                .sema
+                .entity(definition.binding)
+                .expect("entity facts checked by Unit::new")
+                .initializer;
             if definition.kind == DefinitionKind::Object && initializer.is_none() {
                 errors.push(LoweringError::missing(
                     "object definition initializer is not retained",
@@ -304,8 +276,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// p. 140; PDF p. 152.
     pub(super) fn emits_function(&self, binding: usize) -> bool {
         self.reachable.contains(&binding)
-            && (self.definitions.get(&binding) != Some(&DefinitionKind::Inline)
-                || self.private_inline(binding))
+            && self
+                .sema
+                .function_policy(binding)
+                .is_some_and(|policy| policy.body != BodyEmission::InlineOnly)
     }
 
     /// Whether the inline-only definition `binding` is lowered as a private
@@ -315,7 +289,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125. GNU extension: GCC
     /// manual, "Common Function Attributes", `always_inline`.
     pub(super) fn private_inline(&self, binding: usize) -> bool {
-        self.private_inline.contains(&binding)
+        self.sema
+            .function_policy(binding)
+            .is_some_and(|policy| policy.body == BodyEmission::PrivateInline)
     }
 
     /// Declares a function definition's symbol; `None` when its body is
@@ -353,7 +329,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 source,
             ));
         }
-        if self.definitions.get(&binding) == Some(&DefinitionKind::Inline) {
+        if self.sema.function_policy(binding).is_some_and(|policy| {
+            matches!(
+                policy.body,
+                BodyEmission::InlineOnly | BodyEmission::PrivateInline
+            )
+        }) {
             return self.private_body(binding, record);
         }
         self.function(binding)
@@ -429,8 +410,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         // Builtin aliases describe the C binding, never the exact assembler
         // label chosen by the user (GNU extension to C99 §6.2.2p2).
         let runtime = self
-            .names
-            .linked(self.binding_identity(binding))
+            .symbol_request(binding)
             .is_none()
             .then(|| data.origin.library())
             .flatten();
@@ -465,14 +445,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .module
             .declare_function(name, signature, self.ir_linkage(binding));
         self.symbol_attributes(binding, Symbol::Function(func));
-        // Semantic analysis classifies the C spelling; an assembler label,
-        // which only lowering decodes until M7, can name a cataloged symbol
-        // instead. GNU extension: GCC manual, "Asm Labels".
-        if self.names.linked(self.binding_identity(binding)).is_some()
-            && crate::builtins::returns_twice(name)
-        {
-            self.module.function_mut(func).returns_twice = true;
-        }
         Ok(func)
     }
 
@@ -480,21 +452,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Known old-style definitions keep their actual parameter signature.
     /// C99: §6.5.2.2 paragraph 6, pp. 71-72; PDF pp. 83-84.
     pub(super) fn unprototyped_external(&self, binding: usize) -> bool {
-        matches!(
-            self.sema.types.kind(self.sema.bindings[binding].ty),
-            TypeKind::Function {
-                prototype: false,
-                ..
-            }
-        ) && !self.defined_functions.contains(
-            &self
-                .sema
-                .function_extensions
-                .function(binding)
-                .map_or(self.sema.bindings[binding].name.name, |extension| {
-                    extension.identity
-                }),
-        )
+        self.sema
+            .unprototyped_external(binding)
+            .expect("entity facts checked by Unit::new")
     }
 
     /// The IR signature of a C function type: one parameter per declared
@@ -651,9 +611,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let data = self.sema.bindings[binding];
         if data.linkage == Linkage::None {
-            let (stem, function, text) = match self.definitions.get(&binding) {
-                | Some(&DefinitionKind::FunctionName(text)) => ("__func__", Some(text), text),
-                | Some(&DefinitionKind::PrettyFunctionName { function, text }) =>
+            let (stem, function, text) = match self
+                .sema
+                .entity(binding)
+                .and_then(|entity| entity.definition)
+                .map(|definition| definition.kind)
+            {
+                | Some(DefinitionKind::FunctionName(text)) => ("__func__", Some(text), text),
+                | Some(DefinitionKind::PrettyFunctionName { function, text }) =>
                     ("__PRETTY_FUNCTION__", function, text),
                 | _ =>
                     return Err(LoweringErrorKind::MissingFact(
@@ -710,7 +675,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     "{function}.{}",
                     self.context.string_cache.at(data.name.name)
                 );
-                let name = if let Some(name) = self.names.local(binding) {
+                let name = if let Some(name) = self.symbol_request(binding).map(|r| r.name) {
                     if self.module.symbol(name).is_some() || self.conflicting_names.contains(name) {
                         return Err(LoweringError::unsupported(
                             Construct::AssemblerLabel,
@@ -726,7 +691,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .map_err(|kind| at(kind, source))?;
                 let global = self.module.declare_global(name, declaration);
                 self.symbol_attributes(binding, Symbol::Global(global));
-                if self.names.local(binding).is_none() {
+                if self.symbol_request(binding).is_none() {
                     _ = self.generated_globals.insert(global);
                 }
                 _ = self.statics.insert(binding, global);
@@ -781,7 +746,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             linkage,
             size: self.sema.flexible_object_size(binding).unwrap_or(size),
             align,
-            constant: constant_object(types, data.ty),
+            constant: types.readonly_object(data.ty),
             thread_local: data.duration
                 == crate::translation_phases::semantic_analysis::Duration::Thread,
         })
@@ -1039,7 +1004,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 size:         layout.size,
                 align:        super::alignment::storage_alignment(&self.sema.types, ty)
                     .map_err(|kind| at(kind, expression.source_vectors))?,
-                constant:     constant_object(&self.sema.types, ty),
+                constant:     self.sema.types.readonly_object(ty),
                 thread_local: false,
             },
         );
@@ -1547,26 +1512,6 @@ pub(super) fn peel<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression
     expression
 }
 
-/// The IR linkage of a function or object with linkage.
-/// C99: §6.2.2, pp. 30-31; PDF pp. 42-43.
-/// Whether every byte of an object of this type is const: its type or,
-/// for an array, its element type is const-qualified.
-/// C99: §6.7.3 paragraph 5, p. 109; PDF p. 121.
-fn constant_object(
-    types: &crate::translation_phases::semantic_analysis::Types<'_>,
-    mut ty: TypeId,
-) -> bool {
-    loop {
-        if ty.qualifiers.contains(TypeQualifiers::CONST) {
-            return !ty.qualifiers.contains(TypeQualifiers::VOLATILE);
-        }
-        match types.kind(ty) {
-            | TypeKind::Array(element, _) => ty = element,
-            | _ => return false,
-        }
-    }
-}
-
 pub(super) fn at(kind: LoweringErrorKind, source: SourceVectors) -> LoweringError {
     LoweringError {
         kind,
@@ -1585,36 +1530,25 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let address_taken = address_taken::find(sema, tables)?;
         let mut module = Module::new(arena);
         module.set_target(target.triple(), types::data_layout(target));
-        let mut definitions = ArenaMap::with_capacity_and_hasher_in(
-            sema.definitions.len(),
-            rustc_hash::FxBuildHasher,
-            tables,
-        );
-        for definition in sema.definitions {
-            _ = definitions.insert(definition.binding, definition.kind);
-        }
-        let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
-        let mut defined_functions = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
-        let mut private_inline = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
-        for function in sema.functions {
-            if let Some(binding) = function.binding {
-                _ = defined_functions.insert(
-                    sema.function_extensions
-                        .function(binding)
-                        .map_or(sema.bindings[binding].name.name, |extension| {
-                            extension.identity
-                        }),
-                );
-                if definitions.get(&binding) == Some(&DefinitionKind::Inline)
-                    && !function.assembly
-                    && sema
-                        .entity_attributes(binding)
-                        .is_some_and(|attributes| attributes.inlining == Inlining::Always)
-                {
-                    _ = private_inline.insert(binding);
-                }
+        for (index, binding) in sema.bindings.iter().enumerate() {
+            if sema.entity(index).is_none() {
+                return Err(LoweringError::missing(
+                    "entity policy is not retained",
+                    binding.name.source_vectors,
+                ));
             }
         }
+        for function in sema.functions {
+            if let Some(binding) = function.binding
+                && sema.function_policy(binding).is_none()
+            {
+                return Err(LoweringError::missing(
+                    "function policy is not retained",
+                    function.syntax.source_vectors,
+                ));
+            }
+        }
+        let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         Ok(Self {
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             #[cfg(test)]
@@ -1625,9 +1559,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             call_diagnostics: ArenaVec::new_in(arena),
             tables,
             target,
-            names: SymbolNames::new(tables),
-            definitions,
-            defined_functions,
             defined_objects,
             address_taken,
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
@@ -1640,7 +1571,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             private_bodies: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
-            private_inline,
         })
     }
 }

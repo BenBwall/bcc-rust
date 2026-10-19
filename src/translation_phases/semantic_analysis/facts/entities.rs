@@ -64,6 +64,21 @@ impl<'tu> EntityFacts<'tu> {
         self.functions.get(&binding)
     }
 
+    #[cfg(test)]
+    pub(crate) fn remove_entity(&mut self, id: EntityId) {
+        _ = self.records.remove(&id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remove_function(&mut self, binding: usize) {
+        _ = self.functions.remove(&binding);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_initializer(&mut self, id: EntityId) {
+        self.records.get_mut(&id).unwrap().initializer = None;
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn empty(tu: &'tu Bump) -> Self {
         Self {
             records:   ArenaMap::with_hasher_in(FxBuildHasher, tu),
@@ -281,6 +296,13 @@ pub(crate) struct Entity<'tu> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SymbolRequest<'tu> {
     pub(crate) name:   &'tu str,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Valid requests retain provenance for downstream symbol diagnostics."
+        )
+    )]
     pub(crate) source: SourceVectors,
 }
 

@@ -49,51 +49,7 @@ fn evaluate(
     } else {
         Type::I64
     };
-    let (params, result): (&[Type], Type) = match operation {
-        | Operation::Atan2
-        | Operation::Hypot
-        | Operation::Pow
-        | Operation::Fmod
-        | Operation::Remainder
-        | Operation::Copysign
-        | Operation::Nextafter
-        | Operation::Fdim
-        | Operation::Fmax
-        | Operation::Fmin => (&[precision, precision], precision),
-        | Operation::Fma => (&[precision, precision, precision], precision),
-        | Operation::Frexp | Operation::Modf => (&[precision, Type::Ptr], precision),
-        | Operation::Remquo => (&[precision, precision, Type::Ptr], precision),
-        | Operation::Ilogb => (&[precision], Type::I32),
-        | Operation::Lrint | Operation::Lround => (&[precision], long),
-        | Operation::Llrint | Operation::Llround => (&[precision], Type::I64),
-        | Operation::Ldexp | Operation::Scalbn => (&[precision, Type::I32], precision),
-        | Operation::Scalbln => (&[precision, long], precision),
-        | Operation::Nexttoward => (&[precision, long_double], precision),
-        | Operation::Nan => (&[Type::Ptr], precision),
-        | _ => (&[precision], precision),
-    };
-    #[cfg(test)]
-    {
-        let shared =
-            crate::builtins::external_signature(call.name).expect("math signature is cataloged");
-        assert_eq!(
-            shared
-                .parameters
-                .iter()
-                .map(|&p| super::external_type(p, long_width, long_double))
-                .collect::<Vec<_>>(),
-            params.iter().copied().map(Some).collect::<Vec<_>>(),
-            "{}",
-            call.name
-        );
-        assert_eq!(
-            super::external_type(shared.result, long_width, long_double),
-            Some(result),
-            "{}",
-            call.name
-        );
-    }
-    if call.arg_types != params || call.result != Some(result) || call.args.len() != params.len() {
+    if call.args.len() != call.arg_types.len() {
         return Err(UbKind::SignatureMismatch.into());
     }
     if precision == Type::F80 || (operation == Operation::Nexttoward && long_double == Type::F80) {

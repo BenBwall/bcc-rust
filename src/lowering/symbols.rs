@@ -120,6 +120,13 @@ impl Unit<'_, '_, '_> {
     /// visibility and, for a function, code alignment and returns-twice
     /// fact.
     pub(super) fn symbol_attributes(&mut self, binding: usize, symbol: Symbol) {
+        if let Symbol::Function(func) = symbol {
+            self.module.function_mut(func).returns_twice = self
+                .sema
+                .entity(binding)
+                .expect("entity facts checked by Unit::new")
+                .returns_twice;
+        }
         let Some(&attributes) = self.sema.entity_attributes(binding) else {
             return;
         };
@@ -153,11 +160,6 @@ impl Unit<'_, '_, '_> {
                 | Inlining::Always => InlineControl::Always,
             };
         }
-        if let Symbol::Function(func) = symbol
-            && attributes.returns_twice
-        {
-            self.module.function_mut(func).returns_twice = true;
-        }
     }
 
     /// Declares every alias as another name for its target's symbol, and
@@ -168,8 +170,10 @@ impl Unit<'_, '_, '_> {
         errors: &mut ArenaVec<'_, LoweringError>,
     ) {
         for alias in self.sema.symbols.aliases {
-            let names = [alias.binding, alias.target].map(|binding| self.binding_identity(binding));
-            if names.iter().any(|&name| self.names.linked(name).is_some()) {
+            if [alias.binding, alias.target]
+                .iter()
+                .any(|&binding| self.symbol_request(binding).is_some())
+            {
                 errors.push(LoweringError::unsupported(
                     Construct::Attribute(UnsupportedAttribute::AliasAssemblerLabel),
                     alias.source,
