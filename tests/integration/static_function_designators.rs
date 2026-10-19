@@ -93,3 +93,47 @@ int *object_address = 1 ? &object : 0;
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn static_function_designators_reject_object_reads_like_clang() {
+    let root = std::env::temp_dir().join(format!(
+        "bcc-static-designator-errors-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    for initializer in [
+        "*fp",
+        "**fp",
+        "flag ? f : g",
+        "flag ? f : f",
+        "1 ? fp : f",
+        "0 ? f : fp",
+        "*ip",
+    ] {
+        let source = format!(
+            "int f(int); int g(int); int (*fp)(int) = f; int flag; int **ip;\n{}\n",
+            if initializer == "*ip" {
+                format!("int *p = {initializer};")
+            } else {
+                format!("int (*p)(int) = {initializer};")
+            }
+        );
+        let input = root.join("rejected.c");
+        fs::write(&input, &source).unwrap();
+        for bcc in [false, true] {
+            let mut command = Command::new(if bcc {
+                PathBuf::from(env!("CARGO_BIN_EXE_bcc-rust"))
+            } else {
+                clang()
+            });
+            _ = command.arg("-std=c99");
+            _ = command.arg(if bcc { "--emit=ir" } else { "-fsyntax-only" });
+            _ = command.arg(&input);
+            let output = crate::native::run_native(&mut command).unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{source}: {stderr}");
+            assert!(stderr.contains("constant"), "{source}: {stderr}");
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
