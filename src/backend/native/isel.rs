@@ -54,6 +54,7 @@ use super::{
         Cond,
         FrameObject,
         FrameSlotData,
+        Index,
         MBlock,
         MFunction,
         MInst,
@@ -853,6 +854,24 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 if ty == Type::I1 {
                     self.canonical_bool(dst);
                 }
+                return;
+            }
+            // A 64-bit product by 3, 5 or 9 is one `lea` of the value and
+            // its scaled self.
+            if width == Width::B64 && matches!(imm, 3 | 5 | 9) {
+                self.emit(MInst::Lea {
+                    dst,
+                    addr: Mem {
+                        base:  Base::Reg(src),
+                        index: Some(Index {
+                            reg:   src,
+                            #[expect(clippy::cast_possible_truncation, reason = "At most 8.")]
+                            #[expect(clippy::cast_sign_loss, reason = "The factor is positive.")]
+                            scale: (imm - 1) as u8,
+                        }),
+                        disp:  0,
+                    },
+                });
                 return;
             }
             self.emit(MInst::Imul3 {

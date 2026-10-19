@@ -801,9 +801,11 @@ block0(v0: i64):
         f.contains("callq\t___chkstk_ms\n\tsubq\t"),
         "dynamic pages are probed:\n{f}"
     );
-    // The block starts 16-byte aligned above the outgoing arguments; the
-    // address rounds up into its 16 spare bytes, never down below it.
-    let round_up = f.find("addq\t$16, %").expect(f);
+    // The block starts 16-byte aligned above the outgoing arguments (32
+    // bytes of home area here); the address rounds up into its 16 spare
+    // bytes, never down below it. The `lea` of the block's start and the
+    // `add` of 16 combine.
+    let round_up = f.find("leaq\t48(%rsp), %").expect(f);
     assert!(f[round_up..].contains("andq\t$-32, "), "{f}");
     assert!(
         f.contains("(%rbp)"),
@@ -1180,8 +1182,9 @@ block0(v0: i32):
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         let text = assembly(ir, target);
         let f = function_text(&text, "f");
+        // The slot's address plus 63, in one `lea`, then rounded down.
         assert!(
-            f.contains("addq\t$63, ") && f.contains("andq\t$-64, "),
+            f.contains("63(%rsp), ") && f.contains("andq\t$-64, "),
             "{f}"
         );
         // 40 bytes and 48 spare, after the 16-byte-aligned frame.
@@ -1339,4 +1342,28 @@ block3:
     let f = function_text(&text, "f");
     assert_eq!(f.matches("leaq\ttable(%rip)").count(), 1, "{f}");
     assert!(f.contains(",4), %e"), "{f}");
+}
+
+#[test]
+fn small_products_and_offsets_become_lea() {
+    let text = assembly(
+        "abi lowered
+function @f(i64, i64) -> i64 external {
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 3
+    v3 = imul.i64 v0, v2
+    v4 = iconst.i64 1
+    v5 = iadd.i64 v3, v4
+    v6 = iadd.i64 v1, v4
+    v7 = imul.i64 v6, v1
+    v8 = iadd.i64 v5, v7
+    return v8
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("leaq\t1(%rdi,%rdi,2), %"), "{f}");
+    assert!(f.contains("leaq\t1(%rsi), %"), "{f}");
+    assert!(!f.contains("imulq\t$3"), "{f}");
 }

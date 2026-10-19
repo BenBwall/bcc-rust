@@ -29,9 +29,9 @@
 //!    within blocks and on edges.
 //! 6. `rewrite.rs` replaces virtual registers by locations and inserts the
 //!    moves; in debug builds `checker.rs` then proves the result against the
-//!    virtual-register program. Identity copies go, and `edges.rs` removes the
-//!    blocks that only jump and copies short tests over the jumps to them
-//!    (loop rotation).
+//!    virtual-register program. Identity copies go, `peephole.rs` combines
+//!    copies and additions into `lea`s, and `edges.rs` removes the blocks that
+//!    only jump and copies short tests over the jumps to them (loop rotation).
 //!
 //! Read [`allocate`], then the files in that order.
 
@@ -47,8 +47,9 @@ mod liveness;
 mod resolve;
 mod scan;
 
-// Rewriting and its proof
+// Rewriting, its proof and cleanups
 mod checker;
+mod peephole;
 mod rewrite;
 
 pub(crate) use rewrite::rewrite;
