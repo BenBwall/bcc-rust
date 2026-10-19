@@ -1921,38 +1921,61 @@ int main(void) { printf("main\n"); return zero; }
         let source = "struct S {int a,b;};
             int f1(int x){switch(x){case (long)((char *)0 + 1):return 11;default:return 0;}}
             int f2(int x){switch(x){case (long)&((struct S *)0)->b:return 12;default:return 0;}}
-            int f3(int x){switch(x){case (long)(char *)4:return 13;default:return 0;}}
-            int f4(int x){switch(x){case (char *)8 - (char *)0:return 14;default:return 0;}}
-            int main(void){return !(f1(1)==11 && f1(2)==0 && f2(4)==12 && f2(5)==0
+            int f3(int x){switch(x){case (int)(long)(char *)4:return 13;default:return 0;}}
+            int f4(int x){switch(x){case (unsigned char)((char *)8 - (char *)0):return \
+                      14;default:return 0;}}
+            int f5(int x){switch(x){case (unsigned char)(long)(char *)260:return 15;default:return \
+                      0;}}
+            int f6(int x){switch(x){case (long)(_Bool)(char *)4:return 16;default:return 0;}}
+            int main(void){return !(f5(4)==15 && f5(5)==0 && f6(1)==16 && f6(0)==0 && f1(1)==11 && \
+                      f1(2)==0 && f2(4)==12 && f2(5)==0
                 && f3(4)==13 && f3(5)==0 && f4(8)==14 && f4(9)==0);}";
         for backend in [
             &[][..],
             &["--backend=native"][..],
             &["--backend=native", "--native-object"][..],
         ] {
-            let executable = temporary("folded-pointer-cases");
-            let mut flags = vec!["-o", executable.to_str().unwrap()];
-            flags.extend_from_slice(backend);
-            let output = bcc(source, &flags);
-            assert!(
-                output.status.success(),
-                "{backend:?}: {}",
-                text(&output.stderr)
-            );
-            assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
-            assert_eq!(
-                run_native(&mut Command::new(&executable))
-                    .unwrap()
-                    .status
-                    .code(),
-                Some(0)
-            );
-            std::fs::remove_file(executable).unwrap();
+            for mode in ["-std=gnu17", "-std=c99"] {
+                let executable = temporary("folded-pointer-cases");
+                let mut flags = vec![mode, "-o", executable.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert!(
+                    output.status.success(),
+                    "{backend:?}: {}",
+                    text(&output.stderr)
+                );
+                assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+                assert_eq!(
+                    run_native(&mut Command::new(&executable))
+                        .unwrap()
+                        .status
+                        .code(),
+                    Some(0)
+                );
+                std::fs::remove_file(executable).unwrap();
+                let object = temporary("folded-pointer-duplicate.o");
+                let mut flags = vec![mode, "-c", "-o", object.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(
+                    "int f(int x){switch(x){case 4:return 0;case (unsigned char)(long)(char \
+                     *)260:return 1;}return 2;}",
+                    &flags,
+                );
+                assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+                assert!(
+                    text(&output.stderr).contains("case value repeated"),
+                    "{}",
+                    text(&output.stderr)
+                );
+                assert!(!text(&output.stderr).contains("internal error"));
+                assert!(!object.exists());
+            }
         }
         let object = temporary("folded-pointer-sizeof.o");
         let output = bcc(
-            "int f2[sizeof(char[(long)((char *)0 + 2)])];",
-            &["-c", "-o", object.to_str().unwrap()],
+            "int f2[sizeof(char[(unsigned char)(long)(char *)260])];",
+            &["-std=c99", "-c", "-o", object.to_str().unwrap()],
         );
         assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
         assert!(!object.exists());
