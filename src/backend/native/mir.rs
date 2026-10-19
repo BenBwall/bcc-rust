@@ -376,7 +376,7 @@ impl fmt::Debug for PRegSet {
 }
 
 /// A register operand: physical (precolored) or virtual.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 #[expect(
     variant_size_differences,
     reason = "Both variants fit eight bytes; packing them into one word would obscure every match \
@@ -1229,6 +1229,45 @@ impl MInst {
             | Self::Alu { src, .. }
             | Self::Cmp { rhs: src, .. } => Some(src),
             | Self::XAlu { op, src, .. } if !matches!(op, XOp::Xor) => Some(src),
+            | _ => None,
+        }
+    }
+
+    /// The instruction's memory operand, if it has one; no instruction has
+    /// two.
+    pub(crate) const fn memory_operand(&mut self) -> Option<&mut Mem> {
+        match self {
+            | Self::Mov {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Extend {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::XMov {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Alu {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::XAlu {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Cmp {
+                rhs: Operand::Mem(mem),
+                ..
+            }
+            | Self::Store { dst: mem, .. }
+            | Self::XStore { dst: mem, .. }
+            | Self::Lea { addr: mem, .. }
+            | Self::Move128 { mem, .. }
+            | Self::X87Load { mem, .. }
+            | Self::X87Store { mem, .. }
+            | Self::X87ControlWord { mem, .. } => Some(mem),
             | _ => None,
         }
     }

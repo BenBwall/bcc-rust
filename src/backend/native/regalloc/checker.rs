@@ -21,7 +21,12 @@
 //!   spill slot: its destination then holds everything the source held, plus
 //!   the copy's destination value;
 //! - an inserted instruction must be such a move; its destination holds what
-//!   its source held.
+//!   its source held;
+//! - or an inserted `lea` that adds two registers, scaled: its destination then
+//!   holds the *address* `b + i × s` for every value `b` its base held and `i`
+//!   its index held. A program instruction whose indexed memory operand `d(b,
+//!   i, s)` became `d(r)` must find that address in `r`. Writing a new value of
+//!   `b` or `i` makes every address of the old one stale.
 //!
 //! At a join the facts of the predecessors intersect. The facts only
 //! shrink, so the forward dataflow over the blocks reaches a fixed point;
@@ -36,6 +41,7 @@ use crate::{
     backend::native::mir::{
         Base,
         FrameObject,
+        Index,
         MBlock,
         MFunction,
         MInst,
@@ -156,7 +162,8 @@ pub(crate) enum ErrorKind {
     Blocks,
     /// The program's instructions are not all there, once each, in order.
     Order,
-    /// An instruction the allocator inserted is not a whole-register move.
+    /// An instruction the allocator inserted is not a whole-register move
+    /// or the `lea` of an address.
     NotAMove,
     /// A program instruction became something other than itself with its
     /// registers replaced.
@@ -168,14 +175,17 @@ pub(crate) enum ErrorKind {
 
 /// A value of the virtual-register program.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "Facts are short-lived pairs; packing them would obscure the matches."
-)]
 pub(crate) enum Value {
     /// What the program holds in a precolored register.
     Phys(PReg),
     Virt(VReg),
+    /// The sum of the values of two program registers, the second scaled:
+    /// an indexed address computed ahead of the instruction that uses it.
+    Address {
+        base:  Reg,
+        index: Reg,
+        scale: u8,
+    },
 }
 
 /// A place the rewritten function keeps values in.
@@ -231,6 +241,10 @@ impl<'a> Checker<'_, 'a> {
         let mut next = 0;
         for (index, (&inst, &origin)) in insts.iter().zip(origins).enumerate() {
             if origin == INSERTED {
+                if let Some((dst, base, index, scale)) = as_address(inst) {
+                    self.address(dst, base, index, scale);
+                    continue;
+                }
                 let (dst, src) =
                     as_move(inst).ok_or_else(|| error(index, ErrorKind::NotAMove, None))?;
                 self.copy(dst, src, None);
@@ -289,6 +303,29 @@ impl<'a> Checker<'_, 'a> {
             }
             *original.memory_source().expect("matched above") = Operand::Mem(mem);
         }
+        // An indexed address computed into a register first: proven here,
+        // then left out of both sides of the comparison below.
+        if let (
+            Some(&mut Mem {
+                base: Base::Reg(base),
+                index: Some(Index { reg: index, scale }),
+                disp,
+            }),
+            Some(&mut Mem {
+                base: Base::Reg(Reg::Phys(register)),
+                index: None,
+                disp: rewritten_disp,
+            }),
+        ) = (original.memory_operand(), copy.memory_operand())
+            && disp == rewritten_disp
+        {
+            let (value, loc) = (Value::Address { base, index, scale }, Loc::Reg(register));
+            if checking && !self.holds(loc, value) {
+                return Err(ErrorKind::Missing { value, loc });
+            }
+            *original.memory_operand().expect("matched above") = PROVEN_ADDRESS;
+            *copy.memory_operand().expect("matched above") = PROVEN_ADDRESS;
+        }
         // The original with the rewritten registers put in must be the
         // rewritten instruction.
         self.operands.clear();
@@ -307,7 +344,7 @@ impl<'a> Checker<'_, 'a> {
             }
             position += 1;
         });
-        if !matches || position != self.operands.len() || expected != rewritten {
+        if !matches || position != self.operands.len() || expected != copy {
             return Err(shape);
         }
         for index in 0..self.pairs.len() {
@@ -359,10 +396,10 @@ impl<'a> Checker<'_, 'a> {
     }
 
     /// `loc` now holds `value` and nothing else, and no other location
-    /// holds `value`.
+    /// holds `value` or an address computed from its old value.
     fn define(&mut self, loc: Loc, value: Value) {
         self.state
-            .retain(|&(other_loc, other)| other_loc != loc && other != value);
+            .retain(|&(other_loc, other)| other_loc != loc && !depends_on(other, value));
         let at = self.state.partition_point(|&fact| fact < (loc, value));
         self.state.insert(at, (loc, value));
     }
@@ -375,11 +412,32 @@ impl<'a> Checker<'_, 'a> {
         self.values
             .extend(self.state[range].iter().map(|&(_, value)| value));
         if let Some(value) = defined {
-            self.state.retain(|&(_, other)| other != value);
-            if let Err(at) = self.values.binary_search(&value) {
-                self.values.insert(at, value);
+            self.state.retain(|&(_, other)| !depends_on(other, value));
+            self.values.retain(|&other| !depends_on(other, value));
+            let at = self.values.partition_point(|&other| other < value);
+            self.values.insert(at, value);
+        }
+        self.replace(dst);
+    }
+
+    /// `dst` now holds `base + index × scale` for each pair of a value
+    /// `base` holds and a value `index` holds, and nothing else.
+    fn address(&mut self, dst: Loc, base: Loc, index: Loc, scale: u8) {
+        self.values.clear();
+        let (bases, indexes) = (self.range(base), self.range(index));
+        for &(_, base) in &self.state[bases] {
+            for &(_, index) in &self.state[indexes.clone()] {
+                if let (Some(base), Some(index)) = (register(base), register(index)) {
+                    self.values.push(Value::Address { base, index, scale });
+                }
             }
         }
+        self.values.sort_unstable();
+        self.replace(dst);
+    }
+
+    /// `dst` now holds exactly the sorted `values`.
+    fn replace(&mut self, dst: Loc) {
         let range = self.range(dst);
         let at = range.start;
         drop(self.state.drain(range));
@@ -414,6 +472,57 @@ const fn value(reg: Reg) -> Value {
         | Reg::Phys(register) => Value::Phys(register),
         | Reg::Virt(vreg) => Value::Virt(vreg),
     }
+}
+
+/// The program register whose value `value` is; an address is none.
+const fn register(value: Value) -> Option<Reg> {
+    match value {
+        | Value::Phys(register) => Some(Reg::Phys(register)),
+        | Value::Virt(vreg) => Some(Reg::Virt(vreg)),
+        | Value::Address { .. } => None,
+    }
+}
+
+/// Whether `fact` is `value`, or an address computed from it, so that a new
+/// `value` makes it stale.
+fn depends_on(fact: Value, value: Value) -> bool {
+    match fact {
+        | Value::Address { base, index, .. } =>
+            self::value(base) == value || self::value(index) == value,
+        | _ => fact == value,
+    }
+}
+
+/// What an indexed memory operand becomes on both sides of the comparison
+/// once the register holding its address is proven: no register, so the
+/// rest of the instruction is compared alone.
+const PROVEN_ADDRESS: Mem = Mem::new(Base::Constant(u32::MAX), 0);
+
+/// The destination, base, index and scale of an inserted `lea` that adds
+/// two general registers, the second scaled, with no displacement: an
+/// address the rewrite computed for an instruction reading more spilled
+/// registers than there are scratch registers.
+fn as_address(inst: MInst) -> Option<(Loc, Loc, Loc, u8)> {
+    let MInst::Lea {
+        dst: Reg::Phys(dst),
+        addr:
+            Mem {
+                base: Base::Reg(Reg::Phys(base)),
+                index:
+                    Some(Index {
+                        reg: Reg::Phys(index),
+                        scale,
+                    }),
+                disp: 0,
+            },
+    } = inst
+    else {
+        return None;
+    };
+    [dst, base, index]
+        .iter()
+        .all(|register| register.class() == RegClass::Gpr)
+        .then_some((Loc::Reg(dst), Loc::Reg(base), Loc::Reg(index), scale))
 }
 
 /// The destination and source of a program copy: a whole-register move

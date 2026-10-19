@@ -8,21 +8,30 @@ mod selection;
 
 use super::{
     conv::CallConv,
+    emit,
     emit_assembly,
     isel,
-    mir::MFunction,
+    mir::{
+        MFunction,
+        VReg,
+    },
     regalloc::{
         self,
         Allocation,
         CheckError,
+        Location,
     },
 };
 use crate::{
     ir::{
+        Entity,
         Module,
         parse_module,
     },
-    target::Target,
+    target::{
+        CodeOptions,
+        Target,
+    },
     util::bump::Bump,
 };
 
@@ -117,4 +126,39 @@ fn check_corrupted(
     let mut allocation = regalloc::allocate(&mut func, CallConv::of(target), &scratch);
     corrupt(&func, &mut allocation);
     regalloc::rewrite_checked(&mut func, &allocation, &scratch).map_err(|error| Box::new(*error))
+}
+
+/// Puts every virtual register of `func` in its own spill slot for its
+/// whole life: a valid allocation in which every operand of every
+/// instruction goes through the rewrite's spill code.
+fn spill_everything(func: &MFunction<'_>, allocation: &mut Allocation<'_>) {
+    let count = u32::try_from(func.vreg_count()).expect("virtual registers fit u32");
+    for slot in 0..count {
+        allocation.force(VReg::new(slot as usize), Location::Spill(slot));
+    }
+    allocation.spill_slots = count;
+}
+
+/// The assembly of `module` for `target` with every value spilled (see
+/// [`spill_everything`]); debug builds prove each function with the
+/// allocation checker first.
+fn spilled_assembly(module: &Module<'_>, target: Target) -> Result<String, String> {
+    let mut text = String::new();
+    emit(
+        module,
+        target,
+        CodeOptions::default(),
+        &mut text,
+        spill_everything,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(text)
+}
+
+/// The assembly of a textual post-ABI module for `target` with every value
+/// spilled.
+fn spilled(ir: &str, target: Target) -> String {
+    let arena = Bump::new();
+    let module = parse_module(&arena, ir).unwrap_or_else(|error| panic!("{error}\n{ir}"));
+    spilled_assembly(&module, target).unwrap_or_else(|error| panic!("{error}\n{ir}"))
 }

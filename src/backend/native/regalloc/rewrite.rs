@@ -8,9 +8,16 @@
 //! as a memory source operand is read there, and a copy to or from it
 //! becomes a single store or load. Other uses of a spilled piece (the
 //! scan's fallback) load it into a scratch register of its class just
-//! before the instruction and store it from there just after. No instruction
-//! names more than two virtual registers of one class, so two scratch registers
-//! per class suffice; all these moves leave the flags alone.
+//! before the instruction and store it from there just after. An instruction
+//! reads all its operands before it writes any, so a value it only defines
+//! shares a scratch register with one it only reads. No instruction reads
+//! more than two virtual registers of one class except one with an indexed
+//! memory operand and a third general register, such as an indexed store,
+//! whose base, index and value may all be spilled (values live into the
+//! target of an indirect jump are never split); its address then goes into
+//! the first scratch register with a `lea`, which the instruction reads
+//! instead, so two scratch registers per class always suffice. All these
+//! moves and the `lea` leave the flags alone.
 //!
 //! Copies between a register and itself stay until the checker has seen
 //! them, then go; `edges.rs` then threads away the blocks left holding
@@ -37,6 +44,7 @@ use crate::{
         mir::{
             Base,
             FrameObject,
+            Index,
             MFunction,
             MInst,
             Mem,
@@ -214,13 +222,16 @@ fn move_inst(dst: Location, src: Location) -> MInst {
     }
 }
 
-/// A scratch register in use for one instruction: the spilled register it
-/// stands for, and whether the instruction reads and writes it.
+/// A spilled register an instruction names, the scratch register that
+/// stands for it, and whether the instruction reads and writes it.
 #[derive(Clone, Copy)]
 struct Scratch {
-    owner:  Option<VReg>,
-    reads:  bool,
-    writes: bool,
+    vreg:     VReg,
+    class:    RegClass,
+    slot:     u32,
+    register: Option<PReg>,
+    reads:    bool,
+    writes:   bool,
 }
 
 /// Appends the rewritten form of the instruction at `position` to `out`,
@@ -252,52 +263,157 @@ fn rewrite_inst(
     {
         *operand = Operand::Mem(spill_slot(slot));
     }
-    // General scratch registers first, then SSE ones.
-    let mut scratch = [Scratch {
-        owner:  None,
-        reads:  false,
-        writes: false,
-    }; 4];
-    let mut slots = [0_u32; 4];
+    // The spilled registers the instruction names, each once.
+    let mut spilled = [Scratch {
+        vreg:     VReg::new(0),
+        class:    RegClass::Gpr,
+        slot:     0,
+        register: None,
+        reads:    false,
+        writes:   false,
+    }; MAX_SPILLED];
+    let mut count = 0;
     inst.visit_registers(|reg, role| {
         let Reg::Virt(vreg) = *reg else { return };
         match location(vreg, role) {
-            | Location::Reg(register) => *reg = Reg::Phys(register),
+            | Location::Reg(_) => {},
             | Location::Spill(slot) => {
-                let base = match classes[vreg.index()] {
-                    | RegClass::Gpr => 0,
-                    | RegClass::Xmm => 2,
-                };
-                let entries = &scratch[base..base + 2];
-                let index = base
-                    + entries
-                        .iter()
-                        .position(|entry| entry.owner == Some(vreg))
-                        .or_else(|| entries.iter().position(|entry| entry.owner.is_none()))
-                        .expect("an instruction names at most two registers of a class");
-                let entry = &mut scratch[index];
-                entry.owner = Some(vreg);
+                let index = spilled[..count]
+                    .iter()
+                    .position(|entry| entry.vreg == vreg)
+                    .unwrap_or_else(|| {
+                        count += 1;
+                        count - 1
+                    });
+                let entry = &mut spilled[index];
+                entry.vreg = vreg;
+                entry.class = classes[vreg.index()];
+                entry.slot = slot;
                 entry.reads |= role.reads();
                 entry.writes |= role.writes();
-                slots[index] = slot;
-                *reg = Reg::Phys(scratch_register(index));
             },
             | Location::None => unreachable!("{vreg:?} occurs, so it is live"),
         }
     });
-    for (index, entry) in scratch.iter().enumerate() {
-        if entry.owner.is_some() && entry.reads {
-            out.push(load(scratch_register(index), spill_slot(slots[index])));
+    let count = fold_address(&mut inst, &mut spilled[..count], out);
+    let spilled = &mut spilled[..count];
+    for (class, scratch) in [(RegClass::Gpr, SCRATCH), (RegClass::Xmm, SCRATCH_XMM)] {
+        assign(spilled, class, scratch);
+    }
+    inst.visit_registers(|reg, role| {
+        let Reg::Virt(vreg) = *reg else { return };
+        *reg = Reg::Phys(match location(vreg, role) {
+            | Location::Reg(register) => register,
+            | _ => spilled
+                .iter()
+                .find(|entry| entry.vreg == vreg)
+                .and_then(|entry| entry.register)
+                .expect("every spilled register has a scratch register"),
+        });
+    });
+    for entry in spilled.iter() {
+        if entry.reads {
+            let register = entry.register.expect("assigned above");
+            out.push(load(register, spill_slot(entry.slot)));
         }
     }
     let program = out.len();
     out.push(inst);
-    for (index, entry) in scratch.iter().enumerate() {
-        if entry.owner.is_some() && entry.writes {
-            out.push(store(spill_slot(slots[index]), scratch_register(index)));
+    for entry in spilled.iter() {
+        if entry.writes {
+            let register = entry.register.expect("assigned above");
+            out.push(store(spill_slot(entry.slot), register));
         }
     }
     program
+}
+
+/// More distinct virtual registers than any instruction names: an indexed
+/// store names three.
+const MAX_SPILLED: usize = 4;
+
+/// Makes room when `inst` reads three spilled general registers, the most
+/// any instruction names: the base and index of an indexed address and one
+/// more (the value an indexed store stores). The address goes into the first
+/// scratch register with a `lea`, which leaves the flags alone, and the
+/// instruction reads its memory through that register, which leaves the second
+/// scratch register for the third value. Returns how many of `spilled` the
+/// instruction still names: the base's entry stays, holding the address and
+/// loaded already, and the index's goes.
+fn fold_address(inst: &mut MInst, spilled: &mut [Scratch], out: &mut ArenaVec<'_, MInst>) -> usize {
+    let reads = spilled
+        .iter()
+        .filter(|entry| entry.class == RegClass::Gpr && entry.reads)
+        .count();
+    if reads <= 2 {
+        return spilled.len();
+    }
+    let mem = inst
+        .memory_operand()
+        .expect("only an indexed address adds a third general register");
+    let (
+        Base::Reg(Reg::Virt(base)),
+        Some(Index {
+            reg: Reg::Virt(index),
+            scale,
+        }),
+    ) = (mem.base, mem.index)
+    else {
+        unreachable!("three spilled reads include an address's base and index: {mem:?}");
+    };
+    let [first, second] = SCRATCH;
+    let find = |vreg: VReg| {
+        spilled
+            .iter()
+            .position(|entry| entry.vreg == vreg)
+            .expect("a spilled read")
+    };
+    let (base_at, index_at) = (find(base), find(index));
+    out.push(load(first, spill_slot(spilled[base_at].slot)));
+    out.push(load(second, spill_slot(spilled[index_at].slot)));
+    out.push(MInst::Lea {
+        dst:  Reg::Phys(first),
+        addr: Mem {
+            base:  Base::Reg(Reg::Phys(first)),
+            index: Some(Index {
+                reg: Reg::Phys(second),
+                scale,
+            }),
+            disp:  0,
+        },
+    });
+    *mem = Mem::new(Base::Reg(Reg::Phys(first)), mem.disp);
+    spilled[base_at].register = Some(first);
+    spilled[base_at].reads = false;
+    let last = spilled.len() - 1;
+    spilled.swap(index_at, last);
+    last
+}
+
+/// Gives each spilled register of `class` one of the class's two scratch
+/// registers: the ones the instruction reads first, each its own, then the
+/// ones it only writes, each sharing a register with a read-only one or
+/// taking a free one. An instruction reads all its operands before it writes
+/// any, so a value it defines may land where one it only read was.
+fn assign(spilled: &mut [Scratch], class: RegClass, scratch: [PReg; 2]) {
+    for reading in [true, false] {
+        for index in 0..spilled.len() {
+            let entry = spilled[index];
+            if entry.register.is_some() || entry.reads != reading || entry.class != class {
+                continue;
+            }
+            let taken = |register: PReg| {
+                spilled
+                    .iter()
+                    .any(|other| other.register == Some(register) && (reading || other.writes))
+            };
+            let register = scratch
+                .into_iter()
+                .find(|&register| !taken(register))
+                .expect("an instruction reads at most two spilled registers of a class");
+            spilled[index].register = Some(register);
+        }
+    }
 }
 
 /// A copy that has exactly one side in a spill slot, as a single load or
@@ -346,15 +462,6 @@ fn remove_identity_copies(func: &mut MFunction<'_>) {
                 } if dst == src
             )
         });
-    }
-}
-
-/// The scratch register of a scratch entry.
-const fn scratch_register(index: usize) -> PReg {
-    if index < 2 {
-        SCRATCH[index]
-    } else {
-        SCRATCH_XMM[index - 2]
     }
 }
 

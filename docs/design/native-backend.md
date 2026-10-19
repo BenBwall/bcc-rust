@@ -474,7 +474,11 @@ nothing recurses.
    spilled up to its first use. A piece that must keep one location
    (across an indirect jump) or that no register can be taken for stays in
    its slot and goes through the scratch registers (`%r11`/`%r10`,
-   `%xmm15`/`%xmm14`, still reserved), a fallback that never fails.
+   `%xmm15`/`%xmm14`, still reserved), a fallback that never fails: a value
+   an instruction only defines shares a scratch register with one it only
+   reads, and an instruction reading three spilled general registers (an
+   indexed store's base, index and value) first computes its address into
+   `%r11` with a flag-preserving `lea`.
 8. **Resolution.** Each vreg's pieces become `(from position, location)`
    lists. A move goes where a split falls inside a block while the value is
    live on both sides, and on each edge whose ends disagree: at the start of
@@ -490,7 +494,10 @@ nothing recurses.
    the set of facts "location *L* holds the current value of *v*"; a program
    instruction must be the original with registers replaced and read
    locations holding the values the original read, an inserted instruction
-   must be a whole-register move, and states meet by intersection at joins
+   must be a whole-register move or the `lea` of an indexed address (whose
+   destination then holds the symbolic address `b + i × s`, stale once `b`
+   or `i` is redefined, which the instruction using `d(r)` for `d(b, i, s)`
+   must find in `r`), and states meet by intersection at joins
    until a fixed point. Then identity copies go, a copy followed by an
    addition (or a `lea` followed by one) becomes one `lea` where the flags
    are dead, a copy straight back after a copy goes, blocks holding only a

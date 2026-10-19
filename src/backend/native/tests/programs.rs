@@ -735,6 +735,60 @@ int main(void) {
     return 0;
 }"#,
     },
+    Program {
+        // Values live into the target of an indirect jump are never split,
+        // so with more of them than registers they stay in their slots and
+        // every use goes through the scratch registers. An indexed store
+        // then reads three spilled general registers: the base, the index
+        // and the stored value (review of stage 4, finding 1).
+        name:   "indexed_stores_across_an_indirect_jump",
+        source: r#"int printf(const char *, ...);
+volatile unsigned long long v[13] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
+unsigned long long buffer[16];
+unsigned long long *volatile ptr = buffer;
+#define V(n) unsigned long long a##n = v[n];
+static unsigned long long f(unsigned long long i) {
+    V(0) V(1) V(2) V(3) V(4) V(5) V(6) V(7) V(8) V(9) V(10) V(11) V(12)
+    unsigned long long *p = ptr;
+    void *t = &&L;
+    if (i & 1) t = &&R;
+    goto *t;
+L:  p[a12 & 15] = a12; goto End;
+R:  p[a12 & 15] = a12 + 1;
+End: return i + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12;
+}
+volatile unsigned long long input[32];
+static unsigned long long run(unsigned long long i) {
+#define A(n) unsigned long long b##n = input[n];
+#define S(x, y) p[b##x & 31] = b##y;
+    A(0) A(1) A(2) A(3) A(4) A(5) A(6) A(7) A(8) A(9) A(10) A(11) A(12) A(13) A(14) A(15)
+    A(16) A(17) A(18) A(19) A(20) A(21) A(22) A(23)
+    unsigned long long *p = ptr;
+    void *dest = &&L1;
+    if (i & 1) dest = &&L2;
+    goto *dest;
+L1: S(0, 1) S(1, 2) S(2, 3) S(3, 4) S(4, 5) S(5, 6) S(6, 7) S(7, 8) S(8, 9) S(9, 10) S(10, 11)
+    S(11, 12) S(12, 13) S(13, 14) S(14, 15) S(15, 16) S(16, 17) S(17, 18) S(18, 19) S(19, 20)
+    S(20, 21) S(21, 22) S(22, 23) S(23, 0)
+    goto End;
+L2: S(0, 2) S(1, 3) S(2, 4) S(3, 5) S(4, 6) S(5, 7) S(6, 8) S(7, 9) S(8, 10) S(9, 11) S(10, 12)
+    S(11, 13) S(12, 14) S(13, 15) S(14, 16) S(15, 17) S(16, 18) S(17, 19) S(18, 20) S(19, 21)
+    S(20, 22) S(21, 23) S(22, 0) S(23, 1)
+End: return i + b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + b11 + b12 + b13 + b14
+        + b15 + b16 + b17 + b18 + b19 + b20 + b21 + b22 + b23;
+}
+int main(void) {
+    unsigned long long first = f(0);
+    printf("%llu %llu\n", first, buffer[13]);
+    unsigned long long big[32] = { 0 };
+    for (int i = 0; i < 32; i++) input[i] = i * 7 + 1;
+    ptr = big;
+    unsigned long long h = run(1) + run(0);
+    for (int i = 0; i < 32; i++) h = h * 33 + big[i];
+    printf("%llu\n", h);
+    return first != 91 || buffer[13] != 13;
+}"#,
+    },
 ];
 
 /// Programs with `long double` values, which the interpreter does not

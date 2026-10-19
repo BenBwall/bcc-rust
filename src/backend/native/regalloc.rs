@@ -59,6 +59,9 @@ pub(crate) use self::{
     checker::{
         CheckError,
         ErrorKind,
+        INSERTED,
+        Value,
+        check,
     },
     rewrite::rewrite_checked,
 };
