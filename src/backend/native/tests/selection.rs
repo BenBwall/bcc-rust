@@ -1388,3 +1388,30 @@ block0(v0: i32, v1: ptr):
     let f = function_text(&text, "f");
     assert!(f.contains("leaq\t1(%rdi), %"), "{f}");
 }
+
+#[test]
+fn compares_fuse_into_every_user_in_any_block() {
+    let text = assembly(
+        "abi lowered
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = icmp.i32 slt v0, v1
+    v3 = iconst.i32 7
+    v4 = iadd.i32 v0, v3
+    jump block1
+block1:
+    v5 = select.i32 v2, v4, v1
+    brif v2, block2, block3
+block2:
+    return v5
+block3:
+    v6 = select.i32 v2, v1, v0
+    return v6
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(!f.contains("set"), "no compare result is materialized:\n{f}");
+    assert!(f.matches("cmpl\t").count() >= 2, "{f}");
+}

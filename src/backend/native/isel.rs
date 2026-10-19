@@ -14,8 +14,9 @@
 //!   thread-local global is no leaf: it is computed where it is taken.
 //! - *Address folding*: a load or store through a leaf address or a `ptr_add`
 //!   of a register and a small constant uses one memory operand.
-//! - *Compare fusion*: an `icmp` whose only use is the `brif` or `select` of
-//!   its own block is emitted right before that user's `jcc` or `cmov`.
+//! - *Compare fusion*: an `icmp` whose every use is the condition of a `brif`
+//!   or `select`, in any block, is emitted again right before each user's `jcc`
+//!   or `cmov`; its operands dominate every user, so they are available there.
 //!
 //! [`select`] classifies every value first, in reverse post-order so that
 //! operands are classified before their users, then selects the blocks.
@@ -137,6 +138,10 @@ pub(crate) fn select<'a>(
     for block in body.blocks() {
         if tree.is_reachable(block) {
             selector.find_fusions(block);
+        }
+    }
+    for block in body.blocks() {
+        if tree.is_reachable(block) {
             selector.block_map[block.index()] = Some(selector.func.block(arena));
         }
     }
@@ -193,45 +198,47 @@ pub(super) enum AddrBase {
 
 /// The selection state of one function.
 pub(super) struct Selector<'a, 'm, 'ir> {
-    pub(super) module:    &'m Module<'ir>,
-    pub(super) function:  &'m Function<'ir>,
-    pub(super) body:      &'m Body<'ir>,
-    pub(super) signature: Signature<'ir>,
-    pub(super) conv:      CallConv,
-    pub(super) target:    Target,
+    pub(super) module:     &'m Module<'ir>,
+    pub(super) function:   &'m Function<'ir>,
+    pub(super) body:       &'m Body<'ir>,
+    pub(super) signature:  Signature<'ir>,
+    pub(super) conv:       CallConv,
+    pub(super) target:     Target,
     /// The `-ftls-model`: local-exec also reaches declared thread-locals
     /// at a link-time offset.
-    pub(super) tls_model: TlsModel,
-    pub(super) arena:     &'a Bump,
-    pub(super) func:      MFunction<'a>,
+    pub(super) tls_model:  TlsModel,
+    pub(super) arena:      &'a Bump,
+    pub(super) func:       MFunction<'a>,
     /// Each value's representation.
-    pub(super) values:    ArenaVec<'a, ValueKind>,
+    pub(super) values:     ArenaVec<'a, ValueKind>,
     /// Each value's number of uses in reachable code.
-    pub(super) uses:      ArenaVec<'a, u32>,
+    pub(super) uses:       ArenaVec<'a, u32>,
+    /// How many of those are the condition of a `brif` or `select`.
+    pub(super) conditions: ArenaVec<'a, u32>,
     /// Instructions with nothing to emit at their position: leaves,
     /// aliases, and compares fused into their user.
-    pub(super) skipped:   ArenaVec<'a, bool>,
+    pub(super) skipped:    ArenaVec<'a, bool>,
     /// Compares fused into their user.
-    pub(super) fused:     ArenaVec<'a, bool>,
+    pub(super) fused:      ArenaVec<'a, bool>,
     /// Each reachable IR block's machine block.
-    pub(super) block_map: ArenaVec<'a, Option<MBlock>>,
+    pub(super) block_map:  ArenaVec<'a, Option<MBlock>>,
     /// The block instructions are appended to.
-    pub(super) current:   MBlock,
+    pub(super) current:    MBlock,
     /// How `return` hands back a structure result.
-    pub(super) result:    calls::ResultArea,
+    pub(super) result:     calls::ResultArea,
     /// What `va_start` stores, prepared by the entry sequence.
-    pub(super) va_start:  calls::VaStart,
+    pub(super) va_start:   calls::VaStart,
     /// For each labeled IR block, the block its address names and where
     /// its incoming registers start in [`Self::incoming`].
-    pub(super) labeled:   ArenaVec<'a, Option<edges::LabelTarget>>,
+    pub(super) labeled:    ArenaVec<'a, Option<edges::LabelTarget>>,
     /// The registers an `indirect_br` assigns a labeled block's parameters
     /// through, one per parameter, in block order.
-    pub(super) incoming:  ArenaVec<'a, ValueKind>,
+    pub(super) incoming:   ArenaVec<'a, ValueKind>,
     /// The frame slot of [`Self::scratch`], once a sequence needs it.
-    pub(super) scratch:   Option<u32>,
+    pub(super) scratch:    Option<u32>,
     /// The symbols indexed operands use as a base, with the register the
     /// entry block loads each address into.
-    pub(super) bases:     ArenaVec<'a, (Symbol, Reg)>,
+    pub(super) bases:      ArenaVec<'a, (Symbol, Reg)>,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -255,6 +262,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             func: MFunction::new_in(arena),
             values: filled(arena, body.value_count(), ValueKind::Unknown),
             uses: filled(arena, body.value_count(), 0),
+            conditions: filled(arena, body.value_count(), 0),
             skipped: filled(arena, body.inst_count(), false),
             fused: filled(arena, body.inst_count(), false),
             block_map: filled(arena, body.block_count(), None),
@@ -454,31 +462,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             let uses = &mut self.uses;
             self.body
                 .visit_operands(inst, |value| uses[value.index()] += 1);
+            if let InstData::Brif { cond, .. }
+            | InstData::Select {
+                args: [cond, ..], ..
+            } = *self.body.inst(inst)
+            {
+                self.conditions[cond.index()] += 1;
+            }
         }
     }
 
-    /// Marks the compares of `block` whose only use is the block's `brif`
-    /// condition or a later `select` condition in the block.
+    /// Marks the compares of `block` whose every use is the condition of
+    /// a `brif` or `select`; each user emits the comparison itself.
     fn find_fusions(&mut self, block: Block) {
-        let insts = self.body.block_insts(block);
-        for &user in insts {
-            let (InstData::Brif { cond, .. }
-            | InstData::Select {
-                args: [cond, ..], ..
-            }) = *self.body.inst(user)
-            else {
-                continue;
-            };
-            if self.uses[cond.index()] != 1 {
+        for &compare in self.body.block_insts(block) {
+            if !matches!(self.body.inst(compare), InstData::IntCompare { .. })
+                || self.skipped[compare.index()]
+            {
                 continue;
             }
-            let ValueDef::Result(compare) = self.body.value_def(cond) else {
+            let Some(result) = self.body.inst_result(compare) else {
                 continue;
             };
-            if matches!(self.body.inst(compare), InstData::IntCompare { .. })
-                && !self.skipped[compare.index()]
-                && insts.contains(&compare)
-            {
+            let uses = self.uses[result.index()];
+            if uses > 0 && self.conditions[result.index()] == uses {
                 self.fused[compare.index()] = true;
                 self.skipped[compare.index()] = true;
             }
