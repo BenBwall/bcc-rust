@@ -122,8 +122,10 @@ int main(void) {
 ";
 
 /// The C exchange, with the bcc side through the native back end and,
-/// for comparison, through the LLVM back end. Win64's assembly is built
-/// and assembled where it cannot run.
+/// for comparison, through the LLVM back end. Both sides call the runtime
+/// library's `__int128` conversions, so each target runs only where it
+/// links hosted: System V on Linux, Win64 on Windows. Every target's code
+/// is still emitted on every host.
 #[test]
 fn long_double_and_int128_conversions_cross_natively() {
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
@@ -138,8 +140,14 @@ fn long_double_and_int128_conversions_cross_natively() {
             lower_abi(&mut module, target, &scratch).unwrap();
             assert_verified(&module, Profile::PostAbi, &module.to_string());
             let name = format!("wide-floats-{optimized}");
-            assert_conforms(&name, target, &module, CLANG);
-            assert_native_conforms(&format!("{name}-native"), target, &module, CLANG);
+            assert_conforms_with(&name, target, Runtime::Library, &module, CLANG);
+            assert_native_conforms_with(
+                &format!("{name}-native"),
+                target,
+                Runtime::Library,
+                &module,
+                CLANG,
+            );
         }
     }
 }
@@ -221,7 +229,9 @@ int main(void) {
 ";
 
 /// The `__float128` exchange on System V, the convention under which Clang
-/// passes the type in SSE registers.
+/// passes the type in SSE registers. Its arithmetic calls the runtime
+/// library, so it runs only on a Linux host; a Windows host emits the code
+/// and skips the freestanding WSL run.
 #[test]
 fn quad_values_cross_natively() {
     for optimized in [false, true] {
@@ -233,10 +243,17 @@ fn quad_values_cross_natively() {
         lower_abi(&mut module, Target::LinuxGnu, &Bump::new()).unwrap();
         assert_verified(&module, Profile::PostAbi, &module.to_string());
         let name = format!("quad-{optimized}");
-        assert_conforms(&name, Target::LinuxGnu, &module, QUAD_CLANG);
-        assert_native_conforms(
+        assert_conforms_with(
+            &name,
+            Target::LinuxGnu,
+            Runtime::Library,
+            &module,
+            QUAD_CLANG,
+        );
+        assert_native_conforms_with(
             &format!("{name}-native"),
             Target::LinuxGnu,
+            Runtime::Library,
             &module,
             QUAD_CLANG,
         );
