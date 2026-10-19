@@ -156,10 +156,11 @@ pub(super) fn plan_leaves<'tu, 's>(
                     ));
                 }
                 leaves.push(Leaf::Scalar {
-                    offset:     place(destination.offset, source)?,
-                    ty:         destination.ty,
+                    offset: place(destination.offset, source)?,
+                    ty: destination.ty,
                     expression: plan.values[value.0 as usize].expression,
-                    bit_field:  bit_field.map(|bits| BitFieldBits {
+                    value,
+                    bit_field: bit_field.map(|bits| BitFieldBits {
                         bit_offset: bits.bit_offset,
                         width:      bits.width,
                     }),
@@ -186,6 +187,7 @@ pub(super) fn plan_leaves<'tu, 's>(
                     offset,
                     ty: destination.ty,
                     expression,
+                    value,
                 });
             },
             | InitOperation::String {

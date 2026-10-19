@@ -15,7 +15,6 @@
 //! C99: §6.7.8 paragraphs 12-22, pp. 126-127; PDF pp. 138-139.
 
 mod coverage;
-#[cfg(debug_assertions)]
 mod plan;
 
 use coverage::CoverageIndex;
@@ -65,6 +64,8 @@ use crate::{
         },
         semantic_analysis::{
             ArrayBound,
+            InitValueId,
+            InitializerPlan,
             Integer,
             SemanticTranslationUnit,
             TagKind,
@@ -100,6 +101,8 @@ pub(super) enum Leaf<'tu> {
         offset:     u64,
         ty:         TypeId,
         expression: &'tu Expression<'tu>,
+        /// The plan value `expression` evaluates.
+        value:      InitValueId,
         /// For a bit-field, where its bits are from `offset`.
         bit_field:  Option<BitFieldBits>,
     },
@@ -117,54 +120,61 @@ pub(super) enum Leaf<'tu> {
         offset:     u64,
         ty:         TypeId,
         expression: &'tu Expression<'tu>,
+        /// The plan value `expression` evaluates.
+        value:      InitValueId,
     },
 }
 
-/// The stores of `initializer` for an object of type `ty`, in source order.
+/// The stores of `initializer` for an object of type `ty`, in source order,
+/// from the placement plan semantic analysis retained for it, and that plan.
 /// `flexible` is the array type semantic analysis gave the flexible array
 /// member of a static structure whose initializer fills it (GNU), with room
 /// for every element the initializer writes, including those a later
 /// initializer of the member replaces; the caller cuts the replaced tail
 /// off the object.
 /// C99: §6.7.8 paragraphs 14-19, pp. 126-127; PDF pp. 138-139.
-pub(super) fn leaves<'tu, 's>(
-    sema: &SemanticTranslationUnit<'tu>,
+pub(super) fn leaves<'a, 'tu, 's>(
+    sema: &'a SemanticTranslationUnit<'tu>,
     ty: TypeId,
     initializer: &'tu Initializer<'tu>,
     flexible: Option<TypeId>,
     arena: &'s Bump,
-) -> Result<ArenaVec<'s, Leaf<'tu>>, LoweringError> {
-    let leaves = walk(sema, ty, initializer, flexible, arena);
+) -> Result<(ArenaVec<'s, Leaf<'tu>>, &'a InitializerPlan<'tu>), LoweringError> {
+    let plan = sema.initializers.plan(initializer).ok_or_else(|| {
+        LoweringError::missing(
+            "an initializer has no retained plan",
+            initializer.source_vectors,
+        )
+    })?;
+    debug_assert_eq!(plan.ty, ty, "the plan completes the object's type");
+    let leaves = plan::plan_leaves(sema, plan, arena);
     #[cfg(debug_assertions)]
-    compare_plan(sema, ty, initializer, &leaves);
-    leaves
+    compare_walker(sema, ty, initializer, flexible, &leaves);
+    #[cfg(not(debug_assertions))]
+    let _ = flexible;
+    Ok((leaves?, plan))
 }
 
-/// Transitional M8 check, deleted with the walker: the plan semantic
-/// analysis retained for `initializer` places exactly the leaves the walker
-/// finds, and refuses exactly what it refuses. Its own arena leaves the
-/// caller's scratch high-water mark unchanged; it allocates globally only to
-/// report a disagreement.
+/// The value index the walker gives its leaves, which the comparison ignores.
+const WALKED: InitValueId = InitValueId(u32::MAX);
+
+/// Transitional M8 check, deleted with the walker: the leaves of the plan
+/// semantic analysis retained for `initializer` are exactly those the walker
+/// finds, or the walker refuses exactly what the plan refuses. Its own arena
+/// leaves the caller's scratch high-water mark unchanged; it allocates
+/// globally only to report a disagreement.
 #[cfg(debug_assertions)]
-fn compare_plan<'tu>(
+fn compare_walker<'tu>(
     sema: &SemanticTranslationUnit<'tu>,
     ty: TypeId,
     initializer: &'tu Initializer<'tu>,
-    old: &Result<ArenaVec<'_, Leaf<'tu>>, LoweringError>,
+    flexible: Option<TypeId>,
+    new: &Result<ArenaVec<'_, Leaf<'tu>>, LoweringError>,
 ) {
     let arena = Bump::new();
-    let arena = &arena;
-    let new = match sema.initializers.plan(initializer) {
-        | Some(plan) => {
-            assert_eq!(plan.ty, ty, "the plan completes the object's type");
-            plan::plan_leaves(sema, plan, arena)
-        },
-        | None => Err(LoweringError::missing(
-            "an initializer has no retained plan",
-            initializer.source_vectors,
-        )),
-    };
-    let same = match (old, &new) {
+    let old = walk(sema, ty, initializer, flexible, &arena);
+    let old = &old;
+    let same = match (old, new) {
         | (Ok(old), Ok(new)) =>
             old.len() == new.len() && old.iter().zip(new.iter()).all(|(a, b)| key(a) == key(b)),
         | (Err(old), Err(new)) => old == new,
@@ -175,7 +185,7 @@ fn compare_plan<'tu>(
         "M8 plan disagrees with the walker at {:?}:\nwalker {:?}\nplan   {:?}",
         initializer.source_vectors,
         summary(old),
-        summary(&new)
+        summary(new)
     );
 }
 
@@ -197,6 +207,7 @@ fn key(leaf: &Leaf<'_>) -> Key {
             ty,
             expression,
             bit_field,
+            ..
         } => (
             1,
             offset,
@@ -226,6 +237,7 @@ fn key(leaf: &Leaf<'_>) -> Key {
             offset,
             ty,
             expression,
+            ..
         } => (
             3,
             offset,
@@ -288,6 +300,7 @@ fn walk<'tu, 's>(
             offset: 0,
             ty,
             expression,
+            value: WALKED,
             bit_field: None,
         });
         return Ok(leaves);
@@ -380,6 +393,7 @@ fn walk<'tu, 's>(
                         offset,
                         ty: subobject.ty,
                         expression,
+                        value: WALKED,
                         bit_field: subobject.bit_field,
                     });
                 } else {
@@ -574,6 +588,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                 offset,
                 ty,
                 expression,
+                value: WALKED,
                 bit_field: None,
             }));
         }
@@ -605,6 +620,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                 offset,
                 ty,
                 expression,
+                value: WALKED,
             }));
         }
         Ok(None)
@@ -893,7 +909,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         ty: TypeId,
         initializer: &'tu Initializer<'tu>,
     ) -> Result<(), LoweringError> {
-        let leaves = leaves(self.unit.sema, ty, initializer, None, self.scratch)?;
+        let (leaves, plan) = leaves(self.unit.sema, ty, initializer, None, self.scratch)?;
         let coverage = CoverageIndex::new(
             &leaves,
             self.unit.sema,
@@ -904,15 +920,9 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let mut covered = ArenaVec::new_in(self.scratch);
         let mut search = ArenaVec::new_in(self.scratch);
         let mut tasks = ArenaVec::with_capacity_in(2 * leaves.len(), self.scratch);
-        let mut values = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
-        let mut counts = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
-        for leaf in &leaves {
-            if let Leaf::Scalar { expression, .. } | Leaf::Copy { expression, .. } = leaf {
-                *counts
-                    .entry(std::ptr::from_ref(*expression).addr())
-                    .or_insert(0_usize) += 1;
-            }
-        }
+        // Where each plan value a range repeats is remembered once evaluated.
+        let mut remembered = ArenaVec::with_capacity_in(plan.values.len(), self.scratch);
+        remembered.resize(plan.values.len(), usize::MAX);
         for (index, &leaf) in leaves.iter().enumerate() {
             match leaf {
                 | Leaf::Zero {
@@ -1025,9 +1035,16 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                     offset,
                     ty,
                     expression,
+                    value,
                     bit_field,
                 } => {
-                    self.initializer_expression(&mut tasks, &mut values, &counts, expression, ty);
+                    self.initializer_expression(
+                        &mut tasks,
+                        &mut remembered,
+                        plan.values[value.0 as usize].repeated.then_some(value),
+                        expression,
+                        ty,
+                    );
                     tasks.push(Task::Initialize {
                         object,
                         offset,
@@ -1039,8 +1056,15 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                     offset,
                     ty,
                     expression,
+                    value,
                 } => {
-                    self.initializer_expression(&mut tasks, &mut values, &counts, expression, ty);
+                    self.initializer_expression(
+                        &mut tasks,
+                        &mut remembered,
+                        plan.values[value.0 as usize].repeated.then_some(value),
+                        expression,
+                        ty,
+                    );
                     tasks.push(Task::Initialize {
                         object,
                         offset,
@@ -1067,29 +1091,33 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         Ok(())
     }
 
-    /// A GNU range initializer evaluates each expression once, then reuses
-    /// its converted value for every selected subobject, including aggregates.
+    /// Evaluates the expression of a plan value. A GNU range stores one
+    /// value into each element (`repeated`): its first store evaluates the
+    /// expression once and remembers the converted value, including an
+    /// aggregate's, which the later stores reuse.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
     fn initializer_expression(
         &mut self,
         tasks: &mut ArenaVec<'s, Task<'tu>>,
-        values: &mut ArenaMap<'s, usize, usize>,
-        counts: &ArenaMap<'s, usize, usize>,
+        remembered: &mut [usize],
+        repeated: Option<InitValueId>,
         expression: &'tu Expression<'tu>,
         ty: TypeId,
     ) {
-        let key = std::ptr::from_ref(expression).addr();
-        if counts.get(&key).copied().unwrap_or(0) <= 1 {
+        let Some(value) = repeated else {
             tasks.push(Task::Evaluate(expression));
-        } else if let Some(&index) = values.get(&key) {
-            tasks.push(Task::ReuseInitializer(index));
+            return;
+        };
+        let slot = &mut remembered[value.0 as usize];
+        if *slot != usize::MAX {
+            tasks.push(Task::ReuseInitializer(*slot));
         } else {
             let index = self.initializer_values.len();
             self.initializer_values.push(Item {
                 operand: Operand::Void,
                 ty,
             });
-            _ = values.insert(key, index);
+            *slot = index;
             tasks.push(Task::Evaluate(expression));
             tasks.push(Task::SnapshotArgument(expression));
             tasks.push(Task::RememberInitializer(index));

@@ -25,13 +25,6 @@
 //! C99: §6.7.8 paragraphs 9-22, pp. 126-127; PDF pp. 138-139.
 //! GNU extension: GCC manual, "Designated Initializers" (ranges).
 //! <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "M8 switches lowering to retained plans in its next step"
-    )
-)]
 
 use rustc_hash::FxBuildHasher;
 
