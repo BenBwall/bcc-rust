@@ -60,6 +60,7 @@ pub(crate) use self::{
         CheckError,
         ErrorKind,
         INSERTED,
+        Loc,
         Value,
         check,
     },

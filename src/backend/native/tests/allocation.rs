@@ -33,6 +33,7 @@ use crate::{
             CheckError,
             ErrorKind,
             INSERTED,
+            Loc,
             Location,
             Value,
             check,
@@ -850,4 +851,194 @@ block0(v0: f64):
             }
         }
     }
+}
+
+/// The `(slot, register)` of each load of a spill slot directly followed by
+/// a store of the same register back into it.
+fn slot_round_trips(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .windows(2)
+        .filter_map(|pair| {
+            let (slot, register) = move_operands(pair[0])?;
+            let (stored, back) = move_operands(pair[1])?;
+            (slot.contains("(%r")
+                && register.starts_with('%')
+                && stored == register
+                && back == slot)
+                .then(|| format!("{slot} through {register}"))
+        })
+        .collect()
+}
+
+/// The source and destination of a `mov*` line of an assembly listing.
+fn move_operands(line: &str) -> Option<(&str, &str)> {
+    let (op, operands) = line.trim().split_once('\t')?;
+    let (src, dst) = operands.split_once(", ")?;
+    op.starts_with("mov").then_some((src, dst))
+}
+
+#[test]
+fn a_copy_within_one_spill_slot_emits_nothing() {
+    // Review of stage 4, observation 2: a copy between two values that
+    // coalescing joined, made while their slot holds them, loaded the slot
+    // and stored it back. With every value spilled, every coalesced copy
+    // is one: the two-address forms' copies, block arguments, results.
+    let loop_ir = "
+function @g(i64, f64) -> f64 external {
+block0(v0: i64, v1: f64):
+    v2 = iconst.i64 0
+    jump block1(v2, v1)
+block1(v3: i64, v4: f64):
+    v5 = iadd.i64 v3, v0
+    v6 = fmul.f64 v4, v1
+    v7 = icmp.i64 slt v5, v0
+    brif v7, block1(v5, v6), block2
+block2:
+    return v6
+}";
+    for (form, function) in FORMS.iter().copied().chain([("loop", loop_ir)]) {
+        let ir = format!("abi lowered{function}\n");
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            let text = spilled(&ir, target);
+            let trips = slot_round_trips(&text);
+            assert!(trips.is_empty(), "{form}, {target:?}: {trips:?}\n{text}");
+        }
+    }
+}
+
+/// Checks the program `v0 = %rdi; v1 = v0; %rax = v1; return %rax` against
+/// a rewrite that keeps `v0` and `v1` in spill slot 0 and leaves their copy
+/// as the placeholder `Store` of the slot to itself, after `mutate` changed
+/// the program, the rewrite and its origins.
+fn check_slot_copy(
+    mutate: impl FnOnce(&mut Vec<MInst>, &mut Vec<MInst>, &mut Vec<u32>),
+) -> Result<(), Box<CheckError>> {
+    let arena = Bump::new();
+    let mut func = MFunction::new_in(&arena);
+    let block = func.block(&arena);
+    let [first, second] = [func.vreg(), func.vreg()];
+    let copy = |dst: Reg, src: Reg| MInst::Mov {
+        width: Width::B64,
+        dst,
+        src: Operand::Reg(src),
+    };
+    let (v0, v1) = (Reg::Virt(first), Reg::Virt(second));
+    let rax = Reg::Phys(PReg::Rax);
+    let ret = MInst::Ret {
+        uses: PRegSet::of(&[PReg::Rax]),
+    };
+    let mut original = vec![
+        copy(v0, Reg::Phys(PReg::Rdi)),
+        copy(v1, v0),
+        copy(rax, v1),
+        ret,
+    ];
+    let slot = Mem::new(Base::Frame(FrameObject::Spill(0)), 0);
+    let mut rewritten = vec![
+        MInst::Store {
+            width: Width::B64,
+            dst:   slot,
+            src:   Operand::Reg(Reg::Phys(PReg::Rdi)),
+        },
+        MInst::Store {
+            width: Width::B64,
+            dst:   slot,
+            src:   Operand::Mem(slot),
+        },
+        MInst::Mov {
+            width: Width::B64,
+            dst:   rax,
+            src:   Operand::Mem(slot),
+        },
+        ret,
+    ];
+    let mut origins = vec![0, 1, 2, 3];
+    mutate(&mut original, &mut rewritten, &mut origins);
+    func.blocks[block.index()].insts.extend(rewritten);
+    check(&func, &[&original[..]], &[&origins[..]], &arena).map_err(|error| Box::new(*error))
+}
+
+#[test]
+fn the_checker_accepts_a_copy_within_one_spill_slot() {
+    check_slot_copy(|_, _, _| {}).unwrap();
+}
+
+#[test]
+fn the_checker_rejects_a_copy_within_the_wrong_spill_slot() {
+    let slot = |slot: u32| Mem::new(Base::Frame(FrameObject::Spill(slot)), 0);
+    // The placeholder names a slot that does not hold the source.
+    let error = check_slot_copy(|_, rewritten, _| {
+        rewritten[1] = MInst::Store {
+            width: Width::B64,
+            dst:   slot(1),
+            src:   Operand::Mem(slot(1)),
+        };
+    })
+    .expect_err("slot 1 does not hold v0");
+    assert!(
+        matches!(
+            error.kind,
+            ErrorKind::Missing {
+                loc: Loc::Spill(1),
+                ..
+            }
+        ),
+        "{error}"
+    );
+    // A copy between two slots is not an x86 instruction.
+    let error = check_slot_copy(|_, rewritten, _| {
+        rewritten[1] = MInst::Store {
+            width: Width::B64,
+            dst:   slot(1),
+            src:   Operand::Mem(slot(0)),
+        };
+    })
+    .expect_err("a memory-to-memory move");
+    assert!(matches!(error.kind, ErrorKind::Shape), "{error}");
+    // The copy cannot simply be left out: every program instruction has
+    // its rewritten form.
+    let error = check_slot_copy(|_, rewritten, origins| {
+        let _placeholder = rewritten.remove(1);
+        *origins = vec![0, 2, 3];
+    })
+    .expect_err("the copy is missing");
+    assert!(matches!(error.kind, ErrorKind::Order), "{error}");
+}
+
+#[test]
+fn the_checker_rejects_a_slot_overwritten_while_a_copy_of_it_lives() {
+    // The program sets v0 again before reading v1. Both live in slot 0, so
+    // the new v0 overwrites the v1 the slot held: the slot cannot hold the
+    // two values at once.
+    let error = check_slot_copy(|original, rewritten, origins| {
+        original.insert(
+            2,
+            MInst::Mov {
+                width: Width::B64,
+                dst:   Reg::Virt(VReg::new(0)),
+                src:   Operand::Reg(Reg::Phys(PReg::Rsi)),
+            },
+        );
+        rewritten.insert(
+            2,
+            MInst::Store {
+                width: Width::B64,
+                dst:   Mem::new(Base::Frame(FrameObject::Spill(0)), 0),
+                src:   Operand::Reg(Reg::Phys(PReg::Rsi)),
+            },
+        );
+        *origins = vec![0, 1, 2, 3, 4];
+    })
+    .expect_err("v1 was overwritten");
+    assert!(
+        matches!(
+            error.kind,
+            ErrorKind::Missing {
+                value: Value::Virt(_),
+                loc:   Loc::Spill(0),
+            }
+        ),
+        "{error}"
+    );
 }
