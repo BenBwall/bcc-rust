@@ -1769,6 +1769,20 @@ int main(void) { printf("main\n"); return zero; }
                          f(void){return 0;}",
                         false,
                     ),
+                    (
+                        "int f(void){static int b[4] \
+                         __attribute__((section(\".bss.t\")))={1};return b[0];}",
+                        true,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\")))={1}; static int \
+                         f(void){return b[0];} int g(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\")))={1}; int *p=b;",
+                        true,
+                    ),
                 ] {
                     let object = temporary("bss-static.o");
                     let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
@@ -1789,6 +1803,11 @@ int main(void) { printf("main\n"); return zero; }
                     );
                     assert_eq!(object.exists(), !emitted);
                     if emitted {
+                        assert!(
+                            text(&output.stderr).contains("-->"),
+                            "{}",
+                            text(&output.stderr)
+                        );
                         assert!(
                             text(&output.stderr)
                                 .contains("BSS section '.bss.t' cannot have non-zero bytes"),

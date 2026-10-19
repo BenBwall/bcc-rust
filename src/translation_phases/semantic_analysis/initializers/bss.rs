@@ -24,7 +24,6 @@ use super::super::{
     DefinitionKind,
     InitOperation,
     InitializerPlan,
-    Linkage,
     Scalar,
     SemanticError,
     SemanticErrorKind,
@@ -72,19 +71,13 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
     ) {
         return;
     }
+    let mut reachable = None;
     for definition in sema.definitions {
         if definition.kind != DefinitionKind::Object {
             continue;
         }
         let binding = definition.binding;
         let attributes = sema.entity_attributes(binding);
-        // Match BssFunction: internal objects without `used` may be omitted.
-        // Backend guards still validate any retained through evaluated uses.
-        if sema.bindings[binding].linkage != Linkage::External
-            && !attributes.is_some_and(|attributes| attributes.used)
-        {
-            continue;
-        }
         let Some(section) = attributes
             .and_then(|a| a.section)
             .filter(|section| ElfSectionKind::named(section).is_bss())
@@ -97,6 +90,14 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
         let Some(plan) = sema.initializers.plan(initializer) else {
             continue;
         };
+        // Keep source-backed diagnostics for exactly the objects emission
+        // retains, including evaluated references from emitted initializers.
+        if !reachable
+            .get_or_insert_with(|| sema.reachable_bindings(context, scratch, |_| false))
+            .contains(&binding)
+        {
+            continue;
+        }
         let size = sema
             .flexible_object_size(binding)
             .or_else(|| sema.types.layout(plan.ty).map(|l| l.size));
