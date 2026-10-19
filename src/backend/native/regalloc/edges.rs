@@ -177,7 +177,8 @@ pub(super) fn thread_jumps<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
 const DUPLICATED: usize = 8;
 
 /// Replaces each `jmp` to a short block that ends in a conditional branch
-/// by a copy of that block, unless the jump falls through to it anyway. A
+/// to the jump's next block by a copy of that block, unless the jump falls
+/// through to it anyway. A
 /// loop whose test is at the top then branches back from its bottom on the
 /// copied test instead of jumping to the top and testing there (loop
 /// rotation), and an `if` that joins before another test branches on it
@@ -190,10 +191,14 @@ pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
             continue;
         };
         let insts = &func.blocks[target.index()].insts;
+        // The copy pays off when its branch can fall through to the next
+        // block; else it is a `jcc` and a `jmp`, as many as before.
+        let next = MBlock::new(block + 1);
         if target.index() == block + 1
             || target.index() == block
             || insts.len() > DUPLICATED
-            || !matches!(insts.last(), Some(MInst::Jcc { .. }))
+            || !matches!(insts.last(), Some(&MInst::Jcc { taken, not_taken, .. })
+                if taken == next || not_taken == next)
             || insts.iter().any(|inst| matches!(inst, MInst::Call { .. }))
         {
             continue;
