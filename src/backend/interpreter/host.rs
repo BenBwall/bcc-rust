@@ -128,7 +128,12 @@ impl Host for DefaultHost<'_> {
     }
 
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
-        check_signature(call)?;
+        if crate::builtins::external_signature(call.name).is_some()
+            || HOST_FUNCTIONS.contains(&call.name)
+            || checked::provides(call.name)
+        {
+            check_signature(call, self.long_width, self.long_double)?;
+        }
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
             return result;
         }
@@ -297,38 +302,20 @@ const HOST_FUNCTIONS: [&str; 26] = [
 /// All supported targets use i32 int and i64 `size_t`. Open C declarations are
 /// checked using their call operands, after default argument promotions.
 /// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84.
-fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
-    use Type::{
-        I32,
-        I64,
-        Ptr,
+fn check_signature(call: HostCall<'_>, long_width: u32, long_double: Type) -> Result<(), Fault> {
+    let Some(signature) = crate::builtins::external_signature(call.name) else {
+        return Err(UbKind::SignatureMismatch.into());
     };
-    let (params, result, variadic): (&[Type], Option<Type>, bool) = match call.name {
-        | "putchar" | "abs" | "isprint" => (&[I32], Some(I32), false),
-        | "puts" => (&[Ptr], Some(I32), false),
-        | "printf" => (&[Ptr], Some(I32), true),
-        | "sprintf" => (&[Ptr, Ptr], Some(I32), true),
-        | "snprintf" => (&[Ptr, I64, Ptr], Some(I32), true),
-        | "malloc" => (&[I64], Some(Ptr), false),
-        | "calloc" => (&[I64, I64], Some(Ptr), false),
-        | "free" => (&[Ptr], None, false),
-        | "memcpy" | "memmove" | "strncpy" => (&[Ptr, Ptr, I64], Some(Ptr), false),
-        | "memcmp" | "strncmp" => (&[Ptr, Ptr, I64], Some(I32), false),
-        | "strcmp" => (&[Ptr, Ptr], Some(I32), false),
-        | "strcpy" => (&[Ptr, Ptr], Some(Ptr), false),
-        | "memchr" | "memset" => (&[Ptr, I32, I64], Some(Ptr), false),
-        | "strchr" | "strrchr" => (&[Ptr, I32], Some(Ptr), false),
-        | "strlen" => (&[Ptr], Some(I64), false),
-        | "exit" => (&[I32], None, false),
-        | "abort" => (&[], None, false),
-        | _ => match checked::signature(call.name) {
-            | Some(signature) => signature,
-            | None => return Ok(()),
-        },
-    };
-    if call.result != result
-        || (!variadic && call.arg_types.len() != params.len())
-        || !call.arg_types.starts_with(params)
+    if call.result != external_type(signature.result, long_width, long_double)
+        || (!signature.variadic && call.arg_types.len() != signature.parameters.len())
+        || call.arg_types.len() < signature.parameters.len()
+        || call
+            .arg_types
+            .iter()
+            .zip(signature.parameters)
+            .any(|(&actual, &expected)| {
+                Some(actual) != external_type(expected, long_width, long_double)
+            })
     {
         return Err(UbKind::SignatureMismatch.into());
     }
@@ -737,5 +724,74 @@ impl<'a> DefaultHost<'a> {
             },
             ..Self::new_in(arena)
         }
+    }
+}
+
+/// Projects a neutral external signature to the interpreter's scalar ABI.
+/// All current targets have 64-bit pointers and `size_t`; `long` and `long
+/// double` follow the configured target. No semantic types enter the host.
+fn external_type(
+    pattern: crate::builtins::SignatureType,
+    long_width: u32,
+    long_double: Type,
+) -> Option<Type> {
+    use crate::{
+        builtins::SignatureType as T,
+        target::Scalar as S,
+    };
+    Some(match pattern {
+        | T::Scalar(S::Bool | S::Char | S::SignedChar | S::UnsignedChar) => Type::I8,
+        | T::Scalar(S::Short | S::UnsignedShort) => Type::I16,
+        | T::Scalar(S::Int | S::UnsignedInt) => Type::I32,
+        | T::Scalar(S::Long | S::UnsignedLong) if long_width == 32 => Type::I32,
+        | T::Scalar(S::Long | S::UnsignedLong | S::LongLong | S::UnsignedLongLong) | T::Size =>
+            Type::I64,
+        | T::Scalar(S::Int128 | S::UnsignedInt128) => Type::I128,
+        | T::Scalar(S::Float) => Type::F32,
+        | T::Scalar(S::Double) => Type::F64,
+        | T::Scalar(S::LongDouble) => long_double,
+        | T::Pointer(..) | T::VaList | T::File | T::VectorPointer(..) => Type::Ptr,
+        | _ => return None,
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn m7_external_signatures_accept_cataloged_host_calls() {
+    for name in HOST_FUNCTIONS.iter().copied().chain([
+        "__memcpy_chk",
+        "__memmove_chk",
+        "__mempcpy_chk",
+        "__memset_chk",
+        "__strcpy_chk",
+        "__stpcpy_chk",
+        "__strncpy_chk",
+        "__stpncpy_chk",
+        "__strcat_chk",
+        "__strncat_chk",
+        "__sprintf_chk",
+        "__snprintf_chk",
+        "__vsprintf_chk",
+        "__vsnprintf_chk",
+        "__vprintf_chk",
+        "__vfprintf_chk",
+    ]) {
+        let signature = crate::builtins::external_signature(name).expect("cataloged signature");
+        let arena = Bump::new();
+        let mut params = ArenaVec::new_in(&arena);
+        params.extend(
+            signature
+                .parameters
+                .iter()
+                .map(|&p| external_type(p, 64, Type::F80).unwrap()),
+        );
+        let call = HostCall {
+            name,
+            args: &[],
+            arg_types: &params,
+            result: external_type(signature.result, 64, Type::F80),
+            va_list: HostVaList::None,
+        };
+        assert!(check_signature(call, 64, Type::F80).is_ok(), "{name}");
     }
 }

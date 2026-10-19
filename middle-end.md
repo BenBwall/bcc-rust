@@ -629,6 +629,13 @@ the neutral registry and retain object types and memory-order operands for
 execution. Scalar/library support is tested against the registry on every
 current target and environment.
 
+**M7 is complete.** Lowering queries finalized entity records for effective
+symbol requests, known definitions/open calls, inline-body permission,
+returns-twice and `FunctionEnd`. It retains IR symbol collision checks,
+reachability and ABI projection. Host signature validation shares neutral
+builtin contracts and continues to reject malformed textual IR independently.
+See the [M7 receipt](docs/research/semantic-facts-m7.md).
+
 **M6 is complete.** The x86, vector and type-generic families are registry
 descriptors too, and `__has_builtin` queries the registry. Their operations are
 `Semantic` (folded or selected by semantic analysis) or `Unsupported`; neither
@@ -725,7 +732,9 @@ rather than producing wrong code.
 
 GNU assembler labels select the IR symbol name of functions and static-duration
 objects, and propagate across linked declarations. Labels must be nonempty,
-NUL-free UTF-8; automatic register labels are unsupported. Lowering checks
+NUL-free UTF-8; automatic register labels are unsupported. Semantic completion
+retains decoded requests and their inheritance; lowering checks IR symbol
+collisions and reports retained capability refusals. Semantic analysis resolves
 calling-convention modifiers on every declaration and type name, including
 typedefs and abstract function-pointer types. It accepts the target's default
 (`ms_abi` on Windows, `sysv_abi` on Linux) and the conventions bundled Clang
@@ -1566,14 +1575,15 @@ environment (`longjmp`, `_longjmp`, `siglongjmp`, `__longjmp_chk`,
 `__mingw_longjmp`) or return MinGW-w64's stack pointer (`mingw_getsp`). No
 other phase matches these spellings.
 
-- **Semantic analysis.** `EntityAttributes::returns_twice` is the retained
-  fact: GNU `returns_twice` on any declaration of the entity, or a linked
+- **Semantic analysis.** The finalized entity retains its effective contract:
+  `EntityAttributes::returns_twice` for GNU `returns_twice` or a linked
   function whose C name the catalog lists (glibc declares `_setjmp` without
-  the attribute). An internal or local function of that name is not marked.
+  the attribute), combined with cataloged assembler requests. An internal or
+  local C function of that name alone is not marked.
 - **IR.** `Function::returns_twice`, printed and parsed as the header keyword
-  `returns_twice` after `align`. Lowering sets it from the fact (and, until
-  M7 retains assembler labels, from the catalog for a label naming a listed
-  symbol); the textual parser also sets it for an unmarked non-internal
+  `returns_twice` after `align`. Lowering sets it from the retained entity
+  contract, including cataloged assembler requests; the textual parser also
+  sets it for an unmarked non-internal
   function the catalog lists. Calls are ordinary `call`s. Every safeguard
   asks `Module::returns_twice`, which adds an alias's canonical target's
   flag to its own, and `Module::returns_twice_escapes`, which says whether a

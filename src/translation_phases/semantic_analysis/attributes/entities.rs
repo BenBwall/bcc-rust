@@ -1061,6 +1061,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         entities.extend(self.attributes.entities.iter().map(|(&k, &v)| (k, v)));
         SymbolFacts {
             entities,
+            conventions: tu.alloc_slice_copy(&self.attributes.conventions),
             init_functions: init_functions.leak(),
             aliases: &[],
             refusals: tu.alloc_slice_copy(&self.attributes.refusals),
@@ -1261,6 +1262,8 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Specifier lists already checked by name, by address.
     pub(in crate::translation_phases::semantic_analysis) checked: ArenaMap<'s, usize, ()>,
     pub(in crate::translation_phases::semantic_analysis) refusals: ArenaVec<'s, AttributeRefusal>,
+    pub(in crate::translation_phases::semantic_analysis) conventions:
+        ArenaVec<'s, super::super::ConventionFacts>,
     pub(super) entities: ArenaMap<'s, EntityId, EntityAttributes<'tu>>,
     pub(super) call_diagnostics:
         ArenaMap<'s, (usize, usize), super::call_diagnostics::ParsedDiagnostic>,
@@ -1291,6 +1294,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
         Self {
             checked:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             refusals:           ArenaVec::new_in(scratch),
+            conventions:        ArenaVec::new_in(scratch),
             entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             call_diagnostics:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             sections:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),

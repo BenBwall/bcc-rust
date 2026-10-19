@@ -34,8 +34,9 @@
 //! - Translation unit: `module_items.rs` declares functions and globals and
 //!   lays out static initializers; `address_taken.rs` finds the locals that
 //!   need memory; `extensions.rs` reports retained attribute refusals and
-//!   records asm labels; `symbols.rs` maps retained entity attributes to weak
-//!   linkage, aliases, sections and constructor/destructor lists.
+//!   queries decoded symbol requests; `symbols.rs` maps retained entity
+//!   attributes to weak linkage, aliases, sections and constructor/destructor
+//!   lists.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `places.rs` lvalues, loads and
