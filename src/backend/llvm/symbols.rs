@@ -52,9 +52,13 @@ pub(super) fn declare<'id, 'a, 'm>(
     for (id, function) in module.functions() {
         let signature = module.signature(function.signature);
         let ty = function::signature_type(api, signature, arena);
-        if function.attributes.alias.is_some() || module.inline_copy_target(id).is_some() {
+        if function.attributes.alias.is_some()
+            || module.inline_copy_target(id).is_some()
+            || (function.inline_copy_of.is_some() && function.body.is_none())
+        {
             // Placeholder until the alias or the external function exists;
-            // nothing reads it before.
+            // nothing reads it before. A plain inline copy whose body did
+            // not lower is never named.
             functions.push(api.null(api.ty(Type::Ptr)));
             continue;
         }

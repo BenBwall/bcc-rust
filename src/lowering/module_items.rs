@@ -76,6 +76,7 @@ use crate::{
             BindingKind,
             BodyEmission,
             ConstantClass,
+            Definition,
             DefinitionKind,
             FunctionRecord,
             Inlining,
@@ -217,7 +218,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let mut functions = ArenaVec::with_capacity_in(self.sema.functions.len(), self.tables);
         let mut bodies = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
-        for record in self.sema.functions {
+        for record in self.declaration_order() {
             if record
                 .binding
                 .is_some_and(|binding| !self.reachable.contains(&binding))
@@ -275,6 +276,52 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         functions
     }
 
+    /// The function definitions in source order, except that the
+    /// `always_inline` bodies among them take their slots in the order Clang
+    /// creates their LLVM functions ([`Self::clang_creation_order`]). The
+    /// module's function order is LLVM's, so LLVM's always-inliner, which
+    /// visits bodies in it, and the resolution of inline copies for the
+    /// other back ends (`optimizer/always_inline.rs`) both follow it, and
+    /// both choose as Clang does where expanding one recursive body into
+    /// another decides which calls stay calls.
+    fn declaration_order(&self) -> ArenaVec<'a, &'tu FunctionRecord<'tu>> {
+        let mut records: ArenaVec<'a, &'tu FunctionRecord<'tu>> =
+            ArenaVec::with_capacity_in(self.sema.functions.len(), self.tables);
+        records.extend(self.sema.functions.iter());
+        let always = |binding: usize| {
+            self.sema
+                .entity_attributes(binding)
+                .is_some_and(|attributes| attributes.inlining == Inlining::Always)
+                && self.sema.function_policy(binding).is_some_and(|policy| {
+                    matches!(
+                        policy.body,
+                        BodyEmission::PrivateInline | BodyEmission::Definition
+                    )
+                })
+        };
+        let mut slots = ArenaVec::new_in(self.tables);
+        for (index, record) in records.iter().enumerate() {
+            if record
+                .binding
+                .is_some_and(|binding| self.reachable.contains(&binding) && always(binding))
+            {
+                slots.push(index);
+            }
+        }
+        if slots.len() < 2 {
+            return records;
+        }
+        let ranks = self.clang_creation_order();
+        let mut sorted: ArenaVec<'_, &'tu FunctionRecord<'tu>> =
+            ArenaVec::with_capacity_in(slots.len(), self.tables);
+        sorted.extend(slots.iter().map(|&index| records[index]));
+        sorted.sort_by_key(|record| record.binding.and_then(|binding| ranks[binding]));
+        for (&index, record) in slots.iter().zip(sorted) {
+            records[index] = record;
+        }
+        records
+    }
+
     /// Whether this unit defines the linked object `binding`, tentatively
     /// included. C99: §6.9.2p2, p. 143; PDF p. 155.
     pub(super) fn defines_object(&self, binding: usize) -> bool {
@@ -306,21 +353,40 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             || self.plain_inline.contains(&binding)
     }
 
-    /// Lowers every plain inline-only definition without inline assembly
-    /// or `noinline` as well, as a copy that nothing calls: the LLVM back
-    /// end emits it as the external function's `available_externally`
-    /// body, as Clang does when it optimizes, so LLVM can expand calls
-    /// where Clang does; the other back ends drop it. Returns whether
-    /// there is any such definition. The caller lowers the unit again
-    /// without them if lowering fails, since these bodies were not
-    /// lowered before and their constructs must not refuse the unit.
+    /// Whether `binding` is a plain inline-only definition lowered as an
+    /// optional copy ([`Self::lower_plain_inline_bodies`]).
+    pub(super) fn optional_inline_body(&self, binding: usize) -> bool {
+        self.plain_inline.contains(&binding)
+    }
+
+    /// Lowers every plain inline-only definition without inline assembly,
+    /// attribute refusals or `noinline` as well, as a copy that nothing calls:
+    /// the LLVM back end emits it as the external function's
+    /// `available_externally` body, as Clang does when it optimizes, so
+    /// LLVM can expand calls where Clang does; the other back ends drop it.
+    /// Returns whether there is any such definition. These bodies were not
+    /// lowered before, and their constructs must not refuse the unit: one
+    /// that does not lower stays bodiless (`lowering::lower_unit`).
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
     pub(super) fn lower_plain_inline_bodies(&mut self) -> bool {
         for record in self.sema.functions {
             let Some(binding) = record.binding else {
                 continue;
             };
+            let refused = self
+                .sema
+                .symbols
+                .refusals
+                .iter()
+                .any(|refusal| refusal.owner == Some(binding))
+                || self
+                    .sema
+                    .entities
+                    .refusals
+                    .iter()
+                    .any(|refusal| refusal.owner == Some(binding));
             if !record.assembly
+                && !refused
                 && self
                     .sema
                     .function_policy(binding)

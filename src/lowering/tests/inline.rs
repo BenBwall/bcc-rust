@@ -735,10 +735,37 @@ fn plain_inline_copies_follow_clang_emission() {
 fn a_refused_plain_inline_body_keeps_the_external_call() {
     let text = lowered(
         "extern inline __attribute__((gnu_inline)) int readgs(void) { return *(int \
-         __attribute__((address_space(256))) *)0; } int main(void) { return readgs(); }",
+         __attribute__((address_space(256))) *)0; } inline int f(int x) { return x + 1; } int \
+         main(void) { return readgs() + f(1); }",
     );
     assert!(!text.contains("readgs.inline"), "{text}");
     assert!(text.contains("call @readgs("), "{text}");
+    // Only the refused body is dropped (#109 review).
+    assert!(text.contains("function @f.inline("), "{text}");
+}
+
+/// The `always_inline` bodies are declared in the order Clang creates
+/// their LLVM functions, from the first reference, not in definition
+/// order: LLVM's always-inliner visits them in module order, and the
+/// order decides which recursive calls stay calls (#109 review).
+#[test]
+fn always_inline_bodies_follow_clang_creation_order() {
+    let text = lowered(
+        "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); inline \
+         __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) int \
+         h(int); inline __attribute__((always_inline)) int f(int x) { return x ? 2 * g(x - 1) : \
+         1; } inline __attribute__((always_inline)) int h(int x) { return x ? 4 * f(x - 1) : 1; } \
+         inline __attribute__((always_inline)) int g(int x) { return x ? 3 * h(x - 1) : 1; } int \
+         main(void) { printf(\"%d\\n\", f(5)); return 0; }",
+    );
+    let position = |name: &str| {
+        text.find(&format!("function @{name}.always_inline("))
+            .unwrap_or_else(|| panic!("{name}\n{text}"))
+    };
+    assert!(
+        position("f") < position("g") && position("g") < position("h"),
+        "{text}"
+    );
 }
 
 /// A weak inline definition is a weak definition, emitted where it is
