@@ -1376,7 +1376,9 @@ COMDATs emitted after ordinary unwind sections.
 `.refptr`, selectany, `.drectve` exports, `.ctors`/`.dtors` and `.CRT$XC*` arrays
 use the same private listing as the text path. The COFF listing reads
 `.p2align` with the ELF parser, so loop headers inside functions and the
-max-skip form lay out and relax as on ELF.
+max-skip form lay out and relax as on ELF. An explicit `.scl 3` keeps a
+symbol static on either side of `.globl`, as in MC, and an unquoted section
+name must be one MC identifier (`-` needs quotes).
 
 `native/tests/object_coff.rs` independently parses COFF and compares section
 order, bytes/characteristics, symbol types/storage classes and complete aux

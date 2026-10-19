@@ -104,7 +104,12 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                         if name == ".globl" && object.symbols[id].binding == 2 {
                             return Err(Error("global binding after weak binding"));
                         }
-                        object.symbols[id].binding = if name == ".weak" { 2 } else { 1 };
+                        // An explicit `.scl 3` wins over a later `.globl`, as
+                        // it does over an earlier one: MC writes the declared
+                        // storage class, so the symbol stays static.
+                        if name == ".weak" || storage_classes.get(&id) != Some(&3) {
+                            object.symbols[id].binding = if name == ".weak" { 2 } else { 1 };
+                        }
                         continue;
                     },
                     | ".def" => {
@@ -267,12 +272,22 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
 fn parse_section<'a>(coff: &mut Coff<'a>, args: &'a str) -> Result<usize> {
     arity(args, 1, 4)?;
     let mut parts = split(args);
-    let name = unquote(parts.next().ok_or(Error("missing COFF section"))?);
-    if name.is_empty()
-        || name
-            .bytes()
-            .any(|b| !b.is_ascii_alphanumeric() && !matches!(b, b'_' | b'.' | b'$' | b'-'))
-    {
+    let written = parts.next().ok_or(Error("missing COFF section"))?;
+    let name = unquote(written);
+    // MC reads an unquoted name as one identifier: it starts with a letter,
+    // `_` or `.` and goes on with those, digits and `$`. A `-` or a leading
+    // digit or `$` needs quotes.
+    let identifier = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'$');
+    let valid = if written == name {
+        name.bytes().all(identifier)
+            && name
+                .bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b'.'))
+    } else {
+        name.bytes().all(|b| identifier(b) || b == b'-')
+    };
+    if name.is_empty() || !valid {
         return Err(Error("unsupported COFF section name"));
     }
     if matches!(name, ".xdata" | ".pdata")
@@ -421,9 +436,65 @@ mod tests {
         for text in [
             ".weak f\n.def f;.scl 3;.type 32;.endef\nf:\nretq\n",
             ".def f;.scl 3;.type 32;.endef\n.weak f\nf:\nretq\n",
+            ".def f;.scl 3;.type 32;.endef\n.globl f\n.weak f\nf:\nretq\n",
         ] {
             let arena = crate::util::bump::Bump::new();
             assert!(super::parse(text, false, &arena).is_err());
         }
+    }
+
+    /// An explicit static storage class keeps a symbol static whether
+    /// `.globl` comes before or after it, for functions and data, defined
+    /// or referenced from the same section.
+    #[test]
+    fn coff_static_storage_class_wins_over_globl() {
+        for text in [
+            ".def f;.scl 3;.type 32;.endef\n.globl f\nf:\nretq\n",
+            ".globl f\n.def f;.scl 3;.type 32;.endef\nf:\nretq\n",
+            ".def f;.scl 3;.type 32;.endef\n.globl f\nf:\nretq\ng:\ncallq f\njmp f\n",
+            ".def d;.scl 3;.type 0;.endef\n.globl d\n.data\nd:\n.quad d\n.text\nleaq \
+             d(%rip),%rax\n",
+            ".def f;.scl 3;.type 32;.endef\n.globl f\n.def f;.scl 2;.type 32;.endef\nf:\nretq\n",
+        ] {
+            for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+                equivalent(text, target).unwrap();
+            }
+        }
+    }
+
+    /// Clang reads an unquoted section name as one identifier; quotes allow
+    /// any of the characters the emitter writes.
+    #[test]
+    fn coff_section_names_need_quotes_where_clang_does() {
+        for name in [
+            "a1$b.c_d",
+            ".CRT$XCU",
+            "_x",
+            "\"a-b\"",
+            "\"1abc\"",
+            "\".llvm.call-graph-profile\"",
+        ] {
+            let arena = crate::util::bump::Bump::new();
+            let text = section(name, &arena);
+            for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+                equivalent(text, target).unwrap();
+            }
+        }
+        for name in [".llvm.call-graph-profile", "a-b", "1abc", "$foo"] {
+            let arena = crate::util::bump::Bump::new();
+            let text = section(name, &arena);
+            assert!(
+                super::parse(text, false, &arena).is_err(),
+                "accepted {text}"
+            );
+        }
+    }
+
+    /// A listing that puts one byte in the section `name`.
+    fn section<'a>(name: &str, arena: &'a crate::util::bump::Bump) -> &'a str {
+        use std::fmt::Write as _;
+        let mut text = crate::util::bump::ArenaString::new_in(arena);
+        write!(text, ".section {name},\"dr\"\n.byte 1\n").unwrap();
+        text.into_str()
     }
 }
