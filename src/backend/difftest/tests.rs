@@ -16,7 +16,14 @@ use super::{
     },
     sweep,
 };
-use crate::optimizer::Pass;
+use crate::{
+    abi::lower_abi,
+    backend::native::emit_assembly,
+    ir::parse_module,
+    optimizer::Pass,
+    target::Target,
+    util::bump::Bump,
+};
 
 /// The first seed of the default sweeps; any seed works.
 const DEFAULT_SEED: u64 = 0xBCC0_D1FF;
@@ -388,8 +395,36 @@ block0:
 }
 ";
 
+/// The native back end accepts the conversions for every target once they
+/// are lowered for its ABI, and the host's executable prints what the
+/// interpreter prints. Win64 passes the `i128` to `__floattidf` and
+/// `__floattisf` by reference and receives it from `__fixdfti` in
+/// `%xmm0`.
 #[test]
 fn native_backend_matches_the_interpreter_on_wide_conversions() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let arena = Bump::new();
+        let mut module = parse_module(&arena, WIDE_CONVERSIONS).unwrap();
+        lower_abi(&mut module, target, &Bump::new()).unwrap();
+        let mut assembly = String::new();
+        emit_assembly(&module, target, &mut assembly)
+            .unwrap_or_else(|error| panic!("{target:?}: {error}"));
+        for routine in [
+            "__floattidf",
+            "__floattisf",
+            "__floatuntidf",
+            "__floatuntisf",
+            "__fixdfti",
+            "__fixsfti",
+            "__fixunsdfti",
+            "__fixunssfti",
+        ] {
+            assert!(
+                assembly.contains(routine),
+                "{target:?} does not call {routine}:\n{assembly}"
+            );
+        }
+    }
     let reference = super::oracle::Reference {
         seed:        0,
         text:        WIDE_CONVERSIONS.to_string(),
