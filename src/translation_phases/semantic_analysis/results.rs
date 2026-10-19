@@ -91,7 +91,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// Accepted initializers' placement plans, which lowering stores by.
     /// C99: §6.7.8 paragraphs 17-22, pp. 126-127; PDF pp. 138-139.
     #[cfg_attr(
-        not(test),
+        not(any(test, debug_assertions)),
         expect(
             dead_code,
             reason = "M8 switches lowering to retained plans in its next step"

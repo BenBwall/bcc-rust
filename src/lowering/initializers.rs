@@ -15,6 +15,8 @@
 //! C99: §6.7.8 paragraphs 12-22, pp. 126-127; PDF pp. 138-139.
 
 mod coverage;
+#[cfg(debug_assertions)]
+mod plan;
 
 use coverage::CoverageIndex;
 
@@ -126,6 +128,132 @@ pub(super) enum Leaf<'tu> {
 /// off the object.
 /// C99: §6.7.8 paragraphs 14-19, pp. 126-127; PDF pp. 138-139.
 pub(super) fn leaves<'tu, 's>(
+    sema: &SemanticTranslationUnit<'tu>,
+    ty: TypeId,
+    initializer: &'tu Initializer<'tu>,
+    flexible: Option<TypeId>,
+    arena: &'s Bump,
+) -> Result<ArenaVec<'s, Leaf<'tu>>, LoweringError> {
+    let leaves = walk(sema, ty, initializer, flexible, arena);
+    #[cfg(debug_assertions)]
+    compare_plan(sema, ty, initializer, &leaves);
+    leaves
+}
+
+/// Transitional M8 check, deleted with the walker: the plan semantic
+/// analysis retained for `initializer` places exactly the leaves the walker
+/// finds, and refuses exactly what it refuses. Its own arena leaves the
+/// caller's scratch high-water mark unchanged; it allocates globally only to
+/// report a disagreement.
+#[cfg(debug_assertions)]
+fn compare_plan<'tu>(
+    sema: &SemanticTranslationUnit<'tu>,
+    ty: TypeId,
+    initializer: &'tu Initializer<'tu>,
+    old: &Result<ArenaVec<'_, Leaf<'tu>>, LoweringError>,
+) {
+    let arena = Bump::new();
+    let arena = &arena;
+    let new = match sema.initializers.plan(initializer) {
+        | Some(plan) => {
+            assert_eq!(plan.ty, ty, "the plan completes the object's type");
+            plan::plan_leaves(sema, plan, arena)
+        },
+        | None => Err(LoweringError::missing(
+            "an initializer has no retained plan",
+            initializer.source_vectors,
+        )),
+    };
+    let same = match (old, &new) {
+        | (Ok(old), Ok(new)) =>
+            old.len() == new.len() && old.iter().zip(new.iter()).all(|(a, b)| key(a) == key(b)),
+        | (Err(old), Err(new)) => old == new,
+        | _ => false,
+    };
+    assert!(
+        same,
+        "M8 plan disagrees with the walker at {:?}:\nwalker {:?}\nplan   {:?}",
+        initializer.source_vectors,
+        summary(old),
+        summary(&new)
+    );
+}
+
+#[cfg(debug_assertions)]
+type Key = (u8, u64, u64, TypeId, usize, usize, Option<usize>);
+/// What the M8 comparison compares of a leaf.
+#[cfg(debug_assertions)]
+fn key(leaf: &Leaf<'_>) -> Key {
+    match *leaf {
+        | Leaf::Zero {
+            offset,
+            size,
+            ty,
+            end,
+            scope,
+        } => (0, offset, size, ty, end, scope, None),
+        | Leaf::Scalar {
+            offset,
+            ty,
+            expression,
+            bit_field,
+        } => (
+            1,
+            offset,
+            bit_field.map_or(u64::MAX, |bits| {
+                u64::from(bits.bit_offset) << 32 | u64::from(bits.width)
+            }),
+            ty,
+            0,
+            0,
+            Some(std::ptr::from_ref(expression).addr()),
+        ),
+        | Leaf::String {
+            ty,
+            offset,
+            size,
+            literal,
+        } => (
+            2,
+            offset,
+            size,
+            ty,
+            0,
+            0,
+            Some(std::ptr::from_ref(literal).addr()),
+        ),
+        | Leaf::Copy {
+            offset,
+            ty,
+            expression,
+        } => (
+            3,
+            offset,
+            0,
+            ty,
+            0,
+            0,
+            Some(std::ptr::from_ref(expression).addr()),
+        ),
+    }
+}
+
+/// The comparison keys of a walk, for a disagreement report.
+#[cfg(debug_assertions)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "formats only the disagreement the M8 comparison panics with"
+)]
+fn summary(
+    leaves: &Result<ArenaVec<'_, Leaf<'_>>, LoweringError>,
+) -> Result<Vec<Key>, LoweringError> {
+    leaves
+        .as_ref()
+        .map(|leaves| leaves.iter().map(key).collect())
+        .map_err(|error| *error)
+}
+
+fn walk<'tu, 's>(
     sema: &SemanticTranslationUnit<'tu>,
     ty: TypeId,
     initializer: &'tu Initializer<'tu>,
