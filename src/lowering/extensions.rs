@@ -52,39 +52,33 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     }
 
     pub(super) fn binding_identity(&self, binding: usize) -> StringCacheId {
+        let entity = self.sema.entity(binding);
         debug_assert!(
-            self.sema.bindings[binding].needs_entity_policy(),
-            "symbol queries require a function or linked/static object; Unit::new validates their \
-             entity records"
+            entity.is_some(),
+            "Unit::new rejects missing entity facts for functions and linked/static objects; \
+             symbol queries only receive these bindings"
         );
-        self.sema
-            .entity(binding)
-            .expect("entity facts checked by Unit::new")
-            .identity
+        entity.unwrap().identity
     }
 
     pub(super) fn symbol_request(&self, binding: usize) -> Option<SymbolRequest<'tu>> {
+        let entity = self.sema.entity(binding);
         debug_assert!(
-            self.sema.bindings[binding].needs_entity_policy(),
-            "symbol queries require a function or linked/static object; Unit::new validates their \
-             entity records"
+            entity.is_some(),
+            "Unit::new rejects missing entity facts for functions and linked/static objects; \
+             symbol queries only receive these bindings"
         );
-        self.sema
-            .entity(binding)
-            .expect("entity facts checked by Unit::new")
-            .symbol
+        entity.unwrap().symbol
     }
 
     pub(super) fn symbol_name(&self, binding: usize) -> &'a str {
+        let entity = self.sema.entity(binding);
         debug_assert!(
-            self.sema.bindings[binding].needs_entity_policy(),
-            "symbol queries require a function or linked/static object; Unit::new validates their \
-             entity records"
+            entity.is_some(),
+            "Unit::new rejects missing entity facts for functions and linked/static objects; \
+             symbol queries only receive these bindings"
         );
-        let entity = self
-            .sema
-            .entity(binding)
-            .expect("entity facts checked by Unit::new");
+        let entity = entity.unwrap();
         entity.symbol.map_or_else(
             || self.context.string_cache.at(entity.abi_name),
             |request| request.name,
