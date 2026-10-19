@@ -490,6 +490,15 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                      inline int h(void) { return x; } int k(void) { return h(); }",
                     "c17",
                 ),
+                // Clang emits a referenced weak or `always_inline` inline
+                // body at O0, so its reference decides the import (#109).
+                (
+                    "referenced-weak-inline",
+                    "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                     __attribute__((weak)) inline int h(void) { return x; } int k(void) { return \
+                     h(); }",
+                    "c17",
+                ),
                 (
                     "declared-export-inline-static-local",
                     "__declspec(dllexport) inline int f(void); static int helper(void) { return \
@@ -664,7 +673,7 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
     #[cfg(target_os = "linux")]
     fn recursive_forceinline_calls_match_clang_at_run_time() {
         const EXTERNAL: &str = "int f(int x) { return 100 + x; } int g(int x) { return 200 + x; } \
-                                int h(int x) { return 300 + x; }";
+                                int h(int x) { return 300 + x; } int j(int x) { return 400 + x; }";
         // Each bcc arm with the Clang level it must agree with.
         const ARMS: [(&[&str], &str); 4] = [
             (&[], "-O0"),
@@ -721,6 +730,35 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                 "weak-always-inline",
                 "inline __attribute__((weak, always_inline)) int f(int x) { return x ? x * f(x - \
                  1) : 1; } int main(void) { return f(4) % 256; }",
+            ),
+            // Larger cycles: Clang creates the functions from main's call,
+            // whatever the definition order, and LLVM's always-inliner
+            // visits them in that order (#109 review).
+            (
+                "cycle-3",
+                "inline __attribute__((always_inline)) int f(int); inline \
+                 __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) \
+                 int h(int); inline __attribute__((always_inline)) int f(int x) { return x ? 2 * \
+                 g(x - 1) : 1; } inline __attribute__((always_inline)) int h(int x) { return x ? \
+                 4 * f(x - 1) : 1; } inline __attribute__((always_inline)) int g(int x) { return \
+                 x ? 3 * h(x - 1) : 1; } int main(void) { return f(5) % 256; }",
+            ),
+            (
+                "cycle-4",
+                "int main(void); inline __attribute__((always_inline)) int f(int); inline \
+                 __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) \
+                 int h(int); inline __attribute__((always_inline)) int j(int); inline \
+                 __attribute__((always_inline)) int j(int x) { return x ? 5 * f(x - 1) : 1; } \
+                 inline __attribute__((always_inline)) int h(int x) { return x ? 4 * j(x - 1) : \
+                 1; } inline __attribute__((always_inline)) int g(int x) { return x ? 3 * h(x - \
+                 1) : 1; } inline __attribute__((always_inline)) int f(int x) { return x ? 2 * \
+                 g(x - 1) : 1; } int main(void) { return f(5) % 256; }",
+            ),
+            // LLVM expands dynamic allocation (#109 review).
+            (
+                "vla",
+                "inline __attribute__((always_inline)) int f(int x) { volatile int a[x]; a[0] = x \
+                 + 1; return a[0]; } int main(void) { return f(4); }",
             ),
             (
                 "weak-always-inline-direct",
@@ -818,6 +856,30 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
         }
     }
 
+    /// A referenced `always_inline` inline body is emitted at every level,
+    /// so its reference through a redeclaration without `dllimport` decides
+    /// the import, as in Clang (#109 review). Clang's own O0 module has
+    /// already expanded the body, so this compares only the import.
+    #[test]
+    fn always_inline_bodies_decide_dll_imports() {
+        let source = "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; \
+                      __attribute__((always_inline)) inline int h(void) { return x; } int k(void) \
+                      { return h(); }";
+        let output = bcc(
+            source,
+            &[
+                "--emit=llvm",
+                "-fms-extensions",
+                "--target=x86_64-w64-windows-gnu",
+                "-std=c17",
+            ],
+        );
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{output:?}");
+        assert!(text.contains("@x = external global"), "{text}");
+        assert!(!text.contains("dllimport"), "{text}");
+    }
+
     /// The interpreter runs one translation unit, linked with nothing else:
     /// a call that reaches the external definition of an inline-only
     /// function stops it, as the program fails to link alone, while an
@@ -830,6 +892,18 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                 "__forceinline int f(int x) { return x ? x * f(x - 1) : 1; } int main(void) { \
                  return f(4); }",
                 70,
+            ),
+            // Bodies LLVM expands although the frame grows or the
+            // signature is variadic (#109 review).
+            (
+                "inline __attribute__((always_inline)) int f(int x) { volatile int a[x]; a[0] = x \
+                 + 1; return a[0]; } int main(void) { return f(4); }",
+                5,
+            ),
+            (
+                "inline __attribute__((always_inline)) int f(int x, ...) { return x + 1; } int \
+                 main(void) { return f(4, 1.0); }",
+                5,
             ),
             (
                 "__forceinline int f(int x) { return x + 1; } int main(void) { return f(4); }",

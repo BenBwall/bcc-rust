@@ -179,9 +179,11 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
         });
     }
     match lower_unit(context, syntax, sema, target, arena, scratch, plain_inline) {
-        // Plain inline-only bodies were not lowered before; a construct
-        // that lowering refuses in one of them keeps calling the external
-        // definition instead of refusing the unit (C99 §6.7.4p6).
+        // A plain inline-only body that lowering refuses is dropped on its
+        // own, and so is one whose attribute refusals would apply. Other
+        // errors that only such bodies cause, such as an object they alone
+        // reach, are rarer: this backstop lowers the unit again without
+        // any, so that they never refuse it (C99 §6.7.4p6).
         | (Err(_), true) => lower_unit(context, syntax, sema, target, arena, scratch, false).0,
         | (result, _) => result,
     }
@@ -225,7 +227,16 @@ fn lower_unit<'tu, 'ir>(
             ));
         }
         if let Err(error) = FunctionLowerer::lower(&mut unit, record.0, func, scratch) {
-            errors.push(error);
+            // A plain inline-only body is optional: one that lowering
+            // refuses is not emitted, and calls keep reaching the external
+            // definition (C99 §6.7.4p6). Its copy stays bodiless.
+            if !record
+                .0
+                .binding
+                .is_some_and(|binding| unit.optional_inline_body(binding))
+            {
+                errors.push(error);
+            }
         }
     }
     let result = if errors.is_empty() {

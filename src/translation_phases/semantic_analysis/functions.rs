@@ -1621,7 +1621,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Records, for each entity, whether the unit's last evaluated
     /// reference in emitted code named an imported declaration. Code
     /// generation skips dead code ([`State::dead`]) and bodies it does not
-    /// emit: a C99 inline-only or imported body, and an internal or
+    /// emit: a C99 inline-only (unless weak or `always_inline`) or imported
+    /// body, and an internal or
     /// Microsoft discardable inline body that neither GNU `used` nor a
     /// reference from emitted code keeps, as Clang defers such definitions
     /// until their first use.
@@ -1647,14 +1648,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while changed {
             changed = false;
             for &(owner, binding, _, dead) in evaluated {
-                if !dead && self.owner_emitted(owner, &kinds, &emitted) {
+                if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {
                     let entity = self.entity_of(binding);
                     changed |= emitted.insert(entity, ()).is_none();
                 }
             }
         }
         for &(owner, binding, import, dead) in evaluated {
-            if !dead && self.owner_emitted(owner, &kinds, &emitted) {
+            if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {
                 self.dll_referenced(binding, import);
             }
         }
@@ -1667,10 +1668,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         owner: Option<usize>,
         kinds: &ArenaMap<'_, super::facts::EntityId, DefinitionKind>,
         emitted: &ArenaMap<'_, super::facts::EntityId, ()>,
+        symbols: &super::facts::SymbolFacts<'tu>,
     ) -> bool {
         let Some(owner) = owner else { return true };
         let entity = self.entity_of(owner);
         let deferred = match kinds.get(&entity) {
+            // Clang emits a weak inline definition, and an `always_inline`
+            // one as `available_externally`, once referenced, so their
+            // references count; it emits other inline-only bodies only
+            // when optimizing, which this unit's facts do not depend on.
+            | Some(DefinitionKind::Inline)
+                if symbols.entity(entity).is_some_and(|attributes| {
+                    attributes.weak || attributes.inlining == super::Inlining::Always
+                }) =>
+                true,
             | Some(DefinitionKind::Inline) => return false,
             | Some(DefinitionKind::DiscardableFunction) => true,
             | _ => self.bindings[owner].linkage == Linkage::Internal,
