@@ -2182,6 +2182,14 @@ type; open-call policy queries that type and the entity's known definition.
 Lowering decides reachability and generated symbol names, and keys private inline bodies by semantic identity even when another
 entity's asm request names the same external symbol.
 
+Function values of GNU extern-inline fortify wrappers retain the external
+symbol; direct calls can still use the private inline body. For Clang-style
+`pass_object_size` overloads, value resolution selects the sole addressable
+declaration before an explicit function-pointer cast changes its type (C99
+§6.3.2.3p8, p. 48; PDF p. 60). Static relocations consume that same retained
+selection as runtime identifiers, including glibc `getcwd`/`read` wrappers and
+SQLite's generic syscall-pointer table (issue #81).
+
 Assembler labels retain decoded names and provenance, inherited by entity
 identity. Invalid requests retain capability refusals with the same lowering
 stage, text and function-emission filtering. Colliding IR definitions and

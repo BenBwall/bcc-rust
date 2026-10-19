@@ -471,3 +471,141 @@ fn private_inline_bodies_do_not_capture_redirected_symbols() {
     let main = main.split("\nfunction ").next().unwrap_or(main);
     assert!(main.contains("call @read.always_inline("), "{text}");
 }
+
+/// GNU extern-inline bodies supply direct-call implementations while values
+/// keep the external symbol, including Clang's size-annotated fortify overload.
+/// C99: §6.3.2.1p4, p. 46; PDF p. 58; §6.5.3.2p1, p. 78; PDF p. 90.
+#[test]
+fn fortify_wrapper_values_keep_external_symbols() {
+    for clang_fortify in [false, true] {
+        let (attributes, size1, size0) = if clang_fortify {
+            (
+                ", overloadable",
+                "__attribute__((pass_object_size(1)))",
+                "__attribute__((pass_object_size(0)))",
+            )
+        } else {
+            ("", "", "")
+        };
+        let source = format!(
+            r#"
+extern char *getcwd(char *, unsigned long);
+extern char *__getcwd_alias(char *, unsigned long) __asm__("getcwd");
+extern char *__getcwd_chk(char *, unsigned long, unsigned long);
+extern long read(int, void *, unsigned long);
+extern long __read_alias(int, void *, unsigned long) __asm__("read");
+extern long __read_chk(int, void *, unsigned long, unsigned long);
+extern inline __attribute__((always_inline, gnu_inline{attributes}))
+char *getcwd(char *const buf {size1}, unsigned long size) {{
+    unsigned long bos = __builtin_object_size(buf, 1);
+    return bos == (unsigned long)-1 ? __getcwd_alias(buf, size) : __getcwd_chk(buf, size, bos);
+}}
+extern inline __attribute__((always_inline, gnu_inline{attributes}))
+long read(int fd, void *const buf {size0}, unsigned long size) {{
+    unsigned long bos = __builtin_object_size(buf, 0);
+    return bos == (unsigned long)-1 ? __read_alias(fd, buf, size) : __read_chk(fd, buf, size, bos);
+}}
+char *(*cwd_value)(char *, unsigned long) = getcwd;
+char *(*cwd_address)(char *, unsigned long) = &getcwd;
+long (*read_value)(int, void *, unsigned long) = read;
+long (*read_address)(int, void *, unsigned long) = &read;
+int values(void) {{
+    static char *(*cwd_static)(char *, unsigned long) = getcwd;
+    static long (*read_static)(int, void *, unsigned long) = &read;
+    char *(*cwd_local)(char *, unsigned long) = getcwd;
+    long (*read_local)(int, void *, unsigned long) = &read;
+    return cwd_local == cwd_static && read_local == read_static;
+}}
+int calls(char *buf, unsigned long size) {{
+    return getcwd(buf, size) != 0 && read(0, buf, size) >= 0;
+}}
+"#
+        );
+        let text = lowered(&source);
+        for (global, symbol) in [
+            ("cwd_value", "getcwd"),
+            ("cwd_address", "getcwd"),
+            ("read_value", "read"),
+            ("read_address", "read"),
+        ] {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&format!("global @{global} ")))
+                .unwrap();
+            assert!(line.ends_with(&format!("relocs [0: @{symbol}]")), "{text}");
+        }
+        let relocations: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("relocs ["))
+            .collect();
+        assert_eq!(relocations.len(), 6, "{text}");
+        assert!(
+            relocations
+                .iter()
+                .all(|line| line.ends_with("relocs [0: @getcwd]")
+                    || line.ends_with("relocs [0: @read]")),
+            "{text}"
+        );
+        let values = text
+            .split("function @values(")
+            .nth(1)
+            .unwrap()
+            .split("\nfunction ")
+            .next()
+            .unwrap();
+        assert!(values.contains("func_addr @getcwd\n"), "{text}");
+        assert!(values.contains("func_addr @read\n"), "{text}");
+        assert!(!values.contains("always_inline"), "{text}");
+        let calls = text
+            .split("function @calls(")
+            .nth(1)
+            .unwrap()
+            .split("\nfunction ")
+            .next()
+            .unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|line| line.contains("call @") && line.contains(".always_inline("))
+                .count(),
+            2,
+            "{text}"
+        );
+        assert!(text.contains("call @getcwd("), "{text}");
+        assert!(text.contains("call @read("), "{text}");
+    }
+}
+
+/// SQLite stores fortify wrappers in a generic syscall table using an explicit
+/// function-pointer cast. Resolve the sole addressable overload before casting.
+#[test]
+fn fortify_wrapper_cast_initializers_keep_external_symbols() {
+    let text = lowered(
+        r"
+extern char *getcwd(char *, unsigned long);
+extern inline __attribute__((always_inline, gnu_inline, overloadable))
+char *getcwd(char *const buf __attribute__((pass_object_size(1))), unsigned long size) { return buf; }
+void (*syscalls[])(void) = { (void (*)(void))getcwd, (void (*)(void))&getcwd };
+void (*value(void))(void) { return (void (*)(void))getcwd; }
+",
+    );
+    assert!(text.contains("relocs [0: @getcwd, 8: @getcwd]"), "{text}");
+    assert!(text.contains("func_addr @getcwd\n"), "{text}");
+    assert!(!text.contains("function @_Z"), "{text}");
+}
+
+#[test]
+fn gnu_extern_inline_void_values_keep_external_symbol() {
+    let text = lowered(
+        r"
+extern inline __attribute__((always_inline, gnu_inline)) void f(void) {}
+void (*p)() = f;
+void (*q)() = &f;
+void (*value(void))() { return f; }
+void call(void) { f(); }
+",
+    );
+    assert_eq!(text.matches("relocs [0: @f]").count(), 2, "{text}");
+    assert!(text.contains("func_addr @f\n"), "{text}");
+    assert!(text.contains("call @f.always_inline("), "{text}");
+}

@@ -1381,7 +1381,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     expression = operand_expression;
                 },
                 | ExpressionType::Identifier(_) => {
-                    let binding = info.binding.ok_or_else(unsupported)?;
+                    // Use the same retained value selection as runtime
+                    // identifier lowering. A fortify call's private body is
+                    // distinct from its external function address, including
+                    // static relocations (C99 §6.3.2.1p4, p. 46; PDF p. 58).
+                    let binding = self
+                        .sema
+                        .function_extensions
+                        .value(expression)
+                        .or(info.binding)
+                        .ok_or_else(unsupported)?;
                     let data = self.sema.bindings[binding];
                     let source = expression.source_vectors;
                     let kind = self.sema.types.kind(data.ty);

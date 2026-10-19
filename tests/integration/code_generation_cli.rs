@@ -30,6 +30,112 @@ mod tests {
     const SUM: &str = "int main(void) {\n  int s = 0;\n  for (int i = 1; i <= 4; i++)\n    s += \
                        i;\n  return s;\n}\n";
 
+    /// Real glibc fortify wrappers must keep libc addresses in syscall tables.
+    #[test]
+    fn glibc_fortify_wrapper_addresses_match_clang_and_run() {
+        if host() != Some("x86_64-unknown-linux-gnu")
+            || !Path::new("/usr/include/unistd.h").is_file()
+        {
+            eprintln!("skipping glibc fortify test: no Linux GNU host headers");
+            return;
+        }
+        let source = r"
+#include <unistd.h>
+#if __USE_FORTIFY_LEVEL != 2
+#error fortify wrappers must be enabled
+#endif
+char *(*cwd_value)(char *, size_t) = getcwd;
+char *(*cwd_address)(char *, size_t) = &getcwd;
+ssize_t (*read_value)(int, void *, size_t) = read;
+ssize_t (*read_address)(int, void *, size_t) = &read;
+void (*syscalls[])(void) = { (void (*)(void))getcwd, (void (*)(void))&read };
+int main(void) {
+    static char *(*cwd_static)(char *, size_t) = getcwd;
+    char *(*cwd_local)(char *, size_t) = &getcwd;
+    ssize_t (*read_local)(int, void *, size_t) = read;
+    char buf[4096];
+    if (cwd_value != cwd_address || cwd_local != cwd_static || cwd_local != getcwd
+        || read_value != read_address || read_local != read
+        || syscalls[0] != (void (*)(void))getcwd || syscalls[1] != (void (*)(void))read)
+        return 1;
+    if (!cwd_local(buf, sizeof buf) || !getcwd(buf, sizeof buf)) return 2;
+    return read_local(-1, buf, 0) != -1 || read(-1, buf, 0) != -1;
+}
+";
+        let flags = [
+            "--target=x86_64-unknown-linux-gnu",
+            "-D_FORTIFY_SOURCE=2",
+            "-D__OPTIMIZE__",
+            "--idirafter",
+            "/usr/include/x86_64-linux-gnu",
+            "--idirafter",
+            "/usr/include",
+        ];
+        let input = temporary("fortify.c");
+        std::fs::write(&input, source).unwrap();
+        let reference = Command::new("target/llvm/bin/clang")
+            .arg(&input)
+            .args([
+                "-D_FORTIFY_SOURCE=2",
+                "-D__OPTIMIZE__",
+                "-S",
+                "-emit-llvm",
+                "-o",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(reference.status.success(), "{}", text(&reference.stderr));
+        let output = bcc(source, &[&flags[..], &["--emit=llvm"]].concat());
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        for llvm in [text(&reference.stdout), text(&output.stdout)] {
+            for (global, symbol) in [
+                ("cwd_value", "getcwd"),
+                ("cwd_address", "getcwd"),
+                ("read_value", "read"),
+                ("read_address", "read"),
+            ] {
+                let line = llvm
+                    .lines()
+                    .find(|line| line.starts_with(&format!("@{global} =")))
+                    .unwrap();
+                assert!(line.contains(&format!("ptr @{symbol}")), "{line}");
+            }
+            let table = llvm
+                .lines()
+                .find(|line| line.starts_with("@syscalls ="))
+                .unwrap();
+            assert!(
+                table.contains("ptr @getcwd") && table.contains("ptr @read"),
+                "{table}"
+            );
+        }
+        let executable = temporary("fortify.exe");
+        for options in [
+            &["--opt=none", "--llvm-opt=O0"][..],
+            &["--opt=bcc", "--llvm-opt=O2"][..],
+        ] {
+            let built = bcc(
+                source,
+                &[&flags[..], options, &["-o", executable.to_str().unwrap()]].concat(),
+            );
+            assert!(
+                built.status.success(),
+                "{options:?}: {}",
+                text(&built.stderr)
+            );
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{options:?}: {}",
+                text(&output.stderr)
+            );
+        }
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(executable).unwrap();
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [
