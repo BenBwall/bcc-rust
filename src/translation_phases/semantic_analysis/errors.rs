@@ -484,6 +484,8 @@ pub(crate) enum SemanticErrorKind {
     AliasTypeMismatch,
     /// Clang `-Wsection`: a redeclaration names another section.
     SectionMismatch,
+    /// GNU section extension: ELF NOBITS cannot contain function code.
+    BssFunction,
     /// Clang `-Wignored-attributes`: an unsupported visibility argument.
     InvalidVisibility,
     /// Clang: the cleanup argument names no function.
@@ -609,6 +611,7 @@ impl SemanticErrorKind {
             | Self::AliasCycle => "alias is part of a cycle",
             | Self::AliasTypeMismatch => "alias type differs from its target's",
             | Self::SectionMismatch => "different section",
+            | Self::BssFunction => "function in a BSS section",
             | Self::InvalidVisibility => "unsupported visibility",
             | Self::CleanupNotFunction => "not a function",
             | Self::CleanupOverloadSet => "not a single function",
@@ -784,6 +787,7 @@ impl SemanticErrorKind {
             | Self::AliasCycle
             | Self::AliasTypeMismatch
             | Self::SectionMismatch
+            | Self::BssFunction
             | Self::InvalidVisibility
             | Self::CleanupNotFunction
             | Self::CleanupOverloadSet
@@ -1591,6 +1595,10 @@ impl SemanticErrorKind {
                 "section does not match previous declaration",
                 "Clang -Wsection: the latest section request applies",
             ),
+            | Self::BssFunction => (
+                "BSS section cannot have non-zero bytes",
+                "ELF NOBITS sections contain only zero-initialized storage",
+            ),
             | Self::InvalidVisibility => (
                 "visibility argument not supported",
                 "GCC Common Function Attributes: visibility is default, hidden, internal or \
@@ -1741,6 +1749,12 @@ impl ToDiagnostic for SemanticError {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
             })
+        } else if self.kind == SemanticErrorKind::BssFunction {
+            format_in!(
+                arena,
+                "BSS section '{}' cannot have non-zero bytes",
+                self.name.map_or("", |name| context.string_cache.at(name))
+            )
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if let Some(name) = self.name {

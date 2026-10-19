@@ -282,6 +282,8 @@ fn emit<'m>(
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum NativeError<'m> {
     #[error("{0}")]
+    Section(emit::SectionError<'m>),
+    #[error("{0}")]
     Unsupported(Unsupported<'m>),
     #[error("the output refused the assembly text")]
     Format(#[from] fmt::Error),
@@ -302,6 +304,12 @@ pub(crate) enum NativeError<'m> {
 impl<'m> From<Unsupported<'m>> for NativeError<'m> {
     fn from(unsupported: Unsupported<'m>) -> Self {
         Self::Unsupported(unsupported)
+    }
+}
+
+impl<'m> From<emit::SectionError<'m>> for NativeError<'m> {
+    fn from(error: emit::SectionError<'m>) -> Self {
+        Self::Section(error)
     }
 }
 

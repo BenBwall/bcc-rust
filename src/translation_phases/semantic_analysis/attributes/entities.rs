@@ -1079,6 +1079,39 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 continue;
             }
             let entity = self.entity_of(definition.binding);
+            let attributes = self
+                .attributes
+                .entities
+                .get(&entity)
+                .copied()
+                .unwrap_or_default();
+            // Diagnose emitted definitions after redeclarations have supplied
+            // their final section. Unused static and inline-only bodies may
+            // never be emitted; the native emitter checks any it does emit.
+            // GNU extension: section attributes on ELF.
+            if matches!(
+                self.context.configuration.target(),
+                crate::target::Target::LinuxGnu | crate::target::Target::LinuxMusl
+            ) && matches!(definition.kind, super::super::DefinitionKind::Function)
+                && (self.bindings[definition.binding].linkage == Linkage::External
+                    || attributes.used)
+                && let Some(section) = attributes.section
+                && ([".bss", ".tbss", ".sbss"].iter().any(|stem| {
+                    section == *stem
+                        || section
+                            .strip_prefix(stem)
+                            .is_some_and(|s| s.starts_with('.'))
+                }) || section.starts_with(".gnu.linkonce.b.")
+                    || section.starts_with(".llvm.linkonce.b."))
+            {
+                let name = self.context.string_cache.intern(section);
+                self.error(
+                    SemanticErrorKind::BssFunction,
+                    self.bindings[definition.binding].name.source_vectors,
+                    Some(name),
+                    None,
+                );
+            }
             let Some(&(constructor, destructor)) = self.attributes.initializers.get(&entity) else {
                 continue;
             };

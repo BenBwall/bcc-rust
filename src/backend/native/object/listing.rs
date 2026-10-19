@@ -78,6 +78,7 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                                 | b'x' => 4,
                                 | b'T' => 0x400,
                                 | b'G' => 0x200,
+                                | b'l' => 0x1000_0000,
                                 | _ => return Err(Error("unknown section flag")),
                             })
                     })?;
