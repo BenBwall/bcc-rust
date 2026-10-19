@@ -475,20 +475,27 @@ fn minimum_count(storage: Storage) -> u64 {
 }
 
 #[cfg(test)]
-#[cfg_attr(
-    windows,
-    expect(
-        clippy::missing_const_for_thread_local,
-        reason = "The initializers are const blocks; Clippy misreads their expansion."
-    )
-)]
 thread_local! {
     /// Replay steps on this thread, for the scaling tests.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::missing_const_for_thread_local,
+            reason = "The const initializer still trips the lint in the Windows std expansion."
+        )
+    )]
     pub(in crate::lowering) static STEPS: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
     /// Replaces [`minimum_count`] for both storage durations; `u64::MAX`
     /// replays every element.
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::missing_const_for_thread_local,
+            reason = "The const initializer still trips the lint in the Windows std expansion."
+        )
+    )]
     pub(in crate::lowering) static MINIMUM: std::cell::Cell<Option<u64>> = const {
         std::cell::Cell::new(None)
     };
