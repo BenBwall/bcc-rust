@@ -805,9 +805,38 @@ int start(void) { return shared_value + shared_list[3]; }";
 /// since Win64 passes its `i128` arguments by reference.
 const WIDE_FLOAT_IR: &str = include_str!("wide_floats.ir");
 
+/// The line of [`WIDE_FLOAT_IR`] that computes an `frem.f128`, and an
+/// inline operation that replaces it where nothing links `fmodf128`. The
+/// parser wants dense value numbers, so the line is replaced, not removed.
+const WIDE_FLOAT_IR_FREM128: (&str, &str) = ("v10 = frem.f128 v0, v1", "v10 = fneg.f128 v1");
+
+/// Whether `target`'s C library defines `fmodf128`, which both back ends
+/// call for `frem.f128`, as Clang does for it and for `__builtin_fmodf128`.
+/// glibc has it since 2.26. MinGW-w64's runtime has no binary128 functions,
+/// and GCC's libquadmath names the routine `fmodq`.
+fn has_fmodf128(target: Target) -> bool {
+    !matches!(target, Target::WindowsGnu)
+}
+
 /// [`WIDE_FLOAT_IR`] lowered for `target`'s ABI and verified.
 fn wide_float_ir(arena: &Bump, target: Target) -> Module<'_> {
-    let mut module = crate::ir::parse_module(arena, WIDE_FLOAT_IR).unwrap();
+    lowered_wide_float_ir(arena, target, WIDE_FLOAT_IR)
+}
+
+/// [`wide_float_ir`] without its `frem.f128` where nothing links it.
+fn linkable_wide_float_ir(arena: &Bump, target: Target) -> Module<'_> {
+    if has_fmodf128(target) {
+        return wide_float_ir(arena, target);
+    }
+    let (frem, replacement) = WIDE_FLOAT_IR_FREM128;
+    let count = WIDE_FLOAT_IR.matches(frem).count();
+    assert_eq!(count, 1, "{target:?}: wide_floats.ir has {count} `{frem}`");
+    lowered_wide_float_ir(arena, target, &WIDE_FLOAT_IR.replace(frem, replacement))
+}
+
+/// `text`, parsed, lowered for `target`'s ABI and verified.
+fn lowered_wide_float_ir<'ir>(arena: &'ir Bump, target: Target, text: &str) -> Module<'ir> {
+    let mut module = crate::ir::parse_module(arena, text).unwrap();
     crate::abi::lower_abi(&mut module, target, &Bump::new()).unwrap();
     let scratch = Bump::new();
     let errors = crate::ir::verify_module(&module, Profile::PostAbi, &scratch)
@@ -885,6 +914,17 @@ fn wide_float_programs_compile_for_every_target() {
         let mut text = String::new();
         emit_assembly(&module, target, &mut text)
             .unwrap_or_else(|error| panic!("wide-ir-{target:?}: {error}"));
+        // Clang's spelling, even where the C library lacks it.
+        assert!(text.contains("fmodf128"), "wide-ir-{target:?}:\n{text}");
+        let module = linkable_wide_float_ir(&arena, target);
+        let mut text = String::new();
+        emit_assembly(&module, target, &mut text)
+            .unwrap_or_else(|error| panic!("linkable wide-ir-{target:?}: {error}"));
+        assert_eq!(
+            text.contains("fmodf128"),
+            has_fmodf128(target),
+            "linkable wide-ir-{target:?}:\n{text}"
+        );
     }
 }
 
@@ -909,7 +949,7 @@ fn wide_float_programs_match_the_llvm_back_end() {
             }
         }
         let arena = Bump::new();
-        let module = wide_float_ir(&arena, target);
+        let module = linkable_wide_float_ir(&arena, target);
         let name = format!("wide-ir-{target:?}");
         if let Err(failure) = check_against_llvm(&module, target, directory.path(), &name) {
             failures.push(failure);
