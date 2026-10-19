@@ -300,6 +300,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if op == B::Comma {
             let mut result = Self::expression_result(e, rt);
             result.promotion_width = right.promotion_width;
+            // Extension permitted by C99 §6.6p10 (p. 96; PDF p. 108):
+            // fold a comma only when neither operand requires evaluation.
+            // It remains ineligible as an integer constant expression.
+            if left.constant == ConstantClass::Arithmetic
+                && right.constant == ConstantClass::Arithmetic
+            {
+                result.constant = ConstantClass::Arithmetic;
+                result.integer = right.integer;
+                result.floating = right.floating;
+                result.unfolded_binary128 = right.unfolded_binary128;
+            }
             return result;
         }
         let mut info = Self::expression_result(e, self.types.unknown());
@@ -679,6 +690,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     info.constant = ConstantClass::Address;
                     info.integer = selected.integer.map(|v| v.cast(64, false));
                 }
+            }
+            if info.constant == ConstantClass::Address {
+                info.selected_expression = Some(selected.expression);
             }
         }
         info

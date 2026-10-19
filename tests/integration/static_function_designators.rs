@@ -51,7 +51,8 @@ mod tests {
      *(1 ? f : g), **(0 ? f : g), 1 ? (0 ? g : **f) : g,
      0.5 ? f : g, -0.0 ? f : g, 1 ? f : (int (*)(int))0,
      1 ? f : (int (*)(int))1, 0 ? (int (*)(int))1 : g,
-     1 ? f : fp, 0 ? fp : f, 1 ? 0 : f
+     1 ? f : fp, 0 ? fp : f, 1 ? 0 : f,
+     (0, 1) ? f : g, (1, 0) ? f : g
     };
     int object;
     int *object_address = 1 ? &object : 0;
@@ -90,7 +91,7 @@ mod tests {
                 symbols,
                 [
                     "f", "f", "f", "f", "f", "f", "f", "f", "f", "f", "g", "f", "g", "f", "f", "g",
-                    "f", "f", "g", "f", "f", "object"
+                    "f", "f", "g", "f", "f", "f", "g", "object"
                 ],
                 "{compiler}: {relocations}"
             );
@@ -110,6 +111,8 @@ mod tests {
             "**fp",
             "flag ? f : g",
             "flag ? f : f",
+            "(flag, 1) ? f : g",
+            "(f(0), 1) ? f : g",
             "1 ? fp : f",
             "0 ? f : fp",
             "*ip",
@@ -136,7 +139,19 @@ mod tests {
                 let output = crate::native::run_native(&mut command).unwrap();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(!output.status.success(), "{source}: {stderr}");
-                assert!(stderr.contains("constant"), "{source}: {stderr}");
+                if bcc {
+                    assert!(
+                        stderr.contains("error: static-storage initializer requires a constant expression"),
+                        "{source}: {stderr}"
+                    );
+                    let column = if initializer == "*ip" { 10 } else { 17 };
+                    assert!(
+                        stderr.contains(&format!("{}:2:{column}", input.display())),
+                        "{source}: {stderr}"
+                    );
+                } else {
+                    assert!(stderr.contains("constant"), "{source}: {stderr}");
+                }
             }
         }
         fs::remove_dir_all(root).unwrap();

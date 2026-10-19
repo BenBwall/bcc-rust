@@ -1372,31 +1372,6 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     expression = operand_expression;
                     place = false;
                 },
-                | ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c)
-                    if !place && info.constant == ConstantClass::Address =>
-                {
-                    let condition = self
-                        .sema
-                        .expression_info(c.condition_expression)
-                        .ok_or_else(unsupported)?;
-                    if condition.constant != ConstantClass::Arithmetic {
-                        return Err(unsupported());
-                    }
-                    let truth = condition
-                        .integer
-                        .map(|value| value.value != 0)
-                        .or_else(|| {
-                            condition
-                                .floating
-                                .map(|value| !value.real.is_zero() || !value.imag.is_zero())
-                        })
-                        .ok_or_else(unsupported)?;
-                    expression = if truth {
-                        c.then_expression
-                    } else {
-                        c.else_expression
-                    };
-                },
                 | ExpressionType::Parenthesized { expression: inner }
                 | ExpressionType::Unary {
                     operator: UnaryOperator::Extension,
