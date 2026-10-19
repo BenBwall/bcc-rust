@@ -221,13 +221,18 @@ impl<'a> Liveness<'a> {
                         interval.uses.push(def);
                     }
                 });
+                // A value the instruction can read from its spill slot does
+                // not need a register there.
+                let in_memory = inst.memory_source_vreg();
                 inst.visit_registers(|reg, role| {
                     if let Reg::Virt(vreg) = *reg
                         && role.reads()
                     {
                         let interval = &mut intervals[vreg.index()];
                         add(interval, start, position + 1);
-                        interval.uses.push(position);
+                        if in_memory != Some(vreg) {
+                            interval.uses.push(position);
+                        }
                     }
                 });
             }

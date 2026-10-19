@@ -31,8 +31,9 @@ pub(super) struct Interval<'a> {
     pub(super) class:        RegClass,
     /// Sorted, disjoint and never adjacent.
     pub(super) ranges:       ArenaVec<'a, Range>,
-    /// The positions at which instructions read or write the register,
-    /// ascending; each needs the value in a register.
+    /// The positions at which instructions read or write the register and
+    /// need it in a register, ascending: all but reads of a memory source
+    /// operand, which can take the spill slot instead.
     pub(super) uses:         ArenaVec<'a, u32>,
     /// The position this piece starts holding the value from: 0 for a
     /// whole interval, the split position for a piece split off.

@@ -1195,6 +1195,33 @@ impl MInst {
         }
     }
 
+    /// The source operand the instruction may read from memory instead of
+    /// a register: where a spilled value can be used in its slot without a
+    /// reload. (`xorps` would need 16 aligned bytes.)
+    pub(crate) const fn memory_source(&mut self) -> Option<&mut Operand> {
+        match self {
+            | Self::Mov { src, .. }
+            | Self::Extend { src, .. }
+            | Self::XMov { src, .. }
+            | Self::Alu { src, .. }
+            | Self::Cmp { rhs: src, .. } => Some(src),
+            | Self::XAlu { op, src, .. } if !matches!(op, XOp::Xor) => Some(src),
+            | _ => None,
+        }
+    }
+
+    /// The virtual register the memory source reads, when the instruction
+    /// names it nowhere else.
+    pub(crate) fn memory_source_vreg(&self) -> Option<VReg> {
+        let mut inst = *self;
+        let Some(&mut Operand::Reg(Reg::Virt(vreg))) = inst.memory_source() else {
+            return None;
+        };
+        let mut count = 0;
+        inst.visit_registers(|reg, _| count += usize::from(*reg == Reg::Virt(vreg)));
+        (count == 1).then_some(vreg)
+    }
+
     /// Whether removing the instruction changes nothing but the virtual
     /// register it defines and the flags: integer arithmetic on registers
     /// and immediates.

@@ -274,10 +274,24 @@ impl<'a> Checker<'_, 'a> {
             self.copy(dst_loc, src_loc, Some(self::value(dst)));
             return Ok(());
         }
+        // A value read straight from its spill slot.
+        let mut original = original;
+        let mut copy = rewritten;
+        if let (Some(&mut Operand::Reg(reg @ Reg::Virt(_))), Some(&mut Operand::Mem(mem))) =
+            (original.memory_source(), copy.memory_source())
+            && let Some(loc) = spill(mem)
+        {
+            if checking && !self.holds(loc, value(reg)) {
+                return Err(ErrorKind::Missing {
+                    value: value(reg),
+                    loc,
+                });
+            }
+            *original.memory_source().expect("matched above") = Operand::Mem(mem);
+        }
         // The original with the rewritten registers put in must be the
         // rewritten instruction.
         self.operands.clear();
-        let mut copy = rewritten;
         copy.visit_registers(|reg, role| self.operands.push((*reg, role)));
         self.pairs.clear();
         let mut expected = original;

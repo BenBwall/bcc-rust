@@ -4,13 +4,13 @@
 //!
 //! The moves at one place form a parallel copy, sequentialized so that no
 //! move overwrites a location another still reads; a cycle goes through a
-//! scratch register. A piece that lives in its spill slot and still has
-//! uses (the scan's fallback) is loaded into a scratch register of its
-//! class just before the instruction that uses it and stored from it just
-//! after one that defines it, and a copy to or from such a piece becomes a
-//! single store or load. No instruction names more than two virtual
-//! registers of one class, so two scratch registers per class suffice; all
-//! these moves leave the flags alone.
+//! scratch register. A value in its spill slot that an instruction can read
+//! as a memory source operand is read there, and a copy to or from it
+//! becomes a single store or load. Other uses of a spilled piece (the
+//! scan's fallback) load it into a scratch register of its class just
+//! before the instruction and store it from there just after. No instruction
+//! names more than two virtual registers of one class, so two scratch registers
+//! per class suffice; all these moves leave the flags alone.
 //!
 //! Copies between a register and itself stay until the checker has seen
 //! them, then go; `edges.rs` then threads away the blocks left holding
@@ -238,6 +238,13 @@ fn rewrite_inst(
         return out.len() - 1;
     }
     let mut inst = inst;
+    // A spilled value the instruction can read from memory stays there.
+    if let Some(vreg) = inst.memory_source_vreg()
+        && let Location::Spill(slot) = location(vreg, Role::Use)
+        && let Some(operand) = inst.memory_source()
+    {
+        *operand = Operand::Mem(spill_slot(slot));
+    }
     // General scratch registers first, then SSE ones.
     let mut scratch = [Scratch {
         owner:  None,
