@@ -46,9 +46,19 @@ pub(super) fn write<'a>(coff: &Coff<'a>) -> Result<ArenaVec<'a, u8>> {
     out.resize(20 + count * 40, 0);
     let mut checksums = ArenaVec::new_in(arena);
     for (id, section) in object.sections.iter().enumerate() {
-        if section.relocs.len() > 0xFFFF {
-            return Err(Error("COFF relocation overflow is not supported"));
-        }
+        // IMAGE_SCN_LNK_NRELOC_OVFL stores the real count, including this
+        // sentinel, in the first relocation's VirtualAddress field. LLVM
+        // uses it starting at 65,535 relocations, not just above that value.
+        let extended_count = if section.relocs.len() >= usize::from(u16::MAX) {
+            Some(
+                u32::try_from(section.relocs.len())
+                    .ok()
+                    .and_then(|count| count.checked_add(1))
+                    .ok_or(Error("too many COFF relocations"))?,
+            )
+        } else {
+            None
+        };
         if !section.align.is_power_of_two() || section.align > 8192 {
             return Err(Error("invalid COFF section alignment"));
         }
@@ -70,7 +80,13 @@ pub(super) fn write<'a>(coff: &Coff<'a>) -> Result<ArenaVec<'a, u8>> {
         put32(
             &mut out,
             at + 36,
-            coff.sections[id].characteristics | ((section.align.trailing_zeros() + 1) << 20),
+            coff.sections[id].characteristics
+                | ((section.align.trailing_zeros() + 1) << 20)
+                | if extended_count.is_some() {
+                    0x0100_0000
+                } else {
+                    0
+                },
         );
         let mut data = ArenaVec::new_in(arena);
         data.extend_from_slice(&section.data);
@@ -110,8 +126,11 @@ pub(super) fn write<'a>(coff: &Coff<'a>) -> Result<ArenaVec<'a, u8>> {
         if !section.relocs.is_empty() {
             let raw = narrow(out.len() as u64)?;
             put32(&mut out, at + 24, raw);
-            out[at + 32..at + 34]
-                .copy_from_slice(&reloc_count(section.relocs.len())?.to_le_bytes());
+            out[at + 32..at + 34].copy_from_slice(&reloc_count(section.relocs.len()).to_le_bytes());
+            if let Some(count) = extended_count {
+                out.extend_from_slice(&count.to_le_bytes());
+                out.extend_from_slice(&[0; 6]);
+            }
             for reloc in &section.relocs {
                 let symbol = object.symbols[reloc.symbol];
                 let index = if symbol.name.is_empty() || symbol.name.starts_with(".L") {
@@ -142,7 +161,7 @@ pub(super) fn write<'a>(coff: &Coff<'a>) -> Result<ArenaVec<'a, u8>> {
             [3, 1],
         )?;
         symbols.extend_from_slice(&narrow(section.size)?.to_le_bytes());
-        symbols.extend_from_slice(&reloc_count(section.relocs.len())?.to_le_bytes());
+        symbols.extend_from_slice(&reloc_count(section.relocs.len()).to_le_bytes());
         symbols.extend_from_slice(&0_u16.to_le_bytes());
         symbols.extend_from_slice(&checksums[id].to_le_bytes());
         symbols.extend_from_slice(
@@ -293,8 +312,8 @@ fn section_number(id: usize) -> Result<i16> {
     i16::try_from(id + 1).map_err(|_| Error("too many COFF sections"))
 }
 
-fn reloc_count(count: usize) -> Result<u16> {
-    u16::try_from(count).map_err(|_| Error("too many COFF relocations"))
+fn reloc_count(count: usize) -> u16 {
+    u16::try_from(count).unwrap_or(u16::MAX)
 }
 
 fn narrow(value: u64) -> Result<u32> {

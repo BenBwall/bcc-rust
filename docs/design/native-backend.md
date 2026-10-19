@@ -1364,7 +1364,9 @@ selection/associative section numbers, weak external records and long-name
 strings. Relocations use implicit addends, including ADDR64, ADDR32, ADDR32NB,
 REL32/REL32_1..5, SECREL and SECTION. Pinned Clang uses REL32 plus an in-place negative
 addend when immediate bytes follow a displacement. The writer follows that
-choice. `.seh_*` event offsets generate matching `.pdata`/`.xdata`, including
+choice. Sections with at least 65,535 relocations use the COFF overflow flag
+and extended-count sentinel, with saturated header and section auxiliary counts.
+`.seh_*` event offsets generate matching `.pdata`/`.xdata`, including
 small/large stack allocations, saved GPR/XMM registers and frame pointers.
 MinGW uses discardable `.xdata$*`/`.pdata$*` subsections; MSVC uses associative
 COMDATs emitted after ordinary unwind sections.

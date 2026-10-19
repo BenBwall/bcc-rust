@@ -73,6 +73,12 @@ def view(path):
             if definition[5][14] != 5:  # associative COMDATs use the aux section number
                 key = next((s for s in section_symbols if not s[5]), None)
                 comdats.append((index, tuple(key[:5]) if key else None))
+        if flags & 0x01000000:  # IMAGE_SCN_LNK_NRELOC_OVFL
+            assert nrel == 0xFFFF
+            extended_count, target, kind = struct.unpack_from('<IIH', data, relptr)
+            assert extended_count > 0xFFFF and target == kind == 0
+            nrel = extended_count - 1  # the sentinel is not a relocation
+            relptr += 10
         for rel in range(nrel):
             offset, target, kind = struct.unpack_from('<IIH', data, relptr + rel * 10)
             assert offset < size

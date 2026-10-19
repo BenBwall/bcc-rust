@@ -159,8 +159,17 @@ fn inspect(bytes: &[u8]) -> View {
         };
         view.sections
             .push((name(&bytes[at..at + 8], true), size, flags, data));
-        let relocs = u32_at(bytes, at + 24) as usize;
-        for n in 0..usize::from(u16_at(bytes, at + 32)) {
+        let mut relocs = u32_at(bytes, at + 24) as usize;
+        let mut relocation_count = usize::from(u16_at(bytes, at + 32));
+        if flags & 0x0100_0000 != 0 {
+            assert_eq!(relocation_count, usize::from(u16::MAX));
+            let extended_count = u32_at(bytes, relocs) as usize;
+            assert!(extended_count > usize::from(u16::MAX));
+            assert_eq!(&bytes[relocs + 4..relocs + 10], &[0; 6]);
+            relocation_count = extended_count - 1;
+            relocs += 10;
+        }
+        for n in 0..relocation_count {
             let at = relocs + n * 10;
             let (symbol, section) = names[u32_at(bytes, at + 4) as usize].as_ref().unwrap();
             view.relocations.push((
@@ -297,6 +306,16 @@ fn coff_comdat_and_ordinary_unwind_sections_match_clang() {
                 g\n.seh_endprologue\nretq\n.seh_endproc\n";
     for target in [Target::WindowsGnu, Target::WindowsMsvc] {
         equivalent(text, target).unwrap();
+    }
+}
+
+#[test]
+fn coff_relocation_overflow_boundaries_match_clang() {
+    for count in [65_534, 65_535, 65_536] {
+        let text = format!(".data\n{}", ".quad ext\n".repeat(count));
+        for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+            equivalent(&text, target).unwrap();
+        }
     }
 }
 
