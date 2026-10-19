@@ -20,20 +20,31 @@
 //! whichever of the current interval and the active ones that could yield
 //! a compatible register ends last. A spilled value lives in its own stack
 //! slot for its whole life; `rewrite.rs` loads it into a scratch register
-//! before each use and stores it after each definition.
+//! before each use and stores it after each definition. In debug builds,
+//! `checker.rs` then proves the rewritten function against the
+//! virtual-register program.
 //!
 //! Read [`allocate`], then `liveness.rs` for intervals and fixed ranges,
-//! then `rewrite.rs`.
+//! then `rewrite.rs` and `checker.rs`.
 
 // Analysis
 mod liveness;
 
-// Rewriting
+// Rewriting and its proof
+mod checker;
 mod rewrite;
 
 pub(crate) use rewrite::rewrite;
 
 use self::liveness::Liveness;
+#[cfg(test)]
+pub(crate) use self::{
+    checker::{
+        CheckError,
+        ErrorKind,
+    },
+    rewrite::rewrite_checked,
+};
 use super::{
     conv::CallConv,
     mir::{

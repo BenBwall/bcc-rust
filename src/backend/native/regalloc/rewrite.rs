@@ -1,6 +1,7 @@
 //! Rewrites a function with its allocation: virtual registers become their
-//! physical registers, copies between one register and itself disappear,
-//! and spilled values move through the scratch registers.
+//! physical registers, spilled values move through the scratch registers,
+//! and, once the checker has seen them, copies between one register and
+//! itself disappear.
 //!
 //! A spilled value used by an instruction is loaded into a scratch register
 //! of its class just before it, and one the instruction defines is stored
@@ -13,6 +14,11 @@
 use super::{
     Allocation,
     Location,
+    checker::{
+        self,
+        CheckError,
+        INSERTED,
+    },
 };
 use crate::{
     backend::native::{
@@ -41,16 +47,88 @@ use crate::{
     },
 };
 
-/// Replaces every virtual register of `func` by its location.
+/// Replaces every virtual register of `func` by its location, then
+/// deletes the copies between a register and itself. Debug builds first
+/// prove the result with the symbolic checker (`checker.rs`).
 pub(crate) fn rewrite(func: &mut MFunction<'_>, allocation: &Allocation<'_>, arena: &Bump) {
+    if cfg!(debug_assertions) {
+        if let Err(error) = rewrite_checked(func, allocation, arena) {
+            panic!("the register allocation checker rejects the function: {error}");
+        }
+    } else {
+        rewrite_blocks(func, allocation, None, arena);
+    }
+    remove_identity_copies(func);
+}
+
+/// Rewrites `func` as [`rewrite`] does, before deleting identity copies,
+/// and checks the result against the virtual-register program.
+pub(crate) fn rewrite_checked<'a>(
+    func: &mut MFunction<'_>,
+    allocation: &Allocation<'_>,
+    arena: &'a Bump,
+) -> Result<(), &'a CheckError> {
+    let mut original = ArenaVec::with_capacity_in(func.blocks.len(), arena);
+    for block in &func.blocks {
+        original.push(&*arena.alloc_slice_copy(&block.insts));
+    }
+    let mut origins = ArenaVec::with_capacity_in(func.blocks.len(), arena);
+    rewrite_blocks(func, allocation, Some(&mut origins), arena);
+    let mut views = ArenaVec::with_capacity_in(origins.len(), arena);
+    views.extend(origins.iter().map(|origins| &origins[..]));
+    checker::check(func, &original, &views, arena)
+}
+
+/// Rewrites every block; with `origins`, records for each block which
+/// program instruction each rewritten one stands for.
+fn rewrite_blocks<'a>(
+    func: &mut MFunction<'_>,
+    allocation: &Allocation<'_>,
+    mut origins: Option<&mut ArenaVec<'a, ArenaVec<'a, u32>>>,
+    arena: &'a Bump,
+) {
     let classes = &func.classes;
     for block in &mut func.blocks {
         let mut out = ArenaVec::with_capacity_in(block.insts.len(), arena);
-        for &inst in &block.insts {
-            rewrite_inst(inst, allocation, classes, &mut out);
+        let mut block_origins = ArenaVec::new_in(arena);
+        for (index, &inst) in block.insts.iter().enumerate() {
+            let start = out.len();
+            let program = rewrite_inst(inst, allocation, classes, &mut out);
+            if origins.is_some() {
+                let origin = u32::try_from(index).expect("instruction numbers fit u32");
+                // The spill code around the program's instruction is the
+                // allocator's.
+                block_origins.extend(
+                    (start..out.len()).map(|at| if at == program { origin } else { INSERTED }),
+                );
+            }
         }
         block.insts.clear();
         block.insts.extend_from_slice(&out);
+        if let Some(origins) = origins.as_deref_mut() {
+            origins.push(block_origins);
+        }
+    }
+}
+
+/// Deletes the 64-bit copies between a register and itself.
+fn remove_identity_copies(func: &mut MFunction<'_>) {
+    for block in &mut func.blocks {
+        block.insts.retain(|inst| {
+            !matches!(
+                *inst,
+                MInst::Mov {
+                    width: Width::B64,
+                    dst,
+                    src: Operand::Reg(src),
+                }
+                | MInst::XMov {
+                    width: Width::B64,
+                    dst,
+                    src: Operand::Reg(src),
+                } if dst == src
+            )
+        });
     }
 }
 
@@ -63,19 +141,20 @@ struct Scratch {
     writes: bool,
 }
 
-/// Appends the rewritten form of one instruction to `out`.
+/// Appends the rewritten form of one instruction to `out`, with its spill
+/// code; returns where the instruction itself went.
 fn rewrite_inst(
     inst: MInst,
     allocation: &Allocation<'_>,
     classes: &[RegClass],
     out: &mut ArenaVec<'_, MInst>,
-) {
+) -> usize {
     let spill = |vreg: VReg| match allocation.locations[vreg.index()] {
         | Location::Spill(slot) => Some(spill_slot(slot)),
         | _ => None,
     };
     if copy_through_memory(inst, allocation, out) {
-        return;
+        return out.len() - 1;
     }
     let mut inst = inst;
     // General scratch registers first, then SSE ones.
@@ -117,22 +196,8 @@ fn rewrite_inst(
             out.push(load(scratch_register(index), slot));
         }
     }
-    let identity = match inst {
-        | MInst::Mov {
-            width: Width::B64,
-            dst,
-            src: Operand::Reg(src),
-        }
-        | MInst::XMov {
-            width: Width::B64,
-            dst,
-            src: Operand::Reg(src),
-        } => dst == src,
-        | _ => false,
-    };
-    if !identity {
-        out.push(inst);
-    }
+    let program = out.len();
+    out.push(inst);
     for (index, entry) in scratch.iter().enumerate() {
         if let Some(vreg) = entry.owner
             && entry.writes
@@ -141,6 +206,7 @@ fn rewrite_inst(
             out.push(store(slot, scratch_register(index)));
         }
     }
+    program
 }
 
 /// Rewrites a copy that has exactly one spilled side as a single load or

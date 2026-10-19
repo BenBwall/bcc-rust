@@ -1,12 +1,13 @@
-//! Register allocation: calls, pressure, fixed registers and copies.
-//! `allocate` itself checks in debug builds that no two live intervals
-//! share a register and none meets a fixed range of its register; these
-//! tests check where values land.
+//! Register allocation: calls, pressure, fixed registers and copies, and
+//! the allocation checker. `rewrite` runs the checker on every function in
+//! debug builds; these tests check where values land, and that the checker
+//! rejects allocations broken on purpose.
 
 use std::fmt::Write as _;
 
 use super::{
     assembly,
+    check_corrupted,
     function_text,
     with_allocation,
 };
@@ -19,7 +20,10 @@ use crate::{
             PReg,
             Reg,
         },
-        regalloc::Location,
+        regalloc::{
+            ErrorKind,
+            Location,
+        },
     },
     ir::Entity,
     target::Target,
@@ -187,4 +191,101 @@ block3:
             .unwrap();
         assert!(copies >= 4, "{copies}");
     });
+}
+
+/// A function whose parameter lives across two calls.
+const ACROSS_CALLS: &str = "abi lowered
+function @g() -> i64 external
+function @f(i64) -> i64 external {
+block0(v0: i64):
+    v1 = call @g()
+    v2 = call @g()
+    v3 = iadd.i64 v0, v1
+    v4 = iadd.i64 v3, v2
+    return v4
+}
+";
+
+#[test]
+fn the_checker_accepts_the_allocator_s_work() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        check_corrupted(ACROSS_CALLS, "f", target, |_, _| {}).unwrap();
+    }
+}
+
+#[test]
+fn the_checker_rejects_a_value_left_in_a_clobbered_register() {
+    let result = check_corrupted(ACROSS_CALLS, "f", Target::LinuxGnu, |func, allocation| {
+        let MInst::Mov {
+            dst: Reg::Virt(param),
+            ..
+        } = func.blocks[0].insts[0]
+        else {
+            panic!("the entry begins with the parameter copy");
+        };
+        allocation.locations[param.index()] = Location::Reg(PReg::Rcx);
+    });
+    let error = result.expect_err("%rcx does not survive the call");
+    assert!(matches!(error.kind, ErrorKind::Missing { .. }), "{error}");
+}
+
+#[test]
+fn the_checker_rejects_two_live_values_in_one_register() {
+    let ir = "abi lowered
+function @f(i64, i64) -> i64 external {
+block0(v0: i64, v1: i64):
+    v2 = imul.i64 v0, v1
+    v3 = iadd.i64 v2, v0
+    v4 = isub.i64 v3, v1
+    return v4
+}
+";
+    let result = check_corrupted(ir, "f", Target::LinuxGnu, |_, allocation| {
+        for location in &mut allocation.locations {
+            if *location != Location::None {
+                *location = Location::Reg(PReg::Rbx);
+            }
+        }
+    });
+    let error = result.expect_err("the parameters overlap");
+    assert!(matches!(error.kind, ErrorKind::Missing { .. }), "{error}");
+}
+
+#[test]
+fn the_checker_rejects_a_value_in_the_wrong_class() {
+    let result = check_corrupted(ACROSS_CALLS, "f", Target::LinuxGnu, |func, allocation| {
+        let MInst::Mov {
+            dst: Reg::Virt(param),
+            ..
+        } = func.blocks[0].insts[0]
+        else {
+            panic!("the entry begins with the parameter copy");
+        };
+        allocation.locations[param.index()] = Location::Reg(PReg::Xmm9);
+    });
+    let error = result.expect_err("a general value cannot live in %xmm9");
+    assert!(matches!(error.kind, ErrorKind::Shape), "{error}");
+}
+
+#[test]
+fn the_checker_rejects_a_spill_slot_shared_by_live_values() {
+    let ir = "abi lowered
+function @f(i64, i64) -> i64 external {
+block0(v0: i64, v1: i64):
+    v2 = iadd.i64 v0, v1
+    v3 = isub.i64 v2, v0
+    v4 = imul.i64 v3, v1
+    return v4
+}
+";
+    let result = check_corrupted(ir, "f", Target::LinuxGnu, |_, allocation| {
+        for location in &mut allocation.locations {
+            if *location != Location::None {
+                *location = Location::Spill(0);
+            }
+        }
+        allocation.spill_slots = 1;
+    });
+    let error = result.expect_err("the values overwrite each other's slot");
+    assert!(matches!(error.kind, ErrorKind::Missing { .. }), "{error}");
 }
