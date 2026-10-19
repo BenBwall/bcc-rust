@@ -679,3 +679,37 @@ void call(void) { f(); }
     assert!(text.contains("func_addr @f\n"), "{text}");
     assert!(text.contains("call @f.always_inline("), "{text}");
 }
+
+/// A weak inline definition is a weak definition, emitted where it is
+/// referenced, as Clang emits it; a strong definition elsewhere wins. A
+/// GNU89 plain inline definition is an external definition anyway.
+#[test]
+fn weak_inline_definitions_are_weak_definitions_when_referenced() {
+    for gnu89 in [false, true] {
+        let config = CompilerConfiguration::default().with_gnu89_inline(gnu89);
+        for (source, referenced) in [
+            (
+                "inline __attribute__((weak)) int f(int x) { return x ? x * f(x - 1) : 1; } int \
+                 u(int x) { return f(x); }",
+                true,
+            ),
+            (
+                "inline __attribute__((weak, always_inline)) int f(int x) { return x; } int u(int \
+                 x) { return f(x); }",
+                true,
+            ),
+            (
+                "inline __attribute__((weak)) int f(int x) { return x; }",
+                false,
+            ),
+        ] {
+            let text = lower_with(source, config).unwrap_or_else(|error| panic!("{error:?}"));
+            assert_eq!(
+                text.contains("function @f(i32 noundef) -> i32 weak"),
+                referenced || gnu89,
+                "gnu89={gnu89}: {source}\n{text}"
+            );
+            assert!(!text.contains("@f.always_inline"), "{text}");
+        }
+    }
+}
