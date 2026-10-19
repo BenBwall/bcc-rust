@@ -1304,8 +1304,12 @@ impl MInst {
     }
 
     /// Whether the instruction reads the flags, and whether it certainly
-    /// overwrites all of them (a shift by `%cl` may leave them alone, and a
-    /// rotate writes only CF and OF).
+    /// overwrites all of them. The CPU masks a shift count to five bits (six
+    /// for a 64-bit operand, and always six for `shld`/`shrd` here) and a
+    /// masked count of zero leaves every flag alone, so `shlq $64` or
+    /// `shlb $32` overwrites nothing. A shift by `%cl` may likewise leave
+    /// them alone, and a rotate writes only CF and OF. The selector already
+    /// masks its counts, but this does not rely on it.
     pub(crate) const fn flags(&self) -> (bool, bool) {
         match self {
             | Self::Jcc { .. } | Self::Setcc { .. } | Self::Cmov { .. } => (true, false),
@@ -1325,16 +1329,17 @@ impl MInst {
             | Self::X87Compare
             | Self::Unary {
                 op: UnaryOp::Neg, ..
-            }
+            } => (false, true),
             | Self::Shift {
                 op: ShiftOp::Shl | ShiftOp::Shr | ShiftOp::Sar,
-                amount: ShiftAmount::Imm(1..),
+                width,
+                amount: ShiftAmount::Imm(count),
                 ..
-            }
+            } if (*count & if matches!(width, Width::B64) { 63 } else { 31 }) != 0 => (false, true),
             | Self::ShiftDouble {
-                amount: ShiftAmount::Imm(1..),
+                amount: ShiftAmount::Imm(count),
                 ..
-            } => (false, true),
+            } if (*count & 63) != 0 => (false, true),
             | _ => (false, false),
         }
     }

@@ -418,8 +418,9 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
             Flags::Untouched
         },
         // `shld`/`shrd count, src, dst`: dst shifted, filled from src.
-        // A nonzero count writes CF, SF, ZF and PF and leaves OF and AF
-        // undefined.
+        // The count is masked to six bits. A nonzero masked count writes CF,
+        // SF, ZF and PF, writes OF for a count of one and leaves it undefined
+        // otherwise, and leaves AF undefined; a zero one touches no flag.
         | MInst::ShiftDouble {
             dst, src, amount, ..
         } => {
@@ -467,6 +468,10 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
     };
     (at.0, flags)
 }
+
+/// Immediate shift counts on either side of the five- and six-bit masks the
+/// CPU applies: a masked count of zero touches no flag.
+const COUNTS: [u8; 9] = [0, 1, 31, 32, 33, 63, 64, 65, 255];
 
 /// Samples of every form the selector emits: each variant with each
 /// operation, width it selects at, kind of source operand, and implicit
@@ -592,8 +597,8 @@ fn forms() -> Vec<MInst> {
         Test => all.map(|width| MInst::Test { width, lhs: v(), rhs: v() }),
         Shift => [ShiftOp::Shl, ShiftOp::Shr, ShiftOp::Sar, ShiftOp::Rol].into_iter().flat_map(|op| {
             all.into_iter().flat_map(move |width| {
-                [ShiftAmount::Imm(0), ShiftAmount::Imm(1), ShiftAmount::Imm(8), ShiftAmount::Cl]
-                    .map(|amount| MInst::Shift { op, width, dst: v(), amount })
+                COUNTS.into_iter().map(ShiftAmount::Imm).chain([ShiftAmount::Cl])
+                    .map(move |amount| MInst::Shift { op, width, dst: v(), amount })
             })
         }).collect::<Vec<_>>(),
         Unary => all.map(|width| MInst::Unary { op: UnaryOp::Neg, width, dst: v() })
@@ -657,8 +662,8 @@ fn forms() -> Vec<MInst> {
         FloatToFloat => wide.map(|from| MInst::FloatToFloat { from, dst: v(), src: v() }),
         MovGx => wide.map(|width| MInst::MovGx { width, dst: v(), src: v() }),
         ShiftDouble => [true, false].into_iter().flat_map(|left| {
-            [ShiftAmount::Imm(0), ShiftAmount::Imm(9), ShiftAmount::Cl]
-                .map(|amount| MInst::ShiftDouble { left, dst: v(), src: v(), amount })
+            COUNTS.into_iter().map(ShiftAmount::Imm).chain([ShiftAmount::Cl])
+                .map(move |amount| MInst::ShiftDouble { left, dst: v(), src: v(), amount })
         }).collect::<Vec<_>>(),
         RepMovsb => [MInst::RepMovsb],
         RepStosb => [MInst::RepStosb],
