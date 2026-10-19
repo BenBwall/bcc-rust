@@ -1,4 +1,4 @@
-//! LLVM COFFAsmParser's ordered flag interpretation and MCObjectFileInfo's
+//! LLVM `COFFAsmParser`'s ordered flag interpretation and `MCObjectFileInfo`'s
 //! pre-created AMD64 section attributes. These are object-format rules.
 
 use super::{
@@ -155,39 +155,55 @@ pub(super) fn predefined(name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
     use crate::{
         backend::native::tests::object_coff::equivalent,
         target::Target,
+        util::bump::{
+            ArenaString,
+            ArenaVec,
+            Bump,
+        },
     };
 
     #[test]
     fn coff_section_flags_match_clang() {
+        let arena = Bump::new();
         let letters = "abdnDrswxyi";
-        let mut cases = vec![String::new()];
+        let mut cases = ArenaVec::new_in(&arena);
+        cases.push("");
         for first in letters.chars() {
-            cases.push(first.to_string());
+            let mut flags = ArenaString::new_in(&arena);
+            flags.push(first);
+            cases.push(flags.into_str());
             for second in letters.chars() {
-                cases.push(format!("{first}{second}"));
+                let mut flags = ArenaString::new_in(&arena);
+                flags.push(first);
+                flags.push(second);
+                cases.push(flags.into_str());
             }
         }
-        cases
-            .extend(["xr", "dr", "dw", "bw", "yni", "wrx", "rwx", "nrd", "dnr"].map(str::to_owned));
-        for flags in cases {
-            if parse("probe", &flags).is_err() {
+        cases.extend_from_slice(&["xr", "dr", "dw", "bw", "yni", "wrx", "rwx", "nrd", "dnr"]);
+        for &flags in &cases {
+            if parse("probe", flags).is_err() {
                 continue;
             }
             for target in [Target::WindowsGnu, Target::WindowsMsvc] {
-                equivalent(&format!(".section probe,\"{flags}\"\n.zero 1\n"), target).unwrap();
+                let mut text = ArenaString::new_in(&arena);
+                write!(&mut text, ".section probe,\"{flags}\"\n.zero 1\n").unwrap();
+                equivalent(&text, target).unwrap();
             }
         }
         for flags in ["bd", "db", "brd", "q"] {
-            assert!(parse("probe", flags).is_err());
+            _ = parse("probe", flags).unwrap_err();
         }
     }
 
     #[test]
     fn coff_predefined_section_names_match_clang() {
+        let arena = Bump::new();
         for name in [
             ".eh_frame",
             ".rdata",
@@ -252,7 +268,9 @@ mod tests {
         ] {
             for flags in ["", ",\"dw\"", ",\"dr\""] {
                 for target in [Target::WindowsGnu, Target::WindowsMsvc] {
-                    equivalent(&format!(".section {name}{flags}\n.zero 1\n"), target).unwrap();
+                    let mut text = ArenaString::new_in(&arena);
+                    write!(&mut text, ".section {name}{flags}\n.zero 1\n").unwrap();
+                    equivalent(&text, target).unwrap();
                 }
             }
         }

@@ -424,7 +424,7 @@ mod tests {
             data:   ArenaVec::new_in(&arena),
             relocs: ArenaVec::new_in(&arena),
         });
-        assert!(write(&coff).is_err());
+        _ = write(&coff).unwrap_err();
     }
 
     #[test]
