@@ -177,13 +177,18 @@ pub(super) fn thread_jumps<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
 const DUPLICATED: usize = 8;
 
 /// Replaces each `jmp` to a short block that ends in a conditional branch
-/// to the jump's next block by a copy of that block, unless the jump falls
-/// through to it anyway. A
+/// by a copy of that block, unless the jump falls through to it anyway. A
 /// loop whose test is at the top then branches back from its bottom on the
 /// copied test instead of jumping to the top and testing there (loop
 /// rotation), and an `if` that joins before another test branches on it
 /// directly. The copied instructions use allocated registers only, so the
 /// copy computes what the jump's target did; blocks with calls stay.
+///
+/// A copy pays off when its branch can fall through to the next block, or
+/// when the jump is a loop's back edge and one target is the loop's body:
+/// the branch then takes that edge, and the `jmp` to the other target runs
+/// once, when the loop exits. Any other copy would end in a `jcc` and a
+/// `jmp`, as many jumps as it replaced.
 pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
     let mut copy = ArenaVec::new_in(arena);
     for block in 0..func.blocks.len() {
@@ -191,20 +196,47 @@ pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
             continue;
         };
         let insts = &func.blocks[target.index()].insts;
-        // The copy pays off when its branch can fall through to the next
-        // block; else it is a `jcc` and a `jmp`, as many as before.
+        let Some(&MInst::Jcc {
+            cond,
+            taken,
+            not_taken,
+        }) = insts.last()
+        else {
+            continue;
+        };
         let next = MBlock::new(block + 1);
+        let falls = taken == next || not_taken == next;
+        // The loop's body, when the jump is a loop's back edge: the jump's
+        // own block, or else the one target that lies between the copied
+        // test and the jump.
+        let header = target.index();
+        let inside = |to: MBlock| header <= to.index() && to.index() <= block;
+        let body = if taken.index() == block || not_taken.index() == block {
+            Some(MBlock::new(block))
+        } else {
+            match (inside(taken), inside(not_taken)) {
+                | (true, false) => Some(taken),
+                | (false, true) => Some(not_taken),
+                | _ => None,
+            }
+        };
         if target.index() == block + 1
             || target.index() == block
             || insts.len() > DUPLICATED
-            || !matches!(insts.last(), Some(&MInst::Jcc { taken, not_taken, .. })
-                if taken == next || not_taken == next)
+            || !(falls || body.is_some())
             || insts.iter().any(|inst| matches!(inst, MInst::Call { .. }))
         {
             continue;
         }
         copy.clear();
         copy.extend_from_slice(insts);
+        if !falls && body == Some(not_taken) {
+            *copy.last_mut().expect("the copy ends in the branch") = MInst::Jcc {
+                cond:      cond.negated(),
+                taken:     not_taken,
+                not_taken: taken,
+            };
+        }
         let data = &mut func.blocks[block].insts;
         _ = data.pop();
         data.extend_from_slice(&copy);

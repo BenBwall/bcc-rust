@@ -381,3 +381,31 @@ block0(v0: ptr):
         "no scratch register"
     );
 }
+
+#[test]
+fn a_loop_whose_exit_comes_first_branches_back_on_its_test() {
+    // The exit block lies between the header and the latch, so the copied
+    // test cannot fall through; its branch is turned to take the back edge.
+    let ir = "abi lowered
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 sge v2, v0
+    brif v4, block2, block3
+block2:
+    return v3
+block3:
+    v5 = iadd.i32 v3, v2
+    v6 = iconst.i32 1
+    v7 = iadd.i32 v2, v6
+    jump block1(v7, v5)
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    // The latch ends in `jl` back to itself, then the exit's `jmp`.
+    let latch = f.rfind("\tjl\t").expect(f);
+    assert!(f[latch..].contains("\tjmp\t"), "{f}");
+}
