@@ -89,6 +89,10 @@ pub(super) fn normalize_language_arguments(
             }
         } else if text.starts_with("-D") || text.starts_with("-U") {
             normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
+        } else if text == "-O" {
+            normalized.push("--optimization=O1".into());
+        } else if let Some(value) = text.strip_prefix("-O") {
+            normalized.push(format!("--optimization=O{value}").into());
         } else if let Some(value) = text.strip_prefix("-ftls-model=") {
             normalized.push(format!("--tls-model={value}").into());
         } else if let Some(flag) = SINGLE_DASH_LINK_FLAGS
@@ -131,6 +135,12 @@ pub(super) fn normalize_language_arguments(
                     | "--sysroot"
                     | "--source-date-epoch"
                     | "--tls-model"
+                    | "--opt"
+                    | "--llvm-opt"
+                    | "--optimization"
+                    | "--passes"
+                    | "--opt-bisect-limit"
+                    | "--interpret-step-limit"
                     | "--language-option"
                     | "--preprocessing-option"
                     | "-o"
@@ -155,6 +165,7 @@ impl Cli {
                 flag.apply(configuration)
             })
             .with_code_options(self.code_options())
+            .with_optimization(self.code_generation.optimization_macros())
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
     }

@@ -101,9 +101,11 @@ use llvm_sys::{
         LLVMGetBufferStart,
         LLVMGetDataLayoutStr,
         LLVMGetEnumAttributeKindForName,
+        LLVMGetFirstFunction,
         LLVMGetIntrinsicDeclaration,
         LLVMGetNamedFunction,
         LLVMGetNamedGlobalAlias,
+        LLVMGetNextFunction,
         LLVMGetParam,
         LLVMGetPoison,
         LLVMGetTarget,
@@ -116,6 +118,7 @@ use llvm_sys::{
         LLVMInt128TypeInContext,
         LLVMIntTypeInContext,
         LLVMIntrinsicGetType,
+        LLVMIsDeclaration,
         LLVMLookupIntrinsicID,
         LLVMModuleCreateWithNameInContext,
         LLVMPointerTypeInContext,
@@ -1459,10 +1462,29 @@ impl<'id> Session<'id> {
         {
             return Err(Message(error));
         }
+        // LLVM 23 expresses size optimization with function attributes and
+        // the O2 pipeline; default<Os>/default<Oz> are rejected.
+        if matches!(opt, Some(OptLevel::Os | OptLevel::Oz)) {
+            // SAFETY: This session owns the live module and its function list.
+            let mut function = unsafe { LLVMGetFirstFunction(self.module) };
+            while !function.is_null() {
+                // SAFETY: A live function from this module's function list.
+                if unsafe { LLVMIsDeclaration(function) } == 0 {
+                    let value = Val(function, PhantomData);
+                    self.attribute(value, u32::MAX, "optsize", 0, None, false);
+                    if opt == Some(OptLevel::Oz) {
+                        self.attribute(value, u32::MAX, "minsize", 0, None, false);
+                    }
+                }
+                // SAFETY: A live function; attributes do not alter the list.
+                function = unsafe { LLVMGetNextFunction(function) };
+            }
+        }
         let level = match opt.unwrap_or(OptLevel::O0) {
             | OptLevel::O0 => LLVMCodeGenOptLevel::LLVMCodeGenLevelNone,
             | OptLevel::O1 => LLVMCodeGenOptLevel::LLVMCodeGenLevelLess,
-            | OptLevel::O2 => LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
+            | OptLevel::O2 | OptLevel::Os | OptLevel::Oz =>
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
             | OptLevel::O3 => LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive,
         };
         // SAFETY: Known target, terminated triple/CPU/features, valid machine
@@ -1500,7 +1522,7 @@ impl<'id> Session<'id> {
             let pipeline = match opt.unwrap_or(OptLevel::O0) {
                 | OptLevel::O0 => c"default<O0>",
                 | OptLevel::O1 => c"default<O1>",
-                | OptLevel::O2 => c"default<O2>",
+                | OptLevel::O2 | OptLevel::Os | OptLevel::Oz => c"default<O2>",
                 | OptLevel::O3 => c"default<O3>",
             };
             // SAFETY: Creates independently owned pass-builder options.

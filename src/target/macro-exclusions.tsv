@@ -78,3 +78,5 @@ __pie__	Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside
 __seg_fs	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __seg_gs	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __tune_k8__	Code generation, relocation and optimization policy are not implemented.
+__OPTIMIZE__	Optimization policy owned by the CLI and identity macro builder.
+__OPTIMIZE_SIZE__	Optimization policy owned by the CLI and identity macro builder.

@@ -81,6 +81,7 @@ pub(crate) struct CompilerConfiguration {
     repeated_specifier_warnings: bool,
     source_date_epoch: Option<i64>,
     hosted: bool,
+    optimization: (bool, bool),
     gnu89_inline: Option<bool>,
     suppress_warnings: bool,
     warnings_as_errors: bool,

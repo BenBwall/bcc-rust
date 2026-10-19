@@ -32,6 +32,7 @@ mod llvm_build_cache;
 mod math_builtins_cli;
 mod mingw_target_macros;
 mod native_runner;
+mod optimization_cli;
 mod overloadable;
 mod overloadable_abi;
 mod pointer_diagnostics;

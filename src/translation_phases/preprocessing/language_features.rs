@@ -991,6 +991,14 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION"),
     );
     out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
+    // GNU optimization macros (reserved implementation names, C99 §7.1.3p1).
+    let (optimized, size) = configuration.optimization();
+    if optimized {
+        out.push_str("#define __OPTIMIZE__ 1\n");
+    }
+    if size {
+        out.push_str("#define __OPTIMIZE_SIZE__ 1\n");
+    }
     // Identity follows the effective inline mode, including flag overrides.
     out.push_str(if configuration.gnu89_inline() {
         "#define __GNUC_GNU_INLINE__ 1\n"
