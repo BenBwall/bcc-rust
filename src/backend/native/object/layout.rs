@@ -14,74 +14,21 @@ use super::{
 use crate::util::bump::ArenaVec;
 
 impl<'a> Object<'a> {
+    /// Lays out every section as LLVM MC does (`MCAssembler::layout`): one
+    /// pass with every local branch short, then relaxation passes until no
+    /// offset changes.
     pub(super) fn layout(&mut self) -> Result<()> {
-        loop {
-            for section in &mut self.sections {
-                section.size = 0;
-            }
-            for item in &mut self.items {
-                let section = &mut self.sections[item.section];
-                item.offset = section.size;
-                let size = match &item.kind {
-                    | Kind::Label(id) => {
-                        self.symbols[*id].section = Some(item.section);
-                        self.symbols[*id].value = item.offset;
-                        if section.flags & 0x400 != 0 {
-                            self.symbols[*id].kind = 6;
-                        }
-                        0
-                    },
-                    | Kind::Size(id, size) => {
-                        self.symbols[*id].size = if let Some(size) = size {
-                            *size
-                        } else {
-                            if self.symbols[*id].section != Some(item.section) {
-                                return Err(Error("symbol size outside its section"));
-                            }
-                            item.offset
-                                .checked_sub(self.symbols[*id].value)
-                                .ok_or(Error("negative symbol size"))?
-                        };
-                        0
-                    },
-                    | Kind::Align(align, _) => item.offset.wrapping_neg() & (align - 1),
-                    | Kind::Zero(count) => *count,
-                    | Kind::Code(code) => u64::from(code.len),
-                    | Kind::Value(width, _) => u64::from(*width),
-                    | Kind::Branch {
-                        condition, near, ..
-                    } =>
-                        if *near {
-                            if condition.is_some() { 6 } else { 5 }
-                        } else {
-                            2
-                        },
-                    | Kind::Cfi(..) => 0,
-                };
-                section.size = section
-                    .size
-                    .checked_add(size)
-                    .ok_or(Error("section size overflow"))?;
-            }
-            let mut changed = false;
-            for item in &mut self.items {
-                if let Kind::Branch { target, near, .. } = &mut item.kind {
-                    let symbol = self.symbols[*target];
-                    if symbol.binding == 0 && symbol.alias.is_some() {
-                        return Err(Error("unsupported branch to local alias"));
-                    }
-                    let local = symbol.binding == 0 && symbol.section == Some(item.section);
-                    let distance = i128::from(symbol.value) - i128::from(item.offset + 2);
-                    if !*near && (!local || i8::try_from(distance).is_err()) {
-                        *near = true;
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
+        // The item that defines each label: a branch's target is ahead of it
+        // or behind it.
+        let mut defined_at = ArenaVec::with_capacity_in(self.symbols.len(), self.arena);
+        defined_at.resize(self.symbols.len(), usize::MAX);
+        for (index, item) in self.items.iter().enumerate() {
+            if let Kind::Label(id) = item.kind {
+                defined_at[id] = index;
             }
         }
+        _ = self.pass(&defined_at, false)?;
+        while self.pass(&defined_at, true)? {}
         // Alias chains may be forward and must remain iterative.
         for _ in 0..self.symbols.len() {
             let mut changed = false;
@@ -112,6 +59,93 @@ impl<'a> Object<'a> {
             return Err(Error("unresolved or cyclic alias"));
         }
         Ok(())
+    }
+
+    /// One pass of MC's fused relaxation and layout (`relaxOnce`): each item
+    /// takes its offset from the items before it in this pass, alignment
+    /// padding follows from that offset, and with `relax` a short branch
+    /// that cannot reach its target becomes near at once. The distance to a
+    /// target behind the branch uses this pass's offsets. A target ahead of
+    /// it still has the previous pass's offset, so the distance uses the
+    /// branch's previous offset as well, which is what MC's `Stretch`
+    /// correction computes. Returns whether any offset changed.
+    fn pass(&mut self, defined_at: &[usize], relax: bool) -> Result<bool> {
+        let Self {
+            sections,
+            symbols,
+            items,
+            ..
+        } = self;
+        for section in sections.iter_mut() {
+            section.size = 0;
+        }
+        let mut changed = false;
+        for (index, item) in items.iter_mut().enumerate() {
+            let section = &mut sections[item.section];
+            let previous = item.offset;
+            item.offset = section.size;
+            changed |= item.offset != previous;
+            let size = match &mut item.kind {
+                | Kind::Label(id) => {
+                    symbols[*id].section = Some(item.section);
+                    symbols[*id].value = item.offset;
+                    if section.flags & 0x400 != 0 {
+                        symbols[*id].kind = 6;
+                    }
+                    0
+                },
+                | Kind::Size(id, size) => {
+                    symbols[*id].size = if let Some(size) = size {
+                        *size
+                    } else {
+                        if symbols[*id].section != Some(item.section) {
+                            return Err(Error("symbol size outside its section"));
+                        }
+                        item.offset
+                            .checked_sub(symbols[*id].value)
+                            .ok_or(Error("negative symbol size"))?
+                    };
+                    0
+                },
+                | Kind::Align { align, max, .. } => padding(item.offset, *align, *max),
+                | Kind::Zero(count) => *count,
+                | Kind::Code(code) => u64::from(code.len),
+                | Kind::Value(width, _) => u64::from(*width),
+                | Kind::Branch {
+                    condition,
+                    target,
+                    near,
+                } => {
+                    if relax && !*near {
+                        let symbol = symbols[*target];
+                        if symbol.binding == 0 && symbol.alias.is_some() {
+                            return Err(Error("unsupported branch to local alias"));
+                        }
+                        let local = symbol.binding == 0 && symbol.section == Some(item.section);
+                        let from = if defined_at[*target] > index {
+                            previous
+                        } else {
+                            item.offset
+                        };
+                        let distance = i128::from(symbol.value) - i128::from(from + 2);
+                        if !local || i8::try_from(distance).is_err() {
+                            *near = true;
+                        }
+                    }
+                    if *near {
+                        if condition.is_some() { 6 } else { 5 }
+                    } else {
+                        2
+                    }
+                },
+                | Kind::Cfi(..) => 0,
+            };
+            section.size = section
+                .size
+                .checked_add(size)
+                .ok_or(Error("section size overflow"))?;
+        }
+        Ok(changed)
     }
 
     pub(super) fn materialize(&mut self) -> Result<()> {
@@ -218,8 +252,8 @@ impl<'a> Object<'a> {
                         });
                     }
                 },
-                | Kind::Align(align, fill) => {
-                    let count = offset.wrapping_neg() & (align - 1);
+                | Kind::Align { align, fill, max } => {
+                    let count = padding(offset, *align, *max);
                     if let Some(fill) = fill {
                         if self.sections[section].kind == 8 && *fill != 0 {
                             return Err(Error("nonzero alignment in NOBITS section"));
@@ -368,4 +402,13 @@ impl<'a> Object<'a> {
         });
         Ok(id)
     }
+}
+
+/// The padding an alignment item at `offset` emits: up to the next multiple
+/// of `align`, or nothing if that takes more than `max` bytes, as
+/// `MCAssembler::relaxAlign` computes it (x86's smallest `nop` is one byte,
+/// so code alignment needs no rounding).
+fn padding(offset: u64, align: u64, max: u64) -> u64 {
+    let count = offset.wrapping_neg() & (align - 1);
+    if count > max { 0 } else { count }
 }

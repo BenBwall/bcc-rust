@@ -184,16 +184,26 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                         return Err(Error("alignment too large"));
                     }
                     object.sections[section].align = object.sections[section].align.max(align);
-                    Kind::Align(
-                        align,
-                        parts
-                            .next()
-                            .map(|fill| {
-                                u8::try_from(unsigned(fill)?)
-                                    .map_err(|_| Error("alignment fill exceeds one byte"))
-                            })
-                            .transpose()?,
-                    )
+                    // `.p2align align[, [fill][, max]]`: an omitted fill pads
+                    // code with `nop`s. A maximum below one is an error in
+                    // MC; one of at least the alignment has no effect.
+                    let (fill, max) = (parts.next(), parts.next());
+                    if fill == Some("") && max.is_none() {
+                        return Err(Error("missing alignment fill"));
+                    }
+                    let fill = fill
+                        .filter(|fill| !fill.is_empty())
+                        .map(|fill| {
+                            u8::try_from(unsigned(fill)?)
+                                .map_err(|_| Error("alignment fill exceeds one byte"))
+                        })
+                        .transpose()?;
+                    let max = match max.map(unsigned).transpose()? {
+                        | Some(0) => return Err(Error("unsatisfiable alignment maximum")),
+                        | Some(max) if max < align => max,
+                        | _ => align,
+                    };
+                    Kind::Align { align, fill, max }
                 },
                 | ".zero" => Kind::Zero(unsigned(first)?),
                 | ".byte" | ".short" | ".long" | ".quad" => {
@@ -431,7 +441,7 @@ fn directive_operands(name: &str, args: &str) -> Result<()> {
         | ".cfi_def_cfa_offset"
         | ".cfi_def_cfa_register" => count == 1,
         | ".size" | ".type" | ".cfi_offset" | ".cfi_def_cfa" => count == 2,
-        | ".p2align" => (1..=2).contains(&count),
+        | ".p2align" => (1..=3).contains(&count),
         | ".section" => (1..=5).contains(&count),
         | ".byte" | ".short" | ".long" | ".quad" => count > 0,
         | name if name.starts_with(".cfi_") => return Err(Error("unknown CFI directive")),

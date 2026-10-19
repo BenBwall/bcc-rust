@@ -1301,8 +1301,15 @@ follow-up; the current path still formats and parses arena-backed text.
 fixups and layout items. `object/encoder.rs` covers the emitted integer, SSE2,
 x87 and TLS forms, REX/ModRM/SIB addressing and canonical alignment NOPs.
 Local jumps start short; layout promotes out-of-range jumps to rel32 until no
-sizes change, including alignment after branches. `object/elf.rs` writes
-ELF64 sections, local/global/weak symbols and aliases, visibility, RELA records,
+sizes change, including alignment after branches. Since alignment padding
+inside a function shrinks when a branch before it grows, the final sizes
+depend on the order of those decisions, so layout repeats MC's fused pass
+exactly (`MCAssembler::relaxOnce` in the pinned LLVM): each item takes its
+offset from the items before it in the same pass and a branch is promoted
+at once, measuring to a target behind it with this pass's offsets and to a
+target ahead of it with the previous pass's offsets of both ends (MC's
+`Stretch` correction). `object/elf.rs` writes ELF64 sections,
+local/global/weak symbols and aliases, visibility, RELA records,
 COMDAT groups (including grouped relocation sections), NOBITS, TLS,
 `.init_array`/`.fini_array` and `.note.GNU-stack`. Local relocations use section
 symbols plus offsets, while interposable calls retain PLT32 and GOT loads
@@ -1337,9 +1344,12 @@ no direct-only refusal, and the native tests check every program with every
 value spilled through the direct path as well.
 Every supported instruction validates operand count, kind and width before
 encoding. Unsupported suffixes, oversized fields, duplicate definitions,
-conflicting bindings, unsupported size expressions and alignment max-skip
-arguments refuse explicitly. Section names infer GNU/LLVM flags and types;
-byte/short relocations use their own widths, and interposable references retain
+conflicting bindings and unsupported size expressions refuse explicitly.
+`.p2align` takes MC's optional fill and maximum (`.p2align 4,,10`): padding
+that would exceed the maximum is omitted, a maximum of zero is refused as
+MC refuses it, and one of at least the alignment has no effect. Section
+names infer GNU/LLVM flags and types; byte/short relocations use their own
+widths, and interposable references retain
 relocations. The CLI object test uses fresh paths and links/runs each result.
 An object-level COFF fixture pins the text fallback, including unwind sections,
 stubs, COMDATs and exports; it does not claim direct COFF equivalence. The pinned

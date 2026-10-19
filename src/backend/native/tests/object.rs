@@ -677,6 +677,68 @@ fn implicit_code_alignment_uses_canonical_nops() {
     equivalent(&text).unwrap();
 }
 
+#[test]
+fn alignment_maximums_match_clang() {
+    // Code alignment pads with `nop`s, a fill with that byte, and either
+    // emits nothing when it would take more than the maximum; a maximum of
+    // at least the alignment has no effect.
+    for max in [1, 2, 3, 7, 10, 11, 14, 15, 16, 40] {
+        let mut text = String::from(".text\n");
+        for gap in 0..17 {
+            write!(
+                &mut text,
+                ".zero {gap}\n.p2align 4,,{max}\nretq\n.p2align 5,0x90,{max}\nretq\n"
+            )
+            .unwrap();
+        }
+        text.push_str(".data\n");
+        for gap in 0..9 {
+            write!(&mut text, ".zero {gap}\n.p2align 3,0x2a,{max}\n.byte 1\n").unwrap();
+        }
+        text.push_str(".bss\n.zero 3\n.p2align 4,0,8\n.zero 1\n");
+        equivalent(&text).unwrap();
+    }
+}
+
+/// Alignment padding shrinks when branches before it grow, so whether a
+/// branch over it is relaxed depends on the order in which MC lays out and
+/// relaxes items. Random listings of jumps, spacers and alignments near
+/// the rel8 boundary pin that order against the pinned assembler: in six of
+/// these 150, promoting every out-of-range branch of a layout at once, as
+/// the encoder first did, gives other sizes than MC's fused pass.
+#[test]
+fn branch_relaxation_across_alignment_matches_mc() {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut next = |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+    for _ in 0..150 {
+        let labels = 24 + next(8);
+        let mut text = String::from(".text\nf:\n");
+        for label in 0..labels {
+            for _ in 0..=next(3) {
+                match next(7) {
+                    | 0 | 1 => {
+                        let target = next(labels);
+                        let branch = if next(2) == 0 { "jmp" } else { "jne" };
+                        writeln!(&mut text, "{branch} .L{target}").unwrap();
+                    },
+                    | 2 => writeln!(&mut text, ".p2align 4").unwrap(),
+                    | 3 => writeln!(&mut text, ".p2align 4,,{}", 1 + next(14)).unwrap(),
+                    | 4 => writeln!(&mut text, ".p2align 5,,{}", 1 + next(30)).unwrap(),
+                    | _ => writeln!(&mut text, ".zero {}", next(32)).unwrap(),
+                }
+            }
+            writeln!(&mut text, ".L{label}:").unwrap();
+        }
+        text.push_str("retq\n");
+        equivalent(&text).unwrap();
+    }
+}
+
 fn refuses(text: &str, diagnostic: &str) {
     let arena = Bump::new();
     let error = match super::super::object::encode(text, &arena) {
@@ -1074,7 +1136,10 @@ fn invalid_directives_and_overflowing_differences_are_refused() {
     for (text, diagnostic) in [
         ("a:\na:\n", "duplicate"),
         (".weak w\n.globl w\n", "binding"),
-        (".p2align 4,0x90,3", "directive operands"),
+        (".p2align 4,0x90,3,1", "directive operands"),
+        (".p2align 4,,0", "unsatisfiable alignment maximum"),
+        (".p2align 4,", "missing alignment fill"),
+        (".p2align 4,,", "invalid integer"),
         ("f:\ng:\n.size f,.-g", "size expression"),
         (".size f,.-f\n.zero 8\nf:", "size expression"),
         (

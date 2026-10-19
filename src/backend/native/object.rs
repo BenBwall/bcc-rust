@@ -80,7 +80,13 @@ struct Item<'a> {
 enum Kind<'a> {
     Label(usize),
     Size(usize, Option<u64>),
-    Align(u64, Option<u8>),
+    /// `.p2align`: the alignment, the fill byte (multi-byte `nop`s in code
+    /// without one), and the most bytes it may emit before it emits none.
+    Align {
+        align: u64,
+        fill:  Option<u8>,
+        max:   u64,
+    },
     Zero(u64),
     Code(encoder::Code<'a>),
     Value(u8, &'a str),
