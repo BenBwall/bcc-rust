@@ -660,6 +660,12 @@ form has one registry descriptor and `__has_builtin` queries the registry. See
 [the M6 receipt](../research/semantic-facts-m6.md) and the "Builtin families in
 the registry" section of `semantic-analysis.md`.
 
+Status (2026-10-19): M8 is implemented; the current-object checker retains one
+placement plan per accepted initializer and automatic and static lowering
+replay it, with the lowering walker deleted. See
+[the M8 receipt](../research/semantic-facts-m8.md) and the "Initializer
+placement plans" section of `semantic-analysis.md`.
+
 For each landing, run focused tests while developing, then repository canonical
 checks: `cargo test --all-targets`, feature-enabled allocation counting, nightly
 format check and both required Clippy configurations with warnings denied.

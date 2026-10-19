@@ -10,6 +10,7 @@ use crate::translation_phases::{
     GetSeverity,
     semantic_analysis::{
         InitOperation,
+        InitValue,
         InitializerPlan,
     },
 };
@@ -370,20 +371,63 @@ fn sparse_and_overlapping_range_initializers_do_not_expand() {
 
 #[test]
 fn plan_records_stay_small() {
-    use crate::translation_phases::semantic_analysis::{
-        InitValue,
-        Subobject,
-    };
+    use crate::translation_phases::semantic_analysis::Subobject;
     // Recorded in docs/research/semantic-facts-m8.md.
+    assert_eq!(size_of::<Subobject>(), 24);
+    assert_eq!(size_of::<InitValue<'_>>(), 16);
+    assert_eq!(size_of::<InitOperation<'_>>(), 56);
+    assert_eq!(size_of::<InitializerPlan<'_>>(), 48);
+}
+
+/// Measurement for docs/research/semantic-facts-m8.md, not a check: with
+/// `BCC_M8_CORPUS` naming a directory, analyzes each `.c` file under it and
+/// prints how many plans, operations, values and repeats it retains, and
+/// their record bytes (excluding the lookup map).
+#[test]
+#[ignore = "measurement; set BCC_M8_CORPUS"]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a manual measurement reads its corpus path from the environment"
+)]
+fn measure_retained_plan_sizes() {
+    let Some(root) = std::env::var_os("BCC_M8_CORPUS") else {
+        return;
+    };
+    let mut pending = vec![std::path::PathBuf::from(root)];
+    let mut files = Vec::new();
+    while let Some(path) = pending.pop() {
+        if path.is_dir() {
+            pending.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        } else if path.extension().is_some_and(|e| e == "c") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    let (mut units, mut plans, mut operations, mut values, mut repeats, mut largest) =
+        (0, 0, 0, 0, 0, 0);
+    for file in &files {
+        let source = String::from_utf8_lossy(&std::fs::read(file).unwrap()).into_owned();
+        with_source(&source, |context, s| {
+            drop(context.take_pending_errors());
+            units += 1;
+            for plan in s.initializers.plans.values() {
+                plans += 1;
+                operations += plan.operations.len();
+                values += plan.values.len();
+                largest = largest.max(plan.operations.len());
+                repeats += plan
+                    .operations
+                    .iter()
+                    .filter(|o| matches!(o, InitOperation::Repeat { .. }))
+                    .count();
+            }
+        });
+    }
+    let bytes = plans * size_of::<InitializerPlan<'_>>()
+        + operations * size_of::<InitOperation<'_>>()
+        + values * size_of::<InitValue<'_>>();
     eprintln!(
-        "Subobject {} InitValue {} InitOperation {} InitializerPlan {}",
-        size_of::<Subobject>(),
-        size_of::<InitValue<'_>>(),
-        size_of::<InitOperation<'_>>(),
-        size_of::<InitializerPlan<'_>>()
+        "M8 plans: {units} units, {plans} plans, {operations} operations, {values} values, \
+         {repeats} repeats, largest {largest} operations, {bytes} record bytes"
     );
-    assert!(size_of::<Subobject>() <= 24);
-    assert!(size_of::<InitValue<'_>>() <= 16);
-    assert!(size_of::<InitOperation<'_>>() <= 56);
-    assert!(size_of::<InitializerPlan<'_>>() <= 56);
 }
