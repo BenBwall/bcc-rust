@@ -3,7 +3,8 @@
 //! An address operand folds a frame slot, a symbol the module defines (any
 //! symbol on COFF but a weak declaration), or a chain of `ptr_add`s of a
 //! base, constants and one scaled register offset into one memory operand
-//! (`disp(base, index, scale)`). On ELF a symbol the module does
+//! (`disp(base, index, scale)`). A symbol base with an index is loaded into
+//! a register once, at the function's entry. On ELF a symbol the module does
 //! not define is reached through its GOT entry, since executables are
 //! position-independent; on COFF a weak declaration, whose address may be
 //! null, through a `.refptr` stub holding its address, as Clang does.
@@ -44,6 +45,7 @@ use crate::{
             Callee,
             FrameObject,
             Index,
+            MBlock,
             MInst,
             Mem,
             Operand,
@@ -57,6 +59,7 @@ use crate::{
         through_stub,
     },
     ir::{
+        Entity,
         GlobalId,
         Inst,
         InstData,
@@ -71,6 +74,7 @@ use crate::{
         Target,
         TlsModel,
     },
+    util::bump::ArenaVec,
 };
 
 /// The Windows image's TLS index, which the CRT's TLS directory names.
@@ -258,7 +262,10 @@ impl Selector<'_, '_, '_> {
                     Base::Symbol(SymbolRef::Ir(symbol)),
                     disp.checked_add(offset)?,
                 ),
-            | ValueKind::Addr(..) if index.is_some() => (Base::Reg(self.reg(current)), disp),
+            | ValueKind::Addr(AddrBase::Symbol(symbol), offset) if index.is_some() => (
+                Base::Reg(self.symbol_base(symbol)),
+                disp.checked_add(offset)?,
+            ),
             | _ => return None,
         };
         if disp.abs() >= MAX_DISP {
@@ -269,6 +276,39 @@ impl Selector<'_, '_, '_> {
             index,
             disp: i32::try_from(disp).expect("the displacement was bounded"),
         })
+    }
+
+    /// A register holding `symbol`'s address, loaded once at the
+    /// function's entry: an indexed operand needs its base in a register,
+    /// and a loop would otherwise recompute it at every access. The
+    /// allocator splits or spills it like any other value where registers
+    /// are scarce.
+    fn symbol_base(&mut self, symbol: Symbol) -> Reg {
+        if let Some(&(_, reg)) = self.bases.iter().find(|&&(other, _)| other == symbol) {
+            return reg;
+        }
+        let reg = self.vreg();
+        self.bases.push((symbol, reg));
+        reg
+    }
+
+    /// Puts the loads of [`Self::symbol_base`]'s registers at the start of
+    /// the entry block, which dominates every use.
+    pub(super) fn load_bases(&mut self) {
+        if self.bases.is_empty() {
+            return;
+        }
+        let entry = MBlock::new(0);
+        let rest = std::mem::replace(
+            &mut self.func.blocks[entry.index()].insts,
+            ArenaVec::new_in(self.arena),
+        );
+        self.current = entry;
+        for index in 0..self.bases.len() {
+            let (symbol, reg) = self.bases[index];
+            self.address_into(reg, AddrBase::Symbol(symbol), 0);
+        }
+        self.func.blocks[entry.index()].insts.extend(rest);
     }
 
     /// An `i64` offset as a scaled index: the multiplicand of an `imul` by
@@ -440,7 +480,7 @@ impl Selector<'_, '_, '_> {
             );
             return;
         }
-        let mut pieces = [(0_i32, Width::B8, Reg::Virt(crate::ir::Entity::new(0))); 16];
+        let mut pieces = [(0_i32, Width::B8, Reg::Virt(Entity::new(0))); 16];
         let mut count = 0;
         let mut offset = 0;
         for width in [Width::B64, Width::B32, Width::B16, Width::B8] {

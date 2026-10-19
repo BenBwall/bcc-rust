@@ -160,6 +160,7 @@ pub(crate) fn select<'a>(
             }
         }
     }
+    selector.load_bases();
     Ok(selector.func)
 }
 
@@ -227,6 +228,9 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     pub(super) incoming:  ArenaVec<'a, ValueKind>,
     /// The frame slot of [`Self::scratch`], once a sequence needs it.
     pub(super) scratch:   Option<u32>,
+    /// The symbols indexed operands use as a base, with the register the
+    /// entry block loads each address into.
+    pub(super) bases:     ArenaVec<'a, (Symbol, Reg)>,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -259,6 +263,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             labeled: filled(arena, body.block_count(), None),
             incoming: ArenaVec::new_in(arena),
             scratch: None,
+            bases: ArenaVec::new_in(arena),
         }
     }
 

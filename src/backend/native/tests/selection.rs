@@ -1306,3 +1306,37 @@ block0(v0: ptr, v1: i32):
     assert!(!f.contains("shl"), "{f}");
     assert!(!f.contains("imul"), "{f}");
 }
+
+#[test]
+fn indexed_symbol_bases_are_loaded_once() {
+    let text = assembly(
+        "abi lowered
+global @table internal size 64, align 4 = zero
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 slt v2, v0
+    brif v4, block2, block3
+block2:
+    v5 = sext.i64 v2
+    v6 = iconst.i64 4
+    v7 = imul.i64 v5, v6
+    v8 = global_addr @table
+    v9 = ptr_add v8, v7
+    v10 = load.i32 v9, align 4
+    v11 = iadd.i32 v3, v10
+    v12 = iconst.i32 1
+    v13 = iadd.i32 v2, v12
+    jump block1(v13, v11)
+block3:
+    return v3
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert_eq!(f.matches("leaq\ttable(%rip)").count(), 1, "{f}");
+    assert!(f.contains(",4), %e"), "{f}");
+}
