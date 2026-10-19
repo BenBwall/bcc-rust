@@ -452,6 +452,24 @@ fn coff_programs_match_both_targets_at_b0_and_b1() {
     }
 }
 
+/// With every value spilled, every program's COFF object still matches
+/// Clang's on both targets: the placeholder for a copy within one spill slot
+/// (a store of the slot to itself) never reaches the listing, and the
+/// spill code encodes as Clang encodes it.
+#[test]
+fn coff_objects_with_every_value_spilled_match_clang() {
+    for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+        for optimize in [false, true] {
+            for program in super::programs::PROGRAMS {
+                super::end_to_end::with_module(program.source, target, optimize, |module| {
+                    let text = super::spilled_assembly(module, target).unwrap();
+                    equivalent(&text, target).unwrap();
+                });
+            }
+        }
+    }
+}
+
 /// `.p2align` with a fill and a maximum lays out and relaxes branches across
 /// its padding as MC does, on COFF as on ELF.
 #[test]
