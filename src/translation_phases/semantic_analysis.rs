@@ -546,8 +546,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.work.push(Work::Initializer(initializer));
             },
-            | Work::InitializeDone(binding, initializer) =>
-                self.initialize_declaration(binding, initializer),
+            | Work::InitializeDone(binding, initializer) => {
+                self.record_constant_initializer(binding, initializer);
+                self.initialize_declaration(binding, initializer);
+            },
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
             | Work::Condition(slot, integer) => self.check_condition(slot, integer),

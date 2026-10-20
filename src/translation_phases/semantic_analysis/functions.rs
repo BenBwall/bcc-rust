@@ -219,10 +219,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         )));
         self.work
             .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
-                self.functions.orphan,
+                self.functions.emission.orphan,
             )));
         self.functions.dead = false;
-        self.functions.orphan = None;
+        self.functions.emission.orphan = None;
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
             self.functions.current,
             self.statements.loops,
@@ -355,9 +355,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 .insert(self.bindings.len() - 1, alignment);
                         }
                         parameter_aliases.push((prototype, self.bindings.len() - 1));
-                        if let Some(&typed) = self.functions.noreturn.get(&prototype) {
+                        if let Some(&typed) = self.functions.emission.noreturn.get(&prototype) {
                             _ = self
                                 .functions
+                                .emission
                                 .noreturn
                                 .insert(self.bindings.len() - 1, typed);
                         }
@@ -458,20 +459,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
-            | FunctionWork::RestoreOrphan(orphan) => self.functions.orphan = orphan,
+            | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
             | FunctionWork::JoinArms => {
                 let then_end = self.functions.arm_ends.pop().expect("then arm ended");
                 self.functions.dead &= then_end;
-                self.functions.orphan = None;
+                self.functions.emission.orphan = None;
             },
-            | FunctionWork::FoldSwitch(index, bits, signed) =>
-                self.fold_switch(index, bits, signed),
             | FunctionWork::SwitchEnd(outer) => {
-                let after = self.functions.switch_after.take();
+                let after = self.functions.emission.switch_after.take();
                 self.functions.dead = outer || after.unwrap_or(false);
-                self.functions.orphan = None;
+                self.functions.emission.orphan = None;
             },
             | FunctionWork::DeadArm(condition, live, outer) => {
                 let value = self.folded_condition(condition);
@@ -491,9 +490,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(&(_, around)) = marks.first()
                     && (marks.len() == 1 || marks.len() % 2 == 0)
                 {
-                    self.functions.orphan = around;
+                    self.functions.emission.orphan = around;
                 }
-                marks.push((at, self.functions.orphan));
+                marks.push((at, self.functions.emission.orphan));
             },
             | FunctionWork::ExpressionStatementEnd {
                 expression,
@@ -504,7 +503,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // `StmtExprEvaluation` ensures an insertion point: a body that
                 // ends skipped leaves a new block without predecessors.
                 if self.functions.dead {
-                    self.functions.orphan = Some(self.functions.serial);
+                    self.functions.emission.orphan = Some(self.functions.emission.serial);
                 }
                 self.functions.dead = outer;
             },
@@ -527,7 +526,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .statement_id(statement)
                     .is_some_and(|id| self.has_generated_break(id));
                 self.functions.dead = outer || (infinite && !exits);
-                self.functions.orphan = None;
+                self.functions.emission.orphan = None;
             },
         }
     }
@@ -1568,16 +1567,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
     }
 
-    /// The truth value code generation folds `condition` to at `-O0`, as
-    /// `CodeGenFunction::ConstantFoldsToSimpleInteger` does
-    /// ([`Self::folded_integer`]). It does not fold bare floating
-    /// conditions, even though loop code generation can fold their truth
-    /// value when creating an exit block.
-    pub(super) fn folded_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
-        self.folded_integer(condition)
-            .map(|integer| integer.value != 0)
-    }
-
     /// The number of references recorded so far, which marks where the
     /// references of the code analyzed next begin.
     pub(super) fn reference_count(&self) -> usize {
@@ -1624,7 +1613,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 // Code generation continues in the block the selected
                 // association ends in.
-                self.functions.orphan = marks[3 + 2 * index].1;
+                self.functions.emission.orphan = marks[3 + 2 * index].1;
             }
         }
         for range in ranges {
@@ -1946,14 +1935,10 @@ pub(super) enum FunctionWork<'tu> {
     /// Sets whether code generation skips the code that follows.
     RestoreDead(bool),
     /// Restores whether the code being analyzed is emitted into a block
-    /// without predecessors ([`State::orphan`]).
+    /// without predecessors ([`super::emission::State::orphan`]).
     RestoreOrphan(Option<usize>),
     /// Restores the skipped state around the innermost switch.
     RestoreSwitchDead(bool),
-    /// Selects what a folded switch emits once its case labels' values are
-    /// known: the switch's index and its promoted type's width and
-    /// signedness ([`super::emission::FoldedSwitch`]).
-    FoldSwitch(usize, u32, bool),
     /// After a switch: code generation resumes with the code around it,
     /// unless a folded switch's selected statements ended skipped.
     SwitchEnd(bool),
@@ -2132,31 +2117,8 @@ pub(super) struct State<'tu, 's> {
     /// The skipped state around the innermost switch, which its case
     /// labels resume.
     pub(super) switch_dead: bool,
-    /// Code generation emits the code being analyzed into a block without
-    /// predecessors, which a call that does not return created during the
-    /// expression statement numbered here or a later one
-    /// ([`super::emission`]).
-    pub(super) orphan: Option<usize>,
-    /// The number of expression statements begun so far.
-    pub(super) serial: usize,
-    /// The value statements of the statement expressions being analyzed,
-    /// by address, which Clang emits even after a jump.
-    pub(super) value_statements: ArenaMap<'s, usize, ()>,
-    /// Bindings that call nothing that returns: a function declared
-    /// `noreturn`, or an object, parameter or typedef whose function type
-    /// is, directly or by an earlier declaration of the same entity. The
-    /// value says whether the fact belongs to the type (GNU or Microsoft
-    /// `noreturn`), which `__typeof__` and typedefs carry, rather than to
-    /// the declaration (`_Noreturn`).
-    pub(super) noreturn: ArenaMap<'s, usize, bool>,
-    /// Members whose function type does not return, by tag and name.
-    pub(super) noreturn_fields: ArenaMap<'s, (usize, StringCacheId), ()>,
-    /// The switches being analyzed whose controlling expression code
-    /// generation folds, by switch index.
-    pub(super) folds: ArenaMap<'s, usize, super::emission::FoldedSwitch<'tu, 's>>,
-    /// The skipped state a folded switch's selected statements ended in,
-    /// passed from the end of its body to the code after it.
-    pub(super) switch_after: Option<bool>,
+    /// The emission model's state ([`super::emission`]).
+    pub(super) emission: super::emission::State<'tu, 's>,
     /// The skipped state at the end of each enclosing `if` statement's
     /// first arm.
     arm_ends: ArenaVec<'s, bool>,
@@ -2168,8 +2130,8 @@ pub(super) struct State<'tu, 's> {
     pub(super) outside: [Option<usize>; 2],
     /// For each generic selection being analyzed, by address, the number
     /// of references recorded at the start and end of its controlling
-    /// operand and of each association's expression, with the state of
-    /// [`Self::orphan`] there.
+    /// operand and of each association's expression, with the emission
+    /// model's block state there.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, (usize, Option<usize>)>>,
 }
 
@@ -2192,13 +2154,7 @@ impl<'s> State<'_, 's> {
             sizeof:             None,
             dead:               false,
             switch_dead:        false,
-            orphan:             None,
-            serial:             0,
-            value_statements:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn_fields:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            folds:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            switch_after:       None,
+            emission:           super::emission::State::new(scratch),
             arm_ends:           ArenaVec::new_in(scratch),
             generated_breaks:   ArenaVec::new_in(scratch),
             inline_objects:     ArenaVec::new_in(scratch),

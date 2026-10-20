@@ -171,7 +171,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 self.work
                     .push(Work::StatementWork(StatementWork::Substatement(body)));
-                self.prepare_folded_switch(index, slot_expression(slot), body, ty);
+                self.prepare_folded_switch(index, owner, slot_expression(slot), body, ty);
             },
             | StatementWork::SwitchFinish(index, previous) => {
                 self.finish_folded_switch(index);
@@ -933,14 +933,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some((bits, signed)) = self.integer_type(switch.ty) else {
             return;
         };
-        let value = |e| self.case_value(e, bits, signed);
-        let Some(lower) = lower.and_then(value) else {
+        let Some(lower) = lower.and_then(|e| self.case_value(e, bits, signed)) else {
             return;
         };
         let range = upper.is_some();
-        let Some(upper) = upper.map_or(Some(lower), value) else {
+        let Some(upper) = upper.map_or(Some(lower), |e| self.case_value(e, bits, signed)) else {
             return;
         };
+        if !range {
+            self.folded_case(statement, lower);
+        }
         if lower.order_key() > upper.order_key() {
             self.error(SemanticErrorKind::EmptyCaseRange, source, None, None);
             // GNU Case Ranges: no dispatch edge, but retain the label for

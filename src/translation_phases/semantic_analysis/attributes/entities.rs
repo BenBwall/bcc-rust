@@ -259,6 +259,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         );
     }
 
+    /// Whether a declaration so far gives the entity of `binding` GNU
+    /// `weak`, so that its address may be null.
+    /// GNU extension: GCC manual, "Common Function Attributes", `weak`.
+    pub(in crate::translation_phases::semantic_analysis) fn declared_weak(
+        &mut self,
+        binding: usize,
+    ) -> bool {
+        let entity = self.entity_of(binding);
+        self.attributes
+            .entities
+            .get(&entity)
+            .is_some_and(|attributes| attributes.weak)
+    }
+
     /// GCC `weak`: external entities only; Clang rejects internal and
     /// absent linkage. Parameters are ignored silently, as in Clang.
     fn weak_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {

@@ -150,7 +150,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // selection restores (`skip_unselected_generic`).
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
-                        self.functions.orphan,
+                        self.functions.emission.orphan,
                     )));
                 // Marks around each operand let the selection skip the
                 // references code generation does not emit.
@@ -233,7 +233,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // A label is a jump target: code generation emits from it,
                 // in a block that the code before it can branch to.
                 self.functions.dead = false;
-                self.functions.orphan = None;
+                self.functions.emission.orphan = None;
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Goto(name) => {
@@ -461,66 +461,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             self.dead_arm(condition, live);
         }
-    }
-
-    /// Finds labels by an explicit syntax stack, as Clang's `ContainsLabel`
-    /// does; case labels count unless `ignore_cases`. A nested function has
-    /// its own label namespace, and a nested switch owns its case labels.
-    /// C99: §6.8.1p2-4, pp. 131-132; PDF pp. 143-144.
-    pub(super) fn statement_contains_label(
-        &self,
-        statement: &'tu Statement<'tu>,
-        ignore_cases: bool,
-    ) -> bool {
-        use crate::{
-            translation_phases::parsing::syntax::BlockItem,
-            util::bump::ArenaVec,
-        };
-        let mut work = ArenaVec::new_in(self.scratch);
-        work.push((statement, ignore_cases));
-        while let Some((statement, ignore_cases)) = work.pop() {
-            match statement.kind {
-                | StatementType::Label(..) => return true,
-                | StatementType::Case(_, child) | StatementType::Default(child) => {
-                    if !ignore_cases {
-                        return true;
-                    }
-                    work.push((child, ignore_cases));
-                },
-                | StatementType::CaseRange(case) => {
-                    if !ignore_cases {
-                        return true;
-                    }
-                    work.push((case.statement, ignore_cases));
-                },
-                | StatementType::Compound { items } =>
-                    for item in items {
-                        if let BlockItem::Statement(child) = item {
-                            work.push((child, ignore_cases));
-                        }
-                    },
-                | StatementType::Attributed(attributed) =>
-                    work.push((attributed.statement, ignore_cases)),
-                | StatementType::If {
-                    then_statement,
-                    else_statement,
-                    ..
-                } => {
-                    work.push((then_statement, ignore_cases));
-                    if let Some(child) = else_statement {
-                        work.push((child, ignore_cases));
-                    }
-                },
-                | StatementType::Switch { body_statement, .. } => work.push((body_statement, true)),
-                | StatementType::While { body_statement, .. }
-                | StatementType::DoWhile { body_statement, .. } =>
-                    work.push((body_statement, ignore_cases)),
-                | StatementType::For(for_loop) =>
-                    work.push((for_loop.body_statement, ignore_cases)),
-                | _ => {},
-            }
-        }
-        false
     }
 
     pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {
