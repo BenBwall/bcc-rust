@@ -1124,12 +1124,13 @@ bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
     [--interpret-step-limit=N]      instruction limit; default 100000000, 0 unlimited
 bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
+    [-O0|-O1|-O2|-O3|-Os|-Oz|-Og] GCC optimization level; bare -O means -O1
     [--opt=none|bcc]                the bcc optimizer; none is the default
     [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)
     [--opt-bisect-limit=N]          apply only the first N rewrites (implies bcc)
     [--print-after-all]             each function after every pass, to stderr
     [--time-passes]                 per-pass runs, rewrites and times, to stderr
-    [--llvm-opt=none|O0|O1|O2|O3]   LLVM pipeline and machine level; none means O0
+    [--llvm-opt=none|O0|O1|O2|O3|Os|Oz|Og]   LLVM pipeline and machine level; none means O0
     [--llvm-codegen-only]           skip LLVM IR passes; retain machine level
     [--backend=llvm|native]         code generator for -o; native refuses what it lacks
     [-fpic|-fPIC|-fpie|-fPIE|-fno-pic]  relocation model; Linux defaults to -fPIE
@@ -1142,9 +1143,19 @@ bcc-rust x.c --backend=native --emit=asm   print the native back end's assembly
 bcc-rust --print-default-passes     print the default pass list and exit
 ```
 
+`-O0` disables optimization; the other `-O` levels enable bcc's pass
+pipeline and select the corresponding LLVM pipeline (`-Og` uses `O1`).
+The native back end uses the bcc pipeline. The last `-O` wins. Explicit
+`--opt` and `--llvm-opt` override their respective settings from `-O`,
+regardless of order. These selections also work during preprocessing and
+semantic inspection: `__OPTIMIZE__` is 1 when either optimizer is enabled,
+and `__OPTIMIZE_SIZE__` is 1 for an effective LLVM `Os` or `Oz` selection.
+Both macros are ordinary predefined macros, so `-D` and `-U` can override
+them. Explicit pass controls continue to imply the bcc optimizer.
+
 The back-end modes exclude one another and the inspection views
 (`--tokens`, `--syntax-tree`, `--raw-syntax`, `--semantic-types`); the other
-options require a back-end mode. `--emit` and `--interpret` print to stdout and
+options require a back-end mode, except `-O`, `--opt` and `--llvm-opt`. `--emit` and `--interpret` print to stdout and
 the diagnostics, `--print-after-all` and interpreter traps to stderr.
 `--emit=ir`, `--emit=ir-abi` and `--interpret` verify the module first, as the
 LLVM back end does for `--emit=llvm` and `-o`, and report an internal error

@@ -290,9 +290,12 @@ pub(super) struct CodeGeneration {
     /// -no-pie), as code compiled with -fno-pic needs.
     #[arg(long, requires = "output_path", overrides_with = "pie")]
     pub(super) no_pie:               bool,
+    /// GCC optimization level (also accepts -O0, -O1, -O2, -O3, -Os, -Oz, -Og).
+    #[arg(long, value_enum, overrides_with = "optimization")]
+    pub(super) optimization:         Option<LlvmOpt>,
     /// Select the middle-end optimizer: none, or bcc's pass pipeline.
-    #[arg(long, value_enum, default_value = "none", requires = "back_end")]
-    pub(super) opt:                  MiddleEnd,
+    #[arg(long, value_enum, overrides_with = "opt")]
+    pub(super) opt:                  Option<MiddleEnd>,
     /// Run these bcc passes once each, in order, instead of the default
     /// pipeline (implies --opt=bcc), such as fold,simplify-cfg,dce.
     #[arg(long, value_name = "LIST", value_parser = pass_list, requires = "back_end")]
@@ -310,8 +313,8 @@ pub(super) struct CodeGeneration {
     #[arg(long, requires = "back_end")]
     pub(super) time_passes:          bool,
     /// Select the LLVM IR pipeline and code generation level; none means O0.
-    #[arg(long, value_enum, default_value = "none", requires = "back_end")]
-    pub(super) llvm_opt:             LlvmOpt,
+    #[arg(long, value_enum, overrides_with = "llvm_opt")]
+    pub(super) llvm_opt:             Option<LlvmOpt>,
     /// Run no LLVM IR pass, only the code generator at the --llvm-opt
     /// level.
     #[arg(long, requires = "back_end")]
@@ -370,9 +373,30 @@ pub(super) enum LlvmOpt {
     O2,
     #[value(name = "O3")]
     O3,
+    #[value(name = "Os")]
+    Os,
+    #[value(name = "Oz")]
+    Oz,
+    #[value(name = "Og")]
+    Og,
+}
+
+impl LlvmOpt {
+    fn enabled(self) -> bool {
+        !matches!(self, Self::None | Self::O0)
+    }
 }
 
 impl CodeGeneration {
+    /// GNU implementation macros describe the effective optimizer selection.
+    pub(super) fn optimization_macros(&self) -> (bool, bool) {
+        let llvm = self.llvm_opt.or(self.optimization).unwrap_or(LlvmOpt::None);
+        (
+            self.bcc_enabled() || llvm.enabled(),
+            matches!(llvm, LlvmOpt::Os | LlvmOpt::Oz),
+        )
+    }
+
     /// Why the selected options do not fit the selected back end, if they
     /// do not.
     fn back_end_conflict(&self) -> Option<&'static str> {
@@ -395,7 +419,7 @@ impl CodeGeneration {
         if self.emit.is_none() && self.output_path.is_none() {
             return Some("--backend=native needs -o or --emit=asm; --interpret runs the IR");
         }
-        if self.llvm_opt != LlvmOpt::None || self.llvm_codegen_only {
+        if self.llvm_opt.is_some_and(|level| level != LlvmOpt::None) || self.llvm_codegen_only {
             return Some(
                 "--llvm-opt and --llvm-codegen-only configure the LLVM back end, not \
                  --backend=native",
@@ -415,11 +439,6 @@ impl CodeGeneration {
         &self,
         print_after_all: &'a RefCell<dyn fmt::Write + 'a>,
     ) -> Option<OptimizerOptions<'a>> {
-        let enabled = self.opt == MiddleEnd::Bcc
-            || self.passes.is_some()
-            || self.opt_bisect_limit.is_some()
-            || self.print_after_all
-            || self.time_passes;
         #[cfg_attr(
             not(test),
             expect(
@@ -428,7 +447,7 @@ impl CodeGeneration {
                           functional update syntax."
             )
         )]
-        enabled.then(|| {
+        self.bcc_enabled().then(|| {
             let mut options = OptimizerOptions::default();
             options.passes = self.passes;
             options.print_after_all = self.print_after_all.then_some(print_after_all);
@@ -436,6 +455,20 @@ impl CodeGeneration {
             options.bisect_limit = self.opt_bisect_limit;
             options
         })
+    }
+
+    fn bcc_enabled(&self) -> bool {
+        self.opt
+            .unwrap_or(if self.optimization.is_some_and(LlvmOpt::enabled) {
+                MiddleEnd::Bcc
+            } else {
+                MiddleEnd::None
+            })
+            == MiddleEnd::Bcc
+            || self.passes.is_some()
+            || self.opt_bisect_limit.is_some()
+            || self.print_after_all
+            || self.time_passes
     }
 
     /// What `-o` builds.
@@ -454,12 +487,14 @@ impl CodeGeneration {
     /// LLVM IR passes and code generation for `target`.
     fn llvm_options(&self, target: Target, code: CodeOptions) -> LlvmOptions {
         LlvmOptions {
-            opt: match self.llvm_opt {
+            opt: match self.llvm_opt.or(self.optimization).unwrap_or(LlvmOpt::None) {
                 | LlvmOpt::None => None,
                 | LlvmOpt::O0 => Some(OptLevel::O0),
-                | LlvmOpt::O1 => Some(OptLevel::O1),
+                | LlvmOpt::O1 | LlvmOpt::Og => Some(OptLevel::O1),
                 | LlvmOpt::O2 => Some(OptLevel::O2),
                 | LlvmOpt::O3 => Some(OptLevel::O3),
+                | LlvmOpt::Os => Some(OptLevel::Os),
+                | LlvmOpt::Oz => Some(OptLevel::Oz),
             },
             disable_llvm_passes: self.llvm_codegen_only,
             target,

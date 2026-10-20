@@ -1275,8 +1275,6 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     #[test]
     fn back_end_options_need_a_back_end() {
         for flags in [
-            &["--opt=bcc"][..],
-            &["--llvm-opt=O2"][..],
             &["-c"][..],
             &["--emit=ir", "--interpret"][..],
             &["--emit=ir", "--syntax-tree"][..],

@@ -50,7 +50,7 @@ __MEMORY_SCOPE_SINGLE	Scoped atomic operations and memory scopes are not impleme
 __MEMORY_SCOPE_SYSTEM	Scoped atomic operations and memory scopes are not implemented.
 __MEMORY_SCOPE_WRKGRP	Scoped atomic operations and memory scopes are not implemented.
 __MEMORY_SCOPE_WVFRNT	Scoped atomic operations and memory scopes are not implemented.
-__NO_INLINE__	Code generation, relocation and optimization policy are not implemented.
+__NO_INLINE__	Optimization policy owned by the CLI and identity macro builder; defined when optimization is disabled.
 __NO_MATH_ERRNO__	Code generation, relocation and optimization policy are not implemented.
 __OBJC_BOOL_IS_BOOL	Objective-C and CoreFoundation string intrinsics are not implemented.
 __OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES	Scoped atomic operations and memory scopes are not implemented.
@@ -78,3 +78,5 @@ __pie__	Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside
 __seg_fs	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __seg_gs	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __tune_k8__	Code generation, relocation and optimization policy are not implemented.
+__OPTIMIZE__	Optimization policy owned by the CLI and identity macro builder.
+__OPTIMIZE_SIZE__	Optimization policy owned by the CLI and identity macro builder.

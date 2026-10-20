@@ -111,8 +111,8 @@ address structures `may_alias` (bcc's optimizer makes no type-based alias
 assumptions) and turns `__glibc_macro_warning` into `#pragma GCC warning`;
 `math.h` uses the type-generic classification builtins, `complex.h` defines
 `CMPLX` with `__builtin_complex`, and `bits/floatn.h` enables binary128, as
-described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__`, which bcc never
-defines itself, glibc selects Clang's fortify wrappers, which need the
+described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__` (defined when
+optimization is enabled), glibc selects Clang's fortify wrappers, which need the
 `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`,
 `enable_if` and `unavailable` attributes. `__has_attribute` reports them as
 Clang does. Semantic analysis retains overload identities and call selection,
@@ -1162,7 +1162,9 @@ backend work before they can be enabled.
 | `__MEMORY_SCOPE_SYSTEM` | Scoped atomic operations and memory scopes are not implemented. |
 | `__MEMORY_SCOPE_WRKGRP` | Scoped atomic operations and memory scopes are not implemented. |
 | `__MEMORY_SCOPE_WVFRNT` | Scoped atomic operations and memory scopes are not implemented. |
-| `__NO_INLINE__` | Code generation, relocation and optimization policy are not implemented. |
+| `__OPTIMIZE__` | Defined by the identity macro builder when optimization is enabled. |
+| `__OPTIMIZE_SIZE__` | Defined by the identity macro builder for `-Os` and `-Oz`. |
+| `__NO_INLINE__` | Defined by the identity macro builder when optimization is disabled. |
 | `__NO_MATH_ERRNO__` | Code generation, relocation and optimization policy are not implemented. |
 | `__OBJC_BOOL_IS_BOOL` | Objective-C and CoreFoundation string intrinsics are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Scoped atomic operations and memory scopes are not implemented. |
@@ -1242,7 +1244,7 @@ alignment 16. MSVC rejects the explicit type spelling, matching the pinned Clang
 but still accepts binary128 literals and their internal types through `typeof`.
 Clang's target definitions now retain `__SIZEOF_FLOAT128__` on the three GNU
 triples and `__FLOAT128__` on Linux. Clang defines no `__FLT128_*__` macros;
-none are invented. The macro oracle has 80 documented exclusions.
+none are invented. The macro oracle has 82 documented exclusions.
 
 The pinned Clang rejects native `_Float128`, `_Float32`, `_Float64`,
 `_Float32x`, `_Float64x`, and `f128`/`F128` suffixes in C11, C17, GNU17,

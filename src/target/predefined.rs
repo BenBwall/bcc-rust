@@ -148,52 +148,59 @@ mod tests {
         ] {
             for gnu in [false, true] {
                 let mode = if gnu { "gnu17" } else { "c11" };
-                let mut command = Command::new(&clang);
-                _ = command.args([
-                    format!("--target={}", target.triple()).as_str(),
-                    format!("-std={mode}").as_str(),
-                ]);
-                // Clang's default MSVC version is the host's installed
-                // Visual C++ (or 19.33 elsewhere), and macros such as
-                // `__STDC_NO_THREADS__` follow it. Pin the version bcc's
-                // `_MSC_VER` claims so that every host sees one contract.
-                if target == Target::WindowsMsvc {
-                    _ = command.arg(MSVC_COMPATIBILITY_VERSION);
+                for optimization in ["-O0", "-O1", "-O2", "-O3", "-Os", "-Oz", "-Og"] {
+                    let mut command = Command::new(&clang);
+                    _ = command.arg(optimization).args([
+                        format!("--target={}", target.triple()).as_str(),
+                        format!("-std={mode}").as_str(),
+                    ]);
+                    // Clang's default MSVC version is the host's installed
+                    // Visual C++ (or 19.33 elsewhere), and macros such as
+                    // `__STDC_NO_THREADS__` follow it. Pin the version bcc's
+                    // `_MSC_VER` claims so that every host sees one contract.
+                    if target == Target::WindowsMsvc {
+                        _ = command.arg(MSVC_COMPATIBILITY_VERSION);
+                    }
+                    let output = command
+                        .args([
+                            "-dM",
+                            "-E",
+                            "-x",
+                            "c",
+                            if cfg!(windows) { "NUL" } else { "/dev/null" },
+                        ])
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{output:?}");
+                    let reference = String::from_utf8(output.stdout).unwrap();
+                    let expected: BTreeSet<_> = reference
+                        .lines()
+                        .filter(|line| {
+                            let name = line
+                                .strip_prefix("#define ")
+                                .unwrap()
+                                .split([' ', '('])
+                                .next()
+                                .unwrap();
+                            !excluded
+                                .lines()
+                                .any(|entry| entry.split_once('\t').unwrap().0 == name)
+                        })
+                        .map(str::trim_end)
+                        .collect();
+                    let arena = Bump::new();
+                    let actual: BTreeSet<_> = target
+                        .predefined_macros(&arena, gnu)
+                        .lines()
+                        .map(str::trim_end)
+                        .collect();
+                    assert_eq!(
+                        actual,
+                        expected,
+                        "{} {mode} {optimization}",
+                        target.triple()
+                    );
                 }
-                let output = command
-                    .args([
-                        "-dM",
-                        "-E",
-                        "-x",
-                        "c",
-                        if cfg!(windows) { "NUL" } else { "/dev/null" },
-                    ])
-                    .output()
-                    .unwrap();
-                assert!(output.status.success(), "{output:?}");
-                let reference = String::from_utf8(output.stdout).unwrap();
-                let expected: BTreeSet<_> = reference
-                    .lines()
-                    .filter(|line| {
-                        let name = line
-                            .strip_prefix("#define ")
-                            .unwrap()
-                            .split([' ', '('])
-                            .next()
-                            .unwrap();
-                        !excluded
-                            .lines()
-                            .any(|entry| entry.split_once('\t').unwrap().0 == name)
-                    })
-                    .map(str::trim_end)
-                    .collect();
-                let arena = Bump::new();
-                let actual: BTreeSet<_> = target
-                    .predefined_macros(&arena, gnu)
-                    .lines()
-                    .map(str::trim_end)
-                    .collect();
-                assert_eq!(actual, expected, "{} {mode}", target.triple());
             }
         }
     }

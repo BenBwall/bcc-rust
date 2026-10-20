@@ -352,7 +352,14 @@ fn command_lines_follow_the_options() {
             .join(" ")
     };
     let target = "--target=x86_64-unknown-linux-gnu";
-    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::O3] {
+    for level in [
+        OptLevel::O0,
+        OptLevel::O1,
+        OptLevel::O2,
+        OptLevel::O3,
+        OptLevel::Os,
+        OptLevel::Oz,
+    ] {
         assert_eq!(
             arguments(Some(level), true, OutputKind::Executable),
             format!("{target} {} -fuse-ld=lld in.o -o out -lm", level.flag())

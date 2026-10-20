@@ -42,9 +42,9 @@ fn language_flags_apply_in_order_and_input_values_stay_opaque() {
             "--input",
             "-std=c98",
         ];
-        let cli = Cli::try_parse_from(normalize_language_arguments(
-            arguments.map(std::ffi::OsString::from),
-        ))
+        let cli = Cli::try_parse_from(
+            normalize_language_arguments(arguments.map(std::ffi::OsString::from)).unwrap(),
+        )
         .unwrap();
         let configuration = cli.configuration();
         assert_eq!(
@@ -97,9 +97,9 @@ fn inline_flags_override_the_final_standard_and_each_other() {
         (vec!["-std=gnu89", "-fno-gnu89-inline"], false),
     ] {
         let args = [vec!["bcc-rust", "--input", "int x;"], flags].concat();
-        let cli = Cli::try_parse_from(normalize_language_arguments(
-            args.iter().map(std::ffi::OsString::from),
-        ))
+        let cli = Cli::try_parse_from(
+            normalize_language_arguments(args.iter().map(std::ffi::OsString::from)).unwrap(),
+        )
         .unwrap();
         assert_eq!(cli.configuration().gnu89_inline(), expected, "{args:?}");
     }
