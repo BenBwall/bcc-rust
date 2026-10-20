@@ -1,6 +1,8 @@
-//! Turns assembly text into an object or executable with the bundled clang,
-//! which assembles with LLVM's integrated assembler and links with LLD as
-//! the LLVM back end's executables are linked.
+//! Turns the native listing into an object or executable: [`object_writer`]
+//! chooses between encoding the object in process ([`build_object`]) and
+//! assembling the listing with the bundled clang ([`assemble`]), whose
+//! integrated assembler is LLVM's. Executables of both paths link with LLD
+//! through the bundled clang, as the LLVM back end's executables are linked.
 
 use std::{
     io::{
@@ -10,15 +12,47 @@ use std::{
     path::Path,
 };
 
+use super::NativeError;
 use crate::{
     backend::llvm::{
         OutputKind,
         TemporaryObject,
         Toolchain,
     },
+    ir::Module,
     target::Target,
     util::bump::Bump,
 };
+
+/// How `-o` turns the native listing into an object.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ObjectWriter {
+    /// ELF or COFF bytes encoded in process ([`build_object`]).
+    Direct,
+    /// The listing assembled by the bundled clang ([`assemble`]).
+    Assembler,
+}
+
+/// The object writer for `module` on `target`: the one `requested` names
+/// (`--native-object` or `--no-native-object`), else direct COFF objects on
+/// both Windows targets and the assembler on Linux, where direct ELF objects
+/// stay opt-in. The encoder reads only the emitter's own vocabulary, so a
+/// module with file-scope assembly, which is arbitrary assembler input, takes
+/// the assembler by default and is refused when direct objects are requested.
+pub(crate) fn object_writer(
+    module: &Module<'_>,
+    target: Target,
+    requested: Option<ObjectWriter>,
+) -> Result<ObjectWriter, NativeError<'static>> {
+    let encodable = module.module_asm().is_empty();
+    match requested {
+        | Some(ObjectWriter::Direct) if !encodable => Err(NativeError::ObjectModuleAsm),
+        | Some(writer) => Ok(writer),
+        | None if encodable && matches!(target, Target::WindowsGnu | Target::WindowsMsvc) =>
+            Ok(ObjectWriter::Direct),
+        | None => Ok(ObjectWriter::Assembler),
+    }
+}
 
 /// Writes `text` to a temporary `.s` file beside `out_path` and assembles
 /// it, linking an executable unless `kind` asks for an object.
@@ -61,7 +95,7 @@ pub(crate) fn build_object(
     kind: OutputKind,
 ) -> io::Result<()> {
     if kind == OutputKind::SharedLibrary {
-        return Err(io::Error::other(super::NativeError::SharedLibraryCode));
+        return Err(io::Error::other(NativeError::SharedLibraryCode));
     }
     let arena = Bump::new();
     let bytes = match target {

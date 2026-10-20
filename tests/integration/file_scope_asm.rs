@@ -65,18 +65,26 @@ __asm__(\"# last \\\"block\\\"\");
     }
 
     /// The symbol the first block defines links and runs through each back
-    /// end on the host, as Clang's output does.
+    /// end on the host, as Clang's output does. On Windows the native back
+    /// end's default, direct COFF objects, gives way to the assembler.
     #[test]
     fn both_back_ends_link_symbols_defined_in_file_scope_asm() {
-        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            eprintln!("skipping: the program's assembly is for ELF hosts");
+        let target = if cfg!(all(windows, target_env = "gnu")) {
+            "--target=x86_64-w64-windows-gnu"
+        } else if cfg!(all(windows, target_env = "msvc")) {
+            "--target=x86_64-pc-windows-msvc"
+        } else if cfg!(all(target_os = "linux", target_env = "musl")) {
+            "--target=x86_64-unknown-linux-musl"
+        } else if cfg!(target_os = "linux") {
+            LINUX
+        } else {
+            eprintln!("skipping: the host is not a supported target");
+            return;
+        };
+        if !cfg!(target_arch = "x86_64") {
+            eprintln!("skipping: the program's assembly is for x86-64 hosts");
             return;
         }
-        let target = if cfg!(target_env = "musl") {
-            "--target=x86_64-unknown-linux-musl"
-        } else {
-            LINUX
-        };
         for backend in ["--backend=llvm", "--backend=native"] {
             let executable = temporary("asm-answer.exe");
             let built = bcc(
@@ -114,6 +122,68 @@ __asm__(\"# last \\\"block\\\"\");
             if object.exists() {
                 std::fs::remove_file(object).unwrap();
             }
+        }
+    }
+
+    /// Direct COFF objects are the native back end's Windows default, but
+    /// only the assembler reads file-scope assembly: such a module is
+    /// assembled as `--no-native-object` asks, unless `--native-object` comes
+    /// last.
+    #[test]
+    fn windows_native_objects_assemble_file_scope_asm_by_default() {
+        for target in [
+            "--target=x86_64-pc-windows-msvc",
+            "--target=x86_64-w64-windows-gnu",
+        ] {
+            let compile = |flags: &[&str]| {
+                let object = temporary("asm-windows.o");
+                let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                _ = command
+                    .args([target, "--backend=native", "-c", "-o"])
+                    .arg(&object)
+                    .args(flags)
+                    .args(["--input", PROGRAM])
+                    .env("NO_COLOR", "1");
+                if !cfg!(windows) && target.ends_with("windows-gnu") {
+                    // Clang's assembler driver asks for a MinGW root even for
+                    // an object; this header-free source needs none.
+                    _ = command.env("MINGW_ROOT", env::temp_dir());
+                }
+                let output = command.output().unwrap();
+                let bytes = std::fs::read(&object).ok();
+                if bytes.is_some() {
+                    std::fs::remove_file(object).unwrap();
+                }
+                (output, bytes)
+            };
+            let (built, default) = compile(&[]);
+            assert!(built.status.success(), "{target}: {}", text(&built.stderr));
+            let default = default.unwrap();
+            assert!(default.starts_with(&[0x64, 0x86]), "{target}: not COFF");
+            assert!(default.windows(6).any(|s| s == b"answer"), "{target}");
+            for flags in [
+                &["--no-native-object"][..],
+                &["--native-object", "--no-native-object"][..],
+            ] {
+                let (built, assembled) = compile(flags);
+                assert!(
+                    built.status.success(),
+                    "{target} {flags:?}: {}",
+                    text(&built.stderr)
+                );
+                assert!(
+                    assembled.as_deref() == Some(&default[..]),
+                    "{target} {flags:?}"
+                );
+            }
+            let (refused, object) = compile(&["--no-native-object", "--native-object"]);
+            assert_eq!(refused.status.code(), Some(1), "{target}");
+            assert!(
+                text(&refused.stderr).contains("--native-object cannot encode file-scope assembly"),
+                "{target}: {}",
+                text(&refused.stderr)
+            );
+            assert!(object.is_none(), "{target}");
         }
     }
 

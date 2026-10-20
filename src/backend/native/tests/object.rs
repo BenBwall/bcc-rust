@@ -12,10 +12,18 @@ use std::{
 };
 
 use crate::{
-    backend::llvm::{
-        OutputKind,
-        Toolchain,
+    backend::{
+        llvm::{
+            OutputKind,
+            Toolchain,
+        },
+        native::{
+            NativeError,
+            ObjectWriter,
+            object_writer,
+        },
     },
+    ir::parse_module,
     target::Target,
     test_support::TempDir,
     util::bump::Bump,
@@ -636,6 +644,53 @@ fn coff_option_preserves_unwind_comdats_refptr_and_exports() {
         for section in [".pdata", ".xdata", ".drectve", ".refptr.ext"] {
             assert!(dump.contains(section), "missing {section}: {dump}");
         }
+    }
+}
+
+/// Both Windows targets write direct COFF objects unless the assembler is
+/// requested, and Linux keeps the assembler unless direct objects are.
+/// File-scope assembly, which only the assembler reads, takes it by default
+/// on every target and is refused when direct objects are requested.
+#[test]
+fn object_writer_defaults_to_direct_coff_and_assembles_file_scope_asm() {
+    let arena = Bump::new();
+    let plain = parse_module(&arena, "global @g external size 4, align 4 = zero\n").unwrap();
+    let assembly = parse_module(
+        &arena,
+        "module asm \"nop\"\n\nglobal @g external size 4, align 4 = zero\n",
+    )
+    .unwrap();
+    for (target, default) in [
+        (Target::LinuxGnu, ObjectWriter::Assembler),
+        (Target::LinuxMusl, ObjectWriter::Assembler),
+        (Target::WindowsGnu, ObjectWriter::Direct),
+        (Target::WindowsMsvc, ObjectWriter::Direct),
+    ] {
+        assert_eq!(object_writer(&plain, target, None).unwrap(), default);
+        assert_eq!(
+            object_writer(&assembly, target, None).unwrap(),
+            ObjectWriter::Assembler,
+            "{target:?}"
+        );
+        for module in [&plain, &assembly] {
+            assert_eq!(
+                object_writer(module, target, Some(ObjectWriter::Assembler)).unwrap(),
+                ObjectWriter::Assembler,
+                "{target:?}"
+            );
+        }
+        assert_eq!(
+            object_writer(&plain, target, Some(ObjectWriter::Direct)).unwrap(),
+            ObjectWriter::Direct,
+            "{target:?}"
+        );
+        assert!(
+            matches!(
+                object_writer(&assembly, target, Some(ObjectWriter::Direct)),
+                Err(NativeError::ObjectModuleAsm)
+            ),
+            "{target:?}"
+        );
     }
 }
 
