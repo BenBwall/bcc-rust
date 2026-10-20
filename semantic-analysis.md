@@ -905,8 +905,9 @@ records whether Clang's code generation at `-O0` skips the code it appears in
 (`dead`), which approximates Clang's insertion state rather than run-time
 reachability: a skipped reference creates no LLVM value, so it ranks no
 `always_inline` function in Clang's creation order and selects no DLL import,
-and entity reachability instead reads whether lowering omits the reference. Static initializer references
-remain live after jumps when the declaration is emitted. Code is skipped in the arm a constant
+and entity reachability instead reads whether lowering omits the reference.
+Static initializer references remain live after jumps when the declaration is
+emitted. Code is skipped in the arm a constant
 condition does not take, in a generic selection's controlling operand and
 unselected associations, after a jump or a loop without an exit, and until a
 label. One evaluator stands for Clang's `ConstantFoldsToSimpleInteger` in
@@ -933,7 +934,13 @@ selected tentatively only when collection from every later case succeeds.
 A later matching case replaces it and elides the default region too.
 Otherwise, or past 64 later labels, the switch stays unfolded, which may
 retain more code than Clang. Case-label statements and their ancestors remain
-available to lowering. After the
+available to lowering's label blocks. A retained generated-control fact directs
+lowering straight to the chosen label when collection succeeded, and an `if` with an
+elided arm lowers only its selected arm. Conditional and logical operands use
+the same elision facts before ordinary constant shortcuts. Constant-query
+integers use the emission evaluator at the builtin leaf, so semantic integer
+facts, static initializer data, standalone values and loop decisions agree.
+An unknown query still emits zero while the control fold can remain unknown. After
 selection, labels inside the selected statements resume nothing, and the code
 after the switch follows the selected statements' end. When Clang's collection
 fails (a label or declaration it would skip, a `break` inside a collected
@@ -976,7 +983,14 @@ enclosing blocks keeps the code after the call emitted instead, as it is
 without the model of such calls. Bit-field, union and floating reads,
 GNU ranges in `const` initializers and the unselected operand of
 `__builtin_choose_expr` remain unmodeled; each leaves code emitted that Clang
-may skip. The module-item planner
+may skip. `functions.elided` omits lowering traversal and storage collection
+for whole skipped statements and operands; there is no separate `unemitted`
+state. A missing insertion point (`dead`) alone still permits simple
+statements to collect storage. In `0 && ({ L:; static int a; 1; })`, the
+label prevents elision and preserves the static even though the operand is
+not evaluated. Constant-query operands likewise preserve nested static
+declarations and their initializer references while dropping executable
+references. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.
@@ -2265,7 +2279,8 @@ objects, while references owned only by omitted functions do not. Unused
 function-local static and thread-local objects are retained with every emitted
 function when `CompilerConfiguration::optimization().0` is false, exactly when
 `__OPTIMIZE__` is undefined (the default, `-O0`, native B0 and `--opt=none`
-without another enabled optimizer). This follows Clang O0; static duration is
+without another enabled optimizer). This models Clang O0 within the emission
+evaluator's supported forms; static duration is
 C99 §6.2.4p3, p. 32; PDF p. 44. Locals of omitted static or C99 inline-only
 bodies remain omitted (§6.7.4p6, pp. 112-113; PDF pp. 124-125), including
 `used` locals. With optimization enabled, only referenced or `used` locals of
@@ -2280,7 +2295,7 @@ Folded switches elide unselected statements while preserving case labels and
 their ancestors for dispatch; the selected label resumes emission before its
 facts are captured. Unevaluated sizeof/typeof/alignof operands, generic control
 and unselected associations, unselected choose-expression arms and folded-away
-conditional/logical operands retain no local definitions. Runtime VLA operands
+label-free conditional/logical operands retain no local definitions. Runtime VLA operands
 remain evaluated. Declaration contexts are finalized after typing, together
 with reference contexts. Lowering consumes the same operand and statement
 elision facts (C99 §6.8.4.1p2, pp. 133-134; PDF pp. 145-146).

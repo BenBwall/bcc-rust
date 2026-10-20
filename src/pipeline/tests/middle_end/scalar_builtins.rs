@@ -88,7 +88,7 @@ int main(void) {
   char a[16]; void *p=__builtin_assume_aligned(a,16,0);
   if(p!=a || __builtin_expect(bump(),1)!=1 || __builtin_expect_with_probability(bump(),2,0.5)!=2) return 1;
   __builtin_prefetch(a+bump(),0,3);
-  if(calls!=3 || __builtin_constant_p(bump()) || !__builtin_constant_p(1+2) || __builtin_constant_p(1.0)) return 2;
+  if(calls!=3 || __builtin_constant_p(bump()) || !__builtin_constant_p(1+2) || !__builtin_constant_p(1.0)) return 2;
   if(__builtin_object_size((bump(),a),0)!=(__SIZE_TYPE__)-1 || calls!=3 || __builtin_object_size(a,2)!=sizeof(a)) return 3;
   if(__builtin_dynamic_object_size((bump(),a),1)!=(__SIZE_TYPE__)-1 || __builtin_dynamic_object_size(a,3)!=sizeof(a)) return 4;
   if(calls!=3) __builtin_trap();

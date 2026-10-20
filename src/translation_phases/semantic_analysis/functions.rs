@@ -51,6 +51,7 @@ use crate::{
         },
     },
     util::{
+        arena_list::ArenaList,
         bump::{
             ArenaMap,
             ArenaVec,
@@ -460,6 +461,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.statements.switch = switch;
                 self.control.targets.truncate(targets);
             },
+            | FunctionWork::CallArguments(callee, arguments) => {
+                let callee = self.selected_designator(callee);
+                if self.expression_info(callee).binding.is_some_and(|binding| {
+                    self.bindings[binding]
+                        .origin
+                        .descriptor()
+                        .is_some_and(|descriptor| {
+                            matches!(
+                                descriptor.operation,
+                                crate::builtins::BuiltinOperation::Constant
+                            )
+                        })
+                }) {
+                    self.enter_reference_context_kind(ReferenceContextKind::ConstantQuery(
+                        self.functions.initializer,
+                    ));
+                }
+                for &argument in arguments.iter().rev() {
+                    self.work.push(Work::Expression(argument));
+                }
+            },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
@@ -651,7 +673,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut ignored_references = ArenaVec::new_in(self.scratch);
+        let mut ignored_definitions = ArenaVec::new_in(self.scratch);
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
+            ignored_definitions.push(
+                (!matches!(context.kind, ReferenceContextKind::ConstantQuery(_))
+                    && self.reference_context_unevaluated(index))
+                    || context.parent.is_some_and(|p| ignored_definitions[p]),
+            );
             ignored_references.push(
                 self.reference_context_unevaluated(index)
                     || context.parent.is_some_and(|p| ignored_references[p]),
@@ -664,7 +692,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if context.sizeof.is_some_and(|index| ignored[index])
                 || context
                     .reference_context
-                    .is_some_and(|index| ignored_references[index])
+                    .is_some_and(|index| ignored_definitions[index])
             {
                 self.definitions[context.definition].elided = true;
             }
@@ -703,11 +731,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Some(ReferenceOwner::Object(binding)) => Some(binding),
                 | None => None,
             };
-            if !usage.sizeof.is_some_and(|s| ignored[s])
-                && !usage
-                    .reference_context
-                    .is_some_and(|s| ignored_references[s])
-            {
+            let ignored_reference = usage.reference_context.is_some_and(|index| {
+                if matches!(usage.owner, Some(ReferenceOwner::Object(_))) {
+                    self.reference_chain_unevaluated(index, usage.owner)
+                } else {
+                    ignored_references[index]
+                }
+            });
+            if !usage.sizeof.is_some_and(|s| ignored[s]) && !ignored_reference {
                 if let Some(owner) = owner {
                     self.references.push(super::EntityReference {
                         owner,
@@ -733,9 +764,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if b.linkage == Linkage::Internal
                 && !usage.sizeof.is_some_and(|s| ignored[s])
-                && !usage
-                    .reference_context
-                    .is_some_and(|s| ignored_references[s])
+                && !ignored_reference
             {
                 _ = used
                     .entry(self.function_identity(usage.binding))
@@ -1794,12 +1823,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether reference context `index` leaves its operand unevaluated:
     /// alignof always does, GNU typeof unless its type is VM.
     fn reference_context_unevaluated(&self, index: usize) -> bool {
+        self.reference_context_unevaluated_for_owner(index, None)
+    }
+
+    /// Query operands keep nested static initializer data, while calls and
+    /// other executable references remain unevaluated. GNU extension:
+    /// Clang's `__builtin_constant_p` and statement expressions.
+    fn reference_context_unevaluated_for_owner(
+        &self,
+        index: usize,
+        owner: Option<ReferenceOwner>,
+    ) -> bool {
         match self.functions.reference_contexts[index].kind {
+            | ReferenceContextKind::ConstantQuery(initializer) =>
+                !matches!(owner, Some(ReferenceOwner::Object(binding)) if initializer != Some(binding)),
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
                 .typeof_sites
                 .get(&std::ptr::from_ref(syntax).addr())
                 .is_none_or(|site| !self.types.variably_modified(site.ty)),
+        }
+    }
+
+    fn reference_chain_unevaluated(&self, mut index: usize, owner: Option<ReferenceOwner>) -> bool {
+        loop {
+            if self.reference_context_unevaluated_for_owner(index, owner) {
+                return true;
+            }
+            let Some(parent) = self.functions.reference_contexts[index].parent else {
+                return false;
+            };
+            index = parent;
         }
     }
 
@@ -1820,7 +1874,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let mut context = usage.reference_context;
             while let Some(index) = context {
-                evaluated &= !self.reference_context_unevaluated(index);
+                evaluated &= !self.reference_context_unevaluated_for_owner(index, usage.owner);
                 context = self.functions.reference_contexts[index].parent;
             }
             if evaluated {
@@ -1924,16 +1978,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         syntax: Option<&'tu super::ExtendedType<'tu>>,
     ) {
+        self.enter_reference_context_kind(syntax.map_or(
+            ReferenceContextKind::Unevaluated,
+            ReferenceContextKind::Typeof,
+        ));
+    }
+
+    fn enter_reference_context_kind(&mut self, kind: ReferenceContextKind<'tu>) {
         self.work
             .push(Work::FunctionWork(FunctionWork::RestoreReferenceContext(
                 self.functions.reference_context,
             )));
         let index = self.functions.reference_contexts.len();
         self.functions.reference_contexts.push(ReferenceContext {
-            kind:   syntax.map_or(
-                ReferenceContextKind::Unevaluated,
-                ReferenceContextKind::Typeof,
-            ),
+            kind,
             parent: self.functions.reference_context,
         });
         self.functions.reference_context = Some(index);
@@ -2031,6 +2089,8 @@ pub(super) enum FunctionWork<'tu> {
         Option<usize>,
         usize,
     ),
+    /// Enter operand contexts after resolving a builtin's callee.
+    CallArguments(&'tu Expression<'tu>, ArenaList<'tu, &'tu Expression<'tu>>),
     RestoreSizeof(Option<usize>),
     RestoreReferenceContext(Option<usize>),
     /// Sets whether code generation skips the code that follows.
@@ -2209,6 +2269,10 @@ struct ReferenceContext<'tu> {
 enum ReferenceContextKind<'tu> {
     Typeof(&'tu super::ExtendedType<'tu>),
     Unevaluated,
+    /// Query operands keep declarations and their static initializer data.
+    /// The entry initializer distinguishes a query inside static data from
+    /// a static declaration nested inside a query.
+    ConstantQuery(Option<usize>),
 }
 
 /// Parameter type sites execute as part of the definition, before its binding
@@ -2274,8 +2338,8 @@ pub(super) struct State<'tu, 's> {
     pub(super) outside: [Option<usize>; 2],
     /// For each generic selection being analyzed, by address, the number
     /// of references recorded at the start and end of its controlling
-    /// operand and of each association's expression, with the state of
-    /// the emission model's block state there.
+    /// operand and of each association's expression, with the emission
+    /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
 }

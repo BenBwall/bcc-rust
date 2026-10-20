@@ -186,10 +186,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | CommonBuiltin::Constant => {
-                let operand = self.expression_info(args[0]);
-                info.integer = Some(Integer::int(i128::from(
-                    operand.ice && operand.integer.is_some(),
-                )));
+                info.integer = Some(self.constant_query_integer(args[0]));
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },

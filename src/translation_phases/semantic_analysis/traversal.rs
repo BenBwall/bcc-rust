@@ -133,9 +133,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 function_expression,
                 arguments,
             } => {
-                for &argument in arguments.iter().rev() {
-                    self.work.push(Work::Expression(argument));
-                }
+                self.work.push(Work::FunctionWork(FunctionWork::CallArguments(
+                    function_expression,
+                    arguments,
+                )));
                 self.mark_implicit_callee(function_expression);
                 self.work.push(Work::Expression(function_expression));
             },

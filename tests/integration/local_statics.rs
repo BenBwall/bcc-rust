@@ -635,6 +635,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn emitted_constant_queries_match_the_elision_evaluator() {
+        assert_o0_static_emission(
+            "void f(void){while(__builtin_constant_p(\"abc\")){return;}if(1){STATIC}}int \
+             main(void){f();return 0;}",
+            false,
+        );
+        assert_runs_like_clang(
+            r#"
+int printf(const char*,...);
+static int q=__builtin_constant_p("abc");
+_Static_assert(__builtin_constant_p(1.0),"floating constant");
+int f(int x){
+    const int c=3;
+    printf("%d %d %d %d %d %d %d\n",
+        __builtin_constant_p("abc"),__builtin_constant_p(c),
+        __builtin_constant_p((0,1)),__builtin_constant_p((void*)0),
+        __builtin_constant_p(3.5),__builtin_constant_p(x),
+        __builtin_constant_p(__builtin_constant_p(x)));
+    printf("%d %d %d %d %d\n",
+        __builtin_constant_p((x,1)),__builtin_constant_p((long)"abc"),
+        __builtin_constant_p(&*"abc"),__builtin_constant_p("abc"+0),
+        __builtin_constant_p((char*)"abc"+1));
+    return __builtin_constant_p(__builtin_constant_p(x))?1:2;
+}
+int main(void){printf("%d %d\n",f(2),q);return 0;}
+"#,
+        );
+    }
+
+    #[test]
+    fn constant_queries_drop_calls_and_keep_nested_static_data() {
+        assert_o0_static_emission(
+            "static int h(void){STATIC return a;} int f(void){return __builtin_constant_p(h());} \
+             int main(void){return f();}",
+            false,
+        );
+        assert_o0_static_emission(
+            "static int h(void){STATIC return a;} static int q=__builtin_constant_p(h()); int \
+             main(void){return q;}",
+            false,
+        );
+        assert_o0_static_emission(
+            "static int h(void){STATIC return a;} int f(void){return __builtin_constant_p( \
+             ({static int (*p)(void)=h;0;}));} int main(void){return f();}",
+            true,
+        );
+        assert_o0_static_emission(
+            "static int h(void){STATIC return a;} int f(void){return __builtin_constant_p( \
+             ({static int q=__builtin_constant_p(h());0;}));} int main(void){return f();}",
+            false,
+        );
+        assert_runs_like_clang(
+            "static int h(void){return 3;} static int x; int f(void){return \
+             __builtin_constant_p(({static int (*p)(void)=h; static int *q=&x; 0;}));} int \
+             main(void){return f()+__builtin_constant_p(h());}",
+        );
+    }
+
+    #[test]
+    fn constant_queries_read_fresh_compound_literal_values() {
+        assert_runs_like_clang(
+            "int printf(const char*,...); struct S{int a;}; int main(void){ printf(\"%d %d %d \
+             %d\\n\",__builtin_constant_p((struct S){1}.a), \
+             __builtin_constant_p((int){1}),__builtin_constant_p((struct S){1}), \
+             __builtin_constant_p((int[]){1,2}[1]));return 0;}",
+        );
+        assert_o0_static_emission(
+            "int f(void){if(__builtin_constant_p((struct S{int a;}){1}.a)){}else{STATIC}return \
+             0;} int main(void){return f();}",
+            false,
+        );
+    }
+
     fn assert_runs_like_clang(source: &str) {
         let source_file = temporary("run.c");
         let executable = temporary("run.exe");
