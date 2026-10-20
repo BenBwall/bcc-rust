@@ -994,6 +994,59 @@ fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_call
         ("({ die(); (void)h(0); });", gnu, false),
         ("c = ({ die(); h(0); });", gnu, true),
         ("c = ({ return 0; h(0); });", gnu, true),
+        // The #113 review's forms: a label or break in a statement
+        // expression keeps the switch unfolded; standard `[[noreturn]]`
+        // stays with its declaration; a hand-declared `longjmp` needs
+        // `jmp_buf`; a complex product joins paths; unevaluated operands
+        // change nothing; function types carry `noreturn` through any
+        // callee; Clang's evaluator folds more conditions.
+        (
+            "switch (1) { case 1: ({ break; 0; }); case 2: h(0); }",
+            gnu,
+            true,
+        ),
+        (
+            "switch (1) { case 1: break; case 2: ({ l: 0; }); h(0); }",
+            gnu,
+            true,
+        ),
+        ("switch (3) { case 2: ({ l: 0; }); h(0); }", gnu, true),
+        (
+            "[[noreturn]] void nd(void); __typeof__(nd) *p = 0; p(); h(0);",
+            gnu,
+            true,
+        ),
+        ("void longjmp(long *, int); longjmp(0, 1); h(0);", c99, true),
+        ("_Complex double z = 1; die(), (z * z); h(0);", c99, true),
+        ("die(), sizeof(c ? 1 : 0); h(0);", c99, false),
+        ("die(), (1 ? 0 : (c ? 1 : 0)); h(0);", c99, false),
+        ("nr *a[1] = {0}; a[0](); h(0);", c99, false),
+        ("(c ? fpt : fpt)(); h(0);", c99, false),
+        ("(c, fpt)(); h(0);", c99, false),
+        ("((nr *)other)(); h(0);", c99, false),
+        ("__typeof__(holder.m) q = 0; q(); h(0);", gnu, false),
+        (
+            "switch ((0.0, 1)) { case 1: break; default: h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "switch (({ 1; })) { case 1: break; default: h(0); }",
+            gnu,
+            false,
+        ),
+        (
+            "switch (&c != 0) { case 1: break; default: h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "switch (1) { case 1: break; int v; case 2: h(0); }",
+            c99,
+            false,
+        ),
+        ("if (__builtin_constant_p(c)) h(0);", c99, true),
+        ("if (__builtin_constant_p((0, 1)) - 1) h(0);", c99, false),
     ] {
         assert_eq!(h_first(probe, config), emitted, "{probe}");
     }
