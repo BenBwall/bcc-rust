@@ -905,7 +905,8 @@ records whether Clang's code generation at `-O0` skips the code it appears in
 (`dead`), which approximates Clang's insertion state rather than run-time
 reachability: a skipped reference creates no LLVM value, so it ranks no
 `always_inline` function in Clang's creation order and selects no DLL import,
-and both consumers read this one flag. Code is skipped in the arm a constant
+and entity reachability reads this same flag. Static initializer references
+remain live after jumps when the declaration is emitted. Code is skipped in the arm a constant
 condition does not take, in a generic selection's controlling operand and
 unselected associations, after a jump or a loop without an exit, and until a
 label. One evaluator stands for Clang's `ConstantFoldsToSimpleInteger` in
@@ -2259,9 +2260,39 @@ reports each emitted object's first surviving nonzero or relocated leaf at its
 initializer. Semantic checks and lowering share entity reachability: evaluated
 references from emitted functions and object initializers retain internal
 objects, while references owned only by omitted functions do not. Unused
-function-local statics remain omitted at every optimization level. This differs
-from Clang at O0, which emits them with their enclosing function; matching that
-behavior requires changing emission policy rather than initializer validity.
+function-local static and thread-local objects are retained with every emitted
+function when `CompilerConfiguration::optimization().0` is false, exactly when
+`__OPTIMIZE__` is undefined (the default, `-O0`, native B0 and `--opt=none`
+without another enabled optimizer). This follows Clang O0; static duration is
+C99 §6.2.4p3, p. 32; PDF p. 44. Locals of omitted static or C99 inline-only
+bodies remain omitted (§6.7.4p6, pp. 112-113; PDF pp. 124-125), including
+`used` locals. With optimization enabled, only referenced or `used` locals of
+emitted bodies are retained. Constant-untaken arms omitted as a whole by
+Clang's code generation retain no local objects, even `used` ones. The shared
+walk distinguishes a missing insertion point (`dead`) from omission of a whole
+statement or operand (`elided`). Clang `EmitSimpleStmt` still visits declarations,
+compounds, attributed statements and labels (including case/default) after a
+jump or noreturn call. A non-simple statement without a label is skipped there,
+including its nested declarations; labels inside GNU statement expressions count.
+Folded switches elide unselected statements while preserving case labels and
+their ancestors for dispatch; the selected label resumes emission before its
+facts are captured. Unevaluated sizeof/typeof/alignof operands, generic control
+and unselected associations, unselected choose-expression arms and folded-away
+conditional/logical operands retain no local definitions. Runtime VLA operands
+remain evaluated. Declaration contexts are finalized after typing, together
+with reference contexts. Lowering consumes the same operand and statement
+elision facts (C99 §6.8.4.1p2, pp. 133-134; PDF pp. 145-146).
+Function-to-local edges and each initializer's outgoing references share the
+same worklist, so a newly retained local retains its internal referents
+transitively. Dead executable references retain neither a function nor its
+locals. This decision feeds BSS validation, LLVM, both native object paths and
+the interpreter. When optimizing, a reached inline-only function also retains
+its `used` locals, matching Clang's optional-body section diagnostics even on
+native and interpreter pipelines. Semantic checks still precede optimization:
+a constant-read local such as `return b[0]` can be rejected where Clang O1/O2
+folds the read and removes the object. This known difference does not attempt
+to model LLVM's optimizer. Optimized optional copies of C99 inline-only bodies
+retain their existing lowering policy.
 A fixed-depth interval radix tree records later writes; scalar GNU ranges remain periodic queries and one coverage interval, independent of their
 extent. Assignment conversion, negative floating zero, overwritten initializers,
 union selections and bit-fields affect the final contents. Complex ranges use

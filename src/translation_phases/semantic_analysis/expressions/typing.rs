@@ -1307,6 +1307,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.constant = ConstantClass::None;
         }
         _ = self.retain_effect_recipes(info, effects);
+        info.elided = self.functions.elided;
         self.expressions.push(info);
     }
 
@@ -1376,6 +1377,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ExpressionInfo {
             expression: e,
             selected_expression: None,
+            elided: false,
             place_alignment: None,
             ty,
             operation_type: None,

@@ -221,6 +221,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
                 self.functions.emission.orphan,
             )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreElided(
+                self.functions.elided,
+            )));
+        self.functions.elided = false;
         self.functions.dead = false;
         self.functions.emission.orphan = None;
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
@@ -460,9 +465,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
+            | FunctionWork::RestoreElided(elided) => self.functions.elided = elided,
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
-            | FunctionWork::JoinArms => {
+            | FunctionWork::JoinArms(elided) => {
+                self.functions.elided = elided;
                 let then_end = self.functions.arm_ends.pop().expect("then arm ended");
                 self.functions.dead &= then_end;
                 self.functions.emission.orphan = None;
@@ -472,18 +479,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.dead = outer || after.unwrap_or(false);
                 self.functions.emission.orphan = None;
             },
-            | FunctionWork::DeadStatementArm(condition, live, outer, statement) => {
+            | FunctionWork::DeadStatementArm {
+                condition,
+                live,
+                outer_dead,
+                outer_elided,
+                statement,
+            } => {
                 let skipped = self.folded_condition(condition) == Some(!live)
                     && statement
                         .is_none_or(|statement| !self.statement_contains_label(statement, false));
-                self.functions.dead = outer || skipped;
+                self.functions.dead = outer_dead || skipped;
+                self.functions.elided = outer_elided || skipped;
+
             },
-            | FunctionWork::DeadArm(condition, live, outer) => {
+            | FunctionWork::DeadArm {
+                condition,
+                live,
+                outer_dead,
+                outer_elided,
+                label_operand,
+            } => {
                 let value = self.folded_condition(condition);
-                self.functions.dead = outer || value == Some(!live);
+                self.functions.dead = outer_dead || value == Some(!live);
+
+                self.functions.elided = outer_elided
+                    || (value == Some(!live)
+                        && label_operand
+                            .is_none_or(|operand| !self.expression_contains_label(operand)));
             },
             | FunctionWork::GenericMark(generic) => {
-                let at = self.functions.uses.len();
+                let at = EmissionMark {
+                    references:  self.functions.uses.len(),
+                    definitions: self.definitions.len(),
+                    orphan:      self.functions.emission.orphan,
+                };
                 let scratch = self.scratch;
                 let marks = self
                     .functions
@@ -493,12 +523,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // The controlling operand is not emitted, and only the
                 // selected association is: each starts from the block
                 // around the selection ([`super::emission`]).
-                if let Some(&(_, around)) = marks.first()
+                if let Some(around) = marks.first()
                     && (marks.len() == 1 || marks.len() % 2 == 0)
                 {
-                    self.functions.emission.orphan = around;
+                    self.functions.emission.orphan = around.orphan;
                 }
-                marks.push((at, self.functions.emission.orphan));
+                marks.push(at);
             },
             | FunctionWork::ExpressionStatementEnd {
                 expression,
@@ -600,6 +630,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     entity.definition = Some(b.name.source_vectors);
                     self.definitions.push(Definition {
+                        elided:  false,
                         binding: index,
                         kind:    DefinitionKind::Tentative,
                     });
@@ -622,6 +653,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.reference_context_unevaluated(index)
                     || context.parent.is_some_and(|p| ignored_references[p]),
             );
+        }
+        // sizeof/typeof evaluation is known only after its operand is typed.
+        // Apply the same contexts to declarations as to references before
+        // BSS validation or any backend observes the emission graph.
+        for context in &self.functions.definition_contexts {
+            if context.sizeof.is_some_and(|index| ignored[index])
+                || context
+                    .reference_context
+                    .is_some_and(|index| ignored_references[index])
+            {
+                self.definitions[context.definition].elided = true;
+            }
         }
         let mut owners = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for function in &self.function_records {
@@ -1191,6 +1234,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             None,
         );
         self.definitions.push(Definition {
+            elided:  false,
             binding: self.bindings.len() - 1,
             kind:    DefinitionKind::FunctionName(function.name),
         });
@@ -1269,7 +1313,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.record_vm(index);
         if binding.kind == BindingKind::Object && (initialized || binding.linkage == Linkage::None)
         {
+            if self.functions.sizeof.is_some() || self.functions.reference_context.is_some() {
+                self.functions.definition_contexts.push(DefinitionContext {
+                    definition:        self.definitions.len(),
+                    sizeof:            self.functions.sizeof,
+                    reference_context: self.functions.reference_context,
+                });
+            }
             self.definitions.push(Definition {
+                elided:  self.functions.elided,
                 binding: index,
                 kind:    DefinitionKind::Object,
             });
@@ -1424,6 +1476,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         _ = self.functions.entities.insert(b.name.name, entity);
         if !defined {
             self.definitions.push(Definition {
+                elided:  false,
                 binding: index,
                 kind:    DefinitionKind::Tentative,
             });
@@ -1461,6 +1514,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let b = self.bindings[index];
         if b.linkage == Linkage::None {
             self.definitions.push(Definition {
+                elided:  false,
                 binding: index,
                 kind:    DefinitionKind::Function,
             });
@@ -1525,6 +1579,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Microsoft retention is finalized separately from the C99/GNU
         // definition constraints; explicit gnu_inline keeps GNU omission.
         self.definitions.push(Definition {
+            elided:  false,
             binding: index,
             kind:    if entity.can_redefine
                 && b.linkage == Linkage::External
@@ -1575,7 +1630,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             sizeof: self.functions.sizeof,
             inline_function,
             dll_import,
-            dead: self.functions.dead,
+            // Static initializer data is generated even after a jump. An
+            // elided declaration never makes its initializer reachable.
+            dead: self.functions.elided
+                || (self.functions.dead
+                    && !self.functions.initializer.is_some_and(|binding| {
+                        self.bindings[binding].duration.is_static_or_thread()
+                    })),
         });
     }
 
@@ -1618,19 +1679,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
-        ranges.push(marks[0].0..marks[1].0);
+        ranges.push((marks[0], marks[1]));
         for (index, association) in generic.associations.iter().enumerate() {
             if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
-                ranges.push(marks[2 + 2 * index].0..marks[3 + 2 * index].0);
+                ranges.push((marks[2 + 2 * index], marks[3 + 2 * index]));
             } else {
                 // Code generation continues in the block the selected
                 // association ends in.
-                self.functions.emission.orphan = marks[3 + 2 * index].1;
+                self.functions.emission.orphan = marks[3 + 2 * index].orphan;
             }
         }
-        for range in ranges {
-            for usage in &mut self.functions.uses[range] {
-                usage.dead = true;
+        for (start, end) in ranges {
+            self.skip_references(start.references..end.references);
+            for definition in &mut self.definitions[start.definitions..end.definitions] {
+                if definition.kind == DefinitionKind::Object {
+                    definition.elided = true;
+                }
             }
         }
     }
@@ -1638,12 +1702,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Pushes the work that enters the arm of `condition` taken when it is
     /// `live`: code generation skips it when the condition folds to the
     /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
-    pub(super) fn dead_arm(&mut self, condition: &'tu Expression<'tu>, live: bool) {
-        self.work.push(Work::FunctionWork(FunctionWork::DeadArm(
+    pub(super) fn dead_arm(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+        live: bool,
+        label_operand: Option<&'tu Expression<'tu>>,
+    ) {
+        self.work.push(Work::FunctionWork(FunctionWork::DeadArm {
             condition,
             live,
-            self.functions.dead,
-        )));
+            outer_dead: self.functions.dead,
+            outer_elided: self.functions.elided,
+            label_operand,
+        }));
     }
 
     /// Loop code generation folds arithmetic truth, including floating
@@ -1949,6 +2020,8 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whether the code being analyzed is emitted into a block
     /// without predecessors ([`super::emission::State::orphan`]).
     RestoreOrphan(Option<usize>),
+    /// Restores whole-statement/operand omission, including declarations.
+    RestoreElided(bool),
     /// Restores the skipped state around the innermost switch.
     RestoreSwitchDead(bool),
     /// After a switch: code generation resumes with the code around it,
@@ -1957,18 +2030,24 @@ pub(super) enum FunctionWork<'tu> {
     /// Saves the skipped state at the end of an `if` statement's first arm.
     ThenEnd,
     /// Skips the code after an `if` statement when both arms end skipped.
-    JoinArms,
+    JoinArms(bool),
     /// Enters the arm of a condition taken when it is `live`, given whether
     /// the code around the condition is skipped.
-    DeadArm(&'tu Expression<'tu>, bool, bool),
-    /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
-    /// the arm holds a label, which keeps Clang from skipping it.
-    DeadStatementArm(
-        &'tu Expression<'tu>,
-        bool,
-        bool,
-        Option<&'tu Statement<'tu>>,
-    ),
+    DeadArm {
+        condition:     &'tu Expression<'tu>,
+        live:          bool,
+        outer_dead:    bool,
+        outer_elided:  bool,
+        label_operand: Option<&'tu Expression<'tu>>,
+    },
+    /// Enters an `if` arm unless it holds a label.
+    DeadStatementArm {
+        condition:    &'tu Expression<'tu>,
+        live:         bool,
+        outer_dead:   bool,
+        outer_elided: bool,
+        statement:    Option<&'tu Statement<'tu>>,
+    },
     /// Clang omits an infinite loop's exit block unless a generated break
     /// targets it. The loop's body is emitted even for a false condition.
     LoopEnd(&'tu Statement<'tu>, bool),
@@ -2066,6 +2145,24 @@ struct Use {
     dead:              bool,
 }
 
+/// Deferred evaluation contexts shared by local definitions and references.
+/// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+#[derive(Clone, Copy)]
+struct DefinitionContext {
+    definition:        usize,
+    sizeof:            Option<usize>,
+    reference_context: Option<usize>,
+}
+
+/// Bounds around a generic operand, whose selection is known after typing.
+/// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+#[derive(Clone, Copy)]
+struct EmissionMark {
+    references:  usize,
+    definitions: usize,
+    orphan:      Option<usize>,
+}
+
 /// A break's evaluation context settles after an enclosing sizeof/typeof
 /// operand is typed, just as a generated reference's context does.
 /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
@@ -2134,6 +2231,13 @@ pub(super) struct State<'tu, 's> {
     /// does not return, until a label (`CodeGenFunction::EmitStmt`;
     /// [`super::emission`]).
     pub(super) dead: bool,
+    /// A whole statement or operand is omitted, including its declarations:
+    /// an untaken arm, an unselected switch region, or a non-simple statement
+    /// without labels while `dead`. Simple declarations and compounds still
+    /// get visited after jumps. Deferred unevaluated contexts are applied at
+    /// completion too. C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146;
+    /// omission follows Clang's code-generation policy.
+    pub(super) elided: bool,
     /// The skipped state around the innermost switch, which its case
     /// labels resume.
     pub(super) switch_dead: bool,
@@ -2150,36 +2254,39 @@ pub(super) struct State<'tu, 's> {
     pub(super) outside: [Option<usize>; 2],
     /// For each generic selection being analyzed, by address, the number
     /// of references recorded at the start and end of its controlling
-    /// operand and of each association's expression, with the emission
-    /// model's block state there.
-    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, (usize, Option<usize>)>>,
+    /// operand and of each association's expression, with the state of
+    /// the emission model’s block state there.
+    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
+    definition_contexts: ArenaVec<'s, DefinitionContext>,
 }
 
 impl<'s> State<'_, 's> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            reference_context:  None,
-            reference_contexts: ArenaVec::new_in(scratch),
-            reference_function: None,
-            initializer:        None,
-            current:            None,
-            next_function:      0,
-            old_names:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            old_types:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:               ArenaVec::new_in(scratch),
-            evaluated_imports:  &[],
-            sizeof_contexts:    ArenaVec::new_in(scratch),
-            sizeof:             None,
-            dead:               false,
-            switch_dead:        false,
-            emission:           super::emission::State::new(scratch),
-            arm_ends:           ArenaVec::new_in(scratch),
-            generated_breaks:   ArenaVec::new_in(scratch),
-            inline_objects:     ArenaVec::new_in(scratch),
-            outside:            [None; 2],
-            generic_marks:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            reference_context:   None,
+            reference_contexts:  ArenaVec::new_in(scratch),
+            reference_function:  None,
+            initializer:         None,
+            current:             None,
+            next_function:       0,
+            old_names:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses:                ArenaVec::new_in(scratch),
+            evaluated_imports:   &[],
+            sizeof_contexts:     ArenaVec::new_in(scratch),
+            sizeof:              None,
+            dead:                false,
+            elided:              false,
+            switch_dead:         false,
+            emission:            super::emission::State::new(scratch),
+            arm_ends:            ArenaVec::new_in(scratch),
+            generated_breaks:    ArenaVec::new_in(scratch),
+            inline_objects:      ArenaVec::new_in(scratch),
+            outside:             [None; 2],
+            generic_marks:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            definition_contexts: ArenaVec::new_in(scratch),
         }
     }
 }

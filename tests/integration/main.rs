@@ -30,6 +30,7 @@ mod language_cli;
 mod late_builtins;
 mod link_temporary_object;
 mod llvm_build_cache;
+mod local_statics;
 mod math_builtins_cli;
 mod mingw_target_macros;
 mod native_runner;

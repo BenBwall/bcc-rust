@@ -237,6 +237,10 @@ pub(crate) enum ControlTarget {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StatementFacts<'tu> {
+    /// A whole statement is omitted by code generation,
+    /// including its static declarations. C99: §6.8.4.1p2, pp. 133-134;
+    /// PDF pp. 145-146; storage emission follows Clang.
+    pub(crate) elided: bool,
     pub(crate) id:     StatementId,
     pub(crate) syntax: &'tu Statement<'tu>,
     pub(crate) entry:  ControlPoint,

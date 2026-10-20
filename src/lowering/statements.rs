@@ -96,6 +96,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .ok_or_else(|| {
                 LoweringError::missing("statement control facts are not retained", source)
             })?;
+        // Share semantic traversal's whole-statement decision with static
+        // reachability, including references inside the omitted statement.
+        // C99 §6.8.4.1p2, pp. 133-134; PDF pp. 145-146.
+        if control.elided {
+            return Ok(());
+        }
         if !matches!(statement.kind, S::For(_)) || !self.transition_has_cleanup(control.exit) {
             self.tasks.push(Task::CleanupNormal(statement));
         }
@@ -883,8 +889,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         if data.duration.is_static_or_thread() {
             // The module planner owns which static initializers are emitted;
-            // an unused local initializer cannot make a function reachable.
-            // C99 §6.9p3-5, p. 140; PDF p. 152.
+            // retained locals also keep their initializer's referents alive.
+            // C99 §6.2.4p3, p. 32; PDF p. 44; §6.9p3-5, p. 140; PDF p. 152.
             if data.linkage == Linkage::None && self.unit.reachable.contains(&binding) {
                 _ = self
                     .unit

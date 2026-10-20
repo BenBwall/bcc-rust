@@ -576,6 +576,8 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// C11: §6.5.1.1p4, p. 79; PDF p. 97; GNU `choose_expr` follows it.
     /// Constant address conditionals: C99 §6.5.15p4, p. 90; PDF p. 102.
     pub(crate) selected_expression: Option<&'tu Expression<'tu>>,
+    /// The whole operand is skipped by Clang code generation.
+    pub(crate) elided: bool,
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
     pub(crate) operation_type: Option<TypeId>,

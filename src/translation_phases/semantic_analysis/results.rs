@@ -102,8 +102,9 @@ pub(crate) struct EntityReference {
     pub(crate) owner:   usize,
     pub(crate) binding: usize,
     /// The reference is in code that Clang's code generation skips (an
-    /// unreachable statement or a constant-false operand): it still keeps
-    /// what it names reachable, but creates no LLVM value there.
+    /// unreachable statement or a constant-false operand): it neither keeps
+    /// its target reachable nor creates an LLVM value there. References in
+    /// emitted static initializer data remain live even after a jump.
     pub(crate) dead:    bool,
 }
 
@@ -278,6 +279,12 @@ pub(crate) enum DefinitionKind {
 /// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Definition {
+    /// The declaration belongs to a whole statement or operand that Clang
+    /// omits even at O0, including deferred unevaluated contexts. Simple
+    /// declarations after jumps remain emitted.
+    /// C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146 (selection semantics);
+    /// storage emission is a compiler policy.
+    pub(crate) elided:  bool,
     pub(crate) binding: usize,
     pub(crate) kind:    DefinitionKind,
 }

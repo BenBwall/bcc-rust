@@ -182,6 +182,7 @@ impl<'tu, 's> Builder<'tu, 's> {
         }
         let id = StatementId(self.statements.len());
         self.statements.push(StatementFacts {
+            elided: false,
             id,
             syntax,
             entry,

@@ -1,12 +1,15 @@
 //! Module emission from semantic entity references, with one explicit worklist.
 //! No function signatures or bodies are lowered until this plan is complete.
 //! C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p3-5,
-//! p. 140; PDF p. 152. Omitting unused internal definitions follows Clang.
+//! p. 140; PDF p. 152; §6.2.4p3, p. 32; PDF p. 44. Omitting unused
+//! internal definitions and retaining locals at O0 follow Clang.
 
 use super::super::{
+    BindingKind,
     BodyEmission,
     DefinitionKind,
     Linkage,
+    ScopeKind,
     SemanticTranslationUnit,
 };
 use crate::{
@@ -30,6 +33,12 @@ impl SemanticTranslationUnit<'_> {
     /// references, such as another private body or a static helper, are,
     /// and so are those of the inline-only bodies `copied` names, whose
     /// copies lowering emits.
+    /// Without optimization, emitted bodies also retain all their explicit
+    /// static and thread-local objects. With optimization, only referenced
+    /// or `used` locals survive. A `used` local never roots an omitted body.
+    /// Initializer references then retain the objects and functions they name.
+    /// This emission policy follows Clang; static duration itself is C99:
+    /// §6.2.4p3, p. 32; PDF p. 44 (thread duration is a C11 extension).
     /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p3-5,
     /// p. 140; PDF p. 152. GNU extern inline follows the same emission policy.
     /// Microsoft discardable bodies retain their callable external definition
@@ -61,17 +70,71 @@ impl SemanticTranslationUnit<'_> {
         let mut heads = ArenaVec::new_in(arena);
         heads.resize(canonical.len(), None);
         let mut edges = ArenaVec::new_in(arena);
-        for reference in self.references {
-            if self
-                .function_policy(reference.owner)
+        let mut elided = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
+        for definition in self.definitions {
+            if definition.elided {
+                _ = elided.insert(canonical[definition.binding]);
+            }
+        }
+        let body_emitted = |binding| {
+            !self
+                .function_policy(binding)
                 .is_some_and(|policy| policy.body == BodyEmission::InlineOnly)
-                && !copied(reference.owner)
+                || copied(binding)
+        };
+        for reference in self.references {
+            if reference.dead
+                || !body_emitted(reference.owner)
+                || elided.contains(&canonical[reference.binding])
             {
                 continue;
             }
             let owner = canonical[reference.owner];
             edges.push((canonical[reference.binding], heads[owner]));
             heads[owner] = Some(edges.len() - 1);
+        }
+        // Scope parents precede their children. Resolve each scope's nearest
+        // function once, including nested blocks, without walking ancestors
+        // for every local. C99 §6.2.1p4, pp. 29-30; PDF pp. 41-42.
+        let mut owners = ArenaVec::new_in(arena);
+        owners.resize(self.scopes.len(), None);
+        for function in self.functions {
+            owners[function.scope] = function.binding;
+        }
+        for (index, scope) in self.scopes.iter().enumerate() {
+            if scope.kind != ScopeKind::Function {
+                owners[index] = scope.parent.and_then(|parent| owners[parent]);
+            }
+        }
+        let local_owner = |index: usize| {
+            let binding = self.bindings[index];
+            (binding.kind == BindingKind::Object
+                && binding.linkage == Linkage::None
+                && binding.duration.is_static_or_thread())
+            .then(|| owners[binding.scope])
+            .flatten()
+        };
+        let used = |binding| {
+            self.entity_attributes(binding)
+                .is_some_and(|attributes| attributes.used)
+        };
+        for definition in self.definitions {
+            if !matches!(
+                definition.kind,
+                DefinitionKind::Object | DefinitionKind::Tentative
+            ) || definition.elided
+                || (context.configuration.optimization().0 && !used(definition.binding))
+            {
+                continue;
+            }
+            if let Some(owner) = local_owner(definition.binding).filter(|&owner| {
+                body_emitted(owner)
+                    || (context.configuration.optimization().0 && used(definition.binding))
+            }) {
+                let owner = canonical[owner];
+                edges.push((canonical[definition.binding], heads[owner]));
+                heads[owner] = Some(edges.len() - 1);
+            }
         }
         let mut work = ArenaVec::new_in(arena);
         for definition in self.definitions {
@@ -98,10 +161,7 @@ impl SemanticTranslationUnit<'_> {
             work.extend([canonical[alias.binding], canonical[alias.target]]);
         }
         for binding in 0..canonical.len() {
-            if self
-                .entity_attributes(binding)
-                .is_some_and(|attributes| attributes.used)
-            {
+            if used(binding) && local_owner(binding).is_none() {
                 work.push(canonical[binding]);
             }
         }

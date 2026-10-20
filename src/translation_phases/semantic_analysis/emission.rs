@@ -69,52 +69,52 @@ pub(super) struct State<'tu, 's> {
     /// Code generation emits the code being analyzed into a block without
     /// predecessors, which a call that does not return created during the
     /// expression statement numbered here or a later one.
-    pub(super) orphan:       Option<usize>,
+    pub(super) orphan: Option<usize>,
     /// The number of expression statements begun so far.
-    pub(super) serial:       usize,
+    pub(super) serial: usize,
     /// The value statements of the statement expressions being analyzed,
     /// by address, which Clang emits even after a jump.
-    value_statements:        ArenaMap<'s, usize, ()>,
+    pub(super) value_statements: ArenaMap<'s, usize, ()>,
     /// Bindings that call nothing that returns: a function declared
     /// `noreturn`, or an object, parameter or typedef whose function type
     /// is, directly or by an earlier declaration of the same entity. The
     /// value says whether the fact belongs to the type (GNU, `gnu::`,
     /// Microsoft, or Clang's builtin type), which `__typeof__` and typedefs
     /// carry, rather than to the declaration (`_Noreturn`, `[[noreturn]]`).
-    pub(super) noreturn:     ArenaMap<'s, usize, bool>,
+    pub(super) noreturn: ArenaMap<'s, usize, bool>,
     /// Functions whose result is a pointer to a `noreturn` function type.
-    noreturn_results:        ArenaMap<'s, usize, ()>,
+    noreturn_results: ArenaMap<'s, usize, ()>,
     /// Members whose function type does not return, by tag and name.
-    noreturn_fields:         ArenaMap<'s, (usize, StringCacheId), ()>,
+    noreturn_fields: ArenaMap<'s, (usize, StringCacheId), ()>,
     /// File-scope typedefs named `jmp_buf` and `sigjmp_buf` were declared,
     /// which Clang's `longjmp` builtins need.
-    jmp_buf:                 bool,
-    sigjmp_buf:              bool,
+    jmp_buf: bool,
+    sigjmp_buf: bool,
     /// The switches being analyzed whose condition folds, by switch index.
-    folds:                   ArenaMap<'s, usize, switches::FoldedSwitch<'tu>>,
+    folds: ArenaMap<'s, usize, switches::FoldedSwitch<'tu>>,
     /// The skipped state a folded switch's selected statements ended in,
     /// passed from the end of its body to the code after it.
     pub(super) switch_after: Option<bool>,
     /// What each walked statement holds, by address ([`labels`]).
-    holds:                   ArenaMap<'s, usize, labels::Holds>,
+    holds: ArenaMap<'s, usize, labels::Holds>,
     /// The case labels of each walked switch, by address.
-    switches:                ArenaMap<'s, usize, labels::SwitchLabels<'tu, 's>>,
+    switches: ArenaMap<'s, usize, labels::SwitchLabels<'tu, 's>>,
     /// The position of each walked case label among its switch's labels.
-    label_positions:         ArenaMap<'s, usize, usize>,
+    label_positions: ArenaMap<'s, usize, usize>,
     /// The functions walked so far, by address.
-    walked:                  ArenaMap<'s, usize, ()>,
+    walked: ArenaMap<'s, usize, ()>,
     /// The values the evaluator found, by expression address.
-    folded:                  ArenaMap<'s, usize, Option<folding::Value>>,
+    folded: ArenaMap<'s, usize, Option<folding::Value>>,
     /// Whether an expression holds a label, by address.
-    labeled_expressions:     ArenaMap<'s, usize, bool>,
+    labeled_expressions: ArenaMap<'s, usize, bool>,
     /// Whether an expression calls `__builtin_constant_p`, by address.
-    constant_p:              ArenaMap<'s, usize, bool>,
+    constant_p: ArenaMap<'s, usize, bool>,
     /// The initializers of `const` non-volatile objects, which Clang's
     /// evaluator may read.
-    constant_initializers:   ArenaMap<'s, usize, &'tu Expression<'tu>>,
+    constant_initializers: ArenaMap<'s, usize, &'tu Expression<'tu>>,
     /// The initializers of `const` non-volatile arrays and structures, by
     /// binding, whose retained plans Clang's evaluator may read.
-    constant_aggregates:     ArenaMap<'s, usize, &'tu Initializer<'tu>>,
+    constant_aggregates: ArenaMap<'s, usize, &'tu Initializer<'tu>>,
 }
 
 impl<'s> State<'_, 's> {

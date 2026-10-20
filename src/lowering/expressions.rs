@@ -162,6 +162,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 right_expression,
             } => match operator {
                 | BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => {
+                    if self.info(right_expression)?.elided {
+                        // The shared emission walk omitted this operand;
+                        // produce the short-circuit value without visiting it.
+                        let value = self
+                            .iconst(Type::I32, i128::from(operator == BinaryOperator::LogicalOr));
+                        self.push_item(Operand::Value(value), info.ty);
+                        return Ok(());
+                    }
                     let right = self.draft.create_block(&[]);
                     let merge = self.draft.create_block(&[Type::I1]);
                     self.tasks.push(Task::Merge {
@@ -289,6 +297,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::Evaluate(base_expression));
             },
             | E::Conditional(conditional) => {
+                if self.info(conditional.then_expression)?.elided {
+                    self.tasks.push(Task::Evaluate(conditional.else_expression));
+                    return Ok(());
+                }
+                if self.info(conditional.else_expression)?.elided {
+                    self.tasks.push(Task::Evaluate(conditional.then_expression));
+                    return Ok(());
+                }
                 let then = self.draft.create_block(&[]);
                 let otherwise = self.draft.create_block(&[]);
                 let merge_params = self.merge_params(info.ty, source)?;
@@ -332,6 +348,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.compound_literal(info.ty, initializer, source)?,
             | E::Builtin(b) => self.schedule_keyword(expression, b)?,
             | E::OmittedConditional(c) => {
+                if self.info(c.else_expression)?.elided {
+                    self.tasks.push(Task::Evaluate(c.condition_expression));
+                    return Ok(());
+                }
                 let merge_params = self.merge_params(info.ty, source)?;
                 let merge = self.draft.create_block(merge_params);
                 let otherwise = self.draft.create_block(&[]);

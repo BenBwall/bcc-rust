@@ -78,24 +78,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => None,
                 };
                 if live.is_some() {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreElided(
+                            self.functions.elided,
+                        )));
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                         self.functions.dead,
                     )));
                 }
                 self.work.push(Work::Expression(right_expression));
                 if let Some(live) = live {
-                    self.dead_arm(left_expression, live);
+                    self.dead_arm(left_expression, live, Some(right_expression));
                 }
                 self.work.push(Work::Expression(left_expression));
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreElided(
+                        self.functions.elided,
+                    )));
                 self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                     self.functions.dead,
                 )));
                 self.work.push(Work::Expression(c.else_expression));
-                self.dead_arm(c.condition_expression, false);
+                self.dead_arm(c.condition_expression, false, Some(c.else_expression));
                 self.work.push(Work::Expression(c.then_expression));
-                self.dead_arm(c.condition_expression, true);
+                self.dead_arm(c.condition_expression, true, Some(c.then_expression));
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {
@@ -171,6 +179,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
             },
             | E::Countof(operand) => self.syntax_operand(operand),
+            | E::Builtin(b)
+                if b.keyword == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr =>
+            {
+                if let [super::SyntaxOperand::Expression(condition), super::SyntaxOperand::Expression(yes), super::SyntaxOperand::Expression(no)] = &*b.operands {
+                    self.work.push(Work::FunctionWork(FunctionWork::RestoreElided(self.functions.elided)));
+                    self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(self.functions.dead)));
+                    self.work.push(Work::Expression(no));
+                    self.dead_arm(condition, false, None);
+                    self.work.push(Work::Expression(yes));
+                    self.dead_arm(condition, true, None);
+                    self.work.push(Work::Expression(condition));
+                }
+            },
             | E::Builtin(b) => {
                 for &member in b.members.iter().rev() {
                     if let super::super::parsing::OffsetMember::Index(index) = member {
@@ -191,20 +212,57 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
         use super::statements::StatementWork as W;
         self.taint(s.recovered);
-        // Unlike a compound or label, a structured statement with a label
-        // creates an insertion block even after a jump. Clang EmitStmt
-        // needs its condition/header as well as the labeled descendant.
-        if self.functions.dead
-            && matches!(
-                s.kind,
-                S::If { .. } | S::Switch { .. } | S::While { .. } | S::DoWhile { .. } | S::For(_)
-            )
-            && self.statement_contains_label(s, !self.case_labels_resume())
-        {
-            self.functions.dead = false;
+        let value_statement = self
+            .functions
+            .emission
+            .value_statements
+            .contains_key(&std::ptr::from_ref(s).addr());
+        let simple = matches!(
+            s.kind,
+            S::Null
+                | S::Compound { .. }
+                | S::Declaration(_)
+                | S::Attributed(_)
+                | S::Label(..)
+                | S::Case(..)
+                | S::CaseRange(_)
+                | S::Default(_)
+                | S::Goto(_)
+                | S::Break
+                | S::Continue
+                | S::LocalLabels(_)
+                | S::SehLeave
+        );
+        let omitted = if self.functions.dead && !simple && !value_statement {
+            if self.statement_contains_label(s, !self.case_labels_resume()) {
+                // Clang EmitStmt ensures an insertion point for a label.
+                self.functions.dead = false;
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+        if omitted && !self.functions.elided {
+            // Clang EmitSimpleStmt handles declarations and compounds even
+            // without an insertion point; EmitStmt skips other label-free
+            // statements, including all declarations nested inside them.
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreElided(false)));
+            self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                self.functions.dead,
+            )));
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                    self.functions.emission.orphan,
+                )));
+            self.functions.elided = true;
         }
         let outside = self.control.current;
-        _ = self.control.statement(s);
+        if let Some(id) = self.control.statement(s) {
+            self.control.statements[id.0].elided = self.functions.elided;
+        }
         self.work.push(Work::StatementWork(W::RetainTail(s)));
         match s.kind {
             | S::Compound { items } => {
@@ -271,7 +329,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 // Code after the statement is skipped when both arms end
                 // skipped, a missing `else` being an empty arm.
-                self.work.push(Work::FunctionWork(FunctionWork::JoinArms));
+                self.work.push(Work::FunctionWork(FunctionWork::JoinArms(
+                    self.functions.elided,
+                )));
                 let condition = super::statements::slot_expression(condition_expression);
                 if let Some(child) = else_statement {
                     self.work.push(Work::StatementWork(W::Substatement(child)));
@@ -454,15 +514,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         live: bool,
         statement: Option<&'tu Statement<'tu>>,
     ) {
-        // Labels matter only once the condition folds the arm away, so
-        // they are looked for then.
         self.work
-            .push(Work::FunctionWork(FunctionWork::DeadStatementArm(
+            .push(Work::FunctionWork(FunctionWork::DeadStatementArm {
                 condition,
                 live,
-                self.functions.dead,
+                outer_dead: self.functions.dead,
+                outer_elided: self.functions.elided,
                 statement,
-            )));
+            }));
     }
 
     pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {

@@ -97,7 +97,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Whether `expression` holds an ordinary label, in a statement
     /// expression, as Clang's `ContainsLabel` asks of a condition before
     /// folding it; memoized, since conditions nest.
-    pub(super) fn expression_contains_label(&mut self, expression: &'tu Expression<'tu>) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn expression_contains_label(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         work.push((expression, false));
         while let Some((current, children_done)) = work.pop() {
