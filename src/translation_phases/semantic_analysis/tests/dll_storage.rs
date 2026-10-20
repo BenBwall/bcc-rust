@@ -810,8 +810,9 @@ fn review_forms_fix_generated_import_state() {
 /// object, and a volatile read through a pointer is a side effect. From
 /// the #104 review: string literal elements, `const` aggregates and
 /// `__builtin_strlen` fold (`strlen` only with the builtin's type, which
-/// `unsigned long` is not on LLP64), and a variably modified declaration
-/// after a jump resumes code generation.
+/// `unsigned long` is not on LLP64). A variably modified declaration after
+/// a jump resumes nothing, which keeps the import where Clang never reaches
+/// the declaration, as under a union read bcc does not fold.
 #[test]
 fn second_review_forms_fix_generated_import_state() {
     const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
@@ -912,8 +913,12 @@ fn second_review_forms_fix_generated_import_state() {
              return 0; }",
             false,
         ),
-        ("int h(int n) { return 0; int v[n]; x; }", false),
         ("int h(int n) { return 0; if (c) { int v[n]; x; } }", true),
+        (
+            "static const union { int i; float f; } u = {1}; int h(int n) { if (u.i) {} else { \
+             return 0; int a[n]; x; } return 0; }",
+            true,
+        ),
     ] {
         let source = format!("{IMPORTED}{suffix}");
         for target in WINDOWS {

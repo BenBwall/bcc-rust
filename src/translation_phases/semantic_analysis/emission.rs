@@ -27,12 +27,8 @@
 //! h(0);` with `die` declared `noreturn`, `g` is still referenced, but `h`
 //! is not.
 //!
-//! - **Variably modified declarations.** A block-scope object or typedef of a
-//!   variably modified type resumes code generation after a jump
-//!   (`variably_modified.rs`).
-//!
 //! Read [`State`], then `switches.rs`, `insertion.rs`, `noreturn.rs`,
-//! `variably_modified.rs`, `folding.rs` and `labels.rs`.
+//! `folding.rs` and `labels.rs`.
 //!
 //! C99: §6.8.4.2 paragraphs 4-5, p. 134; PDF p. 146 (switch selection);
 //! §6.8.6.3 paragraph 2, p. 138; PDF p. 150 (break); §6.8.3 paragraph 2,
@@ -47,7 +43,6 @@ mod folding;
 mod insertion;
 mod noreturn;
 mod switches;
-mod variably_modified;
 
 // Statement facts
 mod labels;
@@ -120,16 +115,6 @@ pub(super) struct State<'tu, 's> {
     /// The initializers of `const` non-volatile arrays and structures, by
     /// binding, whose retained plans Clang's evaluator may read.
     constant_aggregates:     ArenaMap<'s, usize, &'tu Initializer<'tu>>,
-    /// Code generation never reaches the code being analyzed: a statement
-    /// `EmitStmt` skips whole, the arm a folded condition does not take, or
-    /// a folded switch's statements after the selected `break`. Unlike code
-    /// after a jump, a declaration there resumes nothing
-    /// (`variably_modified.rs`).
-    pub(super) unemitted:    bool,
-    /// The declarator, by identity, and the reference count where a
-    /// declaration in skipped code began to be analyzed as emitted, until
-    /// its type shows whether it resumes code generation.
-    speculation:             Option<(usize, usize)>,
 }
 
 impl<'s> State<'_, 's> {
@@ -154,8 +139,6 @@ impl<'s> State<'_, 's> {
             labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            unemitted:             false,
-            speculation:           None,
         }
     }
 }

@@ -1063,10 +1063,12 @@ fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_call
 /// constant; an atomic `_Bool` decrement and a run-time memory order
 /// branch; a volatile read through a pointer is a side effect; string
 /// literal elements, `const` arrays and structures, and the bit and
-/// `strlen` builtins fold; a variably modified declaration after a jump
-/// resumes code generation, but not where Clang never reaches it.
+/// `strlen` builtins fold. A variably modified declaration after a jump
+/// resumes nothing: Clang resumes code generation there, but not in code it
+/// never reaches, which a condition bcc does not fold, the unselected
+/// operand of `__builtin_choose_expr` or a switch without a match can hide.
 #[test]
-fn always_inline_order_follows_folding_joins_and_variably_modified_declarations() {
+fn always_inline_order_follows_folding_and_joins() {
     let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
     let gnu = c99.with_gnu_extensions(true);
     for (probe, config, emitted) in [
@@ -1149,13 +1151,26 @@ fn always_inline_order_follows_folding_joins_and_variably_modified_declarations(
         ("if (__builtin_clz(1) == 0) h(0);", gnu, false),
         ("if (__builtin_clz(0) == 32) h(0);", gnu, true),
         ("if (__builtin_popcount(3) == 1) h(0);", gnu, false),
-        ("return 0; int v[c]; h(0);", c99, true),
-        ("return 0; typedef int t[c]; h(0);", c99, true),
-        ("return 0; int v[h(0)]; (void)v;", c99, true),
         ("return 0; int v[3]; h(0);", c99, false),
         ("return 0; if (c) { int v[c]; h(0); }", c99, false),
         ("if (0) { int v[c]; h(0); }", c99, false),
-        ("return 0; int w = h(0), v[c]; (void)v;", c99, false),
+        (
+            "static const union { int i; float f; } u = {1}; if (u.i) {} else { return 0; int a[c \
+             + 1]; h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "switch (5) { default: other(); break; { int a[c + 1]; h(0); } case 2: if (c) break; \
+             other(); break; }",
+            c99,
+            false,
+        ),
+        (
+            "(void)__builtin_choose_expr(0, ({ return 0; int a[c + 1]; h(0); 0; }), 0);",
+            gnu,
+            false,
+        ),
     ] {
         assert_eq!(h_first(probe, config), emitted, "{probe}");
     }

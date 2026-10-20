@@ -359,7 +359,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.taint(d.recovered);
                 self.validate_declaration_list_item(d);
-                self.begin_declaration(d);
                 self.work.push(Work::DeclarationBase(d));
                 self.spec(d.declaration_specifiers, d.init_declarators.is_empty());
             },
@@ -410,7 +409,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             },
             | Work::DeclarationDeclarator(d, spec, base, initialized) => {
-                self.begin_declarator(d);
                 self.work.push(Work::Bind(
                     d,
                     spec,
@@ -452,7 +450,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.bind_declaration(d, s, ty, initialized);
                 let bounds = self.bound_actions(ty, bound_start);
                 let binding = (self.bindings.len() > prior).then(|| self.bindings.len() - 1);
-                self.declarator_declared(d, s, ty, binding);
                 if let Some(binding) = binding {
                     if matches!(
                         self.bindings[binding].kind,

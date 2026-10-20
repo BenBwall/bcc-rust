@@ -78,10 +78,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => None,
                 };
                 if live.is_some() {
-                    self.work
-                        .push(Work::FunctionWork(FunctionWork::RestoreUnemitted(
-                            self.functions.emission.unemitted,
-                        )));
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                         self.functions.dead,
                     )));
@@ -93,10 +89,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Expression(left_expression));
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
-                self.work
-                    .push(Work::FunctionWork(FunctionWork::RestoreUnemitted(
-                        self.functions.emission.unemitted,
-                    )));
                 self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                     self.functions.dead,
                 )));
@@ -211,7 +203,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.functions.dead = false;
         }
-        self.omit_unreached_statement(s);
         let outside = self.control.current;
         _ = self.control.statement(s);
         self.work.push(Work::StatementWork(W::RetainTail(s)));
@@ -280,10 +271,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 // Code after the statement is skipped when both arms end
                 // skipped, a missing `else` being an empty arm.
-                self.work
-                    .push(Work::FunctionWork(FunctionWork::RestoreUnemitted(
-                        self.functions.emission.unemitted,
-                    )));
                 self.work.push(Work::FunctionWork(FunctionWork::JoinArms));
                 let condition = super::statements::slot_expression(condition_expression);
                 if let Some(child) = else_statement {
@@ -314,10 +301,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // The body is skipped up to its first case label, which
                 // resumes the code around the switch, as does its end
                 // unless a folded switch's selected statements end skipped.
-                self.work
-                    .push(Work::FunctionWork(FunctionWork::RestoreUnemitted(
-                        self.functions.emission.unemitted,
-                    )));
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreSwitchDead(
                         self.functions.switch_dead,
@@ -479,10 +462,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 live,
                 self.functions.dead,
                 statement,
-            )));
-        self.work
-            .push(Work::FunctionWork(FunctionWork::RestoreUnemitted(
-                self.functions.emission.unemitted,
             )));
     }
 
