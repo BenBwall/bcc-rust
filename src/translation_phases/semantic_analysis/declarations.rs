@@ -1364,8 +1364,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Specifier extensions whose meaning this phase does not model:
     /// constexpr storage, MSVC pointer modifiers and unmodeled layout
     /// attributes. Other attributes, `__extension__`, thread storage (a
-    /// duration, not a type) and x86-64 calling conventions leave the
-    /// declared type unchanged.
+    /// duration, not a type), x86-64 calling conventions and `__forceinline`
+    /// leave the declared type unchanged.
     /// C99: §4 paragraph 6, p. 7; PDF p. 19.
     pub(super) fn unmodeled_extension(
         &self,
@@ -1382,7 +1382,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let Some(item) = chain {
             match item.kind {
                 | K::Constexpr => return Some(UnmodeledType::Constexpr),
-                | K::MsModifier(keyword) if !calling_convention(keyword) =>
+                // `__forceinline` is `inline` plus `always_inline`, which
+                // the function's entity attributes model.
+                | K::MsModifier(keyword)
+                    if !calling_convention(keyword)
+                        && keyword
+                            != super::super::preprocessing::KeywordTokenType::Forceinline =>
                     return Some(UnmodeledType::PointerModifier),
                 | K::Attributes(attribute)
                     if !attribute.recovered && self.layout_attribute(attribute) =>

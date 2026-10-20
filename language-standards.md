@@ -327,6 +327,16 @@ modifiable static objects. An imported inline body defines nothing, so an
 alias may not target it. Explicit `gnu_inline` retains its separate GNU
 rules.
 
+MSVC `__forceinline` (Windows SDK `FORCEINLINE`) is `inline` plus
+`always_inline` on every target, as in Clang: the definition takes the
+inline linkage above (`linkonce_odr`, or `weak_odr` with `extern`, on MSVC;
+a C99 inline definition elsewhere, whose `always_inline` body reaches LLVM
+as Clang's `available_externally` definition, so a recursive one calls the
+external definition at `-O0` as Clang's does), `static __forceinline` stays
+internal, and `extern __forceinline` defines the external symbol. `noinline`
+still prevails, and `__forceinline` on a redeclaration after the body is
+ignored with Clang's warning.
+
 BCC's target selection leaves Microsoft compatibility opt-in; Clang enables
 it by default for the MSVC target. Compare inline emission with matching
 compatibility flags on both compilers.
@@ -760,7 +770,7 @@ before the parser sees the resulting tokens.
   pointer level owns its qualifier set. Calling conventions keep their
   declaration or declarator position, including nested function pointers,
   parameters and abstract declarators. `__forceinline` keeps its modifier and
-  inline property.
+  inline property; semantic analysis adds `always_inline`.
 - `MsvcFrame` owns SEH: `__try` guarded compounds, `__except` expression
   filters, `__finally` compounds and `__leave;`. Children use the machine's
   compound and expression frames and ordinary scope restoration. Missing

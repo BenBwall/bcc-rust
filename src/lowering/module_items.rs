@@ -381,6 +381,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .module
             .declare_function(name, signature, IrLinkage::Internal);
         self.module.function_mut(func).inlining = InlineControl::Always;
+        // Name the external function the copy stands in for, declaring it
+        // when nothing else has, so the LLVM back end can emit Clang's
+        // `available_externally` form. A symbol clash keeps the plain
+        // private copy.
+        if let Ok(external) = self.function(binding) {
+            let name = self.module.function(external).name;
+            self.module.set_inline_copy_of(func, name);
+        }
         // Private copies keep the entity's attribute-only return contract.
         // C99: §7.13.2.1p4, p. 244; PDF p. 256 (longjmp resumes setjmp).
         self.module.function_mut(func).returns_twice = self

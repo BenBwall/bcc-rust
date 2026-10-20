@@ -561,7 +561,13 @@ C99 inline-only bodies and GNU89 `extern inline` bodies remain external
 declarations in IR, so uninlined calls and addresses refer to the external
 symbol. An `always_inline` one (without inline assembly) is also lowered as
 an internal `name.always_inline` function, marked `alwaysinline`, that
-direct calls name; addresses keep the external symbol. Functions carry
+direct calls name; addresses keep the external symbol. The copy records the
+external function it stands for (`inline_copy_of @name`): the interpreter,
+the optimizer and the native back end run the copy, while the LLVM back end
+emits its body as that function's `available_externally` definition and
+points the copy's uses at it, as Clang emits the inline definition, so
+LLVM's always-inliner makes Clang's choices (a recursive body is not inline
+viable, and its calls reach the external definition). Functions carry
 their inline control in IR (`noinline` for GNU `noinline`/`noipa`,
 `alwaysinline`), which the inliner and the LLVM back end honor. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
 The interpreter and LLVM therefore share the same decision. Internal functions
@@ -1479,7 +1485,7 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
 `lowering/cleanup.rs`):
 
 - **Textual form.** Function headers end in
-  `linkage [align N] [returns_twice] [hidden|protected] [section "name"] [used] [alias @target]`,
+  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [hidden|protected] [section "name"] [used] [alias @target]`,
   global headers in `linkage [thread_local] [constant] size N, align N
   [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
   `destructor @f priority N` follow the globals. The verifier checks alias

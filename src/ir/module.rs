@@ -155,9 +155,17 @@ impl<'ir> Module<'ir> {
             align: None,
             returns_twice: false,
             inlining: InlineControl::Default,
+            inline_copy_of: None,
         });
         self.add_symbol(name, Symbol::Function(id));
         id
+    }
+
+    /// Records that `func` is the private inline copy of the external
+    /// function named `external` ([`Function::inline_copy_of`]).
+    pub(crate) fn set_inline_copy_of(&mut self, func: FuncId, external: &str) {
+        let external = self.arena.alloc_str(external);
+        self.functions[func].inline_copy_of = Some(external);
     }
 
     /// Declares a global without an initializer. Panics if the name is
