@@ -88,6 +88,19 @@ impl<'tu, 's> PlanBuilder<'tu, 's> {
         }
     }
 
+    /// Forgets the previous initializer's operations, keeping the storage's
+    /// capacity for the next.
+    pub(super) fn reset(&mut self) {
+        self.operations.clear();
+        self.values.clear();
+        self.repeats.clear();
+        self.shift = 0;
+        self.repeating = 0;
+        self.root_patches.clear();
+        self.flexible_patches.clear();
+        self.valid = true;
+    }
+
     /// A brace pair initializes the aggregate at `destination`; returns its
     /// scope, or [`Self::NO_SCOPE`] for an empty list that stores nothing.
     pub(super) fn zero(
@@ -252,7 +265,7 @@ impl<'tu, 's> PlanBuilder<'tu, 's> {
     /// flexible array member gets `flexible`, room for every element any of
     /// its initializers writes, qualified as the object.
     pub(super) fn finish(
-        self,
+        &mut self,
         tu: &'tu Bump,
         root: TypeId,
         flexible: Option<TypeId>,
@@ -260,7 +273,7 @@ impl<'tu, 's> PlanBuilder<'tu, 's> {
         if !self.valid {
             return None;
         }
-        let mut operations = self.operations;
+        let operations = &mut self.operations;
         let completions = [
             (&self.root_patches, Some(root)),
             (

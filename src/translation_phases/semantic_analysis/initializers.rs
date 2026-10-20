@@ -46,6 +46,7 @@ use super::{
 };
 use crate::{
     translation_phases::{
+        SourceVectors,
         parsing::{
             declaration_syntax::{
                 Designator,
@@ -68,6 +69,7 @@ use crate::{
     util::bump::{
         ArenaMap,
         ArenaVec,
+        Bump,
     },
 };
 
@@ -91,7 +93,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         initializer: &'tu Initializer<'tu>,
         static_storage: bool,
         static_object: bool,
-        declaration_site: Option<crate::translation_phases::SourceVectors>,
+        declaration_site: Option<SourceVectors>,
     ) -> (TypeId, Option<FlexibleArray>) {
         if initializer.recovered || self.types.unanalyzed(ty) {
             return (ty, None);
@@ -112,13 +114,47 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             );
             return (ty, None);
         }
-        let mut work = ArenaVec::new_in(self.scratch);
+        // The scratch arena lives for the whole translation unit, so buffers
+        // made per initializer would never be freed (issue #92); reuse one
+        // set instead. A nested check, should analysis ever start one, takes
+        // a fresh set.
+        let mut buffers = self
+            .initializer_buffers
+            .take()
+            .unwrap_or_else(|| CheckBuffers::new_in(self.scratch));
+        buffers.reset(initializer.source_vectors);
+        let checked = self.check_initializer_with(
+            &mut buffers,
+            ty,
+            initializer,
+            static_storage,
+            static_object,
+            declaration_site,
+        );
+        self.initializer_buffers = Some(buffers);
+        checked
+    }
+
+    /// [`Self::check_initializer`] once the object's type admits an
+    /// initializer, over cleared `buffers`.
+    fn check_initializer_with(
+        &mut self,
+        buffers: &mut CheckBuffers<'tu, 's>,
+        ty: TypeId,
+        initializer: &'tu Initializer<'tu>,
+        static_storage: bool,
+        static_object: bool,
+        declaration_site: Option<SourceVectors>,
+    ) -> (TypeId, Option<FlexibleArray>) {
+        let CheckBuffers {
+            work,
+            writes,
+            leaves,
+            plan,
+        } = buffers;
         // The extents of the object's own flexible array member once an
         // element of it is reached.
         let mut flexible: Option<FlexibleExtent> = None;
-        let mut writes = Writes::new_in(self.scratch, initializer.source_vectors);
-        let mut leaves = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
-        let mut plan = PlanBuilder::new_in(self.scratch);
         let mut count = 0;
         let before = self.semantic_errors;
         let mut unmodeled = false;
@@ -137,7 +173,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         continue;
                     }
                     let destination = site.destination(target);
-                    if self.initializer_unanalyzed(target, &mut leaves) {
+                    if self.initializer_unanalyzed(target, leaves) {
                         plan.unmodeled(destination, site.source);
                         continue;
                     }
@@ -446,7 +482,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                     flexible_designator = Some((ordinal, member, cursor));
                                 }
                                 self.plan_container_entry(
-                                    &mut plan,
+                                    plan,
                                     &cursor,
                                     zero,
                                     designator.source_vectors,
@@ -553,7 +589,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             &mut flexible,
                         );
                     } else if element.designation.is_none() {
-                        self.plan_container_entry(&mut plan, &cursor, zero, source);
+                        self.plan_container_entry(plan, &cursor, zero, source);
                     }
                     // Without explicit braces, descend until an expression can
                     // initialize the complete current subobject or a scalar
@@ -577,7 +613,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 );
                             }
                             cursor = self.plan_descent(
-                                &mut plan,
+                                plan,
                                 cursor,
                                 (target, next_index),
                                 zero,
@@ -589,8 +625,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     if let Some(flexible) = &mut flexible {
                         self.extend_flexible(flexible, &cursor, ty);
                     }
-                    let node =
-                        self.record_write(&mut writes, base, &cursor, &starts, range, element);
+                    let node = self.record_write(writes, base, &cursor, &starts, range, element);
                     // A braced scalar's element initializes the scalar itself.
                     let site = match scalar {
                         | Some(site) => site,
@@ -800,10 +835,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         cursor: Current<'s>,
         (container, index): (TypeId, u64),
         zero: u32,
-        (source, expression): (
-            crate::translation_phases::SourceVectors,
-            crate::translation_phases::SourceVectors,
-        ),
+        (source, expression): (SourceVectors, SourceVectors),
     ) -> Current<'s> {
         let at = self
             .plan_child(cursor.container, &cursor.at, cursor.index, container)
@@ -839,7 +871,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         plan: &mut PlanBuilder<'tu, 's>,
         cursor: &Current<'s>,
         zero: u32,
-        source: crate::translation_phases::SourceVectors,
+        source: SourceVectors,
     ) {
         let destination = Subobject {
             offset: cursor.at.offset,
@@ -937,7 +969,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         writes: &mut Writes<'_>,
         base: u32,
         cursor: &Current<'_>,
-        inner: &[super::SourceVectors],
+        inner: &[SourceVectors],
         range: Option<(usize, u64)>,
         element: &InitializerElement<'tu>,
     ) -> u32 {
@@ -1016,7 +1048,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         own: bool,
         empty: bool,
         whole: bool,
-        source: super::SourceVectors,
+        source: SourceVectors,
         flexible: &mut Option<FlexibleExtent>,
     ) {
         if !own && !empty {
@@ -1407,6 +1439,36 @@ struct Current<'s> {
     root_index: u64,
     /// Where `container` is in the plan.
     at:         Container<'s>,
+}
+
+/// The checker's working storage, kept by the analyzer between
+/// initializers. Its vectors and maps keep their capacity when cleared, so
+/// a translation unit of many initializers grows the scratch arena only to
+/// fit the largest one.
+pub(super) struct CheckBuffers<'tu, 's> {
+    work:   ArenaVec<'s, InitWork<'tu, 's>>,
+    writes: Writes<'s>,
+    leaves: ArenaMap<'s, usize, TypeId>,
+    plan:   PlanBuilder<'tu, 's>,
+}
+
+impl<'s> CheckBuffers<'_, 's> {
+    fn new_in(scratch: &'s Bump) -> Self {
+        Self {
+            work:   ArenaVec::new_in(scratch),
+            writes: Writes::new_in(scratch),
+            leaves: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            plan:   PlanBuilder::new_in(scratch),
+        }
+    }
+
+    /// Empties every buffer for the initializer at `source`.
+    fn reset(&mut self, source: SourceVectors) {
+        self.work.clear();
+        self.writes.reset(source);
+        self.leaves.clear();
+        self.plan.reset();
+    }
 }
 
 /// Resumable brace-list and current-object initialization tasks. Each

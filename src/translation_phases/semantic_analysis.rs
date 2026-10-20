@@ -1834,6 +1834,8 @@ struct Analyzer<'a, 'tu, 's> {
     expression_indices:      ArenaMap<'s, usize, usize>,
     flexible_arrays:         ArenaMap<'tu, usize, FlexibleArray>,
     initializers:            InitializerFacts<'tu>,
+    /// The initializer checker's working storage between initializers.
+    initializer_buffers:     Option<initializers::CheckBuffers<'tu, 's>>,
     /// Unions whose definition requests `transparent_union`, until their
     /// completion decides whether they qualify.
     transparent_unions:      ArenaMap<'s, usize, SourceVectors>,

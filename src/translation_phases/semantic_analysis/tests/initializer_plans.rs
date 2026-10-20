@@ -293,6 +293,17 @@ fn compound_literals_and_rejected_initializers() {
 
 /// The plan work (`review_steps[3]`) and operations of `source`.
 fn plan_work(source: &str) -> (usize, usize) {
+    analyze(source, |analyzer, _| {
+        (
+            analyzer.review_steps.get()[3],
+            analyzer.initializers.totals().1,
+        )
+    })
+}
+
+/// Analyzes `source`, which must be accepted, and inspects the analyzer
+/// and its scratch arena.
+fn analyze<R>(source: &str, inspect: impl FnOnce(&Analyzer<'_, '_, '_>, &Bump) -> R) -> R {
     let tu = Bump::new();
     let scratch = Bump::new();
     let source = tu.alloc_str(&format!("{source}\n"));
@@ -311,10 +322,154 @@ fn plan_work(source: &str) -> (usize, usize) {
         analyzer.step(work);
     }
     assert_accepted(analyzer.context, source);
-    (
-        analyzer.review_steps.get()[3],
-        analyzer.initializers.totals().1,
-    )
+    inspect(&analyzer, &scratch)
+}
+
+/// The scratch bytes analysis uses for `functions` functions of `locals`
+/// initialized automatic scalars each.
+fn initialized_locals_scratch(functions: usize, locals: usize) -> usize {
+    let mut source = String::new();
+    for f in 0..functions {
+        write!(source, "int f{f}(int p) {{").unwrap();
+        for v in 0..locals {
+            write!(source, " int v{v} = p + {v};").unwrap();
+        }
+        source.push_str(" return v0; }\n");
+    }
+    analyze(&source, |_, scratch| scratch.used())
+}
+
+#[test]
+fn scalar_initializers_reuse_the_checker_storage() {
+    // Issue #92: the scratch arena lives for the whole translation unit, so
+    // working storage the checker made per initializer was never freed, and
+    // peak memory for local-heavy files rose about 15% with M8's plans.
+    // Each further initializer now costs only the analysis of its
+    // expression and declaration, not a fresh set of checker buffers.
+    let small = initialized_locals_scratch(20, 50);
+    let large = initialized_locals_scratch(40, 50);
+    let per_initializer = (large - small) / (20 * 50);
+    assert!(
+        per_initializer <= 1_800,
+        "{per_initializer} scratch bytes per initializer"
+    );
+}
+
+/// Every retained plan of `source`, rendered and sorted, and its numbers of
+/// error-severity diagnostics and of all diagnostics, warnings such as
+/// `-Winitializer-overrides` included.
+fn plans_and_diagnostics(source: &str) -> (Vec<String>, (usize, usize)) {
+    let mut result = None;
+    with_source(source, |context, s| {
+        let errors = context.take_pending_errors();
+        let errors = (
+            errors
+                .iter()
+                .filter(|e| e.severity() == ErrorSeverity::Error)
+                .count(),
+            errors.len(),
+        );
+        let mut plans = s
+            .initializers
+            .plans
+            .values()
+            .map(|plan| render(s, plan))
+            .collect::<Vec<_>>();
+        plans.sort();
+        result = Some((plans, errors));
+    });
+    result.unwrap()
+}
+
+/// Checks the declarations `items` in sequence in one function body, after
+/// `prelude`, and each alone: the checker's reused buffers (issue #92) must
+/// leave every initializer with the plan and diagnostics it has alone.
+fn assert_sequence_matches_isolation(prelude: &str, items: &[&str]) {
+    let body = |items: &str| format!("{prelude}\nvoid g(int p) {{ {items} (void)p; }}");
+    // The prelude's own plans and errors count once.
+    let prelude_only = plans_and_diagnostics(&body(""));
+    let mut isolated = prelude_only.clone();
+    for item in items {
+        let (mut plans, errors) = plans_and_diagnostics(&body(item));
+        for plan in &prelude_only.0 {
+            let index = plans.iter().position(|p| p == plan).unwrap();
+            drop(plans.remove(index));
+        }
+        isolated.0.extend(plans);
+        isolated.1.0 += errors.0 - prelude_only.1.0;
+        isolated.1.1 += errors.1 - prelude_only.1.1;
+    }
+    isolated.0.sort();
+    assert_eq!(
+        plans_and_diagnostics(&body(&items.concat())),
+        isolated,
+        "{items:#?}"
+    );
+}
+
+#[test]
+fn complex_initializers_in_sequence_keep_their_own_plans() {
+    // Ranges, overrides, union selections, completed arrays, braced strings
+    // and compound literals nested in designated initializers, each after
+    // one that leaves different range, override and patch state behind.
+    let prelude = "struct S { int a[3]; int b; };
+         union U { int x; struct S s; };
+         struct F { int n; int a[]; };
+         static struct F f = { 2, { 53, 59 } };";
+    let items = [
+        "struct S a[4] = { [1 ... 3] = { .a = { [1 ... 2] = 7 }, .b = 11 }, [2].b = 13 };",
+        "union U u = { .s = { .b = 17, .a = { [2] = 19 } }, .x = 23 };",
+        "int completed[] = { [5] = 29 };",
+        "struct S n = { .a = { [0] = ((struct S){ .b = p, .a = { [1 ... 2] = p } }).b }, .b = 3 };",
+        "char str[] = { \"abc\" };",
+        "int *lit = (int[]){ [3] = p, 1 };",
+        "static struct F h = { .a = { 1, 2, 3 }, .a = { 4 } };",
+        "int tail[2][3] = { { 1, 2 }, { [2] = 3 } };",
+        "int x = p;",
+    ];
+    assert_sequence_matches_isolation(prelude, &items);
+    let (plans, errors) = plans_and_diagnostics(&format!(
+        "{prelude}\nvoid g(int p) {{ {} }}",
+        items.concat()
+    ));
+    assert_eq!(errors.0, 0);
+    // The file-scope object, nine declarations and two compound literals.
+    assert_eq!(plans.len(), 12);
+}
+
+#[test]
+fn rejected_initializers_leave_no_state_for_the_next() {
+    // Each rejected initializer stops the checker part-way; the valid one
+    // after it must still get its whole plan, and the rejected one none.
+    let prelude = "struct S { int a[2]; int b; };";
+    let items = [
+        "int bad[2] = { [0 ... 1] = { 1, 2 }, [9] = 3 };",
+        "int good[3] = { [2] = 7, [0] = 5 };",
+        "struct S bad2 = { .missing = 3, .a = { [7] = 4 }, .b = \"wrong\" };",
+        "struct S good2 = { .b = 11, .a = { 13, 17 } };",
+        "int bad3[] = { [-1] = 3 };",
+        "int good3[] = { 19, 23 };",
+        // An undeclared operand is diagnosed before the checker runs, which
+        // then gives up on the plan without a new error.
+        "struct S bad5 = undeclared;",
+        "struct S good5 = { { 41 }, 43 };",
+        "int nested = ({ int bad4[1] = { [3] = 1 }; int good4[2] = { 29, 31 }; good4[1]; });",
+        "int scalar = { 1, 2 };",
+        "int final = 37;",
+    ];
+    assert_sequence_matches_isolation(prelude, &items);
+    let (plans, errors) = plans_and_diagnostics(&format!(
+        "{prelude}\nvoid g(int p) {{ {} }}",
+        items.concat()
+    ));
+    assert!(errors.0 >= 5, "{errors:?} diagnostics");
+    for plan in [
+        "zero 0+12 end 3\nstore 8 v0\nstore 0 v1\n",
+        "zero 0+8 end 3\nstore 0 v0\nstore 4 v1\n",
+        "store 0 v0\n",
+    ] {
+        assert!(plans.iter().any(|p| p == plan), "{plan:?} in {plans:#?}");
+    }
 }
 
 #[test]

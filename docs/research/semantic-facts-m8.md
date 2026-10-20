@@ -173,6 +173,33 @@ emission scales with the stores and bytes it produces. The
 `-Winitializer-overrides` recorder keeps its separate 65,536-element range
 cap.
 
+## Peak memory for local-heavy files (issue #92)
+
+M8 as first merged raised peak RSS on the M7 review's "N functions × 50
+initialized locals" generator by about 15%. The cause was not the retained
+plans but the checker's working storage: the analyzer's scratch arena lives
+for the whole translation unit, and `check_initializer` built its work stack,
+override recorder, leaf cache and, new in M8, the plan builder's five vectors
+afresh for every initializer. The plan builder's vectors and the work stack,
+whose entries grew to carry plan sites, left about 780 bytes of dead scratch
+per `int v = e;`. The analyzer now keeps one set of checker buffers and clears
+it per initializer; plans are copied to the translation-unit arena as before.
+
+Peak RSS (`ru_maxrss`, debug builds through the swarm wrapper, Linux,
+2-3 runs each, spread under 1%):
+
+| Input | M6 | main before M8 (c74dfb0c) | M8 producer alone (2bc00d11) | main (c1f72977) | reused buffers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2k × 50 locals | 526 MiB | 529 MiB | 603 MiB | 605 MiB | 535 MiB (+1.7%) |
+| 4k × 50 locals, `--emit=ir` | 1025 MiB | 1030 MiB | | 1181 MiB | 1042 MiB (+1.6%) |
+| 8k × 50 locals | 2022 MiB | 2031 MiB | | 2336 MiB | 2055 MiB (+1.6%) |
+
+Percentages are against M6. The rest of the difference is the retained plans
+themselves: one `Store`, one value and a map entry per local. The library
+test `scalar_initializers_reuse_the_checker_storage` bounds the scratch bytes
+each further initialized local costs at 1,800; it measures 1,539 with the
+buffers reused and 2,275 at c1f72977.
+
 ## Final checks
 
 Run through the shared swarm wrapper on Linux at the final tree (the M8
