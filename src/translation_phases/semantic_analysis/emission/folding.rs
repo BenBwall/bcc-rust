@@ -479,11 +479,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's `Expr::HasSideEffects`, syntactically: an assignment, an
-    /// increment or decrement, a call or a volatile read.
+    /// increment or decrement, a call or a volatile read: a volatile lvalue
+    /// that is converted to its value, which an object named or reached
+    /// through `*`, `[]`, `.` or `->` is, unless it is an array or the
+    /// operand of `&`, or a member's structure.
+    /// C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58; §5.1.2.3 paragraph 2,
+    /// p. 13; PDF p. 25.
     fn has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
         let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
-        work.push(expression);
-        while let Some(expression) = work.pop() {
+        // Each expression, with whether its value is read if it is an
+        // lvalue.
+        work.push((expression, true));
+        while let Some((expression, read)) = work.pop() {
             let effect = match expression.kind {
                 | ExpressionType::Call { .. }
                 | ExpressionType::StatementExpression(_)
@@ -510,15 +517,47 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | UnaryOperator::PostDecrement,
                     ..
                 } => true,
-                | ExpressionType::Identifier(_) => self
-                    .expression_info(expression)
-                    .ty
-                    .qualifiers
-                    .contains(TypeQualifiers::VOLATILE),
+                | ExpressionType::Identifier(_) => read && self.volatile_lvalue(expression),
+                | ExpressionType::Parenthesized { expression: inner } => {
+                    work.push((inner, read));
+                    false
+                },
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::AddressOf,
+                    operand_expression,
+                } => {
+                    work.push((operand_expression, false));
+                    false
+                },
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Indirection,
+                    operand_expression: base_expression,
+                }
+                | ExpressionType::IndirectMember {
+                    base_expression, ..
+                } => {
+                    work.push((base_expression, true));
+                    read && self.volatile_lvalue(expression)
+                },
+                | ExpressionType::DirectMember {
+                    base_expression, ..
+                } => {
+                    work.push((base_expression, false));
+                    read && self.volatile_lvalue(expression)
+                },
+                | ExpressionType::Binary {
+                    operator: BinaryOperator::Subscript,
+                    left_expression,
+                    right_expression,
+                } => {
+                    work.push((left_expression, true));
+                    work.push((right_expression, true));
+                    read && self.volatile_lvalue(expression)
+                },
                 | ExpressionType::SizeofExpr(_) | ExpressionType::AlignofExpr(_) => false,
                 | _ => {
                     super::labels::expression_children(self.scratch, expression, |child| {
-                        work.push(child);
+                        work.push((child, true));
                     });
                     false
                 },
@@ -528,6 +567,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         false
+    }
+
+    /// Whether lvalue `expression` has a volatile-qualified type that is
+    /// not an array, whose value a read would load.
+    fn volatile_lvalue(&self, expression: &'tu Expression<'tu>) -> bool {
+        let ty = self.expression_info(expression).ty;
+        ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+            && !matches!(
+                self.types.nodes[ty.index],
+                TypeKind::Array(..) | TypeKind::Function { .. }
+            )
     }
 }
 
