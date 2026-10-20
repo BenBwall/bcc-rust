@@ -274,6 +274,42 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 errors.push(error);
             }
         }
+        // A retained local can be inside an unevaluated operand. Define its
+        // storage independently of the executable walk (C99 §6.2.4p3).
+        let mut owners = ArenaVec::new_in(self.tables);
+        owners.resize(self.sema.scopes.len(), None);
+        for function in self.sema.functions {
+            owners[function.scope] = function.binding;
+        }
+        for (index, scope) in self.sema.scopes.iter().enumerate() {
+            if scope.kind != ScopeKind::Function {
+                owners[index] = scope.parent.and_then(|parent| owners[parent]);
+            }
+        }
+        for definition in self.sema.definitions {
+            let binding = self.sema.bindings[definition.binding];
+            if !matches!(
+                definition.kind,
+                DefinitionKind::Object | DefinitionKind::Tentative
+            ) || binding.linkage != Linkage::None
+                || !binding.duration.is_static_or_thread()
+                || !self.reachable.contains(&definition.binding)
+            {
+                continue;
+            }
+            let Some(owner) = owners[binding.scope] else {
+                continue;
+            };
+            let name = self.symbol_name(owner);
+            let initializer = self
+                .sema
+                .entity(definition.binding)
+                .expect(super::ENTITY_FACTS)
+                .initializer;
+            if let Err(error) = self.define_object(definition.binding, Some(name), initializer) {
+                errors.push(error);
+            }
+        }
         self.declare_aliases_and_initializers(errors);
         functions
     }
@@ -589,6 +625,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         let data = self.sema.bindings[binding];
+        if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
+            return Err(LoweringErrorKind::MissingFact(
+                "lowering referenced an omitted internal function",
+            ));
+        }
         let name = self.symbol_name(binding);
         // Builtin aliases describe the C binding, never the exact assembler
         // label chosen by the user (GNU extension to C99 §6.2.2p2).
@@ -793,6 +834,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Ok(global);
         }
         let data = self.sema.bindings[binding];
+        if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
+            return Err(LoweringErrorKind::MissingFact(
+                "lowering referenced an omitted internal object",
+            ));
+        }
         if data.linkage == Linkage::None {
             let (stem, function, text) = match self
                 .sema
@@ -848,6 +894,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         local: Option<&str>,
         initializer: Option<&'tu Initializer<'tu>>,
     ) -> Result<GlobalId, LoweringError> {
+        if let Some(&global) = self.statics.get(&binding) {
+            return Ok(global);
+        }
         let data = self.sema.bindings[binding];
         let source = data.name.source_vectors;
         let global = match local {

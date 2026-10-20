@@ -932,7 +932,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
             tasks.push(Task::DeclareBinding(
                 binding,
-                fact.initializer,
+                fact.initializer.filter(|_| !fact.initializer_elided),
                 init.source_vectors,
             ));
         }

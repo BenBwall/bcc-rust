@@ -612,6 +612,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dead_initializers_and_cleanup_references_agree_with_lowering() {
+        assert_runs_like_clang(
+            "int printf(const char*,...); void exit(int); static int h(void){return 31;} static \
+             void clean(int *p){*p=0;} int f(int k){if(k){exit(0); int x=h(); return x;}return \
+             1;} int g(int k){if(k){exit(0); int x __attribute__((cleanup(clean)))=h();}return \
+             2;} int v(int k){if(k){exit(0); int a[h()]; a[0]=1;return a[0];}return 3;} int \
+             r(void){static int s=5;return 4;int x=s;return x;} int q(void){goto L;int x=({static \
+             int s=7;h()+s;}); L:return 5;} int main(void){printf(\"%d %d %d %d \
+             %d\\n\",f(0),g(0),v(0),r(),q());return 0;}",
+        );
+    }
+
+    #[test]
+    fn retained_statics_in_skipped_operands_have_storage() {
+        for source in [
+            "int f(void){return 0 && ({L:;STATIC 1;});}",
+            "int f(void){return __builtin_constant_p(({STATIC 0;}));}",
+        ] {
+            assert_o0_static_emission(source, true);
+        }
+    }
+
     fn assert_runs_like_clang(source: &str) {
         let source_file = temporary("run.c");
         let executable = temporary("run.exe");

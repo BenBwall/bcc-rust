@@ -99,13 +99,14 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 /// PDF pp. 137-142.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EntityReference {
-    pub(crate) owner:   usize,
-    pub(crate) binding: usize,
-    /// The reference is in code that Clang's code generation skips (an
-    /// unreachable statement or a constant-false operand): it neither keeps
-    /// its target reachable nor creates an LLVM value there. References in
-    /// emitted static initializer data remain live even after a jump.
-    pub(crate) dead:    bool,
+    pub(crate) owner:     usize,
+    pub(crate) binding:   usize,
+    /// Clang does not create an LLVM value here; used for creation order
+    /// and DLL import selection. Static initializer data stays live.
+    pub(crate) dead:      bool,
+    /// Lowering emits no reference here. Only this flag drops a reachability
+    /// edge.
+    pub(crate) unlowered: bool,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than

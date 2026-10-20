@@ -537,7 +537,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::Initializer(initializer));
             },
             | Work::InitializeDeclaration(declarator, initializer) => {
-                self.correspondence.initializer(declarator, initializer);
+                let automatic = declarator
+                    .identifier()
+                    .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
+                    .is_some_and(|entry| {
+                        self.bindings[entry.binding].duration == Duration::Automatic
+                    });
+                let omitted = automatic
+                    && self.functions.dead
+                    && !self.initializer_contains_label(initializer);
+                self.correspondence
+                    .initializer(declarator, initializer, omitted);
+                self.work
+                    .push(Work::FunctionWork(functions::FunctionWork::RestoreElided(
+                        self.functions.elided,
+                    )));
+                self.functions.elided |= omitted;
                 self.work
                     .push(Work::RestoreReferenceOwner(self.functions.initializer));
                 if let Some(entry) = declarator

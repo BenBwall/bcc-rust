@@ -83,7 +83,7 @@ impl SemanticTranslationUnit<'_> {
                 || copied(binding)
         };
         for reference in self.references {
-            if reference.dead
+            if reference.unlowered
                 || !body_emitted(reference.owner)
                 || elided.contains(&canonical[reference.binding])
             {

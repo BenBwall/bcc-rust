@@ -905,7 +905,7 @@ records whether Clang's code generation at `-O0` skips the code it appears in
 (`dead`), which approximates Clang's insertion state rather than run-time
 reachability: a skipped reference creates no LLVM value, so it ranks no
 `always_inline` function in Clang's creation order and selects no DLL import,
-and entity reachability reads this same flag. Static initializer references
+and entity reachability instead reads whether lowering omits the reference. Static initializer references
 remain live after jumps when the declaration is emitted. Code is skipped in the arm a constant
 condition does not take, in a generic selection's controlling operand and
 unselected associations, after a jump or a loop without an exit, and until a
@@ -2286,8 +2286,12 @@ with reference contexts. Lowering consumes the same operand and statement
 elision facts (C99 §6.8.4.1p2, pp. 133-134; PDF pp. 145-146).
 Function-to-local edges and each initializer's outgoing references share the
 same worklist, so a newly retained local retains its internal referents
-transitively. Dead executable references retain neither a function nor its
-locals. This decision feeds BSS validation, LLVM, both native object paths and
+transitively. Only unlowered references retain neither a function nor its
+locals. Dead automatic initializers without labels and dead cleanup
+registrations are omitted by sema and lowering together. Retained local storage
+is defined independently of the executable expression walk, including statics
+inside skipped operands. Lowering checks omitted internal referents before
+creating a declaration. This decision feeds BSS validation, LLVM, both native object paths and
 the interpreter. When optimizing, a reached inline-only function also retains
 its `used` locals, matching Clang's optional-body section diagnostics even on
 native and interpreter pipelines. Semantic checks still precede optimization:

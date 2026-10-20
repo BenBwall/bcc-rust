@@ -71,6 +71,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         holds.label || (!ignore_cases && holds.case)
     }
 
+    /// Clang's dead automatic initializer check, including labels in nested
+    /// statement expressions. C99: §6.7.8, pp. 125-130; PDF pp. 137-142.
+    pub(in crate::translation_phases::semantic_analysis) fn initializer_contains_label(
+        &mut self,
+        initializer: &'tu Initializer<'tu>,
+    ) -> bool {
+        let mut expressions = ArenaVec::new_in(self.scratch);
+        initializer_expressions(self.scratch, initializer, &mut |e| expressions.push(e));
+        expressions
+            .into_iter()
+            .any(|e| self.expression_contains_label(e))
+    }
+
     /// What a declaration's initializers hold, in their statement
     /// expressions, once its function is walked.
     pub(super) fn declaration_holds(&self, declaration: &'tu Declaration<'tu>) -> Holds {
@@ -114,7 +127,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 continue;
             }
             if let ExpressionType::StatementExpression(statement) = current.kind {
-                let labeled = self.holds(statement).label;
+                let holds = self.holds(statement);
+                let labeled = holds.label || holds.case;
                 _ = self
                     .functions
                     .emission

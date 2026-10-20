@@ -235,7 +235,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// a tentative default replaced by a later matching case. Keep case-label
     /// ancestors: lowering still dispatches through the ordinary switch.
     fn skip_folded_region(&mut self, start: SwitchMark) {
-        self.skip_references(start.references..self.reference_count());
+        self.elide_references(start.references..self.reference_count());
         for definition in &mut self.definitions[start.definitions..] {
             if definition.kind == DefinitionKind::Object {
                 definition.elided = true;

@@ -53,10 +53,11 @@ pub(crate) struct EntityId(pub(crate) usize);
 /// 137-142.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeclarationFacts<'tu> {
-    pub(crate) id:              OccurrenceId,
-    pub(crate) binding:         Option<usize>,
-    pub(crate) entity:          Option<EntityId>,
-    pub(crate) initializer:     Option<&'tu Initializer<'tu>>,
+    pub(crate) id:                 OccurrenceId,
+    pub(crate) binding:            Option<usize>,
+    pub(crate) entity:             Option<EntityId>,
+    pub(crate) initializer_elided: bool,
+    pub(crate) initializer:        Option<&'tu Initializer<'tu>>,
     /// Prototype declarations retain their parameter correspondence too.
     /// Definitions consume their completed `FunctionRecord` instead.
     #[cfg_attr(
@@ -66,8 +67,8 @@ pub(crate) struct DeclarationFacts<'tu> {
             reason = "Prototype-only correspondence is queryable but has no executable body."
         )
     )]
-    pub(crate) parameter_facts: &'tu [ParameterFacts<'tu>],
-    pub(crate) site:            BoundSiteFacts<'tu>,
+    pub(crate) parameter_facts:    &'tu [ParameterFacts<'tu>],
+    pub(crate) site:               BoundSiteFacts<'tu>,
 }
 
 /// Ordered incoming parameter correspondence. Invalid/unnamed parameters keep
@@ -187,6 +188,7 @@ impl<'tu> CorrespondenceBuilder<'tu> {
             binding: binding.map(|(index, _)| index),
             entity,
             initializer: None,
+            initializer_elided: false,
             parameter_facts,
             site,
         });
@@ -219,9 +221,11 @@ impl<'tu> CorrespondenceBuilder<'tu> {
         &mut self,
         syntax: Declarator<'tu>,
         initializer: &'tu Initializer<'tu>,
+        elided: bool,
     ) {
         if let Some(id) = self.indices.get(&identity(syntax)) {
             self.declarations[id.0].initializer = Some(initializer);
+            self.declarations[id.0].initializer_elided = elided;
         }
     }
 

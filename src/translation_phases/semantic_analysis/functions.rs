@@ -713,6 +713,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         owner,
                         binding: usage.binding,
                         dead: usage.dead,
+                        unlowered: usage.unlowered,
                     });
                 }
                 if let Some(import) = usage.dll_import {
@@ -1635,6 +1636,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             dll_import,
             // Static initializer data is generated even after a jump. An
             // elided declaration never makes its initializer reachable.
+            unlowered: self.functions.elided,
             dead: self.functions.elided
                 || (self.functions.dead
                     && !self.functions.initializer.is_some_and(|binding| {
@@ -1658,6 +1660,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
             {
                 usage.dead = true;
+            }
+        }
+    }
+
+    /// Marks references that lowering omits, independently of LLVM creation
+    /// order. C99: §6.9p3-5, p. 140; PDF p. 152.
+    pub(super) fn elide_references(&mut self, range: std::ops::Range<usize>) {
+        let function = self.functions.reference_function;
+        for usage in &mut self.functions.uses[range] {
+            if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
+            {
+                usage.dead = true;
+                usage.unlowered = true;
             }
         }
     }
@@ -1693,7 +1708,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         for (start, end) in ranges {
-            self.skip_references(start.references..end.references);
+            self.elide_references(start.references..end.references);
             for definition in &mut self.definitions[start.definitions..end.definitions] {
                 if definition.kind == DefinitionKind::Object {
                     definition.elided = true;
@@ -2147,6 +2162,7 @@ struct Use {
     dll_import:        Option<bool>,
     /// Code generation skips the reference ([`State::dead`]).
     dead:              bool,
+    unlowered:         bool,
 }
 
 /// Deferred evaluation contexts shared by local definitions and references.
@@ -2259,7 +2275,7 @@ pub(super) struct State<'tu, 's> {
     /// For each generic selection being analyzed, by address, the number
     /// of references recorded at the start and end of its controlling
     /// operand and of each association's expression, with the state of
-    /// the emission model’s block state there.
+    /// the emission model's block state there.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
 }

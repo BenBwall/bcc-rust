@@ -248,12 +248,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if self.functions.current.is_none() {
             return;
         }
+        let before = self.reference_count();
+        self.record_binding_use(function, self.bindings[function].name);
+        let omitted = self.functions.dead || self.functions.elided;
+        if omitted {
+            self.elide_references(before..self.reference_count());
+        }
         _ = self.control.open(
             self.scope,
             RegionKind::CleanupDeclaration(BindingId(variable)),
-            CleanupKind::Call {
-                variable: BindingId(variable),
-                function: BindingId(function),
+            if omitted {
+                CleanupKind::None
+            } else {
+                CleanupKind::Call {
+                    variable: BindingId(variable),
+                    function: BindingId(function),
+                }
             },
             source,
         );
@@ -909,16 +919,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             }
         }
-        // The variable's scope calls the function, so the enclosing body
-        // uses it: it needs a definition and keeps it reachable.
-        // C99: §6.9p3, p. 140; PDF p. 152.
-        self.record_binding_use(
-            entry.binding,
-            crate::translation_phases::parsing::syntax::Identifier {
-                name:           identifier.contents,
-                source_vectors: identifier.source_vectors,
-            },
-        );
         _ = self.attributes.pending_cleanups.insert(
             declarator,
             (binding, entry.binding, variable.name.source_vectors),
