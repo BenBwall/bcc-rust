@@ -900,7 +900,38 @@ their owning function definition or object initializer. Parameter type-site
 uses belong to the function whose entry executes them, even before its binding
 is installed. The producer excludes constant `sizeof`, `alignof` and
 non-VM `typeof` operands after typing, using retained typeof execution facts;
-linked redeclarations keep their binding identities. The module-item planner
+linked redeclarations keep their binding identities. Each reference also
+records whether Clang's code generation at `-O0` skips the code it appears in
+(`dead`), which approximates Clang's insertion state rather than run-time
+reachability: a skipped reference creates no LLVM value, so it ranks no
+`always_inline` function in Clang's creation order and selects no DLL import,
+and both consumers read this one flag. Code is skipped in the arm a constant
+condition does not take (an integer constant, or a comma expression whose left
+operand folds, but not a bare floating constant), in a generic selection's
+controlling operand and unselected associations, after a jump or a loop without
+an exit, and until a label. Two forms take more than the statement walk
+(`emission.rs`). A `switch` whose controlling expression folds emits only the
+statements Clang's `CollectStatementsForCase` gathers from the matching case,
+else `default` (§6.8.4.2p4-5, printed p. 134, PDF p. 146): to know the
+selection first, its case labels' expressions are analyzed before the body
+when no declaration in the body precedes them; the other arms are skipped, the
+labels inside the selected statements resume nothing, and the code after the
+switch follows the selected statements' end. When Clang's collection fails (a
+label or declaration it would skip, a `break` inside a collected statement
+other than a block, a case range after the match, a case label it cannot reach
+through blocks and labels), the switch is emitted unfolded, as Clang does. An
+expression statement ending in a call that does not return skips what follows
+until a label (`EmitStmt` erases the block without predecessors the call left):
+a call to a function declared `noreturn` (GNU, `gnu::`, standard and
+`__declspec` spellings, or `_Noreturn`, C11 §6.7.4p8), to `__builtin_unreachable`
+or `__builtin_abort`, to a hosted library function Clang's builtin table marks
+(`abort`, `exit`, `_Exit`, `longjmp`, and in GNU modes `_exit`, `_longjmp`,
+`siglongjmp`), or through an object, parameter or member whose function type
+carries the attribute, directly, by a typedef or by `__typeof__`. The rest of the
+same expression is still emitted, a `&&`, `||` or `?:` whose condition does not
+fold joins reachable code again, and a statement expression's value statement is
+emitted even after a jump. A declaration's initializer does not end the code
+after it. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.
