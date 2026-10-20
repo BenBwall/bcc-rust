@@ -6,17 +6,22 @@
 //! joins its paths in a block with predecessors ends that state. Clang's
 //! expression emitters that do, with default options and no sanitizers:
 //! - `&&` and `||` whose left operand does not fold (`land.end`, `lor.end`);
-//! - a scalar `?:` whose condition does not fold, unless both operands are
-//!   evaluatable constants, which it selects (`cond.end`); a complex or
-//!   aggregate `?:` always (`ComplexExprEmitter` and `AggExprEmitter` do not
-//!   fold their condition);
+//! - a scalar or `void` `?:` whose condition does not fold, unless both
+//!   operands are evaluatable constants, which it selects (`cond.end`); a
+//!   `void` operand never is. A complex or aggregate `?:` always
+//!   (`ComplexExprEmitter` and `AggExprEmitter` do not fold their condition);
 //! - a multiplication of two floating complex operands, which checks the result
 //!   for NaNs (`complex_mul_cont`);
-//! - an atomic compound assignment or increment that `atomicrmw` cannot
-//!   perform, which loops on `cmpxchg` (`atomic_cont`);
-//! - an atomic compare-and-exchange builtin (`cmpxchg.continue`);
+//! - an atomic compound assignment, increment or decrement that `atomicrmw`
+//!   cannot perform, which loops on `cmpxchg` (`atomic_cont`);
+//! - an atomic compare-and-exchange builtin (`cmpxchg.continue`), and an atomic
+//!   builtin whose memory order is not a constant, which switches over the
+//!   orders (`atomic.continue`);
 //! - `va_arg` of a scalar on the System V ABI, which reads registers or memory
 //!   (`vaarg.end`).
+//!
+//! Each rule reads the expression's type, so it runs once the expression is
+//! analyzed.
 //!
 //! Only an evaluated, emitted expression counts: neither a `sizeof`,
 //! `alignof` or `typeof` operand nor an operand a folded condition skips.
@@ -32,6 +37,7 @@
 use super::super::{
     Analyzer,
     BindingOrigin,
+    TagKind,
     TypeKind,
     Work,
     functions::FunctionWork,
@@ -41,7 +47,12 @@ use super::super::{
     },
 };
 use crate::{
-    builtins::BuiltinId,
+    builtins::{
+        AtomicFamily,
+        AtomicOperation,
+        BuiltinId,
+        BuiltinOperation,
+    },
     target::Target,
     translation_phases::{
         parsing::syntax::{
@@ -57,6 +68,7 @@ use crate::{
         },
         preprocessing::KeywordTokenType,
     },
+    util::bump::ArenaVec,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -121,32 +133,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | BinaryOperator::BitwiseOrAssignment),
                 left_expression,
                 ..
-            } => self.atomic_update_loops(left_expression, Some(operator)),
+            } => self.atomic_update_loops(left_expression, Update::Assignment(operator)),
             | ExpressionType::Unary {
-                operator:
-                    UnaryOperator::PreIncrement
-                    | UnaryOperator::PreDecrement
-                    | UnaryOperator::PostIncrement
-                    | UnaryOperator::PostDecrement,
+                operator: operator @ (UnaryOperator::PreIncrement | UnaryOperator::PostIncrement),
                 operand_expression,
-            } => self.atomic_update_loops(operand_expression, None),
+            }
+            | ExpressionType::Unary {
+                operator: operator @ (UnaryOperator::PreDecrement | UnaryOperator::PostDecrement),
+                operand_expression,
+            } => self.atomic_update_loops(
+                operand_expression,
+                if matches!(
+                    operator,
+                    UnaryOperator::PreIncrement | UnaryOperator::PostIncrement
+                ) {
+                    Update::Increment
+                } else {
+                    Update::Decrement
+                },
+            ),
             | ExpressionType::Call {
                 function_expression,
-                ..
-            } => self
-                .expression_info(function_expression)
-                .binding
-                .is_some_and(|binding| {
-                    matches!(
-                        self.bindings[binding].origin,
-                        BindingOrigin::Intrinsic(
-                            BuiltinId::AtomicC11CompareExchangeStrong
-                                | BuiltinId::AtomicC11CompareExchangeWeak
-                                | BuiltinId::AtomicGnuCompareExchangeN
-                                | BuiltinId::AtomicGnuCompareExchange
-                        )
-                    )
-                }),
+                arguments,
+            } => self.atomic_call_branches(function_expression, arguments.as_slice()),
             | ExpressionType::Builtin(builtin)
                 if builtin.keyword == KeywordTokenType::BuiltinVaArg =>
                 !matches!(
@@ -208,59 +217,158 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         )
     }
 
-    /// Whether an update of atomic `target` loops on `cmpxchg`: a compound
-    /// assignment by `operator` (an increment or decrement without one)
-    /// that `atomicrmw` cannot perform (`ScalarExprEmitter`).
-    fn atomic_update_loops(
-        &self,
-        target: &'tu Expression<'tu>,
-        operator: Option<BinaryOperator>,
-    ) -> bool {
+    /// Whether an update of atomic `target` loops on `cmpxchg` because
+    /// `atomicrmw` cannot perform it (`ScalarExprEmitter`). An increment
+    /// of `_Bool` stores `true`, and one of an integer or of a floating
+    /// type of power-of-two width adds; a decrement of `_Bool` loops. A
+    /// compound assignment of an integer other than `_Bool` by `+`, `-`,
+    /// `&`, `^` or `|` does not loop.
+    fn atomic_update_loops(&self, target: &'tu Expression<'tu>, update: Update) -> bool {
         use BinaryOperator as B;
         let ty = self.expression_info(target).ty;
         let TypeKind::Atomic(value) = self.types.nodes[ty.index] else {
             return false;
         };
-        let value = &self.types.nodes[value.index];
-        let integer = matches!(value, TypeKind::Scalar(scalar) if scalar.integer());
-        let boolean = matches!(value, TypeKind::Scalar(Scalar::Bool));
-        match operator {
-            | None =>
-                !(boolean
-                    || integer
-                    || matches!(
-                        value,
-                        TypeKind::Scalar(Scalar::Float | Scalar::Double | Scalar::Float128)
-                    )),
-            | Some(
+        let TypeKind::Scalar(scalar) = self.types.nodes[value.index] else {
+            return true;
+        };
+        let boolean = scalar == Scalar::Bool;
+        let integer = scalar.integer() && !boolean;
+        match update {
+            | Update::Increment if boolean => false,
+            | Update::Increment | Update::Decrement =>
+                !(integer
+                    || matches!(scalar, Scalar::Float | Scalar::Double | Scalar::Float128)
+                    || (scalar == Scalar::LongDouble && self.types.target.long_double_is_double())),
+            | Update::Assignment(
                 B::AdditionAssignment
                 | B::SubtractionAssignment
                 | B::BitwiseAndAssignment
                 | B::BitwiseXorAssignment
                 | B::BitwiseOrAssignment,
-            ) => boolean || !integer,
-            | Some(
+            ) => !integer,
+            | Update::Assignment(
                 B::MultiplicationAssignment
                 | B::DivisionAssignment
                 | B::ModuloAssignment
                 | B::LeftShiftAssignment
                 | B::RightShiftAssignment,
             ) => true,
-            | Some(_) => false,
+            | Update::Assignment(_) => false,
         }
     }
 
-    /// Whether the System V ABI passes a `va_arg` of type `ty` in registers,
-    /// which Clang reads with a branch: an integer, pointer, `float` or
-    /// `double`, but not `long double`.
-    fn register_class(&self, ty: TypeId) -> bool {
-        let ty = self.types.non_atomic(ty);
-        match self.types.nodes[ty.index] {
-            | TypeKind::Pointer(_) => true,
-            | TypeKind::Scalar(scalar) =>
-                scalar.integer() || matches!(scalar, Scalar::Float | Scalar::Double),
-            | _ => false,
+    /// Whether a call of `function` with `arguments` is an atomic builtin
+    /// whose code generation branches and joins: a compare-and-exchange
+    /// (`cmpxchg.continue`), or an operation whose memory order is not a
+    /// constant, which switches over the orders (`atomic.continue`), unless
+    /// its object is copied by a library call: one whose size is not a
+    /// power of two, or exceeds 16 bytes (`CodeGenFunction::EmitAtomicExpr`).
+    /// C11: §7.17.3 paragraph 1, p. 275; PDF p. 293.
+    fn atomic_call_branches(
+        &mut self,
+        function: &'tu Expression<'tu>,
+        arguments: &[&'tu Expression<'tu>],
+    ) -> bool {
+        use AtomicOperation as O;
+        let Some(binding) = self.expression_info(function).binding else {
+            return false;
+        };
+        let origin = self.bindings[binding].origin;
+        if matches!(
+            origin,
+            BindingOrigin::Intrinsic(
+                BuiltinId::AtomicC11CompareExchangeStrong
+                    | BuiltinId::AtomicC11CompareExchangeWeak
+                    | BuiltinId::AtomicGnuCompareExchangeN
+                    | BuiltinId::AtomicGnuCompareExchange
+            )
+        ) {
+            return true;
         }
+        let Some(BuiltinOperation::Atomic(atomic)) =
+            origin.descriptor().map(|descriptor| descriptor.operation)
+        else {
+            return false;
+        };
+        if atomic.family == AtomicFamily::Sync
+            || matches!(
+                atomic.operation,
+                O::Init | O::AlwaysLockFree | O::IsLockFree
+            )
+            || atomic.count == 0
+            || arguments.len() != atomic.count
+        {
+            return false;
+        }
+        if self.evaluates_to_number(arguments[atomic.count - 1]) {
+            return false;
+        }
+        if matches!(
+            atomic.operation,
+            O::ThreadFence | O::SignalFence | O::TestSet | O::Clear
+        ) {
+            return true;
+        }
+        let pointer = self.expression_info(arguments[0]).ty;
+        let pointer = self.types.non_atomic(pointer);
+        let TypeKind::Pointer(object) = self.types.nodes[pointer.index] else {
+            return false;
+        };
+        self.types
+            .layout(object)
+            .is_some_and(|layout| layout.size.is_power_of_two() && layout.size <= 16)
+    }
+
+    /// Whether the System V ABI passes a `va_arg` of type `ty` in registers,
+    /// which Clang reads with a branch (`X86_64ABIInfo::EmitVAArg`): an
+    /// integer, pointer, `float`, `double`, `__float128` or vector, a complex
+    /// `float` or `double`, or a structure or union of at most 16 bytes, but
+    /// nothing with an x87 class (`long double`), a misaligned member or a
+    /// flexible array member, nor an empty one, which are read from memory.
+    fn register_class(&self, ty: TypeId) -> bool {
+        let Some(layout) = self.types.layout(ty) else {
+            return false;
+        };
+        if !(1..=16).contains(&layout.size) {
+            return false;
+        }
+        // Each object within `ty`, with its offset.
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push((ty, 0));
+        while let Some((ty, offset)) = work.pop() {
+            let ty = self.types.non_atomic(ty);
+            let aligned = self
+                .types
+                .layout(ty)
+                .is_some_and(|layout| layout.align == 0 || offset % layout.align == 0);
+            match self.types.nodes[ty.index] {
+                | TypeKind::Scalar(
+                    Scalar::LongDouble | Scalar::ComplexLongDouble | Scalar::Void,
+                ) => return false,
+                | TypeKind::Scalar(_) | TypeKind::Pointer(_) | TypeKind::Vector { .. } =>
+                    if !aligned {
+                        return false;
+                    },
+                | TypeKind::Array(element, _) => work.push((element, offset)),
+                | TypeKind::Tag(id) => {
+                    let tag = &self.types.tags[id];
+                    if tag.contains_flexible.get() || !aligned {
+                        return false;
+                    }
+                    if tag.kind != TagKind::Enum {
+                        for member in tag.members.get() {
+                            // A bit-field's own alignment is not checked.
+                            if member.width.is_none() {
+                                work.push((member.ty, offset + member.offset));
+                            }
+                        }
+                    }
+                },
+                | _ => return false,
+            }
+        }
+        true
     }
 
     /// Begins expression statement `statement`. A statement expression's
@@ -366,4 +474,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .insert(std::ptr::from_ref(last).addr(), ());
         }
     }
+}
+
+/// An update of an atomic object.
+#[derive(Clone, Copy)]
+enum Update {
+    Increment,
+    Decrement,
+    /// A compound assignment by this operator.
+    Assignment(BinaryOperator),
 }

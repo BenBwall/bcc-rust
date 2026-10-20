@@ -86,9 +86,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's `Expr::isEvaluatable`: whether `expression` evaluates to a
-    /// constant of any type without side effects.
+    /// constant of any type without side effects. A `void` expression has
+    /// no value, so it is not evaluatable.
     pub(super) fn evaluatable(&mut self, expression: &'tu Expression<'tu>) -> bool {
-        self.evaluate_value(expression, 0).is_some()
+        let ty = self.expression_info(expression).ty;
+        !matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void))
+            && self.evaluate_value(expression, 0).is_some()
+    }
+
+    /// Whether `expression` evaluates to a number, which code generation
+    /// emits as a constant rather than an instruction.
+    pub(super) fn evaluates_to_number(&mut self, expression: &'tu Expression<'tu>) -> bool {
+        matches!(
+            self.evaluate_value(expression, 0),
+            Some(Value::Integer(_) | Value::Floating(_))
+        )
     }
 
     /// The value of `expression` as Clang's evaluator computes it, if it

@@ -523,7 +523,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::Statement(statement, new_scope) => self.statement(statement, new_scope),
             | Work::Expression(expression) => self.expression(expression),
-            | Work::ExpressionDone(e) => self.expression_done(e),
+            | Work::ExpressionDone(e) => {
+                self.expression_done(e);
+                // The blocks `e` creates depend on its type.
+                self.expression_emitted(e);
+            },
             | Work::ValueExpression(e) => {
                 let info = self.expression_info(e);
                 _ = self.converted(info);
