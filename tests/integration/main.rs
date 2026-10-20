@@ -38,6 +38,7 @@ mod pointer_diagnostics;
 mod preprocessing_cli;
 mod reachable_functions;
 mod semantic_cli;
+mod static_function_designators;
 mod target_resource_headers;
 mod target_selection;
 mod thread_local_linkage_cli;

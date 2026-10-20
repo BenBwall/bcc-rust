@@ -1334,8 +1334,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
 
     /// The symbol and byte offset an address constant designates: a static
     /// object, function, string literal or, as a GNU extension, label,
-    /// optionally with a constant subscript, member offset or integer added.
+    /// optionally selected by a constant conditional or with a constant
+    /// subscript, member offset or integer added.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    /// C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91.
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
     fn address_constant(
         &mut self,
         mut expression: &'tu Expression<'tu>,
@@ -1382,7 +1385,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | ExpressionType::Unary {
                     operator: UnaryOperator::Indirection,
                     operand_expression,
-                } if place => {
+                } if place
+                    || matches!(self.sema.types.kind(info.ty), TypeKind::Function { .. }) =>
+                {
+                    // Function indirection designates the same function; an
+                    // object indirection in value context would require a load.
                     expression = operand_expression;
                     place = false;
                 },
@@ -1402,7 +1409,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     expression = operand_expression;
                 },
                 | ExpressionType::Identifier(_) => {
-                    let binding = info.binding.ok_or_else(unsupported)?;
+                    // Use the same retained value selection as runtime
+                    // identifier lowering. A fortify call's private body is
+                    // distinct from its external function address, including
+                    // static relocations (C99 §6.3.2.1p4, p. 46; PDF p. 58).
+                    let binding = self
+                        .sema
+                        .function_extensions
+                        .value(expression)
+                        .or(info.binding)
+                        .ok_or_else(unsupported)?;
                     let data = self.sema.bindings[binding];
                     let source = expression.source_vectors;
                     let kind = self.sema.types.kind(data.ty);

@@ -638,7 +638,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let target = target
             .and_then(|ty| self.pointer_target(ty))
             .filter(|ty| matches!(self.types.nodes[ty.index], TypeKind::Function { .. }));
-        let (selected, ambiguous) = self.function_value_candidate(anchor, target);
+        // Resolve a sole addressable declaration before applying the target
+        // type: a fortify overload with pass_object_size has no address, but
+        // the ordinary external declaration does. An explicit cast may then
+        // change that function pointer's type (C99 §6.3.2.3p8, p. 48;
+        // PDF p. 60). Only an ambiguous set needs the target to select it.
+        let (selected, ambiguous) = self.function_value_candidate(anchor, None);
+        let (selected, ambiguous) = if ambiguous && target.is_some() {
+            self.function_value_candidate(anchor, target)
+        } else {
+            (selected, ambiguous)
+        };
         if let Some(binding) = selected.filter(|_| !ambiguous) {
             let mut leaf = self.selected_designator(source.expression);
             if let super::super::ExpressionType::Unary {
