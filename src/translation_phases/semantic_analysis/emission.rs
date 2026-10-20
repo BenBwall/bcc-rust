@@ -50,7 +50,10 @@ mod labels;
 use rustc_hash::FxBuildHasher;
 
 use crate::{
-    translation_phases::parsing::syntax::Expression,
+    translation_phases::parsing::{
+        declaration_syntax::Initializer,
+        syntax::Expression,
+    },
     util::{
         bump::{
             ArenaMap,
@@ -109,6 +112,9 @@ pub(super) struct State<'tu, 's> {
     /// The initializers of `const` non-volatile objects, which Clang's
     /// evaluator may read.
     constant_initializers:   ArenaMap<'s, usize, &'tu Expression<'tu>>,
+    /// The initializers of `const` non-volatile arrays and structures, by
+    /// binding, whose retained plans Clang's evaluator may read.
+    constant_aggregates:     ArenaMap<'s, usize, &'tu Initializer<'tu>>,
 }
 
 impl<'s> State<'_, 's> {
@@ -132,6 +138,7 @@ impl<'s> State<'_, 's> {
             constant_p:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }
