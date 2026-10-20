@@ -34,6 +34,7 @@ bcc-windows test --sha FULL_SHA --wait -- --all-targets --no-fail-fast
 bcc-windows test --sha FULL_SHA --wait -- --test code_generation_cli mingw_crt_inline_helpers_link_from_two_translation_units -- --nocapture
 bcc-windows bench --sha FULL_SHA --wait -- --bench bench -- 'Lexer/batch' --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot
 bcc-windows ci --sha FULL_SHA --wait
+bcc-windows torture --sha FULL_SHA --wait -- --match 20021127-1.c --arms A0,A1 --jobs 1 --repeat 5
 bcc-windows list
 bcc-windows wait RUN_ID
 bcc-windows logs RUN_ID
@@ -46,6 +47,16 @@ all-target tests, allocation tests, strict Clippy with and without benchmark
 features, nightly formatting, and `git diff --check`, recording every check
 even when another fails. Cargo programs and their descendants receive the
 Windows crash-dialog suppression wrapper.
+
+Torture jobs build the release compiler, download and checksum-verify the
+pinned GCC release once into the runner checkout's `target/compiler-corpus`,
+and pass the arguments after `--` to `scripts/run_gcc_torture_execute.py`,
+which supplies its own crash-dialog suppression. The job sets `--source`,
+`--output` and `--bcc`; `--repeat N` (at most 20) runs the same survey N times
+in sequence. Each round's `manifest.json`, `results.json` (with per-run exit
+codes and seconds) and `summary.md` are uploaded under `torture-N/`. Failing
+or timed-out programs are the measurement, so only a round without results
+fails the job.
 
 The same interface works directly through GitHub CLI:
 
@@ -62,8 +73,8 @@ Logs and `results.json` (requested SHA, tree, actual Windows/Rust identity,
 arguments, and per-command exit codes) are uploaded for 14 days. Criterion
 reports are uploaded when produced. Artifacts include failures; a completed
 run is not necessarily a passing run. The requested compiler commit receives
-the `windows/test`, `windows/bench`, or `windows/ci` GitHub commit status and a
-link to its run. Jobs are serialized on this one host.
+the `windows/test`, `windows/bench`, `windows/ci`, or `windows/torture` GitHub
+commit status and a link to its run. Jobs are serialized on this one host.
 
 ## Windows host maintenance
 

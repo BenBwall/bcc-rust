@@ -13,9 +13,9 @@ on:
         required: true
         default: ci
         type: choice
-        options: [ci, test, bench]
+        options: [ci, test, bench, torture]
       cargo_args_json:
-        description: JSON argument array appended to cargo test or cargo bench
+        description: JSON argument array appended to cargo test, cargo bench, or the GCC torture execute survey
         required: false
         default: '[]'
         type: string
