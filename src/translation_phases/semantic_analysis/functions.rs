@@ -31,6 +31,7 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::{
+            GenericSelection,
             declaration_syntax::{
                 Declaration,
                 DeclarationSpecifiers,
@@ -41,6 +42,7 @@ use crate::{
             },
             syntax::{
                 Expression,
+                ExpressionType,
                 FunctionDefinition,
                 Identifier,
                 Statement,
@@ -453,15 +455,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.dead &= then_end;
             },
             | FunctionWork::DeadArm(condition, live, outer) => {
-                // ConstantFoldsToSimpleInteger does not elide bare floating
-                // conditions at -O0, even though loop code generation can
-                // fold their truth value when creating an exit block.
-                let info = self.expression_info(condition);
-                let value = (info.constant == super::ConstantClass::Arithmetic)
-                    .then_some(info.integer)
-                    .flatten()
-                    .map(|integer| integer.value != 0);
+                let value = self.folded_condition(condition);
                 self.functions.dead = outer || value == Some(!live);
+            },
+            | FunctionWork::GenericMark(generic) => {
+                let at = self.functions.uses.len();
+                let scratch = self.scratch;
+                self.functions
+                    .generic_marks
+                    .entry(std::ptr::from_ref(generic).addr())
+                    .or_insert_with(|| ArenaVec::new_in(scratch))
+                    .push(at);
+            },
+            | FunctionWork::ExpressionStatementEnd(expression) => {
+                let mut expression = expression;
+                while let ExpressionType::Parenthesized { expression: inner }
+                | ExpressionType::Cast {
+                    operand_expression: inner,
+                    ..
+                } = expression.kind
+                {
+                    expression = inner;
+                }
+                if let ExpressionType::Call {
+                    function_expression,
+                    ..
+                } = expression.kind
+                    && self
+                        .expression_info(function_expression)
+                        .binding
+                        .is_some_and(|binding| {
+                            self.bindings[binding].origin
+                                == super::BindingOrigin::Intrinsic(
+                                    crate::builtins::BuiltinId::Unreachable,
+                                )
+                        })
+                {
+                    self.functions.dead = true;
+                }
             },
             | FunctionWork::LoopEnd(statement, outer) => {
                 let infinite = match statement.kind {
@@ -1513,6 +1544,68 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
     }
 
+    /// The truth value code generation folds `condition` to at `-O0`, as
+    /// `CodeGenFunction::ConstantFoldsToSimpleInteger` does: an integer
+    /// constant, or a comma expression whose left operand folds (so has no
+    /// side effects) and whose right operand folds. It does not fold bare
+    /// floating conditions, even though loop code generation can fold their
+    /// truth value when creating an exit block.
+    fn folded_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
+        let mut condition = condition;
+        loop {
+            match condition.kind {
+                | ExpressionType::Parenthesized { expression } => condition = expression,
+                | ExpressionType::Binary {
+                    operator: super::super::parsing::syntax::BinaryOperator::Comma,
+                    left_expression,
+                    right_expression,
+                } => {
+                    _ = self.folded_condition(left_expression)?;
+                    condition = right_expression;
+                },
+                | _ => break,
+            }
+        }
+        let info = self.expression_info(condition);
+        (info.constant == super::ConstantClass::Arithmetic)
+            .then_some(info.integer)
+            .flatten()
+            .map(|integer| integer.value != 0)
+    }
+
+    /// Marks the references of a generic selection's controlling operand
+    /// and of its unselected associations as skipped: Clang's code
+    /// generation emits only the selected association. C11: §6.5.1.1p3,
+    /// p. 79; PDF p. 97.
+    pub(super) fn skip_unselected_generic(
+        &mut self,
+        generic: &'tu GenericSelection<'tu>,
+        selected: Option<&'tu Expression<'tu>>,
+    ) {
+        let Some(marks) = self
+            .functions
+            .generic_marks
+            .remove(&std::ptr::from_ref(generic).addr())
+        else {
+            return;
+        };
+        if marks.len() != 2 * generic.associations.len() + 2 {
+            return;
+        }
+        let mut ranges = ArenaVec::new_in(self.scratch);
+        ranges.push(marks[0]..marks[1]);
+        for (index, association) in generic.associations.iter().enumerate() {
+            if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
+                ranges.push(marks[2 + 2 * index]..marks[3 + 2 * index]);
+            }
+        }
+        for range in ranges {
+            for usage in &mut self.functions.uses[range] {
+                usage.dead = true;
+            }
+        }
+    }
+
     /// Pushes the work that enters the arm of `condition` taken when it is
     /// `live`: code generation skips it when the condition folds to the
     /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
@@ -1836,6 +1929,12 @@ pub(super) enum FunctionWork<'tu> {
     /// Clang omits an infinite loop's exit block unless a generated break
     /// targets it. The loop's body is emitted even for a false condition.
     LoopEnd(&'tu Statement<'tu>, bool),
+    /// Records where the references of a generic selection's next operand
+    /// begin or end ([`State::generic_marks`]).
+    GenericMark(&'tu GenericSelection<'tu>),
+    /// After an expression statement: Clang's code generation skips what
+    /// follows `__builtin_unreachable()`, which leaves no insertion point.
+    ExpressionStatementEnd(&'tu Expression<'tu>),
 }
 
 /// Definition and tentative-definition state for an identifier with linkage.
@@ -1993,6 +2092,10 @@ pub(super) struct State<'tu, 's> {
     inline_objects: ArenaVec<'s, InlineObject>,
     /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
     pub(super) outside: [Option<usize>; 2],
+    /// For each generic selection being analyzed, by address, the number
+    /// of references recorded at the start and end of its controlling
+    /// operand and of each association's expression.
+    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, usize>>,
 }
 
 impl<'s> State<'_, 's> {
@@ -2018,6 +2121,7 @@ impl<'s> State<'_, 's> {
             generated_breaks:   ArenaVec::new_in(scratch),
             inline_objects:     ArenaVec::new_in(scratch),
             outside:            [None; 2],
+            generic_marks:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

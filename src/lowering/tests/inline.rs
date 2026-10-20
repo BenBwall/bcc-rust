@@ -793,6 +793,55 @@ fn always_inline_bodies_follow_clang_creation_order() {
             "{dead}\n{text}"
         );
     }
+    // In an ordinary function before `main`, the forms whose skipped
+    // references a review found counted: a generic selection's controlling
+    // operand and unselected association, a comma condition that folds, and
+    // the code after `__builtin_unreachable()` (#109 review, round 3).
+    for dead in [
+        "(void)_Generic(h(0), int: 0, default: 1);",
+        "(void)_Generic(0, int: 0, default: h(0));",
+        "if ((0, 0)) h(0);",
+        "__builtin_unreachable(); h(0);",
+    ] {
+        let text = lowered(&format!(
+            "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); \
+             inline __attribute__((always_inline)) int g(int); inline \
+             __attribute__((always_inline)) int h(int); inline __attribute__((always_inline)) int \
+             f(int x) {{ return x ? 2 * g(x - 1) : 1; }} inline __attribute__((always_inline)) \
+             int g(int x) {{ return x ? 3 * h(x - 1) : 1; }} inline \
+             __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : 1; }} int \
+             probe(void) {{ {dead} return 0; }} int main(void) {{ printf(\"%d\\n\", f(6)); return \
+             0; }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(
+            position("f") < position("g") && position("g") < position("h"),
+            "{dead}\n{text}"
+        );
+    }
+    // The selected association and a live comma condition still count.
+    for live in [
+        "(void)_Generic(0, int: h(0), default: 0);",
+        "if ((0, 1)) h(0);",
+    ] {
+        let text = lowered(&format!(
+            "inline __attribute__((always_inline)) int f(int); inline \
+             __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) int \
+             h(int); inline __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - \
+             1) : 1; }} inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x \
+             - 1) : 1; }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * \
+             f(x - 1) : 1; }} int probe(void) {{ {live} return 0; }} int main(void) {{ return \
+             f(6); }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(position("h") < position("f"), "{live}\n{text}");
+    }
 }
 
 /// A weak inline definition is a weak definition, emitted where it is
