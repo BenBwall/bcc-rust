@@ -101,19 +101,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | ExpressionType::OmittedConditional(conditional) =>
                 self.conditional_joins(e, conditional, false),
             | ExpressionType::Binary {
-                operator:
-                    operator @ (BinaryOperator::Multiplication
-                    | BinaryOperator::MultiplicationAssignment),
+                operator: BinaryOperator::Multiplication | BinaryOperator::MultiplicationAssignment,
                 left_expression,
                 right_expression,
             } if self.complex_floating(left_expression)
                 && self.complex_floating(right_expression) =>
-            {
-                let _ = operator;
-                true
-            },
+                true,
             | ExpressionType::Binary {
-                operator,
+                operator:
+                    operator @ (BinaryOperator::MultiplicationAssignment
+                    | BinaryOperator::DivisionAssignment
+                    | BinaryOperator::ModuloAssignment
+                    | BinaryOperator::AdditionAssignment
+                    | BinaryOperator::SubtractionAssignment
+                    | BinaryOperator::LeftShiftAssignment
+                    | BinaryOperator::RightShiftAssignment
+                    | BinaryOperator::BitwiseAndAssignment
+                    | BinaryOperator::BitwiseXorAssignment
+                    | BinaryOperator::BitwiseOrAssignment),
                 left_expression,
                 ..
             } => self.atomic_update_loops(left_expression, Some(operator)),
