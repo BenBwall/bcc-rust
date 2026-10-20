@@ -865,6 +865,140 @@ fn always_inline_bodies_follow_clang_creation_order() {
     }
 }
 
+/// A switch whose condition folds emits only the statements Clang's
+/// `CollectStatementsForCase` selects, and an expression statement ending
+/// in a call that does not return skips what follows. References there
+/// create no function, so Clang's order stays f, g, h; references Clang
+/// does emit put h first (#113). Each expectation matches Clang 23's
+/// `-O0 -Xclang -disable-llvm-passes` module.
+#[test]
+fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_calls() {
+    let h_first = |probe: &str, config: CompilerConfiguration| {
+        let source = format!(
+            "int c; int other(void); __attribute__((noreturn)) void die(void); _Noreturn void \
+             stop(void); void exit(int); void _exit(int); void (*fp)(void) \
+             __attribute__((noreturn)); typedef void nr(void) __attribute__((noreturn)); nr *fpt; \
+             struct s {{ void (*m)(void) __attribute__((noreturn)); }} holder; inline \
+             __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) int \
+             g(int); inline __attribute__((always_inline)) int h(int); inline \
+             __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - 1) : 1; }} \
+             inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x - 1) : 1; \
+             }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : \
+             1; }} int probe(void) {{ {probe} return 0; }} int main(void) {{ return f(6); }}"
+        );
+        let text = lower_with(&source, config).unwrap_or_else(|error| panic!("{error:?}\n{probe}"));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}: {probe}\n{text}"))
+        };
+        assert!(position("f") < position("g"), "{probe}\n{text}");
+        position("h") < position("f")
+    };
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (probe, config, emitted) in [
+        // The unselected arms, the default fallback and an elided body.
+        (
+            "switch (0) { case 1: h(0); break; default: break; }",
+            c99,
+            false,
+        ),
+        ("switch (5) { case 1: h(0); }", c99, false),
+        ("switch (2) { case 1: break; case 2: h(0); }", c99, true),
+        ("switch (5) { case 1: break; default: h(0); }", c99, true),
+        (
+            "switch ((0, 1)) { case 0: h(0); break; case 1: break; }",
+            c99,
+            false,
+        ),
+        (
+            "switch ((other(), 1)) { case 0: h(0); break; case 1: break; }",
+            c99,
+            true,
+        ),
+        // Selected statements fall through later labels, which resume
+        // nothing; the code after the switch follows their end.
+        ("switch (1) { case 1: return 0; case 2: h(0); }", c99, false),
+        (
+            "switch (5) { default: return 0; case 1: h(0); }",
+            c99,
+            false,
+        ),
+        ("switch (1) { case 1: return 0; } h(0);", c99, false),
+        ("switch (1) { case 1: break; } h(0);", c99, true),
+        // Case labels inside skipped statements do not keep them; a case
+        // label Clang cannot reach through blocks, a skipped declaration
+        // or a label the switch would skip leave it unfolded.
+        (
+            "switch (1) { case 0: if (h(0)) { case 3: break; } break; case 1: break; }",
+            c99,
+            false,
+        ),
+        (
+            "switch (1) { case 0: h(0); if (c) { case 1: ; } }",
+            c99,
+            true,
+        ),
+        (
+            "switch (1) { int y; case 0: h(0); break; case 1: y = 0; (void)y; }",
+            c99,
+            true,
+        ),
+        (
+            "goto l; switch (0) { case 1: l: h(0); break; default: break; }",
+            c99,
+            true,
+        ),
+        (
+            "switch (1) { case 2 ... 3: h(0); break; case 1: break; }",
+            gnu,
+            false,
+        ),
+        (
+            "switch (1) { case 1: break; case 2 ... 3: h(0); }",
+            gnu,
+            true,
+        ),
+        // Calls that do not return: attributes, `_Noreturn`, library
+        // functions, function pointers of a `noreturn` type, and casts of
+        // a function designator.
+        ("die(); h(0);", c99, false),
+        ("stop(); h(0);", c99, false),
+        ("exit(0); h(0);", c99, false),
+        ("_exit(0); h(0);", gnu, false),
+        ("_exit(0); h(0);", c99, true),
+        ("exit(0); h(0);", c99.with_hosted(false), true),
+        ("fp(); h(0);", c99, false),
+        ("fpt(); h(0);", c99, false),
+        ("holder.m(); h(0);", c99, false),
+        ("__typeof__(die) *q = die; q(); h(0);", gnu, false),
+        ("void (*p)(void) = die; p(); h(0);", c99, true),
+        ("((void (*)(void))die)(); h(0);", c99, false),
+        (
+            "(void)_Generic(0, int: die(), default: 0); h(0);",
+            c99,
+            false,
+        ),
+        // The rest of the expression is emitted; a condition that does not
+        // fold joins reachable code again; a label resumes code generation.
+        ("die(), h(0);", c99, true),
+        ("(die(), other()); h(0);", c99, false),
+        ("c ? die() : (void)0; h(0);", c99, true),
+        ("1 ? die() : (void)0; h(0);", c99, false),
+        ("(void)(c && (die(), 1)); h(0);", c99, true),
+        ("die(); l: h(0);", c99, true),
+        ("int y = (die(), 1); h(y);", c99, true),
+        ("do die(); while (0); h(0);", c99, true),
+        // A statement expression's value statement is emitted after a jump.
+        ("({ die(); }); h(0);", gnu, false),
+        ("({ die(); (void)h(0); });", gnu, false),
+        ("c = ({ die(); h(0); });", gnu, true),
+        ("c = ({ return 0; h(0); });", gnu, true),
+    ] {
+        assert_eq!(h_first(probe, config), emitted, "{probe}");
+    }
+}
+
 /// A weak inline definition is a weak definition, emitted where it is
 /// referenced, as Clang emits it; a strong definition elsewhere wins. A
 /// GNU89 plain inline definition is an external definition anyway.

@@ -593,6 +593,89 @@ fn labels_loop_exits_and_floating_conditions_fix_generated_import_state() {
     }
 }
 
+/// A folded switch emits only its selected statements, and an expression
+/// statement ending in a call that does not return skips what follows, so
+/// references there keep the import; references Clang emits drop it.
+/// These expectations are pinned against Clang 23 on both Windows ABIs at
+/// -O0 (#113). C99: §6.8.4.2p5, p. 134; PDF p. 146.
+#[test]
+fn folded_switches_and_calls_that_do_not_return_fix_generated_import_state() {
+    const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
+                            int x; __attribute__((noreturn)) void die(void); void exit(int); ";
+    for (suffix, imported) in [
+        (
+            "int h(void) { switch (0) { case 1: return x; default: break; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (5) { case 1: return x; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: return 0; case 2: return x; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: return 0; } return x; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: break; } return x; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (2) { case 1: break; case 2: return x; } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (5) { case 1: break; default: return x; } return 0; }",
+            false,
+        ),
+        (
+            "int h(int a) { switch (1) { case 0: x; if (a) { case 1: ; } } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch ((0, 1)) { case 0: return x; case 1: break; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { goto L; switch (0) { case 1: L: return x; default: break; } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (5) { default: return 0; case 1: return x; } }",
+            true,
+        ),
+        ("int h(void) { die(); return x; }", true),
+        ("int h(void) { exit(0); return x; }", true),
+        ("int h(void) { die(), x; return 0; }", false),
+        ("int h(int a) { a ? die() : (void)0; return x; }", false),
+        ("int h(void) { 1 ? die() : (void)0; return x; }", true),
+        ("int h(void) { die(); L: return x; }", false),
+        ("int h(void) { int y = (die(), 1); return x + y; }", false),
+        ("int h(void) { ({ die(); }); return x; }", true),
+        ("int h(void) { return ({ die(); x; }); }", false),
+        (
+            "int h(void) { void (*p)(void) = die; p(); return x; }",
+            false,
+        ),
+        (
+            "int h(void) { void (*p)(void) __attribute__((noreturn)) = die; p(); return x; }",
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{suffix}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {suffix}"
+            );
+        }
+    }
+}
+
 /// Generated-reference filtering does not change semantic uses: an internal
 /// function still needs a definition even after an infinite loop.
 /// C99: §6.9p3, p. 140; PDF p. 152.
