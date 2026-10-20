@@ -487,7 +487,10 @@ avoids mismatched calls under C99 §6.5.2.2p6,p9 (pp. 71-72; PDF pp. 83-84);
 The C89 implicit declaration rule remains §3.3.2.2 (p. 41; PDF p. 55). Undeclared reserved `__builtin_*` names are GCC
 builtins in every mode: they are bound as opaque functions without a
 diagnostic, and calls to them have unknown results, except that
-`__builtin_constant_p` folds to whether its operand is an arithmetic constant.
+`__builtin_constant_p` uses the shared Clang-like query evaluator: arithmetic
+constants, string starts and supported constant aggregate elements can fold;
+unknown queries emit zero. This value also drives static initializer data and
+runtime lowering.
 
 In GNU modes, as in GCC, an arithmetic constant that is not an integer constant
 expression (§6.6p6) is folded where an integer constant expression is required

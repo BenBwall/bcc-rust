@@ -119,9 +119,15 @@ fn function_designator_static_void_pointer_keeps_its_relocation() {
         Symbol,
     };
     for source in [FUNCTION_TABLE, CALL_FUNCTION_TABLE] {
+        // Keep a runtime table read: Clang folds FUNCTION_TABLE's original
+        // condition and omits both the table and its function at O0.
+        let source = format!(
+            "volatile int slot; {}",
+            source.replace("table[0]", "table[slot]")
+        );
         for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
             for (optimize, profile) in STAGES {
-                with_module(source, target, optimize, profile, |module, target| {
+                with_module(&source, target, optimize, profile, |module, target| {
                     assert!(module.globals().any(|(_, global)| matches!(global.init, Some(GlobalInit::Bytes {relocations, ..}) if relocations.iter().any(|relocation| matches!(relocation.target, RelocationTarget::Symbol(Symbol::Function(_)))))), "{module}");
                     assert_eq!(interpret(module, target), (0, String::new()));
                 });
