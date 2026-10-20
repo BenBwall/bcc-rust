@@ -588,6 +588,70 @@ mod tests {
         std::fs::remove_file(source_file).unwrap();
     }
 
+    #[test]
+    fn case_labels_prevent_ancestor_elision() {
+        assert_runs_like_clang(
+            "int printf(const char*,...); int f(int y){int x=0; switch(2){default:x=9;break; case \
+             1:if(y){case 2:x=2;} x+=1;} return x;} int g(int \
+             y){switch(2){default:break;while(y){case 2:return 1;}}return 0;} int \
+             main(void){printf(\"%d %d %d\\n\",f(0),f(1),g(0));return 0;}",
+        );
+    }
+
+    fn assert_runs_like_clang(source: &str) {
+        let source_file = temporary("run.c");
+        let executable = temporary("run.exe");
+        std::fs::write(&source_file, source).unwrap();
+        let reference = Command::new(clang())
+            .args(["-std=gnu99", "-O0"])
+            .arg(&source_file)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(reference.status.success(), "{}", text(&reference.stderr));
+        let expected = run_native(&mut Command::new(&executable)).unwrap();
+        std::fs::remove_file(&executable).unwrap();
+        for flags in [
+            &["-O0"][..],
+            &["-O2"][..],
+            &["--backend=native", "--opt=none"][..],
+            &["--backend=native", "--opt=bcc"][..],
+            &["--backend=native", "--native-object", "--opt=none"][..],
+            &["--backend=native", "--native-object", "--opt=bcc"][..],
+            &["--interpret", "--opt=none"][..],
+            &["--interpret", "--opt=bcc"][..],
+        ] {
+            let interpreted = flags.contains(&"--interpret");
+            let mut args = vec!["-std=gnu99"];
+            args.extend_from_slice(flags);
+            if !interpreted {
+                args.extend_from_slice(&["-o", executable.to_str().unwrap()]);
+            }
+            let compiled = bcc(source, &args);
+            assert!(
+                compiled.status.success(),
+                "{flags:?}: {}",
+                text(&compiled.stderr)
+            );
+            let actual = if interpreted {
+                compiled
+            } else {
+                let output = run_native(&mut Command::new(&executable)).unwrap();
+                std::fs::remove_file(&executable).unwrap();
+                output
+            };
+            assert_eq!(
+                actual.status.code(),
+                expected.status.code(),
+                "{flags:?}: {}",
+                text(&actual.stderr)
+            );
+            assert_eq!(actual.stdout, expected.stdout, "{flags:?}");
+        }
+        std::fs::remove_file(source_file).unwrap();
+    }
+
     fn defined_symbols(object: &Path) -> Option<BTreeSet<String>> {
         let output = Command::new("nm")
             .arg("--defined-only")

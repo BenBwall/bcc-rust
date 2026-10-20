@@ -234,7 +234,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | S::SehLeave
         );
         let omitted = if self.functions.dead && !simple && !value_statement {
-            if self.statement_contains_label(s, !self.case_labels_resume()) {
+            if self.statement_contains_label(s, false) {
                 // Clang EmitStmt ensures an insertion point for a label.
                 self.functions.dead = false;
                 false

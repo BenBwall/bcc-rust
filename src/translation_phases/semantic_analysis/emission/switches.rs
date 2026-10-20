@@ -270,21 +270,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether a case label of the innermost switch makes skipped code that
-    /// holds it emitted again, as an ordinary label does. Clang never emits
-    /// the statements of a switch it skips, or those a folded switch has
-    /// left behind; it does emit a skipped statement holding a case label
-    /// among the statements it selects, as in an unfolded switch.
-    /// C99: §6.8.1 paragraph 4, p. 132; PDF p. 144.
-    pub(in crate::translation_phases::semantic_analysis) fn case_labels_resume(&self) -> bool {
-        !self.functions.switch_dead
-            && self
-                .statements
-                .switch
-                .and_then(|index| self.functions.emission.folds.get(&index))
-                .is_none_or(|fold| fold.phase != Phase::Ended)
-    }
-
     /// Ends a folded switch's selected statements at the `break` that
     /// `CollectStatementsForCase` stops at; Clang emits nothing for it.
     /// C99: §6.8.6.3 paragraph 2, p. 138; PDF p. 150.
