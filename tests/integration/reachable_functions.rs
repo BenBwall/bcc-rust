@@ -827,7 +827,8 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
 
     /// Clang emits a plain inline-only body as `available_externally` only
     /// when LLVM optimizes, and bcc gives LLVM the same bodies (#109): O0
-    /// keeps the declaration, O1 and above add the body, and a body that
+    /// keeps the declaration, O1 and above add the body, whether set by
+    /// `--llvm-opt` or `-O`, and a body that
     /// wraps its own symbol through an assembler label gets none.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
     #[test]
@@ -850,9 +851,12 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                     (Some("--llvm-opt=O0"), false),
                     (Some("--llvm-opt=O1"), body),
                     (Some("--llvm-opt=O2"), body),
+                    (Some("-O0"), false),
+                    (Some("-O2"), body),
+                    (Some("-O2 --llvm-opt=O0"), false),
                 ] {
                     let mut flags = vec!["--emit=llvm", "-std=c99", target.as_str()];
-                    flags.extend(level);
+                    flags.extend(level.into_iter().flat_map(str::split_whitespace));
                     let output = bcc(source, &flags);
                     let text = String::from_utf8_lossy(&output.stdout);
                     assert!(output.status.success(), "{output:?}");

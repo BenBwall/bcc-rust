@@ -501,7 +501,10 @@ impl CodeGeneration {
         if self.backend == BackEnd::Native || (self.emit.is_none() && self.output_path.is_none()) {
             InlineCopies::Resolve
         } else if !self.llvm_codegen_only
-            && matches!(self.llvm_opt, LlvmOpt::O1 | LlvmOpt::O2 | LlvmOpt::O3)
+            && matches!(
+                self.llvm_opt.or(self.optimization),
+                Some(LlvmOpt::O1 | LlvmOpt::O2 | LlvmOpt::O3)
+            )
         {
             InlineCopies::Keep
         } else {
