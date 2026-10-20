@@ -470,19 +470,17 @@ fn private_inline_bodies_do_not_capture_redirected_symbols() {
         .expect("main is defined");
     let main = main.split("\nfunction ").next().unwrap_or(main);
     assert!(main.contains("call @read.always_inline("), "{text}");
-    // The copy names the external function whose `available_externally`
-    // body the LLVM back end makes it (#89), and the text round-trips.
+    // A wrapper of its own symbol is no `available_externally` body of it
+    // (#89): as that body, its call to `read` would call itself. Clang emits
+    // no body for it (its `isTriviallyRecursive`).
     let header = private.lines().next().unwrap_or_default();
-    assert!(
-        header.contains("alwaysinline inline_copy_of @read "),
-        "{text}"
-    );
+    assert!(!header.contains("inline_copy_of"), "{text}");
     let arena = Bump::new();
     let module = parse_module(&arena, &text).unwrap();
     let Some(crate::ir::Symbol::Function(copy)) = module.symbol("read.always_inline") else {
         panic!("{text}");
     };
-    assert_eq!(module.function(copy).inline_copy_of, Some("read"), "{text}");
+    assert_eq!(module.function(copy).inline_copy_of, None, "{text}");
 }
 
 /// GNU extern-inline bodies supply direct-call implementations while values
@@ -707,6 +705,29 @@ fn plain_inline_only_bodies_are_unreferenced_copies() {
         text.contains("function @f(i32 noundef) -> i32 external\n"),
         "{text}"
     );
+}
+
+/// An `always_inline` wrapper that calls its own symbol through an
+/// assembler label, like glibc's fortify wrappers before 2.40, keeps a
+/// private copy that is not its external function's body: as that body,
+/// LLVM would inline its call to the symbol into itself.
+#[test]
+fn always_inline_wrappers_of_their_own_symbol_stay_private() {
+    let text = lowered(
+        "extern int real(int) __asm__(\"f\"); extern inline __attribute__((always_inline, \
+         gnu_inline)) int f(int x) { return real(x) + 1; } int u(int x) { return f(x); }",
+    );
+    let copy = text
+        .split("function @f.always_inline(")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the copy is defined\n{text}"));
+    assert!(
+        copy.lines()
+            .next()
+            .is_some_and(|header| !header.contains("inline_copy_of")),
+        "{text}"
+    );
+    assert!(text.contains("call @f.always_inline("), "{text}");
 }
 
 /// No copy where Clang emits no `available_externally` body: an unused,

@@ -871,6 +871,27 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
         }
     }
 
+    /// An `always_inline` wrapper of its own symbol, like glibc's fortify
+    /// wrappers before 2.40, is no `available_externally` body: LLVM would
+    /// inline its call to the symbol into itself, and the program loops.
+    /// Clang emits no body for it (its `isTriviallyRecursive`).
+    #[test]
+    fn always_inline_wrappers_of_their_own_symbol_are_not_available_externally() {
+        let source = "extern char *real(char *, unsigned long) __asm__(\"getcwd\"); extern inline \
+                      __attribute__((always_inline, gnu_inline)) char *getcwd(char *b, unsigned \
+                      long n) { return real(b, n); } char *u(char *b) { return getcwd(b, 8); }";
+        for level in ["--llvm-opt=O0", "--llvm-opt=O2"] {
+            let output = bcc(
+                source,
+                &["--emit=llvm", "--target=x86_64-unknown-linux-gnu", level],
+            );
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "{output:?}");
+            assert!(!text.contains("available_externally"), "{level}\n{text}");
+            assert!(text.contains("call ptr @getcwd("), "{level}\n{text}");
+        }
+    }
+
     /// A referenced `always_inline` inline body is emitted at every level,
     /// so its reference through a redeclaration without `dllimport` decides
     /// the import, as in Clang (#109 review). Clang's own O0 module has
