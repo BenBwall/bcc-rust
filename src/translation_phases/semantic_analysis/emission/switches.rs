@@ -12,7 +12,8 @@
 //! skipped, which can only make more code skipped. From the selected label
 //! on, later labels resume nothing, and the selected statements' `break`
 //! ends them. A `default` is selected when it is met, tentatively: a later
-//! matching case replaces it. Without a match and a `default`, Clang emits
+//! matching case replaces it, so it is selected only when every later
+//! case's collection succeeds. Without a match and a `default`, Clang emits
 //! nothing of a body that holds no label.
 //!
 //! #104's whole-arm omission can mark the same regions: the references
