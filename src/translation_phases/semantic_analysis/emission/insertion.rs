@@ -135,11 +135,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ..
             } => self.atomic_update_loops(left_expression, Update::Assignment(operator)),
             | ExpressionType::Unary {
-                operator: operator @ (UnaryOperator::PreIncrement | UnaryOperator::PostIncrement),
-                operand_expression,
-            }
-            | ExpressionType::Unary {
-                operator: operator @ (UnaryOperator::PreDecrement | UnaryOperator::PostDecrement),
+                operator:
+                    operator @ (UnaryOperator::PreIncrement
+                    | UnaryOperator::PostIncrement
+                    | UnaryOperator::PreDecrement
+                    | UnaryOperator::PostDecrement),
                 operand_expression,
             } => self.atomic_update_loops(
                 operand_expression,
