@@ -59,11 +59,16 @@ const DEPTH: u32 = 256;
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang's `ConstantFoldsToSimpleInteger` for `condition`: its integer
-    /// value, when it evaluates without side effects and holds no label.
+    /// value, when it has an integer or enumerated type, evaluates without
+    /// side effects and holds no label. `EvaluateAsInt` refuses any other
+    /// type, so a null pointer condition does not fold.
+    /// C99: §6.2.5 paragraph 17, p. 35; PDF p. 47.
     pub(in crate::translation_phases::semantic_analysis) fn folded_integer(
         &mut self,
         condition: &'tu Expression<'tu>,
     ) -> Option<Integer> {
+        let ty = self.expression_info(condition).ty;
+        _ = self.integer_type(ty)?;
         let Some(Value::Integer(value)) = self.evaluate_value(condition, 0) else {
             return None;
         };
