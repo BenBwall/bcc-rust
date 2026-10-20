@@ -58,6 +58,9 @@ pub(crate) struct MFunction<'a> {
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
     pub(crate) register_save:    bool,
+    /// The largest alignment an IR stack slot asks for; a slot aligned
+    /// above 16 bytes rounds its address up from `%rsp` at run time.
+    pub(crate) slot_align:       u64,
     /// A callee-saved register the prologue pushes first, written or not:
     /// `%rbp` when the function takes its frame address, so the caller's
     /// `%rbp` is where a frame pointer would save it.
@@ -85,6 +88,7 @@ impl<'a> MFunction<'a> {
             calls:            false,
             dynamic:          false,
             register_save:    false,
+            slot_align:       1,
             first_push:       None,
             indirect:         ArenaVec::new_in(arena),
             labels:           ArenaVec::new_in(arena),
@@ -794,8 +798,10 @@ impl Role {
     }
 }
 
-/// One machine instruction. The two-address forms (`Alu`, `Shift`,
-/// `Unary`, `Cmov`) read and write `dst`.
+/// One machine instruction. The two-address forms (`Alu`, `XAlu`, `Shift`,
+/// `Unary`, `Cmov`, `ShiftDouble`) read and write `dst`; the register
+/// allocator relies on that, and `tests/operands.rs` checks every form's
+/// operands and flags against x86.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MInst {
     /// `dst ← src`. A 64-bit move between registers is a copy, which the
@@ -1298,7 +1304,12 @@ impl MInst {
     }
 
     /// Whether the instruction reads the flags, and whether it certainly
-    /// overwrites all of them (a shift by `%cl` may leave them alone).
+    /// overwrites all of them. The CPU masks a shift count to five bits (six
+    /// for a 64-bit operand, and always six for `shld`/`shrd` here) and a
+    /// masked count of zero leaves every flag alone, so `shlq $64` or
+    /// `shlb $32` overwrites nothing. A shift by `%cl` may likewise leave
+    /// them alone, and a rotate writes only CF and OF. The selector already
+    /// masks its counts, but this does not rely on it.
     pub(crate) const fn flags(&self) -> (bool, bool) {
         match self {
             | Self::Jcc { .. } | Self::Setcc { .. } | Self::Cmov { .. } => (true, false),
@@ -1318,15 +1329,17 @@ impl MInst {
             | Self::X87Compare
             | Self::Unary {
                 op: UnaryOp::Neg, ..
-            }
-            | Self::Shift {
-                amount: ShiftAmount::Imm(1..),
-                ..
-            }
-            | Self::ShiftDouble {
-                amount: ShiftAmount::Imm(1..),
-                ..
             } => (false, true),
+            | Self::Shift {
+                op: ShiftOp::Shl | ShiftOp::Shr | ShiftOp::Sar,
+                width,
+                amount: ShiftAmount::Imm(count),
+                ..
+            } if (*count & if matches!(width, Width::B64) { 63 } else { 31 }) != 0 => (false, true),
+            | Self::ShiftDouble {
+                amount: ShiftAmount::Imm(count),
+                ..
+            } if (*count & 63) != 0 => (false, true),
             | _ => (false, false),
         }
     }

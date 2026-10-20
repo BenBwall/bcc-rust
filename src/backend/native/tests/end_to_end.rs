@@ -1129,3 +1129,113 @@ fn sse_unsigned_conversions_raise_no_invalid_exception() {
         }
     }
 }
+
+/// A System V leaf with its frame in the red zone, interrupted by `SIGPROF`
+/// over and over while its frame is live. The handler unwinds through the
+/// signal frame and the leaf to its caller and `main` with the C library's
+/// unwinder, which reads the `.eh_frame` the back end describes, and the
+/// leaf then checks that its frame survived the handlers, which the kernel
+/// runs below the red zone (psABI §3.2.2). The program declares what it
+/// needs from glibc and libgcc itself.
+const RED_ZONE_UNWINDING: &str = r#"
+typedef void (*handler_t)(int);
+handler_t signal(int, handler_t);
+struct timeval_ { long sec; long usec; };
+struct itimerval_ { struct timeval_ interval, value; };
+int setitimer(int, const struct itimerval_ *, struct itimerval_ *);
+int printf(const char *, ...);
+typedef int (*trace_fn)(void *, void *);
+int _Unwind_Backtrace(trace_fn, void *);
+unsigned long _Unwind_GetIP(void *);
+void *_Unwind_FindEnclosingFunction(void *);
+
+int spin(int seed);
+int run(int seed);
+int main(void);
+
+static volatile int hits, total, broken;
+
+struct found { int leaf, caller, entry; };
+
+static int step(void *context, void *data) {
+    struct found *found = data;
+    void *start = _Unwind_FindEnclosingFunction((void *)_Unwind_GetIP(context));
+    if (start == (void *)spin) found->leaf = 1;
+    else if (start == (void *)run) found->caller = 1;
+    else if (start == (void *)main) found->entry = 1;
+    return 0;
+}
+
+static void on_profile(int number) {
+    struct found found = {0, 0, 0};
+    _Unwind_Backtrace(step, &found);
+    total++;
+    if (found.leaf) {
+        if (found.caller && found.entry) hits++;
+        else broken++;
+    }
+}
+
+__attribute__((noinline)) int spin(int seed) {
+    volatile int a[16];
+    for (int i = 0; i < 16; i++) a[i] = seed * i;
+    long rounds = 0;
+    while (hits < 20 && total < 100000 && rounds < 3000000000L) {
+        int k = rounds++ & 15;
+        a[k] = a[k];
+    }
+    int ok = 1;
+    for (int i = 0; i < 16; i++) ok &= a[i] == seed * i;
+    return ok;
+}
+
+__attribute__((noinline)) int run(int seed) {
+    struct itimerval_ every = {{0, 1000}, {0, 1000}};
+    struct itimerval_ off = {{0, 0}, {0, 0}};
+    setitimer(2, &every, 0);
+    int ok = spin(seed);
+    setitimer(2, &off, 0);
+    return ok;
+}
+
+int main(void) {
+    signal(27, on_profile);
+    int ok = run(7);
+    printf("%d %d %d\n", ok, hits >= 20, broken);
+    return ok && hits >= 20 && broken == 0 ? 0 : 1;
+}
+"#;
+
+#[test]
+fn unwinding_through_a_red_zone_leaf_in_a_signal_handler() {
+    let directory = TempDir::new("native-red-zone-unwinding");
+    for (target, runner) in targets() {
+        if target != Target::LinuxGnu || runner != Runner::Native {
+            eprintln!("skipping {target:?}: the red zone and SIGPROF are System V's");
+            continue;
+        }
+        for optimize in [false, true] {
+            let name = format!("red-zone-unwinding-{optimize}");
+            let text = with_module(RED_ZONE_UNWINDING, target, optimize, |module| {
+                let mut text = String::new();
+                emit_assembly(module, target, &mut text).unwrap();
+                text
+            });
+            let spin = super::function_text(&text, "spin");
+            assert!(
+                !spin.contains("subq") && spin.contains("(%rsp"),
+                "{name}: the leaf keeps its frame in the red zone:\n{spin}"
+            );
+            let run = run_assembly(&text, target, runner, directory.path(), &name)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                run,
+                Run {
+                    status: 0,
+                    stdout: "1 1 0\n".to_owned(),
+                },
+                "{name}:\n{text}"
+            );
+        }
+    }
+}

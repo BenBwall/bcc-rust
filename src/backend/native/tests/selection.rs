@@ -140,7 +140,8 @@ block0(v0: i64):
 fn addresses_fold_into_memory_operands() {
     let text = assembly(MEMORY, Target::LinuxGnu);
     let f = function_text(&text, "f");
-    assert!(f.contains("movq\t%rdi, 8(%rsp)"), "{f}");
+    // The leaf's slot is in the red zone.
+    assert!(f.contains("movq\t%rdi, -8(%rsp)"), "{f}");
     assert!(
         f.contains("counter(%rip)"),
         "a defined global is RIP-relative:\n{f}"
@@ -1417,4 +1418,136 @@ block3:
         "no compare result is materialized:\n{f}"
     );
     assert!(f.matches("cmpl\t").count() >= 2, "{f}");
+}
+
+/// A leaf function's frame of `size` bytes, one 8-byte value stored at its
+/// top and read back.
+fn leaf_frame(size: u32, align: u32) -> String {
+    format!(
+        "abi lowered
+function @f(i64) -> i64 external {{
+    slot0 = stack_slot {size}, align {align}
+block0(v0: i64):
+    v1 = stack_addr slot0
+    v2 = iconst.i64 {}
+    v3 = ptr_add v1, v2
+    store.i64 v0, v3, align 8
+    v4 = load.i64 v3, align 8
+    return v4
+}}
+",
+        size - 8
+    )
+}
+
+#[test]
+fn system_v_leaf_frames_live_in_the_red_zone() {
+    // A 16-byte-aligned slot keeps its alignment: 8 bytes of padding put
+    // it at `entry %rsp - 24`, a multiple of 16, and its top 8 bytes 16
+    // bytes below the return address.
+    for (size, align, top) in [(64, 8, -8), (128, 8, -8), (16, 16, -16)] {
+        let text = assembly(&leaf_frame(size, align), Target::LinuxGnu);
+        let f = function_text(&text, "f");
+        assert!(
+            !f.contains("subq") && !f.contains("addq") && !f.contains(".cfi_def_cfa_offset"),
+            "the frame stays below %rsp:\n{f}"
+        );
+        assert!(
+            f.contains(&format!("movq\t%rdi, {top}(%rsp)")),
+            "the slot's top is just below the return address:\n{f}"
+        );
+        // Windows has no red zone.
+        let text = assembly(&leaf_frame(size, align), Target::WindowsGnu);
+        let f = function_text(&text, "f");
+        assert!(
+            f.contains("subq\t$") && f.contains(".seh_stackalloc"),
+            "{f}"
+        );
+    }
+}
+
+#[test]
+fn frames_outside_the_red_zone_move_rsp() {
+    // More than 128 bytes.
+    let text = assembly(&leaf_frame(136, 8), Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("subq\t$136, %rsp\n\t.cfi_def_cfa_offset 144"),
+        "{f}"
+    );
+    assert!(f.contains("movq\t%rdi, 128(%rsp)"), "{f}");
+    // A call, whose return address would land in the frame.
+    let text = assembly(
+        "abi lowered
+function @g(ptr) external
+function @f() external {
+    slot0 = stack_slot 8, align 8
+block0:
+    v0 = stack_addr slot0
+    call @g(v0)
+    return
+}
+",
+        Target::LinuxGnu,
+    );
+    assert!(function_text(&text, "f").contains("subq\t$"), "{text}");
+    // `stack_save` reads `%rsp`, which would then point into the frame.
+    let text = assembly(
+        "abi lowered
+function @f(i64) -> i64 external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = stack_addr slot0
+    store.i64 v0, v1, align 8
+    v2 = stack_save
+    v3 = ptrtoint.i64 v2
+    return v3
+}
+",
+        Target::LinuxGnu,
+    );
+    assert!(function_text(&text, "f").contains("subq\t$"), "{text}");
+}
+
+#[test]
+fn loop_tops_are_aligned_to_16_bytes() {
+    let ir = "abi lowered
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 slt v2, v0
+    brif v4, block2, block3
+block2:
+    v5 = iadd.i32 v3, v2
+    v6 = iconst.i32 1
+    v7 = iadd.i32 v2, v6
+    jump block1(v7, v5)
+block3:
+    return v3
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let f = function_text(&text, "f");
+        let aligned: Vec<&str> = f
+            .split("\t.p2align\t4\n")
+            .skip(1)
+            .map(|rest| rest.split_once(":\n").expect("a label follows").0)
+            .collect();
+        assert!(!aligned.is_empty(), "{f}");
+        for label in aligned {
+            let at = f.find(&format!("{label}:\n")).unwrap();
+            assert!(
+                f[at..].contains(&format!("\t{label}\n")),
+                "{label} is the target of a back edge:\n{f}"
+            );
+        }
+    }
+    let text = assembly(ADD, Target::LinuxGnu);
+    assert!(
+        !function_text(&text, "add").contains(".p2align"),
+        "straight-line code is not aligned:\n{text}"
+    );
 }

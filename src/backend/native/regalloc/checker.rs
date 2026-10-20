@@ -18,8 +18,9 @@
 //!   then holds only the written value, which no other location holds any more
 //!   (the old value is stale);
 //! - a program copy may instead be any whole-register move, load or store of a
-//!   spill slot: its destination then holds everything the source held, plus
-//!   the copy's destination value;
+//!   spill slot, or a copy of a spill slot to itself (a placeholder for no
+//!   instruction at all, deleted after the check): its destination then holds
+//!   everything the source held, plus the copy's destination value;
 //! - an inserted instruction must be such a move; its destination holds what
 //!   its source held;
 //! - or an inserted `lea` that adds two registers, scaled: its destination then
@@ -544,7 +545,8 @@ const fn register_copy(inst: MInst) -> Option<(Reg, Reg)> {
 }
 
 /// The destination and source of a rewritten whole-register move: between
-/// two registers of one class, or between a register and a spill slot.
+/// two registers of one class, between a register and a spill slot, or from
+/// a spill slot to itself.
 fn as_move(inst: MInst) -> Option<(Loc, Loc)> {
     let (class, dst, src) = match inst {
         | MInst::Mov {
@@ -567,6 +569,12 @@ fn as_move(inst: MInst) -> Option<(Loc, Loc)> {
             dst,
             src: Reg::Phys(src),
         } => (RegClass::Xmm, spill(dst)?, Loc::Reg(src)),
+        // Of either class: no register takes part.
+        | MInst::Store {
+            width: Width::B64,
+            dst,
+            src: Operand::Mem(src),
+        } => (RegClass::Gpr, spill(dst)?, spill(src)?),
         | _ => return None,
     };
     // `%rsp` may be a side of a program copy (`stack_save`); `placed`
@@ -575,8 +583,8 @@ fn as_move(inst: MInst) -> Option<(Loc, Loc)> {
         | Loc::Reg(register) => register.class() == class,
         | Loc::Spill(_) => true,
     };
-    (fits(dst) && fits(src) && !matches!((dst, src), (Loc::Spill(_), Loc::Spill(_))))
-        .then_some((dst, src))
+    let between_slots = matches!((dst, src), (Loc::Spill(dst), Loc::Spill(src)) if dst != src);
+    (fits(dst) && fits(src) && !between_slots).then_some((dst, src))
 }
 
 /// The location a move's source operand reads.

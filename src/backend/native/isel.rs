@@ -117,6 +117,7 @@ pub(crate) fn select<'a>(
         // An object aligned above the stack's 16 bytes gets room to round
         // its address up at run time (see `over_aligned_address`).
         let align = slot.align.bytes();
+        selector.func.slot_align = selector.func.slot_align.max(align);
         let (size, align) = if align > 16 {
             (u64::from(slot.size) + align - 16, 16)
         } else {

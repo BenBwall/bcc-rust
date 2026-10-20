@@ -14,74 +14,21 @@ use super::{
 use crate::util::bump::ArenaVec;
 
 impl<'a> Object<'a> {
+    /// Lays out every section as LLVM MC does (`MCAssembler::layout`): one
+    /// pass with every local branch short, then relaxation passes until no
+    /// offset changes.
     pub(super) fn layout(&mut self) -> Result<()> {
-        loop {
-            for section in &mut self.sections {
-                section.size = 0;
-            }
-            for item in &mut self.items {
-                let section = &mut self.sections[item.section];
-                item.offset = section.size;
-                let size = match &item.kind {
-                    | Kind::Label(id) => {
-                        self.symbols[*id].section = Some(item.section);
-                        self.symbols[*id].value = item.offset;
-                        if section.flags & 0x400 != 0 {
-                            self.symbols[*id].kind = 6;
-                        }
-                        0
-                    },
-                    | Kind::Size(id, size) => {
-                        self.symbols[*id].size = if let Some(size) = size {
-                            *size
-                        } else {
-                            if self.symbols[*id].section != Some(item.section) {
-                                return Err(Error("symbol size outside its section"));
-                            }
-                            item.offset
-                                .checked_sub(self.symbols[*id].value)
-                                .ok_or(Error("negative symbol size"))?
-                        };
-                        0
-                    },
-                    | Kind::Align(align, _) => item.offset.wrapping_neg() & (align - 1),
-                    | Kind::Zero(count) => *count,
-                    | Kind::Code(code) => u64::from(code.len),
-                    | Kind::Value(width, _) => u64::from(*width),
-                    | Kind::Branch {
-                        condition, near, ..
-                    } =>
-                        if *near {
-                            if condition.is_some() { 6 } else { 5 }
-                        } else {
-                            2
-                        },
-                    | Kind::Cfi(..) => 0,
-                };
-                section.size = section
-                    .size
-                    .checked_add(size)
-                    .ok_or(Error("section size overflow"))?;
-            }
-            let mut changed = false;
-            for item in &mut self.items {
-                if let Kind::Branch { target, near, .. } = &mut item.kind {
-                    let symbol = self.symbols[*target];
-                    if symbol.binding == 0 && symbol.alias.is_some() {
-                        return Err(Error("unsupported branch to local alias"));
-                    }
-                    let local = symbol.binding == 0 && symbol.section == Some(item.section);
-                    let distance = i128::from(symbol.value) - i128::from(item.offset + 2);
-                    if !*near && (!local || i8::try_from(distance).is_err()) {
-                        *near = true;
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
+        // The item that defines each label: a branch's target is ahead of it
+        // or behind it.
+        let mut defined_at = ArenaVec::with_capacity_in(self.symbols.len(), self.arena);
+        defined_at.resize(self.symbols.len(), usize::MAX);
+        for (index, item) in self.items.iter().enumerate() {
+            if let Kind::Label(id) = item.kind {
+                defined_at[id] = index;
             }
         }
+        _ = self.pass(&defined_at, false)?;
+        while self.pass(&defined_at, true)? {}
         // Alias chains may be forward and must remain iterative.
         for _ in 0..self.symbols.len() {
             let mut changed = false;
@@ -95,7 +42,7 @@ impl<'a> Object<'a> {
                         changed = true;
                     }
                     self.symbols[id].size = to.size;
-                    if self.symbols[id].kind == 0 {
+                    if !self.coff && self.symbols[id].kind == 0 {
                         self.symbols[id].kind = to.kind;
                     }
                 }
@@ -114,6 +61,96 @@ impl<'a> Object<'a> {
         Ok(())
     }
 
+    /// One pass of MC's fused relaxation and layout (`relaxOnce`): each item
+    /// takes its offset from the items before it in this pass, alignment
+    /// padding follows from that offset, and with `relax` a short branch
+    /// that cannot reach its target becomes near at once. The distance to a
+    /// target behind the branch uses this pass's offsets. A target ahead of
+    /// it still has the previous pass's offset, so the distance uses the
+    /// branch's previous offset as well, which is what MC's `Stretch`
+    /// correction computes. Returns whether any offset changed.
+    fn pass(&mut self, defined_at: &[usize], relax: bool) -> Result<bool> {
+        let Self {
+            coff,
+            sections,
+            symbols,
+            items,
+            ..
+        } = self;
+        for section in sections.iter_mut() {
+            section.size = 0;
+        }
+        let mut changed = false;
+        for (index, item) in items.iter_mut().enumerate() {
+            let section = &mut sections[item.section];
+            let previous = item.offset;
+            item.offset = section.size;
+            changed |= item.offset != previous;
+            let size = match &mut item.kind {
+                | Kind::Label(id) => {
+                    symbols[*id].section = Some(item.section);
+                    symbols[*id].value = item.offset;
+                    if section.flags & 0x400 != 0 {
+                        symbols[*id].kind = 6;
+                    }
+                    0
+                },
+                | Kind::Size(id, size) => {
+                    symbols[*id].size = if let Some(size) = size {
+                        *size
+                    } else {
+                        if symbols[*id].section != Some(item.section) {
+                            return Err(Error("symbol size outside its section"));
+                        }
+                        item.offset
+                            .checked_sub(symbols[*id].value)
+                            .ok_or(Error("negative symbol size"))?
+                    };
+                    0
+                },
+                | Kind::Align { align, max, .. } => padding(item.offset, *align, *max),
+                | Kind::Zero(count) => *count,
+                | Kind::Bytes(bytes) => bytes.len() as u64,
+                | Kind::Code(code) => u64::from(code.len),
+                | Kind::Value(width, _) | Kind::CoffValue(width, _, _) => u64::from(*width),
+                | Kind::Branch {
+                    condition,
+                    target,
+                    near,
+                } => {
+                    if relax && !*near {
+                        let symbol = symbols[*target];
+                        if symbol.binding == 0 && symbol.alias.is_some() {
+                            return Err(Error("unsupported branch to local alias"));
+                        }
+                        let local =
+                            resolvable(*coff, symbol) && symbol.section == Some(item.section);
+                        let from = if defined_at[*target] > index {
+                            previous
+                        } else {
+                            item.offset
+                        };
+                        let distance = i128::from(symbol.value) - i128::from(from + 2);
+                        if !local || i8::try_from(distance).is_err() {
+                            *near = true;
+                        }
+                    }
+                    if *near {
+                        if condition.is_some() { 6 } else { 5 }
+                    } else {
+                        2
+                    }
+                },
+                | Kind::Cfi(..) => 0,
+            };
+            section.size = section
+                .size
+                .checked_add(size)
+                .ok_or(Error("section size overflow"))?;
+        }
+        Ok(changed)
+    }
+
     pub(super) fn materialize(&mut self) -> Result<()> {
         for section in &mut self.sections {
             if section.kind != 8 {
@@ -128,6 +165,14 @@ impl<'a> Object<'a> {
             let section = item.section;
             let offset = item.offset;
             match &item.kind {
+                | Kind::Bytes(bytes) => {
+                    if self.sections[section].kind == 8 {
+                        return Err(Error("string in a NOBITS section"));
+                    }
+                    let start = usize::try_from(offset).map_err(|_| Error("section too large"))?;
+                    self.sections[section].data[start..start + bytes.len()]
+                        .copy_from_slice(bytes.as_bytes());
+                },
                 | Kind::Code(code) => {
                     if self.sections[section].kind == 8 {
                         return Err(Error("instruction in a NOBITS section"));
@@ -147,19 +192,23 @@ impl<'a> Object<'a> {
                         )?;
                     }
                 },
-                | Kind::Value(width, expression) => {
+                | Kind::Value(width, expression) | Kind::CoffValue(width, expression, _) => {
                     let (width, expression) = (*width, *expression);
                     self.fixup(
                         section,
                         offset,
                         width,
                         expression,
-                        match width {
-                            | 8 => 1,
-                            | 4 => 10,
-                            | 2 => 12,
-                            | 1 => 14,
-                            | _ => return Err(Error("unsupported data relocation width")),
+                        if let Kind::CoffValue(_, _, kind) = item.kind {
+                            kind
+                        } else {
+                            match width {
+                                | 8 => 1,
+                                | 4 => 10,
+                                | 2 => 12,
+                                | 1 => 14,
+                                | _ => return Err(Error("unsupported data relocation width")),
+                            }
                         },
                         0,
                     )?;
@@ -173,7 +222,7 @@ impl<'a> Object<'a> {
                         return Err(Error("branch in a NOBITS section"));
                     }
                     let target = *target;
-                    let local = self.symbols[target].binding == 0
+                    let local = resolvable(self.coff, self.symbols[target])
                         && self.symbols[target].section == Some(section);
                     let mut code = [0; 6];
                     let len = if *near {
@@ -218,8 +267,8 @@ impl<'a> Object<'a> {
                         });
                     }
                 },
-                | Kind::Align(align, fill) => {
-                    let count = offset.wrapping_neg() & (align - 1);
+                | Kind::Align { align, fill, max } => {
+                    let count = padding(offset, *align, *max);
                     if let Some(fill) = fill {
                         if self.sections[section].kind == 8 && *fill != 0 {
                             return Err(Error("nonzero alignment in NOBITS section"));
@@ -252,6 +301,9 @@ impl<'a> Object<'a> {
         kind: u32,
         bias: i64,
     ) -> Result<()> {
+        if !self.coff && kind >= 0x0001_0000 {
+            return Err(Error("COFF relocation in ELF listing"));
+        }
         let explicit_plt = expression.ends_with("@PLT") && kind == 4;
         let expression = listing::expression(if explicit_plt {
             expression
@@ -278,7 +330,7 @@ impl<'a> Object<'a> {
                 }
                 value += i128::from(symbol.value) - i128::from(base.value);
             } else if matches!(kind, 2 | 4)
-                && symbol.binding == 0
+                && resolvable(self.coff, symbol)
                 && !explicit_plt
                 && symbol.section == Some(section)
             {
@@ -367,5 +419,25 @@ impl<'a> Object<'a> {
             relocs: ArenaVec::new_in(self.arena),
         });
         Ok(id)
+    }
+}
+
+/// The padding an alignment item at `offset` emits: up to the next multiple
+/// of `align`, or nothing if that takes more than `max` bytes, as
+/// `MCAssembler::relaxAlign` computes it (x86's smallest `nop` is one byte,
+/// so code alignment needs no rounding).
+fn padding(offset: u64, align: u64, max: u64) -> u64 {
+    let count = offset.wrapping_neg() & (align - 1);
+    if count > max { 0 } else { count }
+}
+
+// COFF function-typed and weak symbols retain linker fixups even within a
+// section; ordinary labels (including globals) can be resolved by the
+// assembler.
+fn resolvable(coff: bool, symbol: Symbol<'_>) -> bool {
+    if coff {
+        symbol.binding != 2 && symbol.kind != 2
+    } else {
+        symbol.binding == 0
     }
 }

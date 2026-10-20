@@ -15,7 +15,9 @@
 //! are saved with `movaps` after the allocation (`.seh_savexmm`). A function
 //! whose stack moves sets `%rbp` to `%rsp` after the allocation
 //! (`.cfi_def_cfa_register`, `.seh_setframe %rbp, 0`) and its epilogue
-//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form.
+//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form. A
+//! System V leaf frame in the red zone (`frame.rs`) needs neither the `sub`
+//! nor the `add`, and its CFA stays where the pushes left it.
 //!
 //! Each function's read-only constants follow it in `.rodata` (`.rdata` on
 //! COFF), 16 bytes each so that `xorps` may read them.
@@ -79,6 +81,7 @@ use crate::{
     target::Target,
     util::bump::{
         ArenaSet,
+        ArenaVec,
         Bump,
     },
 };
@@ -116,12 +119,13 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     /// One function: label, prologue, blocks, and the end of its unwind
-    /// information.
+    /// information. `arena` holds the function's scratch data.
     pub(crate) fn function(
         &mut self,
         id: FuncId,
         func: &MFunction<'_>,
         frame: &Frame<'_>,
+        arena: &Bump,
     ) -> fmt::Result {
         let function = self.module.function(id);
         let name = Name(function.name);
@@ -156,8 +160,12 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             self.stubs.extend(func.indirect_symbols.iter().copied());
         }
         self.prologue(frame)?;
+        let aligned = aligned_blocks(func, arena);
         for (index, block) in func.blocks.iter().enumerate() {
             let block_id = MBlock::new(index);
+            if aligned[index] {
+                writeln!(self.out, "{LOOP_ALIGNMENT}")?;
+            }
             writeln!(self.out, "{}:", Label(id, block_id))?;
             for &(label, _) in func.labels.iter().filter(|&&(_, at)| at == block_id) {
                 writeln!(self.out, "{}:", BlockLabel(id, label))?;
@@ -261,6 +269,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     fn prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let size = frame.allocation();
         let mut cfa = 8;
         for &register in &frame.saved {
             writeln!(self.out, "\tpushq\t%{}", register.name(Width::B64))?;
@@ -276,23 +285,23 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "\t.seh_pushreg %{}", register.name(Width::B64))?;
             }
         }
-        if frame.size > 0 {
-            if !self.elf && frame.size >= 4096 {
+        if size > 0 {
+            if !self.elf && size >= 4096 {
                 let probe = if self.target == Target::WindowsMsvc {
                     "__chkstk"
                 } else {
                     "___chkstk_ms"
                 };
-                writeln!(self.out, "\tmovl\t${}, %eax", frame.size)?;
+                writeln!(self.out, "\tmovl\t${size}, %eax")?;
                 writeln!(self.out, "\tcallq\t{probe}")?;
                 writeln!(self.out, "\tsubq\t%rax, %rsp")?;
             } else {
-                writeln!(self.out, "\tsubq\t${}, %rsp", frame.size)?;
+                writeln!(self.out, "\tsubq\t${size}, %rsp")?;
             }
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_offset {}", frame.cfa_offset())?;
             } else {
-                writeln!(self.out, "\t.seh_stackalloc {}", frame.size)?;
+                writeln!(self.out, "\t.seh_stackalloc {size}")?;
             }
         }
         for &(register, offset) in &frame.saved_xmm {
@@ -318,6 +327,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     fn epilogue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let size = frame.allocation();
         if self.elf {
             writeln!(self.out, "\t.cfi_remember_state")?;
         }
@@ -331,14 +341,14 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             )?;
         }
         if frame.rbp_based {
-            writeln!(self.out, "\tleaq\t{}(%rbp), %rsp", frame.size)?;
-            cfa -= frame.size;
+            writeln!(self.out, "\tleaq\t{size}(%rbp), %rsp")?;
+            cfa -= size;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa %rsp, {cfa}")?;
             }
-        } else if frame.size > 0 {
-            writeln!(self.out, "\taddq\t${}, %rsp", frame.size)?;
-            cfa -= frame.size;
+        } else if size > 0 {
+            writeln!(self.out, "\taddq\t${size}, %rsp")?;
+            cfa -= size;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_offset {cfa}")?;
             }
@@ -1113,6 +1123,36 @@ impl fmt::Display for Stub<'_> {
             write!(f, "\"{prefix}{}\"", self.name)
         }
     }
+}
+
+/// The directive that starts a loop header: the next 16-byte boundary,
+/// padded with multi-byte `nop`s, as LLVM aligns loops on x86-64
+/// (`X86TargetLowering` prefers 16-byte loop alignment and sets no limit on
+/// the padding). A limit, as GCC's `.p2align 4,,10`, measured slower on
+/// `benches/c`: a loop it leaves unaligned loses what alignment gained.
+const LOOP_ALIGNMENT: &str = "\t.p2align\t4";
+
+/// Which blocks of `func` are loop headers in its final layout: targets of
+/// an edge from a later block or from themselves. Every loop the layout
+/// keeps has one, entered from the block before it once per run of the loop
+/// and from its back edge on every iteration, so its padding runs once per
+/// run of the loop. Other blocks inside loops stay where they fall: LLVM
+/// also aligns those its block frequencies call hot, but without them that
+/// would align, for example, every case of an interpreter's dispatch, which
+/// on `benches/c` cost as much as it saved. The entry block is aligned with
+/// the function.
+fn aligned_blocks<'a>(func: &MFunction<'_>, arena: &'a Bump) -> ArenaVec<'a, bool> {
+    let blocks = func.blocks.len();
+    let mut aligned = ArenaVec::with_capacity_in(blocks, arena);
+    aligned.resize(blocks, false);
+    for block in 0..blocks {
+        for successor in func.successors(MBlock::new(block)) {
+            if successor.index() <= block && successor.index() > 0 {
+                aligned[successor.index()] = true;
+            }
+        }
+    }
+    aligned
 }
 
 /// Whether the module defines `symbol`; runtime symbols never are.

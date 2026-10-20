@@ -6,22 +6,24 @@
 //! move overwrites a location another still reads; a cycle goes through a
 //! scratch register. A value in its spill slot that an instruction can read
 //! as a memory source operand is read there, and a copy to or from it
-//! becomes a single store or load. Other uses of a spilled piece (the
-//! scan's fallback) load it into a scratch register of its class just
-//! before the instruction and store it from there just after. An instruction
-//! reads all its operands before it writes any, so a value it only defines
-//! shares a scratch register with one it only reads. No instruction reads
-//! more than two virtual registers of one class except one with an indexed
-//! memory operand and a third general register, such as an indexed store,
-//! whose base, index and value may all be spilled (values live into the
+//! becomes a single store or load; a copy between two values that coalescing
+//! joined, made while their slot holds them, becomes nothing. Other uses of a
+//! spilled piece (the scan's fallback) load it into a scratch register of its
+//! class just before the instruction and store it from there just after. An
+//! instruction reads all its operands before it writes any, so a value it only
+//! defines shares a scratch register with one it only reads. No instruction
+//! reads more than two virtual registers of one class except one with an
+//! indexed memory operand and a third general register, such as an indexed
+//! store, whose base, index and value may all be spilled (values live into the
 //! target of an indirect jump are never split); its address then goes into
 //! the first scratch register with a `lea`, which the instruction reads
 //! instead, so two scratch registers per class always suffice. All these
 //! moves and the `lea` leave the flags alone.
 //!
-//! Copies between a register and itself stay until the checker has seen
-//! them, then go; `edges.rs` then threads away the blocks left holding
-//! only a jump.
+//! Copies between a location and itself stay until the checker has seen
+//! them, then go (one within a spill slot is a placeholder `Store` from the
+//! slot to itself, which x86 cannot encode); `edges.rs` then threads away the
+//! blocks left holding only a jump.
 
 use super::{
     Allocation,
@@ -417,7 +419,7 @@ fn assign(spilled: &mut [Scratch], class: RegClass, scratch: [PReg; 2]) {
 }
 
 /// A copy that has exactly one side in a spill slot, as a single load or
-/// store.
+/// store, or both in one slot, as the placeholder [`identity_copy`].
 fn copy_through_memory(inst: MInst, location: &impl Fn(VReg, Role) -> Location) -> Option<MInst> {
     let (MInst::Mov {
         width: Width::B64,
@@ -440,28 +442,45 @@ fn copy_through_memory(inst: MInst, location: &impl Fn(VReg, Role) -> Location) 
     match (dst, src) {
         | (Location::Spill(_), Location::Reg(_)) | (Location::Reg(_), Location::Spill(_)) =>
             Some(move_inst(dst, src)),
+        | (Location::Spill(dst), Location::Spill(src)) if dst == src =>
+            Some(identity_copy(spill_slot(dst))),
         | _ => None,
     }
 }
 
-/// Deletes the 64-bit copies between a register and itself.
+/// Deletes the 64-bit copies between a register and itself and the
+/// placeholders of copies within a spill slot.
 fn remove_identity_copies(func: &mut MFunction<'_>) {
     for block in &mut func.blocks {
-        block.insts.retain(|inst| {
-            !matches!(
-                *inst,
-                MInst::Mov {
-                    width: Width::B64,
-                    dst,
-                    src: Operand::Reg(src),
-                }
-                | MInst::XMov {
-                    width: Width::B64,
-                    dst,
-                    src: Operand::Reg(src),
-                } if dst == src
-            )
+        block.insts.retain(|inst| match *inst {
+            | MInst::Mov {
+                width: Width::B64,
+                dst,
+                src: Operand::Reg(src),
+            }
+            | MInst::XMov {
+                width: Width::B64,
+                dst,
+                src: Operand::Reg(src),
+            } => dst != src,
+            | MInst::Store {
+                width: Width::B64,
+                dst,
+                src: Operand::Mem(src),
+            } => dst != src,
+            | _ => true,
         });
+    }
+}
+
+/// The placeholder of a copy between two values in one spill slot: a store
+/// of the slot to itself, which the checker reads as the copy and which is
+/// deleted with the identity copies, before anything emits it.
+const fn identity_copy(slot: Mem) -> MInst {
+    MInst::Store {
+        width: Width::B64,
+        dst:   slot,
+        src:   Operand::Mem(slot),
     }
 }
 

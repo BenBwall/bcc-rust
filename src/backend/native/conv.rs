@@ -39,6 +39,11 @@ pub(crate) struct CallConv {
     /// Bytes between the return address and the first stack argument: the
     /// home area the caller reserves for the callee on Win64.
     pub(crate) home_area:        u32,
+    /// Bytes below `%rsp` that signal and interrupt handlers leave alone, so
+    /// a leaf function may keep its frame there without moving `%rsp`: the
+    /// System V red zone (psABI §3.2.2). Win64 has none ("x64 stack usage":
+    /// memory below `%rsp` is volatile).
+    pub(crate) red_zone:         u32,
 }
 
 /// Which convention.
@@ -146,6 +151,7 @@ impl CallConv {
             PReg::Xmm13,
         ],
         home_area:        0,
+        red_zone:         128,
     };
     pub(crate) const WIN64: Self = Self {
         kind:             ConvKind::Win64,
@@ -218,6 +224,7 @@ impl CallConv {
             PReg::Xmm13,
         ],
         home_area:        32,
+        red_zone:         0,
     };
 
     /// The convention of `target`.

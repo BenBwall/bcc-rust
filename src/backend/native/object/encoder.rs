@@ -821,7 +821,9 @@ impl<'a> Code<'a> {
         else {
             return Err(Error("expected memory"));
         };
-        let (expr, kind) = if let Some(expr) = disp.strip_suffix("@TPOFF") {
+        let (expr, kind) = if let Some(expr) = disp.strip_suffix("@SECREL32") {
+            (expr, 0x0001_000B)
+        } else if let Some(expr) = disp.strip_suffix("@TPOFF") {
             (expr, 23)
         } else if let Some(expr) = disp.strip_suffix("@GOTTPOFF") {
             if !rip {
@@ -836,7 +838,7 @@ impl<'a> Code<'a> {
         } else {
             (disp, if rip { 2 } else { 11 })
         };
-        if expr.contains('@') {
+        if expr.contains('@') && !expr.starts_with('"') {
             return Err(Error("unsupported relocation suffix"));
         }
         if !expr.is_empty() {
@@ -1053,14 +1055,17 @@ fn operand(text: &str) -> Result<Operand<'_>> {
     if let Some(imm) = text.strip_prefix('$') {
         return Ok(Operand::Imm(number(imm)?));
     }
-    if let Some(disp) = text.strip_prefix("%fs:") {
+    if let Some(disp) = text
+        .strip_prefix("%fs:")
+        .or_else(|| text.strip_prefix("%gs:"))
+    {
         return Ok(Operand::Mem {
             base: None,
             index: None,
             scale: 0,
             disp,
             rip: false,
-            segment: Some(0x64),
+            segment: Some(if text.starts_with("%gs:") { 0x65 } else { 0x64 }),
         });
     }
     if text == "%st" {
