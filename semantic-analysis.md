@@ -959,14 +959,16 @@ object), and a System V `va_arg` of a type passed in registers; unevaluated and
 skipped operands change nothing. These rules read the expression's type, so
 they run once it is analyzed. A statement
 expression's value statement is emitted even after a jump. A declaration's
-initializer does not end the code after it, but a block-scope object or
-typedef of a variably modified type does: `EmitVariablyModifiedType` ensures
-an insertion point before it evaluates the array sizes, so they and the code
-after them are emitted, unless the declaration is in code Clang never
-reaches (a statement `EmitStmt` skips whole, a folded condition's other arm,
-a folded switch's statements after the selected `break`). Bit-fields, unions,
-GNU ranges, floating comparisons and a declaration in an unselected generic
-association remain unmodeled; each leaves code emitted that Clang may skip. The module-item planner
+initializer does not end the code after it. Neither does a block-scope object
+or typedef of a variably modified type, although Clang's
+`EmitVariablyModifiedType` ensures an insertion point there and emits the
+array sizes and the code after them: the rule needs to know that Clang reaches
+the declaration at all, which conditions only Clang folds, the unselected
+operand of `__builtin_choose_expr` and a switch without a match can hide, so
+such code stays skipped, as before #113. Bit-field, union and floating reads,
+GNU ranges in `const` initializers and the unselected operand of
+`__builtin_choose_expr` remain unmodeled; each leaves code emitted that Clang
+may skip. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.
