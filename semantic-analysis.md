@@ -958,7 +958,9 @@ builtin whose memory order is not a constant (unless a library call copies its
 object), and a System V `va_arg` of a type passed in registers; unevaluated and
 skipped operands change nothing. These rules read the expression's type, so
 they run once it is analyzed. A statement
-expression's value statement is emitted even after a jump. A declaration's
+expression's value statement is emitted even after a jump, and one whose body
+ends skipped ends its expression statement's code only where it is emitted
+itself: not in a skipped or unevaluated operand. A declaration's
 initializer does not end the code after it. Neither does a block-scope object
 or typedef of a variably modified type, although Clang's
 `EmitVariablyModifiedType` ensures an insertion point there and emits the

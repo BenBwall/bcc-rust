@@ -507,8 +507,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => self.end_expression_statement(expression, serial, value),
             | FunctionWork::StatementExpressionEnd(outer) => {
                 // `StmtExprEvaluation` ensures an insertion point: a body that
-                // ends skipped leaves a new block without predecessors.
-                if self.functions.dead {
+                // ends skipped leaves a new block without predecessors. Only
+                // an emitted statement expression does: not one in code or an
+                // operand that is skipped, nor one in an unevaluated operand.
+                if self.functions.dead
+                    && !outer
+                    && self.functions.sizeof.is_none()
+                    && self.functions.reference_context.is_none()
+                {
                     self.functions.emission.orphan = Some(self.functions.emission.serial);
                 }
                 self.functions.dead = outer;

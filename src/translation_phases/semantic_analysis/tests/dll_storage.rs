@@ -812,7 +812,9 @@ fn review_forms_fix_generated_import_state() {
 /// `__builtin_strlen` fold (`strlen` only with the builtin's type, which
 /// `unsigned long` is not on LLP64). A variably modified declaration after
 /// a jump resumes nothing, which keeps the import where Clang never reaches
-/// the declaration, as under a union read bcc does not fold.
+/// the declaration, as under a union read bcc does not fold. A statement
+/// expression in an operand a folded condition skips skips nothing after
+/// its expression statement.
 #[test]
 fn second_review_forms_fix_generated_import_state() {
     const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
@@ -915,6 +917,21 @@ fn second_review_forms_fix_generated_import_state() {
         ),
         ("int h(int n) { return 0; if (c) { int v[n]; x; } }", true),
         ("int h(int n) { die(); int v[n]; x; return 0; }", false),
+        ("int h(void) { (void)(0 && ({ 5; })); x; return 0; }", false),
+        ("int h(void) { (void)(1 || ({ 5; })); x; return 0; }", false),
+        (
+            "int h(void) { (void)(0 ? ({ 5; }) : 0); x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { (void)(1 ? 0 : ({ 5; })); x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { (void)(0 ? ({ return 99; 0; }) : 0); x; return 0; }",
+            false,
+        ),
+        ("int h(void) { ({ return 0; 1; }); x; return 0; }", true),
         (
             "static const union { int i; float f; } u = {1}; int h(int n) { if (u.i) {} else { \
              return 0; int a[n]; x; } return 0; }",

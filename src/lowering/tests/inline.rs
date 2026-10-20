@@ -1180,6 +1180,54 @@ fn always_inline_order_follows_folding_and_joins() {
     }
 }
 
+/// A statement expression ending in skipped code leaves a block without
+/// predecessors only when code generation emits it: not in an operand a
+/// folded `?:`, `&&` or `||` skips, nor in the unselected operand of
+/// `__builtin_choose_expr`, so the code after its expression statement is
+/// emitted (the #104 review's `n_g01`, `n_g02`, `n_g03`, `n_g06` and
+/// `n_e06`, checked against Clang 23).
+#[test]
+fn always_inline_order_ignores_statement_expressions_code_generation_skips() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (probe, emitted) in [
+        ("(void)(0 && ({ 5; })); h(0);", true),
+        ("(void)(1 || ({ 5; })); h(0);", true),
+        ("(void)(0 ? ({ 5; }) : 0); h(0);", true),
+        ("(void)(1 ? 0 : ({ 5; })); h(0);", true),
+        ("(void)__builtin_choose_expr(0, ({ 5; }), 0); h(0);", true),
+        ("int r = 0; r = 1 ? 2 : ({ 5; }); r += 1; h(r);", true),
+        (
+            "int r = 0; while (1) { r++; (void)(0 && ({ break; 0; })); if (c) break; } h(r);",
+            true,
+        ),
+        ("(void)(0 ? ({ exit(1); 0; }) : 0); h(0);", true),
+        ("(void)(1 || ({ die(); 0; })); h(0);", true),
+        ("(void)(0 ? ({ for (;;) ; 0; }) : 0); h(0);", true),
+        ("(void)(0 ? ({ return 99; 0; }) : 0); h(0);", true),
+        (
+            "(void)(0 ? ({ __builtin_unreachable(); 0; }) : 0); h(0);",
+            true,
+        ),
+        (
+            "int r = __builtin_choose_expr(__builtin_constant_p(3) && __builtin_constant_p(4), 3 \
+             > 4 ? 3 : 4, ({ int a = 3, b = 4; a > b ? a : b; })); h(r);",
+            true,
+        ),
+        (
+            "int r = 0; r += (0 ? (1 ? ({ static int s; s; }) : 0) : other()); h(r);",
+            true,
+        ),
+        // A statement expression that is emitted and ends skipped still
+        // leaves its block without predecessors.
+        ("({ return 0; 1; }); h(0);", false),
+        ("(void)({ die(); 0; }); h(0);", false),
+        ("(void)(c ? ({ return 0; 1; }) : 0); h(0);", true),
+    ] {
+        assert_eq!(h_first(probe, gnu), emitted, "{probe}");
+    }
+}
+
 /// A weak inline definition is a weak definition, emitted where it is
 /// referenced, as Clang emits it; a strong definition elsewhere wins. A
 /// GNU89 plain inline definition is an external definition anyway.

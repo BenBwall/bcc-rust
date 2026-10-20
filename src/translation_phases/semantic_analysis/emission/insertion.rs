@@ -26,7 +26,9 @@
 //! Only an evaluated, emitted expression counts: neither a `sizeof`,
 //! `alignof` or `typeof` operand nor an operand a folded condition skips.
 //! A statement expression's value statement is emitted even after a jump
-//! when the expression has a value, and keeps its block.
+//! when the expression has a value, and keeps its block. A statement
+//! expression whose body ends skipped leaves a block without predecessors,
+//! but only when it is emitted itself, not in such an operand.
 //! C99: §6.8.3 paragraph 2, p. 132; PDF p. 144; §6.5.13-§6.5.15,
 //! pp. 89-91; PDF pp. 101-103; §6.5.5 paragraph 3, p. 82; PDF p. 94.
 //! C11: §6.5.16.2 paragraph 3, pp. 103-104; PDF pp. 121-122 (atomic
