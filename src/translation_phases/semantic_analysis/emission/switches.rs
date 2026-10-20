@@ -337,6 +337,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) {
         if let Some(id) = self.control.statement_id(switch) {
             self.control.statements[id.0].generated = super::super::GeneratedControl::Switch(label);
+            if let StatementType::Switch {
+                condition_expression,
+                ..
+            } = switch.kind
+                && let Some(condition) =
+                    super::super::statements::slot_expression(condition_expression)
+            {
+                self.elide_condition_references(condition);
+            }
         }
     }
 

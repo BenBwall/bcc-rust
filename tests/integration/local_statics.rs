@@ -709,6 +709,31 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
         );
     }
 
+    #[test]
+    fn folded_controls_drop_only_their_executable_condition_references() {
+        for body in [
+            "if(&h!=0)return 0;return 1;",
+            "switch(&h!=0){case 1:return 0;default:return 1;}",
+            "return (&h!=0)?0:1;",
+            "return (&h==0)&&1;",
+            "return ((&h!=0)||0)!=1;",
+        ] {
+            let template =
+                format!("static int h(void){{STATIC return a;}} int main(void){{{body}}}");
+            assert_o0_static_emission(&template, false);
+            assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+        }
+        for body in [
+            "if(&h!=0){L:;}else{M:;}return 0;",
+            "if(__builtin_constant_p(({static int (*p)(void)=h;0;}))){}return 0;",
+        ] {
+            assert_o0_static_emission(
+                &format!("static int h(void){{STATIC return a;}}int main(void){{{body}}}"),
+                true,
+            );
+        }
+    }
+
     fn assert_runs_like_clang(source: &str) {
         let source_file = temporary("run.c");
         let executable = temporary("run.exe");

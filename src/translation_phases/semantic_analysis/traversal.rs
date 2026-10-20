@@ -89,6 +89,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Expression(right_expression));
                 if let Some(live) = live {
                     self.dead_arm(left_expression, live, Some(right_expression));
+                    self.begin_condition_references(left_expression);
                 }
                 self.work.push(Work::Expression(left_expression));
             },
@@ -104,6 +105,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.dead_arm(c.condition_expression, false, Some(c.else_expression));
                 self.work.push(Work::Expression(c.then_expression));
                 self.dead_arm(c.condition_expression, true, Some(c.then_expression));
+                self.begin_condition_references(c.condition_expression);
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {
@@ -190,6 +192,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.dead_arm(condition, false, None);
                     self.work.push(Work::Expression(yes));
                     self.dead_arm(condition, true, None);
+                    self.begin_condition_references(condition);
                     self.work.push(Work::Expression(condition));
                 }
             },
@@ -347,6 +350,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.dead_statement_arm(s, condition, true, Some(then_statement));
                 }
                 self.work.push(Work::Condition(condition_expression, false));
+                if let Some(condition) = condition {
+                    self.begin_condition_references(condition);
+                }
                 self.expression_slot(condition_expression);
             },
             | S::Switch {
@@ -378,6 +384,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
                 self.work.push(Work::Condition(condition_expression, true));
+                if let Some(condition) = super::statements::slot_expression(condition_expression) {
+                    self.begin_condition_references(condition);
+                }
                 self.expression_slot(condition_expression);
             },
             | S::While {

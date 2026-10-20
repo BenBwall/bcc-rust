@@ -482,6 +482,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::Expression(argument));
                 }
             },
+            | FunctionWork::ConditionReferences(condition, mark) => {
+                let end = self.reference_count();
+                if end > mark.start {
+                    _ = self.functions.condition_uses.insert(
+                        std::ptr::from_ref(condition).addr(),
+                        ConditionUses { mark, end },
+                    );
+                }
+            },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
@@ -516,6 +525,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.elided = outer_elided || skipped;
                 if skipped && let Some(id) = self.control.statement_id(owner) {
                     self.control.statements[id.0].generated = super::GeneratedControl::If(!live);
+                    self.elide_condition_references(condition);
                 }
             },
             | FunctionWork::DeadArm {
@@ -527,11 +537,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 let value = self.folded_condition(condition);
                 self.functions.dead = outer_dead || value == Some(!live);
-
-                self.functions.elided = outer_elided
-                    || (value == Some(!live)
-                        && label_operand
-                            .is_none_or(|operand| !self.expression_contains_label(operand)));
+                let elided = value == Some(!live)
+                    && label_operand.is_none_or(|operand| !self.expression_contains_label(operand));
+                self.functions.elided = outer_elided || elided;
+                if elided {
+                    self.elide_condition_references(condition);
+                }
             },
             | FunctionWork::GenericMark(generic) => {
                 let at = EmissionMark {
@@ -1648,16 +1659,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .filter(|&i| self.bindings[i].linkage == Linkage::External);
         self.functions.uses.push(Use {
             reference_context: self.functions.reference_context,
-            owner: self
-                .functions
-                .initializer
-                // A thread-local object's initializer is constant data too.
-                .filter(|&binding| self.bindings[binding].duration.is_static_or_thread())
-                .map(ReferenceOwner::Object)
-                .or(self
-                    .functions
-                    .reference_function
-                    .map(ReferenceOwner::Function)),
+            owner: self.reference_owner(),
             binding,
             name,
             sizeof: self.functions.sizeof,
@@ -1672,6 +1674,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.bindings[binding].duration.is_static_or_thread()
                     })),
         });
+    }
+
+    fn reference_owner(&self) -> Option<ReferenceOwner> {
+        self.functions
+            .initializer
+            .filter(|&binding| self.bindings[binding].duration.is_static_or_thread())
+            .map(ReferenceOwner::Object)
+            .or(self
+                .functions
+                .reference_function
+                .map(ReferenceOwner::Function))
+    }
+
+    /// Captures only the condition's uses, before either arm is analyzed.
+    /// Folded lowering can then omit them while retaining initializer data
+    /// of static declarations collected inside an unevaluated operand.
+    /// C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146; omission follows Clang.
+    pub(super) fn begin_condition_references(&mut self, condition: &'tu Expression<'tu>) {
+        self.work
+            .push(Work::FunctionWork(FunctionWork::ConditionReferences(
+                condition,
+                ConditionMark {
+                    start: self.reference_count(),
+                    owner: self.reference_owner(),
+                },
+            )));
+    }
+
+    pub(super) fn elide_condition_references(&mut self, condition: &'tu Expression<'tu>) {
+        let Some(uses) = self
+            .functions
+            .condition_uses
+            .remove(&std::ptr::from_ref(condition).addr())
+        else {
+            return;
+        };
+        for usage in &mut self.functions.uses[uses.mark.start..uses.end] {
+            if usage.owner == uses.mark.owner {
+                usage.dead = true;
+                usage.unlowered = true;
+            }
+        }
     }
 
     /// The number of references recorded so far, which marks where the
@@ -2091,6 +2135,7 @@ pub(super) enum FunctionWork<'tu> {
     ),
     /// Enter operand contexts after resolving a builtin's callee.
     CallArguments(&'tu Expression<'tu>, ArenaList<'tu, &'tu Expression<'tu>>),
+    ConditionReferences(&'tu Expression<'tu>, ConditionMark),
     RestoreSizeof(Option<usize>),
     RestoreReferenceContext(Option<usize>),
     /// Sets whether code generation skips the code that follows.
@@ -2234,6 +2279,19 @@ struct DefinitionContext {
     reference_context: Option<usize>,
 }
 
+/// Owner and first reference before a foldable condition is analyzed.
+#[derive(Clone, Copy)]
+pub(super) struct ConditionMark {
+    start: usize,
+    owner: Option<ReferenceOwner>,
+}
+
+#[derive(Clone, Copy)]
+struct ConditionUses {
+    mark: ConditionMark,
+    end:  usize,
+}
+
 /// Bounds around a generic operand, whose selection is known after typing.
 /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
 #[derive(Clone, Copy)]
@@ -2278,7 +2336,7 @@ enum ReferenceContextKind<'tu> {
 /// Parameter type sites execute as part of the definition, before its binding
 /// is installed. Resolve their syntactic owner to that binding at completion.
 /// C99: §6.9.1p10, p. 142; PDF p. 154.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ReferenceOwner {
     Function(usize),
     Object(usize),
@@ -2342,6 +2400,7 @@ pub(super) struct State<'tu, 's> {
     /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
+    condition_uses: ArenaMap<'s, usize, ConditionUses>,
 }
 
 impl<'s> State<'_, 's> {
@@ -2371,6 +2430,7 @@ impl<'s> State<'_, 's> {
             outside:             [None; 2],
             generic_marks:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             definition_contexts: ArenaVec::new_in(scratch),
+            condition_uses:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }
