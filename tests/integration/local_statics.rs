@@ -839,6 +839,12 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
     }
 
     fn assert_runs_like_clang(source: &str) {
+        // The sources target the default Linux C library, which only a Linux
+        // host can link and run; the static-emission checks still run.
+        if !cfg!(target_os = "linux") {
+            eprintln!("running these programs requires a Linux host");
+            return;
+        }
         let source_file = temporary("run.c");
         let executable = temporary("run.exe");
         std::fs::write(&source_file, source).unwrap();
