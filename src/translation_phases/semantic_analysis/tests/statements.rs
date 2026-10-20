@@ -221,28 +221,27 @@ fn labels_and_loop_placement_are_function_local() {
 /// C99: §6.2.1 paragraphs 4 and 7, pp. 29-30; PDF pp. 41-42.
 #[test]
 fn folded_switch_case_labels_keep_source_order_and_scope() {
-    let names = |source: &str| {
-        let mut names = Vec::new();
+    let names = |source: &str, expected: &[&str]| {
         with_source(source, |context, _| {
-            for error in context.take_pending_errors() {
-                if let TranslationError::Semantic(error) = error {
-                    names.push(
-                        error
-                            .name
-                            .map(|name| context.string_cache.at(name).to_owned()),
-                    );
-                }
-            }
+            let errors = context.take_pending_errors();
+            let names = errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Semantic(error) => error.name,
+                    | _ => None,
+                })
+                .map(|name| context.string_cache.at(name))
+                .collect::<Vec<_>>();
+            assert_eq!(names, expected, "{source}");
         });
-        names
     };
-    assert_eq!(
-        names("int f(void) { switch (1) { case 1: bad = 0; break; case nope: break; } return 0; }"),
-        [Some("bad".to_owned()), Some("nope".to_owned())]
+    names(
+        "int f(void) { switch (1) { case 1: bad = 0; break; case nope: break; } return 0; }",
+        &["bad", "nope"],
     );
-    assert_eq!(
-        names("int f(void) { switch (1) { case x: y = 0; case z: w = 0; } return 0; }"),
-        ["x", "y", "z", "w"].map(|name| Some(name.to_owned()))
+    names(
+        "int f(void) { switch (1) { case x: y = 0; case z: w = 0; } return 0; }",
+        &["x", "y", "z", "w"],
     );
     // An enumerator a case label declares in one block is not visible in
     // the next one.

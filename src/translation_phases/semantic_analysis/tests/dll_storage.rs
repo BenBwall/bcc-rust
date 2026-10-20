@@ -688,104 +688,109 @@ fn review_forms_fix_generated_import_state() {
     const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
                             int x; __attribute__((noreturn)) void die(void); ";
     const NP: &str = "typedef void (*NP)(void) __attribute__((noreturn)); ";
-    for (suffix, imported) in [
+    for (prefix, suffix, imported) in [
         (
-            "int h(void) { switch (1) { case 1: ({ break; 0; }); case 2: x; } return 0; }"
-                .to_owned(),
+            "",
+            "int h(void) { switch (1) { case 1: ({ break; 0; }); case 2: x; } return 0; }",
             false,
         ),
         (
-            "int h(void) { switch (1) { case 1: break; case 2: ({ label: 0; }); x; } return 0; }"
-                .to_owned(),
+            "",
+            "int h(void) { switch (1) { case 1: break; case 2: ({ label: 0; }); x; } return 0; }",
             false,
         ),
         (
+            "",
             "int h(void) { switch (1) { case 1: break; case 2: { int v = ({ lab: 0; }); x; } } \
-             return 0; }"
-                .to_owned(),
+             return 0; }",
             false,
         ),
         (
-            "[[noreturn]] void d2(void); __typeof__(d2) *p; int h(void) { p(); x; return 0; }"
-                .to_owned(),
+            "",
+            "[[noreturn]] void d2(void); __typeof__(d2) *p; int h(void) { p(); x; return 0; }",
             false,
         ),
         (
+            "",
             "struct __jmp_buf_tag; void longjmp(struct __jmp_buf_tag *, int); struct \
-             __jmp_buf_tag *jp; int h(void) { longjmp(jp, 1); x; return 0; }"
-                .to_owned(),
+             __jmp_buf_tag *jp; int h(void) { longjmp(jp, 1); x; return 0; }",
             false,
         ),
         (
+            "",
             "typedef long jmp_buf[8]; void longjmp(long *, int); int h(void) { longjmp(0, 1); x; \
-             return 0; }"
-                .to_owned(),
+             return 0; }",
             true,
         ),
         (
-            "int h(void) { _Complex double z = 1; die(), (z * z); x; return 0; }".to_owned(),
+            "",
+            "int h(void) { _Complex double z = 1; die(), (z * z); x; return 0; }",
             false,
         ),
         (
-            "int c; int h(void) { die(), sizeof(c ? 1 : 0); x; return 0; }".to_owned(),
+            "",
+            "int c; int h(void) { die(), sizeof(c ? 1 : 0); x; return 0; }",
+            true,
+        ),
+        (NP, "NP a[1]; int h(void) { a[0](); x; return 0; }", true),
+        (
+            NP,
+            "NP getnp(void); int h(void) { getnp()(); x; return 0; }",
             true,
         ),
         (
-            format!("{NP}NP a[1]; int h(void) {{ a[0](); x; return 0; }}"),
+            NP,
+            "NP p1, p2; int c; int h(void) { (c ? p1 : p2)(); x; return 0; }",
             true,
         ),
         (
-            format!("{NP}NP getnp(void); int h(void) {{ getnp()(); x; return 0; }}"),
-            true,
-        ),
-        (
-            format!("{NP}NP p1, p2; int c; int h(void) {{ (c ? p1 : p2)(); x; return 0; }}"),
-            true,
-        ),
-        (
-            format!(
-                "{NP}NP p1; void (*p2)(void); int c; int h(void) {{ (c ? p1 : p2)(); x; return 0; \
-                 }}"
-            ),
+            NP,
+            "NP p1; void (*p2)(void); int c; int h(void) { (c ? p1 : p2)(); x; return 0; }",
             false,
         ),
         (
+            "",
             "struct U { struct { void (*f)(void) __attribute__((noreturn)); }; } u; int h(void) { \
-             u.f(); x; return 0; }"
-                .to_owned(),
+             u.f(); x; return 0; }",
             true,
         ),
         (
-            "int h(void) { switch ((0.0, 1)) { case 1: break; default: x; } return 0; }".to_owned(),
+            "",
+            "int h(void) { switch ((0.0, 1)) { case 1: break; default: x; } return 0; }",
             true,
         ),
         (
-            "int h(void) { switch (({ 1; })) { case 1: break; default: x; } return 0; }".to_owned(),
+            "",
+            "int h(void) { switch (({ 1; })) { case 1: break; default: x; } return 0; }",
             true,
         ),
         (
-            "int c; int h(void) { switch (&c != 0) { case 1: break; default: x; } return 0; }"
-                .to_owned(),
+            "",
+            "int c; int h(void) { switch (&c != 0) { case 1: break; default: x; } return 0; }",
             true,
         ),
         (
-            "int h(void) { switch (1) { case 1: break; int v; case 2: x; } return 0; }".to_owned(),
+            "",
+            "int h(void) { switch (1) { case 1: break; int v; case 2: x; } return 0; }",
             true,
         ),
         (
-            "int c; int h(void) { if (__builtin_constant_p(c)) x; return 0; }".to_owned(),
+            "",
+            "int c; int h(void) { if (__builtin_constant_p(c)) x; return 0; }",
             false,
         ),
         (
-            "int h(void) { if (__builtin_constant_p(1) - 1) x; return 0; }".to_owned(),
+            "",
+            "int h(void) { if (__builtin_constant_p(1) - 1) x; return 0; }",
             true,
         ),
         (
-            "int h(void) { const int k = 0; if (k) x; return 0; }".to_owned(),
+            "",
+            "int h(void) { const int k = 0; if (k) x; return 0; }",
             true,
         ),
     ] {
-        let source = format!("{IMPORTED}{suffix}");
+        let source = format!("{IMPORTED}{prefix}{suffix}");
         for target in WINDOWS {
             assert_eq!(
                 facts(&source, target, "x").0,
