@@ -145,6 +145,12 @@ use crate::{
     },
 };
 
+/// Panic message for entity queries that cannot miss. `Unit::new` refuses a
+/// unit whose policy-bearing bindings (functions and linked or static
+/// objects) lack entity facts, and lowering only queries those bindings.
+const ENTITY_FACTS: &str = "entity facts checked by Unit::new: every function and linked or \
+                            static object binding has retained entity facts";
+
 /// Lowers a translation unit to an IR module for `target`, allocated in
 /// `arena`. `scratch` holds each function's working state and is reset
 /// between functions. A unit that any phase reported an error in is

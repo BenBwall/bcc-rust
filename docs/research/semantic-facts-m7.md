@@ -339,3 +339,25 @@ retained in `round2-legacy-instrumentation.patch`.
 - Family builtin instances and unsupported x86/vector lowering remain as M6
   recorded. Supporting nondefault conventions or aliases involving asm labels
   is a separately evidenced backend capability change.
+
+## Retained symbol storage compaction (#86)
+
+Entity completion now retains a sorted dense array of 72-byte entity records.
+It allocates only for functions and linked/static objects, so automatic locals
+leave no holes. The common declaration-only case indexes directly by entity
+ID; units with binding gaps use binary search. `Entity` is a value view over
+this storage, preserving the existing field meanings and inspection snapshot.
+The snapshot's 136-byte figure describes that view, not a retained record.
+
+Definitions reference the existing definition array. Definition/initializer,
+body and exceptional return policy occupy an optional 40-byte cold record;
+assembler requests retain their own 24-byte provenance record only when used.
+Function policies are a sorted dense binding/policy array. Completion preserves
+the old maps' last-write behavior for repeated definitions and policies.
+
+Two counting/filling passes build one flat binding array and one flat
+occurrence array, preserving their original order. There are no per-entity
+scratch vectors or hash tables. Temporary ID and count vectors have known
+capacities and are released before the next scratch pass. Size tests pin the
+actual retained layouts; lowering's symbol accessors assert that their callers
+supply a function or linked/static object whose entity `Unit::new` validated.

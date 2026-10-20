@@ -252,7 +252,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             let initializer = self
                 .sema
                 .entity(definition.binding)
-                .expect("entity facts checked by Unit::new")
+                .expect(super::ENTITY_FACTS)
                 .initializer;
             if definition.kind == DefinitionKind::Object && initializer.is_none() {
                 errors.push(LoweringError::missing(
@@ -458,7 +458,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     pub(super) fn unprototyped_external(&self, binding: usize) -> bool {
         self.sema
             .unprototyped_external(binding)
-            .expect("entity facts checked by Unit::new")
+            .expect(super::ENTITY_FACTS)
     }
 
     /// The IR signature of a C function type: one parameter per declared
