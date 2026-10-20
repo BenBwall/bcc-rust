@@ -914,6 +914,7 @@ fn second_review_forms_fix_generated_import_state() {
             false,
         ),
         ("int h(int n) { return 0; if (c) { int v[n]; x; } }", true),
+        ("int h(int n) { die(); int v[n]; x; return 0; }", false),
         (
             "static const union { int i; float f; } u = {1}; int h(int n) { if (u.i) {} else { \
              return 0; int a[n]; x; } return 0; }",

@@ -1067,6 +1067,7 @@ fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_call
 /// resumes nothing: Clang resumes code generation there, but not in code it
 /// never reaches, which a condition bcc does not fold, the unselected
 /// operand of `__builtin_choose_expr` or a switch without a match can hide.
+/// A call that does not return skips nothing when one follows.
 #[test]
 fn always_inline_order_follows_folding_and_joins() {
     let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
@@ -1152,6 +1153,9 @@ fn always_inline_order_follows_folding_and_joins() {
         ("if (__builtin_clz(0) == 32) h(0);", gnu, true),
         ("if (__builtin_popcount(3) == 1) h(0);", gnu, false),
         ("return 0; int v[3]; h(0);", c99, false),
+        ("die(); int v[c]; h(0);", c99, true),
+        ("die(); { int v[c]; } h(0);", c99, true),
+        ("die(); int v[3]; h(0);", c99, false),
         ("return 0; if (c) { int v[c]; h(0); }", c99, false),
         ("if (0) { int v[c]; h(0); }", c99, false),
         (

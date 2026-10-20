@@ -41,6 +41,7 @@ use super::super::{
     TypeKind,
     Work,
     functions::FunctionWork,
+    scopes::Namespace,
     types::{
         Scalar,
         TypeId,
@@ -55,16 +56,26 @@ use crate::{
     },
     target::Target,
     translation_phases::{
-        parsing::syntax::{
-            BinaryOperator,
-            BlockItem,
-            ConditionalExpression,
-            Expression,
-            ExpressionSlot,
-            ExpressionType,
-            Statement,
-            StatementType,
-            UnaryOperator,
+        parsing::{
+            ExtendedType,
+            declaration_syntax::{
+                Declaration,
+                Declarator,
+                DirectDeclarator,
+                TypeSpecifiers,
+            },
+            syntax::{
+                BinaryOperator,
+                BlockItem,
+                ConditionalExpression,
+                Constant,
+                Expression,
+                ExpressionSlot,
+                ExpressionType,
+                Statement,
+                StatementType,
+                UnaryOperator,
+            },
         },
         preprocessing::KeywordTokenType,
     },
@@ -431,10 +442,117 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .orphan
                     .is_some_and(|since| since >= serial)
                 {
-                    self.functions.dead = true;
                     self.functions.emission.orphan = None;
+                    if !self.variably_modified_ahead() {
+                        self.functions.dead = true;
+                    }
                 },
         }
+    }
+
+    /// Whether a declaration that may have a variably modified type is
+    /// still to be analyzed in the blocks around the code: an item of
+    /// theirs, or one inside a block, label or attribute such an item
+    /// holds. Clang's `EmitVariablyModifiedType` ensures an insertion point
+    /// at a block-scope object or typedef of such a type, which resumes the
+    /// code after it, but whether Clang reaches it at all depends on folds
+    /// this model does not make. So a block a call that does not return
+    /// left is not erased then: the code after the call stays emitted, as
+    /// it is without the model of such calls. A bound that is not an
+    /// integer literal, a `typeof` specifier and a typedef name of a
+    /// variably modified or unknown type count.
+    /// C99: §6.7.5.2 paragraphs 2 and 4, p. 116; PDF p. 128; §6.8
+    /// paragraph 3, p. 131; PDF p. 143.
+    fn variably_modified_ahead(&self) -> bool {
+        let mut items = ArenaVec::new_in(self.scratch);
+        for work in self.work.iter() {
+            if let Work::BlockItem(item) = *work {
+                items.push(item);
+            }
+        }
+        while let Some(item) = items.pop() {
+            let mut statement = match item {
+                | BlockItem::Declaration(declaration) => {
+                    if self.declaration_may_be_variably_modified(declaration) {
+                        return true;
+                    }
+                    continue;
+                },
+                | BlockItem::Statement(statement) => statement,
+                | BlockItem::FunctionDefinition(_) => continue,
+            };
+            loop {
+                match statement.kind {
+                    | StatementType::Label(_, child)
+                    | StatementType::Case(_, child)
+                    | StatementType::Default(child) => statement = child,
+                    | StatementType::CaseRange(range) => statement = range.statement,
+                    | StatementType::Attributed(attributed) => statement = attributed.statement,
+                    | StatementType::Compound { items: inner } => {
+                        for &inner in inner {
+                            items.push(inner);
+                        }
+                        break;
+                    },
+                    | StatementType::Declaration(declaration) => {
+                        if self.declaration_may_be_variably_modified(declaration) {
+                            return true;
+                        }
+                        break;
+                    },
+                    | _ => break,
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether `declaration` may declare something of a variably modified
+    /// type, judged from its syntax and the typedefs visible now.
+    fn declaration_may_be_variably_modified(&self, declaration: &'tu Declaration<'tu>) -> bool {
+        let specifiers = match declaration.declaration_specifiers.type_specifiers {
+            | TypeSpecifiers::Extended(ExtendedType::Typeof { .. }) => true,
+            | TypeSpecifiers::TypedefName(name) => self
+                .lookup(Namespace::Ordinary, name.name)
+                .is_none_or(|entry| {
+                    self.types
+                        .variably_modified(self.bindings[entry.binding].ty)
+                }),
+            | _ => false,
+        };
+        specifiers
+            || declaration
+                .init_declarators
+                .iter()
+                .any(|init| self.declarator_has_variable_bound(init.declarator))
+    }
+
+    /// Whether `declarator` has an array bound that is not an integer
+    /// literal, outside function parameters.
+    fn declarator_has_variable_bound(&self, declarator: Declarator<'tu>) -> bool {
+        let mut declarators = ArenaVec::new_in(self.scratch);
+        declarators.push(declarator);
+        while let Some(declarator) = declarators.pop() {
+            for direct in declarator.kind {
+                match *direct {
+                    | DirectDeclarator::Array {
+                        assignment_expression: Some(bound),
+                        ..
+                    } => {
+                        let mut bound = bound;
+                        while let ExpressionType::Parenthesized { expression } = bound.kind {
+                            bound = expression;
+                        }
+                        if !matches!(bound.kind, ExpressionType::Constant(Constant::Integer(_))) {
+                            return true;
+                        }
+                    },
+                    | DirectDeclarator::Parenthesized(inner) => declarators.push(inner.declarator),
+                    | _ => {},
+                }
+            }
+        }
+        false
     }
 
     /// Begins statement expression `block`, emitted in the code around it,
