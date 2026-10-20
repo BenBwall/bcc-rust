@@ -909,12 +909,14 @@ and both consumers read this one flag. Code is skipped in the arm a constant
 condition does not take, in a generic selection's controlling operand and
 unselected associations, after a jump or a loop without an exit, and until a
 label. One evaluator stands for Clang's `ConstantFoldsToSimpleInteger` in
-every condition the flag folds (`if`, `switch`, scalar `?:`, `&&`, `||`): an
+every condition the flag folds (`if`, `switch`, scalar `?:`, `&&`, `||`), which
+must have an integer or enumerated type, as `EvaluateAsInt` requires: an
 integer constant, a comma whose left operand evaluates, a statement expression
 of side-effect-free expression statements, a `const` non-volatile object with
 a constant initializer, the address of a non-weak object or function,
 `__builtin_expect` and `__builtin_constant_p` as Clang's evaluator computes
-them, but no call, assignment, volatile or other object read, and no condition
+them (a volatile read, also through `*`, `[]`, `.` or `->`, is a side effect),
+but no call, assignment, volatile or other object read, and no condition
 holding a label. Loops instead test the value IR emission produces. Two forms
 take more than the statement walk (`emission/`). A `switch` whose
 controlling expression folds emits only the statements Clang's
@@ -922,7 +924,10 @@ controlling expression folds emits only the statements Clang's
 (§6.8.4.2p4-5, printed p. 134, PDF p. 146). Analysis still runs in source
 order: the body is analyzed as unfolded until a label is selected, which then
 marks the references recorded since the body began as skipped; a `default` is
-selected tentatively, and a later matching case replaces it. After the
+selected tentatively, and a later matching case replaces it, when the
+collection from every case label after it succeeds; otherwise, or past 64 later
+labels, the switch is analyzed as unfolded, which may leave more code emitted
+than Clang does but never less. After the
 selection, labels inside the selected statements resume nothing, and the code
 after the switch follows the selected statements' end. When Clang's collection
 fails (a label or declaration it would skip, a `break` inside a collected
@@ -941,11 +946,15 @@ declaration attributes, C11 §6.7.4p8), to `__builtin_unreachable` or
 carries the function type attribute: pointers, arrays, members, call results,
 casts, typedefs and `__typeof__`, and a conditional when both operands do. The
 rest of the same expression is still emitted. An expression whose paths join in
-a block with predecessors ends that state: a `&&`, `||` or scalar `?:` whose
-condition does not fold (unless the `?:` selects between constants), a complex
-or aggregate `?:`, a product of two floating complex values, an atomic update
-`atomicrmw` cannot perform, an atomic compare-and-exchange and a System V
-`va_arg`; unevaluated and skipped operands change nothing. A statement
+a block with predecessors ends that state: a `&&`, `||` or scalar or `void`
+`?:` whose condition does not fold (unless the `?:` selects between constants,
+which a `void` operand is not), a complex or aggregate `?:`, a product of two
+floating complex values, an atomic update `atomicrmw` cannot perform (an atomic
+`_Bool` decrement among them), an atomic compare-and-exchange, an atomic
+builtin whose memory order is not a constant (unless a library call copies its
+object), and a System V `va_arg` of a type passed in registers; unevaluated and
+skipped operands change nothing. These rules read the expression's type, so
+they run once it is analyzed. A statement
 expression's value statement is emitted even after a jump. A declaration's initializer does not end the code
 after it. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
