@@ -53,7 +53,8 @@ The research behind the decisions lives in `docs/research/`:
    │
    ├──► LLVM back end (src/backend/llvm)        textual .ll → bundled clang
    ├──► interpreter (src/backend/interpreter)   reference semantics, test oracle
-   └──► native back end (src/backend/native)    x86-64 assembly → bundled clang
+   └──► native back end (src/backend/native)    x86-64 assembly → bundled clang,
+                                                or objects encoded in process
 ```
 
 One IR serves every stage. The analyzed syntax tree is already the C-aware high
@@ -457,9 +458,11 @@ templates as invalid, in Clang's words, and refuses a template with NUL or
 bytes that are not UTF-8 as unsupported, each at its syntax. The LLVM back end appends each block to the module's inline
 assembly; the native listing writes the blocks verbatim after its first
 `.text`, before every function and object, as Clang's output places them, then
-`.att_syntax`. `--native-object` refuses such a module (its encoder
-reads only the emitter's own vocabulary), and the interpreter refuses to run
-it, since the assembly may define code or data it cannot see.
+`.att_syntax`. Direct object encoding reads only the emitter's own
+vocabulary, so the native back end assembles such a module with the bundled
+clang even where direct objects are its default (Windows), and
+`--native-object` refuses it. The interpreter refuses to run it, since the
+assembly may define code or data it cannot see.
 
 A `thread_local` global (`global @g external thread_local size 4, align 4`)
 has one copy per thread, initialized from its initializer when the thread
@@ -1136,12 +1139,17 @@ bcc's own x86-64 code generator is designed in
 macro-expansion instruction selector over the post-ABI IR, a machine IR over
 virtual registers, linear-scan register allocation with fixed-register
 ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
-and AT&T assembly assembled and linked by the bundled clang. It compiles
+and AT&T assembly, which the bundled clang assembles, or ELF and COFF
+objects it encodes itself; the bundled clang links executables. It compiles
 integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
 stack allocation, computed `goto`, thread-local globals and the GNU symbol
 attributes, and refuses everything else (`f80`, `f128`, `i128` float
 conversions) before writing any output.
 `--backend=native` selects it for `-o`, and `--emit=asm` prints its assembly.
+For `-o` it encodes COFF objects directly on the Windows targets and has the
+bundled clang assemble its listing on Linux; `--native-object` and
+`--no-native-object` choose either path on any target, and the last of the
+two wins.
 
 ## Source layout
 
@@ -1177,6 +1185,8 @@ bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with cla
     [--llvm-opt=none|O0|O1|O2|O3|Os|Oz|Og]   LLVM pipeline and machine level; none means O0
     [--llvm-codegen-only]           skip LLVM IR passes; retain machine level
     [--backend=llvm|native]         code generator for -o; native refuses what it lacks
+    [--native-object|--no-native-object]  native objects encoded in process (the
+                                    Windows default) or assembled by clang (Linux)
     [-fpic|-fPIC|-fpie|-fPIE|-fno-pic]  relocation model; Linux defaults to -fPIE
     [-ftls-model=MODEL]             least specific ELF TLS model: global-dynamic,
                                     local-dynamic, initial-exec or local-exec
