@@ -1019,15 +1019,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// The start of a string literal counts, while an interior pointer or
     /// another non-null object's address does not. GNU extension:
     /// `__builtin_constant_p`.
+    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59 (pointer-to-integer casts).
     fn constant_query_value(&mut self, operand: &'tu Expression<'tu>, depth: u32) -> bool {
         if depth >= DEPTH {
             return false;
         }
         self.is_constant_query(operand)
-            || matches!(
-                self.address_parts(operand, false),
-                Some((super::super::expressions::AddressBase::String(_), 0))
-            )
+            || self.constant_query_string_address(operand)
             || self.discarded_comma_constant(operand, depth)
             || match self.evaluate_value(operand, depth) {
                 | Some(Value::Address(Some(_))) | None => false,

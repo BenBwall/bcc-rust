@@ -944,6 +944,8 @@ the same elision facts before ordinary constant shortcuts. Constant-query
 integers use the emission evaluator at the builtin leaf, so semantic integer
 facts, static initializer data, standalone values and loop decisions agree.
 An unknown query still emits zero while the control fold can remain unknown.
+String-address queries require each integer cast to have exactly the pointer width;
+widening an integer after a narrowing cast does not recover the address.
 When lowering omits a folded condition, its executable references are unlowered
 too; nested static declarations keep their initializer-data references. After
 selection, labels inside the selected statements resume nothing, and the code

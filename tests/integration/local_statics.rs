@@ -666,6 +666,79 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
     }
 
     #[test]
+    fn constant_query_pointer_casts_preserve_target_dll_references() {
+        let source_file = temporary("query-width.c");
+        let reference_object = temporary("query-width-clang.o");
+        let object = temporary("query-width-bcc.o");
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-w64-windows-gnu",
+            "x86_64-pc-windows-msvc",
+        ] {
+            let target_flag = format!("--target={target}");
+            for operand in [
+                "(char)\"a\"",
+                "(int)\"a\"",
+                "(long)\"a\"",
+                "(long long)\"a\"",
+                "(long long)(int)\"a\"",
+                "(char*)(int)\"a\"",
+                "(double)(long)\"a\"",
+                "(_Bool)\"a\"",
+                "(__int128)\"a\"",
+                "(unsigned __int128)(long)\"a\"",
+                "(long)(__int128)\"a\"",
+                "(char *)(__int128)\"a\"",
+                "(unsigned long long)(__int128)\"a\"",
+            ] {
+                let source = format!(
+                    "__declspec(dllimport) extern int x; int live(void){{return x;}} extern int \
+                     x; int probe(void){{if(!__builtin_constant_p({operand})) return x; return \
+                     0;}}"
+                );
+                std::fs::write(&source_file, &source).unwrap();
+                let reference = Command::new(clang())
+                    .args([&target_flag, "-std=gnu99", "-fms-extensions", "-O0", "-c"])
+                    .arg(&source_file)
+                    .arg("-o")
+                    .arg(&reference_object)
+                    .output()
+                    .unwrap();
+                assert!(reference.status.success(), "{}", text(&reference.stderr));
+                let actual = bcc(
+                    &source,
+                    &[
+                        &target_flag,
+                        "-std=gnu99",
+                        "-fms-extensions",
+                        "-O0",
+                        "-c",
+                        "-o",
+                        object.to_str().unwrap(),
+                    ],
+                );
+                assert!(actual.status.success(), "{}", text(&actual.stderr));
+                if let Some(expected) = undefined_symbols(&reference_object) {
+                    let actual = undefined_symbols(&object).unwrap();
+                    // Clang also records MSVC's _fltused marker for the
+                    // unevaluated floating cast. This probe compares the
+                    // reference that controls DLL import inheritance.
+                    for symbol in ["x", "__imp_x"] {
+                        assert_eq!(
+                            actual.contains(symbol),
+                            expected.contains(symbol),
+                            "{target}: {operand}: {symbol}"
+                        );
+                    }
+                }
+                std::fs::remove_file(&reference_object).unwrap();
+                std::fs::remove_file(&object).unwrap();
+            }
+        }
+        std::fs::remove_file(source_file).unwrap();
+    }
+
+    #[test]
     fn constant_queries_drop_calls_and_keep_nested_static_data() {
         assert_o0_static_emission(
             "static int h(void){STATIC return a;} int f(void){return __builtin_constant_p(h());} \
@@ -786,6 +859,17 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
             assert_eq!(actual.stdout, expected.stdout, "{flags:?}");
         }
         std::fs::remove_file(source_file).unwrap();
+    }
+
+    fn undefined_symbols(object: &Path) -> Option<BTreeSet<String>> {
+        let output = Command::new("nm").arg("-u").arg(object).output().ok()?;
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        Some(
+            text(&output.stdout)
+                .lines()
+                .filter_map(|line| line.split_whitespace().last().map(str::to_owned))
+                .collect(),
+        )
     }
 
     fn defined_symbols(object: &Path) -> Option<BTreeSet<String>> {
