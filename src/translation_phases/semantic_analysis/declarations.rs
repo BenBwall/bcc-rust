@@ -236,7 +236,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::Extended(extended) => {
                 if let super::ExtendedType::Atomic(name) = *extended {
                     self.work.push(Work::Atomic(source));
-                    self.work.push(Work::TypeName(name));
+                    self.work.push(Work::TypeName(name, false));
                     return;
                 }
                 let reason = match *extended {
@@ -301,12 +301,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         direct: &'tu DirectDeclarator<'tu>,
         source: SourceVectors,
         parameter: bool,
+        fold_bounds: bool,
     ) {
         let base = self.take_type();
         match *direct {
             | DirectDeclarator::Parenthesized(p) =>
                 self.work
-                    .push(Work::Declarator(p.declarator, base, parameter)),
+                    .push(Work::Declarator(p.declarator, base, parameter, fold_bounds)),
             | DirectDeclarator::Array {
                 type_qualifiers,
                 is_static,
@@ -350,6 +351,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         expression,
                         source,
                         self.semantic_errors,
+                        fold_bounds,
                     ));
                     // A bound whose evaluation is exceptional is not an
                     // integer constant expression, so it is a variable length
@@ -1449,7 +1451,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Expression(expression)),
             | super::SyntaxOperand::Type(name) => {
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(name));
+                self.work.push(Work::TypeName(name, false));
             },
         }
     }

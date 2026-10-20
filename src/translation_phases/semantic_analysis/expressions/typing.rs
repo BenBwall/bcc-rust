@@ -379,7 +379,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.report_void_arithmetic(e, target);
                         info.ty = lt;
                         if self.address_value(left) && right.ice && right.integer.is_some() {
+                            if op == B::Addition && Self::pointer_value(left) == Some(0) {
+                                self.error(
+                                    SemanticErrorKind::NullPointerArithmetic,
+                                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                                    None,
+                                    None,
+                                );
+                            }
                             info.constant = ConstantClass::Address;
+                            info.integer = self.absolute_pointer_offset(
+                                left,
+                                right,
+                                target,
+                                op == B::Subtraction,
+                            );
                         }
                     } else if op == B::Subtraction
                         && self.pointer_target(rt).is_some_and(|t| {
@@ -392,7 +406,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         info.integer = self.address_difference(left, right, target);
                         if info.integer.is_some() {
                             info.constant = ConstantClass::Arithmetic;
-                            info.folding = ConstantFolding::AddressDifference;
+                            info.folding = ConstantFolding::Address;
                         } else if let Some(labels) = self.label_difference(left, right) {
                             info.constant = ConstantClass::LabelDifference;
                             self.control.record_difference(e, labels);
@@ -412,7 +426,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                     info.ty = rt;
                     if self.address_value(right) && left.ice && left.integer.is_some() {
+                        if Self::pointer_value(right) == Some(0) {
+                            self.error(
+                                SemanticErrorKind::NullPointerArithmetic,
+                                e.operator_source_vectors.unwrap_or(e.source_vectors),
+                                None,
+                                None,
+                            );
+                        }
                         info.constant = ConstantClass::Address;
+                        info.integer = self.absolute_pointer_offset(
+                            right,
+                            left,
+                            self.pointer_target(rt).expect("validated pointer target"),
+                            false,
+                        );
                     }
                 } else {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
@@ -1181,13 +1209,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.constant = ConstantClass::Address;
         }
-        // GNU modes fold an integer-valued address constant converted to an
-        // integer type, which C99 does not count as arithmetic (§6.6p8).
-        if self.context.configuration.gnu_extensions()
-            && self.integer_type(target).is_some()
-            && Self::pointer_value(operand).is_some()
-        {
+        // Clang folds integer-valued pointer casts as an additional constant
+        // form, including in ISO modes (§6.6p10). Preserve their non-ICE
+        // status so array and integer-constant contexts apply their own policy.
+        if self.integer_type(target).is_some() && Self::pointer_value(operand).is_some() {
             info.constant = ConstantClass::Arithmetic;
+            info.folding = ConstantFolding::Address;
+            info.ice = false;
         }
         // GNU extension: GCC "Labels as Values". A label difference
         // converted to an integer of 32 to 64 bits, no wider than the value

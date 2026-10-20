@@ -1,6 +1,6 @@
-//! Floating constants as IR bits: the folded values semantic analysis keeps
-//! are host `long double`s, and lowering needs the exact bits of an
-//! `f32`, `f64` or `f80` constant.
+//! Floating constants as target bits: the folded values semantic analysis keeps
+//! are host `long double`s. Initializer checks and lowering need the exact bits
+//! of an `f32`, `f64` or `f80` constant.
 //!
 //! An x87 extended value is 80 bits: a 64-bit significand with an explicit
 //! integer bit, a 15-bit biased exponent and a sign. [`constant_bits`]
@@ -36,13 +36,13 @@ fn parts(value: &LongDouble) -> Option<(bool, u16, u64)> {
 
 /// The bits of `value` as a constant of the floating type `ty`, or `None`
 /// for any other type or an unsupported host carrier.
-pub(super) fn constant_bits(value: &LongDouble, ty: Type) -> Option<u128> {
+pub(crate) fn constant_bits(value: &LongDouble, ty: Type) -> Option<u128> {
     constant_parts(parts(value)?, ty)
 }
 
 /// Converts decoded carrier parts to the target format.
 /// C99: §6.3.1.5, p. 44; PDF p. 56.
-pub(super) fn constant_parts(
+pub(crate) fn constant_parts(
     (sign, exponent, significand): (bool, u16, u64),
     ty: Type,
 ) -> Option<u128> {
@@ -80,13 +80,13 @@ pub(super) fn constant_parts(
 /// rounded to nearest even; `None` for a type that is not `f32`, `f64` or
 /// `f80`.
 /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
-pub(super) fn from_integer(value: i128, ty: Type) -> Option<u128> {
+pub(crate) fn from_integer(value: i128, ty: Type) -> Option<u128> {
     from_magnitude(value < 0, value.unsigned_abs(), ty)
 }
 
 /// Converts an unsigned magnitude without interpreting its high bit as a sign.
 /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
-pub(super) fn from_unsigned(value: u128, ty: Type) -> Option<u128> {
+pub(crate) fn from_unsigned(value: u128, ty: Type) -> Option<u128> {
     from_magnitude(false, value, ty)
 }
 
@@ -132,7 +132,7 @@ fn x87_from_magnitude(sign: bool, magnitude: u128) -> u128 {
 
 /// The integer a floating constant truncates to (C99 §6.3.1.4 paragraph 1),
 /// or `None` for a NaN, an infinity or a value beyond `i128`.
-pub(super) fn to_integer(value: &LongDouble) -> Option<i128> {
+pub(crate) fn to_integer(value: &LongDouble) -> Option<i128> {
     let (sign, exponent, significand) = parts(value)?;
     if exponent == 0x7FFF {
         return None;
@@ -152,7 +152,7 @@ pub(super) fn to_integer(value: &LongDouble) -> Option<i128> {
 
 /// The bytes of a floating constant in memory: little-endian, `size` bytes,
 /// zero padded past the format's own width.
-pub(super) fn bytes(bits: u128, size: usize) -> impl Iterator<Item = u8> {
+pub(crate) fn bytes(bits: u128, size: usize) -> impl Iterator<Item = u8> {
     bits.to_le_bytes().into_iter().take(size)
 }
 

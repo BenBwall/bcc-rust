@@ -216,3 +216,40 @@ fn priorities_beyond_sixteen_bits_are_parse_errors() {
     let text = "function @f() external {\nblock0:\n    return\n}\nconstructor @f priority 65536\n";
     _ = parse_module(&arena, text).unwrap_err();
 }
+
+/// File-scope assembly prints one block per line, before the globals, with
+/// its newlines, quotes, backslashes and controls escaped, and parses back
+/// in the same order.
+#[test]
+fn module_asm_round_trips_in_order_with_escapes() {
+    let text = "\
+module asm \".globl s\\u{a}s:\\u{a}\\u{9}ret\"
+module asm \"# \\u{22}quoted\\u{22} \\\\ café\"
+
+global @g external size 4, align 4 = zero
+";
+    assert_round_trip(text);
+    let arena = Bump::new();
+    let module = parse(&arena, text);
+    assert_eq!(
+        module.module_asm(),
+        [".globl s\ns:\n\tret", "# \"quoted\" \\ café"]
+    );
+    let mut built = Module::new(&arena);
+    built.add_module_asm("a\u{1}b");
+    assert_eq!(built.to_string(), "module asm \"a\\u{1}b\"\n");
+    for (input, kind) in [
+        (
+            "module asm \"nul\\u{0}\"\n",
+            ParseErrorKind::BadSymbolEscape,
+        ),
+        ("module asm \"bad\\q\"\n", ParseErrorKind::BadSymbolEscape),
+        ("module asm \"open\n", ParseErrorKind::UnterminatedString),
+    ] {
+        let error = parse_module(&arena, input).unwrap_err();
+        assert_eq!(error.kind, kind, "{input}");
+    }
+    for input in ["module \"x\"\n", "module asm @x\n"] {
+        _ = parse_module(&arena, input).unwrap_err();
+    }
+}

@@ -274,7 +274,7 @@ fn address_difference_folding_obeys_extension_policy() {
                     );
                     if let Some(error) = errors.first() {
                         assert!(
-                            matches!(error, TranslationError::Extension(_)),
+                            matches!(error, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::FoldedIntegerConstant),
                             "{errors:?}"
                         );
                         assert_eq!(

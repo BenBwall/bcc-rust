@@ -107,6 +107,10 @@ fn declare_items<'t>(
         match token.kind {
             | TokenKind::End => return Ok(()),
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
+            | TokenKind::Ident("module") => {
+                let text = parse_module_asm(cursor)?;
+                module.add_module_asm(text.asm_text(scratch)?);
+            },
             | TokenKind::Ident("global") => {
                 let (name, declaration, _) = parse_global_header(cursor)?;
                 if module.symbol(name.text_name(scratch)?).is_some() {
@@ -154,7 +158,8 @@ fn declare_items<'t>(
     }
 }
 
-const EXPECTED_ITEM: &str = "`target`, `abi`, `global`, `constructor`, `destructor` or `function`";
+const EXPECTED_ITEM: &str =
+    "`target`, `module`, `abi`, `global`, `constructor`, `destructor` or `function`";
 
 /// The second pass: parses initializers and bodies.
 fn define_items<'t>(
@@ -167,6 +172,7 @@ fn define_items<'t>(
         match token.kind {
             | TokenKind::End => return Ok(()),
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
+            | TokenKind::Ident("module") => _ = parse_module_asm(cursor)?,
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
             | TokenKind::Ident("global") => {
                 let (name, _, attributes) = parse_global_header(cursor)?;
@@ -214,6 +220,19 @@ fn define_items<'t>(
             | _ => return Err(token.expected(EXPECTED_ITEM)),
         }
     }
+}
+
+/// `module asm "..."`: one file-scope assembly block, returned as its
+/// string token. The first pass decodes it into the module, so blocks keep
+/// their order; the second skips it.
+fn parse_module_asm<'t>(cursor: &mut Cursor<'_, 't>) -> Result<Token<'t>, ParseError<'t>> {
+    _ = cursor.next();
+    cursor.expect(TokenKind::Ident("asm"), "`asm`")?;
+    let text = cursor.next();
+    if !matches!(text.kind, TokenKind::String(_)) {
+        return Err(text.expected("a string"));
+    }
+    Ok(text)
 }
 
 /// `abi lowered`: the module is post-ABI.

@@ -448,6 +448,19 @@ section, `used` retention and `hidden`/`protected` visibility. Constructors
 and destructors are parameterless defined functions with a 16-bit priority,
 kept in registration order. See [GNU entity attributes](#gnu-entity-attributes-2026-10-14).
 
+File-scope GNU basic assembly (`__asm__("...")` outside a function) is kept as
+module assembly: one text block per `asm`, in source order. It prints as
+`module asm "text"` lines after the target lines, with backslashes, quotes
+(`\u{22}`) and controls such as newlines (`\u{a}`) escaped so each block stays
+on one line. Lowering reports qualifiers, operands and wide or Unicode
+templates as invalid, in Clang's words, and refuses a template with NUL or
+bytes that are not UTF-8 as unsupported, each at its syntax. The LLVM back end appends each block to the module's inline
+assembly; the native listing writes the blocks verbatim after its first
+`.text`, before every function and object, as Clang's output places them, then
+`.att_syntax`. `--native-object` refuses such a module (its encoder
+reads only the emitter's own vocabulary), and the interpreter refuses to run
+it, since the assembly may define code or data it cannot see.
+
 A `thread_local` global (`global @g external thread_local size 4, align 4`)
 has one copy per thread, initialized from its initializer when the thread
 starts; `global_addr` yields the evaluating thread's copy. Its address is

@@ -46,6 +46,10 @@ pub(crate) enum SemanticErrorKind {
     /// §6.5.8p2, p. 85; PDF p. 97; §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84;
     /// §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126; PDF p. 138.
     PointerConstraint(crate::configuration::DiagnosticGroup),
+    /// Additional constant forms under C99 §6.6p10, p. 96; PDF p. 108.
+    FoldedArrayBound,
+    FoldedIntegerConstant,
+    NullPointerArithmetic,
     /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC pragma extension.
     PragmaPackMalformed,
     PragmaPackPopEmpty,
@@ -484,6 +488,12 @@ pub(crate) enum SemanticErrorKind {
     AliasTypeMismatch,
     /// Clang `-Wsection`: a redeclaration names another section.
     SectionMismatch,
+    /// GNU section extension: ELF NOBITS cannot contain function code.
+    BssFunction,
+    /// GNU section extension: ELF NOBITS cannot contain initialized bytes.
+    BssInitializer,
+    /// GNU section extension: ELF NOBITS cannot contain address fixups.
+    BssFixups,
     /// Clang `-Wignored-attributes`: an unsupported visibility argument.
     InvalidVisibility,
     /// Clang: the cleanup argument names no function.
@@ -555,6 +565,9 @@ impl SemanticErrorKind {
     pub(super) const fn attribute_group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup;
         match self {
+            | Self::FoldedArrayBound | Self::FoldedIntegerConstant =>
+                Some(DiagnosticGroup::GnuFoldingConstant),
+            | Self::NullPointerArithmetic => Some(DiagnosticGroup::GnuNullPointerArithmetic),
             | Self::UnknownAttribute => Some(DiagnosticGroup::UnknownAttributes),
             | Self::IgnoredAttribute
             | Self::AttributeAfterDefinition
@@ -574,6 +587,9 @@ impl SemanticErrorKind {
     const fn label(self) -> &'static str {
         match self {
             | Self::PointerConstraint(_) => "pointer constraint violation",
+            | Self::FoldedArrayBound => "folded array bound",
+            | Self::FoldedIntegerConstant => "folded integer constant expression",
+            | Self::NullPointerArithmetic => "arithmetic on a null pointer",
             | Self::PragmaPackMalformed
             | Self::PragmaPackPopEmpty
             | Self::PragmaPackPopNameAlignment
@@ -609,6 +625,9 @@ impl SemanticErrorKind {
             | Self::AliasCycle => "alias is part of a cycle",
             | Self::AliasTypeMismatch => "alias type differs from its target's",
             | Self::SectionMismatch => "different section",
+            | Self::BssFunction => "function in a BSS section",
+            | Self::BssInitializer => "non-zero initializer in a BSS section",
+            | Self::BssFixups => "address initializer in a BSS section",
             | Self::InvalidVisibility => "unsupported visibility",
             | Self::CleanupNotFunction => "not a function",
             | Self::CleanupOverloadSet => "not a single function",
@@ -784,6 +803,9 @@ impl SemanticErrorKind {
             | Self::AliasCycle
             | Self::AliasTypeMismatch
             | Self::SectionMismatch
+            | Self::BssFunction
+            | Self::BssInitializer
+            | Self::BssFixups
             | Self::InvalidVisibility
             | Self::CleanupNotFunction
             | Self::CleanupOverloadSet
@@ -807,6 +829,18 @@ impl SemanticErrorKind {
             | Self::DllImportDataDefinition
             | Self::DllExportHidden
             | Self::DllImportVisibility => self.attribute_explanation(),
+            | Self::FoldedArrayBound => (
+                "variable length array folded to constant array as an extension",
+                "C99 §6.7.5.2p4: a non-ICE bound declares a variable length array",
+            ),
+            | Self::FoldedIntegerConstant => (
+                "expression is not an integer constant expression; folding it to a constant is a GNU extension",
+                "C99 §6.6p6: pointer conversions are not allowed in an integer constant expression",
+            ),
+            | Self::NullPointerArithmetic => (
+                "arithmetic on a null pointer treated as a cast from integer to pointer is a GNU extension",
+                "C99 §6.6p10 permits additional constant forms",
+            ),
             | Self::PointerConstraint(group) => (
                 match group {
                     | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
@@ -840,6 +874,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
                     | crate::configuration::DiagnosticGroup::InitializerOverrides
+                    | crate::configuration::DiagnosticGroup::GnuFoldingConstant
+                    | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
                     | crate::configuration::DiagnosticGroup::ConstantPromotion => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
@@ -1591,6 +1627,14 @@ impl SemanticErrorKind {
                 "section does not match previous declaration",
                 "Clang -Wsection: the latest section request applies",
             ),
+            | Self::BssFunction | Self::BssInitializer => (
+                "BSS section cannot have non-zero bytes",
+                "ELF NOBITS sections contain only zero-initialized storage",
+            ),
+            | Self::BssFixups => (
+                "BSS section cannot have fixups",
+                "ELF NOBITS sections cannot contain relocations",
+            ),
             | Self::InvalidVisibility => (
                 "visibility argument not supported",
                 "GCC Common Function Attributes: visibility is default, hidden, internal or \
@@ -1741,6 +1785,22 @@ impl ToDiagnostic for SemanticError {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
             })
+        } else if matches!(
+            self.kind,
+            SemanticErrorKind::BssFunction
+                | SemanticErrorKind::BssInitializer
+                | SemanticErrorKind::BssFixups
+        ) {
+            format_in!(
+                arena,
+                "BSS section '{}' cannot have {}",
+                self.name.map_or("", |name| context.string_cache.at(name)),
+                if self.kind == SemanticErrorKind::BssFixups {
+                    "fixups"
+                } else {
+                    "non-zero bytes"
+                }
+            )
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if let Some(name) = self.name {

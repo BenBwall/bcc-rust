@@ -28,13 +28,19 @@ pub(crate) fn assemble(
     target: Target,
     kind: OutputKind,
 ) -> io::Result<()> {
+    // The direct encoder refuses file-scope assembly, so such listings are
+    // only assembled.
     #[cfg(test)]
-    if matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
+    if matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+        && !text.contains(super::emit::MODULE_ASM_START)
+    {
         super::tests::object::equivalent(text)?;
         return build_object(text, out_path, target, kind);
     }
     #[cfg(test)]
-    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) {
+    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc)
+        && !text.contains(super::emit::MODULE_ASM_START)
+    {
         super::tests::object_coff::equivalent(text, target)?;
         return build_object(text, out_path, target, kind);
     }

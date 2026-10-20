@@ -64,14 +64,14 @@ pub(crate) enum ConstantClass {
     LabelDifference,
 }
 
-/// Folding restrictions and GNU address-difference eligibility are separate
+/// Folding restrictions and additional address constant forms are separate
 /// from initializer constant classes. Atomic value casts remain non-ICEs.
 /// C99: §6.6p10, p. 96; PDF p. 108 (additional constant forms).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConstantFolding {
     Permitted,
-    /// An address difference folded under C99 §6.6p10 and GNU policy.
-    AddressDifference,
+    /// An address difference or pointer-to-integer cast folded under §6.6p10.
+    Address,
     AtomicCast,
 }
 
@@ -88,6 +88,6 @@ impl ExpressionInfo<'_> {
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn folded_address(self) -> bool {
-        self.folding == ConstantFolding::AddressDifference
+        self.folding == ConstantFolding::Address
     }
 }

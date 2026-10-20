@@ -1651,6 +1651,401 @@ int main(void) { printf("main\n"); return zero; }
     }
 
     #[test]
+    fn llvm_diagnostic_errors_fail_cli_without_an_output_file() {
+        // This static body is retained by a call, rather than `used`, so it
+        // reaches LLVM's MC diagnostics instead of the early semantic check.
+        let source = "static __attribute__((noinline,section(\".bss.z\"))) int f(int x) { return \
+                      x+1; }\nstatic __attribute__((noinline,section(\".bss.second\"))) int h(int \
+                      x) { return x+2; }\nint g(int x) { return f(x) + h(x); }\n";
+        let object = temporary("llvm-diagnostic-refused.o");
+        std::fs::write(&object, b"stale object").unwrap();
+        let output = bcc(
+            source,
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--opt=none",
+                "--llvm-opt=O0",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        assert!(
+            text(&output.stderr).contains("BSS section '.bss.z' cannot have non-zero bytes"),
+            "{}",
+            text(&output.stderr)
+        );
+        assert!(
+            text(&output.stderr).contains("BSS section '.bss.second' cannot have non-zero bytes"),
+            "{}",
+            text(&output.stderr)
+        );
+        assert!(!object.exists(), "an LLVM error wrote an object");
+        // Installing the diagnostic callback must preserve LLVM's filtering
+        // of optimization remarks on ordinary successful compilations.
+        let valid = bcc(
+            "int value(void) { return 3; }",
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--opt=none",
+                "--llvm-opt=O0",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ],
+        );
+        assert!(valid.status.success(), "{}", text(&valid.stderr));
+        assert!(valid.stderr.is_empty(), "{}", text(&valid.stderr));
+        assert!(object.exists());
+        std::fs::remove_file(object).unwrap();
+    }
+
+    #[test]
+    fn bss_initializer_errors_fail_all_backends_without_an_output_file() {
+        let source = "int a __attribute__((section(\".bss.z\"))) = 4;\nint b \
+                      __attribute__((section(\".gnu.linkonce.tb.z\"))) = 5;\n";
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let object = temporary("bss-refused.o");
+            std::fs::write(&object, b"stale object").unwrap();
+            let output_path = object.to_str().unwrap();
+            let mut flags = vec!["--target=x86_64-unknown-linux-gnu", "-c", "-o", output_path];
+            flags.extend_from_slice(backend);
+            let output = bcc(source, &flags);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{backend:?}: {}",
+                text(&output.stderr)
+            );
+            assert!(
+                !object.exists(),
+                "a failed compilation wrote an object: {backend:?}"
+            );
+            let stderr = text(&output.stderr);
+            assert!(
+                stderr.contains("BSS section '.bss.z' cannot have non-zero bytes"),
+                "{stderr}"
+            );
+            assert!(
+                stderr.contains("BSS section '.gnu.linkonce.tb.z' cannot have non-zero bytes"),
+                "{stderr}"
+            );
+            assert!(stderr.contains(":1:") && stderr.contains(":2:"), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn bss_static_objects_are_checked_only_when_emitted() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for optimize in [false, true] {
+                for (source, emitted) in [
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\"))) = {1}; int \
+                         f(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\"))) = {1}; int \
+                         *f(void){return b;}",
+                        true,
+                    ),
+                    (
+                        "static int b[4] __attribute__((used,section(\".bss.t\"))) = {1}; int \
+                         f(void){return 0;}",
+                        true,
+                    ),
+                    (
+                        "struct P {int a,b;}; static struct P p[1000] \
+                         __attribute__((section(\".bss.t\"))) = {[0 ... 999]={0,1}}; int \
+                         f(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "int f(void){static int b[4] \
+                         __attribute__((section(\".bss.t\")))={1};return b[0];}",
+                        true,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\")))={1}; static int \
+                         f(void){return b[0];} int g(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\")))={1}; int *p=b;",
+                        true,
+                    ),
+                ] {
+                    let object = temporary("bss-static.o");
+                    let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+                    flags.extend_from_slice(backend);
+                    if optimize {
+                        flags.push(if backend.is_empty() {
+                            "--llvm-opt=O2"
+                        } else {
+                            "--opt=bcc"
+                        });
+                    }
+                    let output = bcc(source, &flags);
+                    assert_eq!(
+                        output.status.success(),
+                        !emitted,
+                        "{backend:?} optimize={optimize}: {}",
+                        text(&output.stderr)
+                    );
+                    assert_eq!(object.exists(), !emitted);
+                    if emitted {
+                        assert!(
+                            text(&output.stderr).contains("-->"),
+                            "{}",
+                            text(&output.stderr)
+                        );
+                        assert!(
+                            text(&output.stderr)
+                                .contains("BSS section '.bss.t' cannot have non-zero bytes"),
+                            "{}",
+                            text(&output.stderr)
+                        );
+                    } else {
+                        assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+                        std::fs::remove_file(object).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_compilation_removes_stale_object_files() {
+        let cases = [
+            ("preprocessing", "#error deliberate failure\n"),
+            ("parsing", "int value = ;\n"),
+            ("semantics", "int value = not_declared;\n"),
+            ("lowering", "int value(void) { __asm__(\"\"); return 0; }\n"),
+            (
+                "backend",
+                "static __attribute__((noinline,section(\".bss.fn\"))) int f(int x) { return x+1; \
+                 } int g(int x) { return f(x); }\n",
+            ),
+        ];
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for (kind, source) in cases {
+                let object = temporary("stale-object.o");
+                std::fs::write(&object, b"stale object").unwrap();
+                let mut flags = vec![
+                    "--target=x86_64-unknown-linux-gnu",
+                    "-c",
+                    "-o",
+                    object.to_str().unwrap(),
+                ];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert_eq!(
+                    output.status.code(),
+                    Some(1),
+                    "{kind} {backend:?}: {}",
+                    text(&output.stderr)
+                );
+                assert!(!object.exists(), "{kind} {backend:?} left stale output");
+            }
+        }
+    }
+
+    #[test]
+    fn driver_conflicts_preserve_stale_object_files() {
+        for conflict in [
+            &["--native-object"][..],
+            &["--backend=native", "--llvm-opt=O2"][..],
+            &["--backend=native", "--llvm-codegen-only"][..],
+        ] {
+            let object = temporary("driver-conflict.o");
+            std::fs::write(&object, b"existing object").unwrap();
+            let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+            flags.extend_from_slice(conflict);
+            // A usage error must precede even invalid source diagnostics.
+            let output = bcc("int value = not_declared;", &flags);
+            assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+            assert!(text(&output.stderr).contains("--backend=native"));
+            assert!(!text(&output.stderr).contains("not_declared"));
+            assert_eq!(std::fs::read(&object).unwrap(), b"existing object");
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_compilation_preserves_read_only_object_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // Root's access(W_OK) succeeds even for mode 0444, as it does in LLVM.
+        // SAFETY: getuid has no preconditions.
+        if unsafe { libc::getuid() } == 0 {
+            return;
+        }
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for source in ["int value;", "int value = not_declared;"] {
+                let object = temporary("read-only-object.o");
+                std::fs::write(&object, b"existing object").unwrap();
+                std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o444)).unwrap();
+                let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+                assert_eq!(std::fs::read(&object).unwrap(), b"existing object");
+                std::fs::remove_file(object).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn front_end_failure_preserves_stale_executable_like_clang() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let executable = temporary("stale-executable");
+            std::fs::write(&executable, b"existing executable").unwrap();
+            let mut flags = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-o",
+                executable.to_str().unwrap(),
+            ];
+            flags.extend_from_slice(backend);
+            let output = bcc("int value = not_declared;", &flags);
+            assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+            assert_eq!(std::fs::read(&executable).unwrap(), b"existing executable");
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn folded_pointer_cases_retain_switch_dispatch_on_all_backends() {
+        let source = "struct S {int a,b;};
+            int f1(int x){switch(x){case (long)((char *)0 + 1):return 11;default:return 0;}}
+            int f2(int x){switch(x){case (long)&((struct S *)0)->b:return 12;default:return 0;}}
+            int f3(int x){switch(x){case (int)(long)(char *)4:return 13;default:return 0;}}
+            int f4(int x){switch(x){case (unsigned char)((char *)8 - (char *)0):return \
+                      14;default:return 0;}}
+            int f5(int x){switch(x){case (unsigned char)(long)(char *)260:return 15;default:return \
+                      0;}}
+            int f6(int x){switch(x){case (long)(_Bool)(char *)4:return 16;default:return 0;}}
+            int main(void){return !(f5(4)==15 && f5(5)==0 && f6(1)==16 && f6(0)==0 && f1(1)==11 && \
+                      f1(2)==0 && f2(4)==12 && f2(5)==0
+                && f3(4)==13 && f3(5)==0 && f4(8)==14 && f4(9)==0);}";
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for mode in ["-std=gnu17", "-std=c99"] {
+                let executable = temporary("folded-pointer-cases");
+                let mut flags = vec![mode, "-o", executable.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert!(
+                    output.status.success(),
+                    "{backend:?}: {}",
+                    text(&output.stderr)
+                );
+                assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+                assert_eq!(
+                    run_native(&mut Command::new(&executable))
+                        .unwrap()
+                        .status
+                        .code(),
+                    Some(0)
+                );
+                std::fs::remove_file(executable).unwrap();
+                let object = temporary("folded-pointer-duplicate.o");
+                let mut flags = vec![mode, "-c", "-o", object.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(
+                    "int f(int x){switch(x){case 4:return 0;case (unsigned char)(long)(char \
+                     *)260:return 1;}return 2;}",
+                    &flags,
+                );
+                assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+                assert!(
+                    text(&output.stderr).contains("case value repeated"),
+                    "{}",
+                    text(&output.stderr)
+                );
+                assert!(!text(&output.stderr).contains("internal error"));
+                assert!(!object.exists());
+            }
+        }
+        let object = temporary("folded-pointer-sizeof.o");
+        let output = bcc(
+            "int f2[sizeof(char[(unsigned char)(long)(char *)260])];",
+            &["-std=c99", "-c", "-o", object.to_str().unwrap()],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        assert!(!object.exists());
+    }
+
+    #[test]
+    fn null_pointer_arithmetic_emits_zero_data_without_fixups() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let object = temporary("null-pointer-arithmetic.o");
+            let mut flags = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ];
+            flags.extend_from_slice(backend);
+            let output = bcc(
+                "char *a __attribute__((section(\".bss.a\"))) = (char *)0 + 0;\nint *b \
+                 __attribute__((section(\".bss.b\"))) = 0 + (int *)0;\nchar *c = (char *)0 - 0;\n",
+                &flags,
+            );
+            assert!(
+                output.status.success(),
+                "{backend:?}: {}",
+                text(&output.stderr)
+            );
+            assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+            assert!(object.exists());
+            if cfg!(target_os = "linux") {
+                let relocations = Command::new("readelf")
+                    .arg("-r")
+                    .arg(&object)
+                    .output()
+                    .unwrap();
+                assert!(relocations.status.success());
+                assert!(
+                    text(&relocations.stdout).contains("There are no relocations"),
+                    "{}",
+                    text(&relocations.stdout)
+                );
+            }
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    #[test]
     fn windows_gnu_object_output_needs_no_mingw() {
         let object = temporary("no-mingw.o");
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))

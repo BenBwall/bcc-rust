@@ -56,13 +56,23 @@ impl CompilerConfiguration {
         }
     }
 
+    /// Whether a warning was explicitly requested, independently of its
+    /// context-dependent default (for example GNU folding outside bounds).
+    pub(crate) fn diagnostic_requested(self, group: DiagnosticGroup) -> bool {
+        self.warning_options[group as usize].enabled == Some(true)
+    }
+
     /// Constraint diagnostics remain enabled under Allow; pedantic Deny
     /// promotes them. Explicit group overrides can suppress or demote even
     /// default errors, just as Clang does.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 permits warning diagnostics.
     pub(crate) fn diagnostic_severity(self, group: DiagnosticGroup) -> Option<ErrorSeverity> {
         let option = self.warning_options[group as usize];
-        if !option.enabled.unwrap_or(group.enabled_by_default()) {
+        if !option.enabled.unwrap_or(
+            group.enabled_by_default()
+                || (group.default() == GroupDefault::Extension
+                    && self.extension_policy != ExtensionPolicy::Allow),
+        ) {
             return None;
         }
         let default = if option.reenabled_warning {
@@ -180,6 +190,11 @@ diagnostic_groups! {
     /// An initializer that replaces an earlier one for the same subobject
     /// (C99 §6.7.8p19); Clang warns by default.
     InitializerOverrides => Some("initializer-overrides"), Warning, false;
+    /// Folding a non-ICE array bound; other constant contexts enable this
+    /// group only explicitly or under pedantic, as Clang does.
+    GnuFoldingConstant => Some("gnu-folding-constant"), Warning, true;
+    /// Clang's additional constant form for addition to a null pointer.
+    GnuNullPointerArithmetic => Some("gnu-null-pointer-arithmetic"), Extension, true;
     /// A decimal or unsuffixed constant that takes a wider type of its list.
     /// Valid C99 that neither GCC nor Clang diagnoses, so it stays off; the
     /// bcc-only `-Wconstant-promotion` reports it.
@@ -192,6 +207,7 @@ enum GroupDefault {
     Error,
     Warning,
     Ignored,
+    Extension,
 }
 
 impl DiagnosticGroup {
@@ -205,13 +221,14 @@ impl DiagnosticGroup {
     pub(crate) const fn default_severity(self) -> ErrorSeverity {
         match self.default() {
             | GroupDefault::Error => ErrorSeverity::Error,
-            | GroupDefault::Warning | GroupDefault::Ignored => ErrorSeverity::Warning,
+            | GroupDefault::Warning | GroupDefault::Ignored | GroupDefault::Extension =>
+                ErrorSeverity::Warning,
         }
     }
 
     /// Whether the group reports anything before an option enables it.
     pub(crate) fn enabled_by_default(self) -> bool {
-        self.default() != GroupDefault::Ignored
+        matches!(self.default(), GroupDefault::Error | GroupDefault::Warning)
     }
 }
 

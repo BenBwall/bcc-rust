@@ -296,6 +296,7 @@ pub(crate) fn analyze<'tu>(
         errors: analyzer.error_diagnostics,
     };
     result.entities = EntityFacts::retain(context, &result, &scratch, unit_arena, &symbol_requests);
+    initializers::bss::check(context, &mut result, &scratch);
     result
 }
 
@@ -419,7 +420,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     can_weaken: spec.storage_class == Some(StorageClass::Typedef),
                     microsoft_object: true,
                 }));
-                self.work.push(Work::Declarator(d, base, false));
+                self.work.push(Work::Declarator(
+                    d,
+                    base,
+                    false,
+                    // C99 §6.7.5.2p2: function declarations cannot have
+                    // variably modified types; do not recover return bounds.
+                    functions::function_derivation(d, self.scratch).is_none()
+                        && (self.scope == 0
+                            || matches!(
+                                spec.storage_class,
+                                Some(StorageClass::Static | StorageClass::Extern)
+                            )),
+                ));
             },
             | Work::Bind(d, s, initialized, bound_start) => {
                 let ty = self.take_type();
@@ -484,7 +497,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::FunctionBase(f) => {
                 let base = self.take_type();
                 self.work.push(Work::FunctionBody(f));
-                self.work.push(Work::Declarator(f.declarator, base, false));
+                self.work
+                    .push(Work::Declarator(f.declarator, base, false, false));
             },
             | Work::FunctionBody(f) => {
                 let ty = self.take_type();
@@ -686,15 +700,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.values.push(ty);
             },
-            | Work::TypeName(name) => {
+            | Work::TypeName(name, fold_bounds) => {
                 if let Some(site) = self.type_name_sites.get(&type_name_identity(name)) {
                     self.values.push(site.ty);
                     return;
                 }
-                self.work.push(Work::TypeNameBase(name));
+                self.work.push(Work::TypeNameBase(name, fold_bounds));
                 self.spec(name.declaration_specifiers, false);
             },
-            | Work::TypeNameBase(name) => {
+            | Work::TypeNameBase(name, fold_bounds) => {
                 let base = self.take_type();
                 self.work
                     .push(Work::TypeNameDone(name, self.types.runtime_bounds.len()));
@@ -708,7 +722,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     microsoft_object: false,
                 }));
                 if let Some(d) = name.declarator {
-                    self.work.push(Work::Declarator(d, base, false));
+                    self.work
+                        .push(Work::Declarator(d, base, false, fold_bounds));
                 } else {
                     self.values.push(base);
                 }
@@ -753,9 +768,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         );
                     }
                 },
-            | Work::Declarator(d, base, parameter) => {
+            | Work::Declarator(d, base, parameter, fold_bounds) => {
                 self.check_declarator_attributes(d);
-                self.work.push(Work::DeclaratorDone(d, base, parameter));
+                self.work
+                    .push(Work::DeclaratorDone(d, base, parameter, fold_bounds));
                 for level in d.pointer.levels {
                     self.attribute_chain_operands(level.attributes);
                 }
@@ -765,7 +781,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                 }
             },
-            | Work::DeclaratorDone(d, mut base, parameter) => {
+            | Work::DeclaratorDone(d, mut base, parameter, fold_bounds) => {
                 self.record_symbol_requests(d);
                 for level in d.pointer.levels {
                     if !(level.qualifiers
@@ -811,13 +827,31 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     if vector && matches!(direct, DirectDeclarator::Attributes(_)) {
                         continue;
                     }
-                    self.work
-                        .push(Work::Direct(direct, d.source_vectors, parameter));
+                    self.work.push(Work::Direct(
+                        direct,
+                        d.source_vectors,
+                        parameter,
+                        fold_bounds,
+                    ));
                 }
             },
-            | Work::Direct(d, source, parameter) => self.direct(d, source, parameter),
-            | Work::ArrayDone(element, q, expression, source, errors_before) => {
-                let value = self.integers.pop().flatten();
+            | Work::Direct(d, source, parameter, fold_bounds) =>
+                self.direct(d, source, parameter, fold_bounds),
+            | Work::ArrayDone(element, q, expression, source, errors_before, fold_bounds) => {
+                let mut value = self.integers.pop().flatten();
+                let info = self.expression_info(expression);
+                // C99 §6.7.5.2p4, pp. 116-117; PDF pp. 128-129:
+                // a folded pointer expression is not an ICE. Clang recovers
+                // declarations requiring a constant bound with a warning.
+                // Automatic arrays and type names (including within sizeof)
+                // retain their variable bounds.
+                if value.is_some() && !info.ice && info.folded_address() {
+                    if fold_bounds {
+                        self.error(SemanticErrorKind::FoldedArrayBound, source, None, None);
+                    } else {
+                        value = None;
+                    }
+                }
                 if self.non_integer_bound(expression) {
                     self.error(SemanticErrorKind::InvalidArrayBound, source, None, None);
                     self.values.push(self.types.unknown());
@@ -942,7 +976,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }));
                 if let Some(d) = p.declarator {
                     self.validate_parameter_arrays(d);
-                    self.work.push(Work::Declarator(d, base, true));
+                    self.work.push(Work::Declarator(d, base, true, false));
                 } else {
                     self.values.push(base);
                 }
@@ -1174,7 +1208,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }));
                 self.work.push(Work::VectorAttributes(d.attributes, true));
                 if let Some(decl) = d.declarator {
-                    self.work.push(Work::Declarator(decl, base, false));
+                    self.work.push(Work::Declarator(decl, base, false, true));
                 } else {
                     self.values.push(base);
                 }
@@ -1681,18 +1715,19 @@ enum Work<'tu, 's> {
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     SpecDone(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),
-    TypeName(&'tu TypeName<'tu>),
-    TypeNameBase(&'tu TypeName<'tu>),
+    TypeName(&'tu TypeName<'tu>, bool),
+    TypeNameBase(&'tu TypeName<'tu>, bool),
     TypeNameDone(&'tu TypeName<'tu>, usize),
-    Declarator(Declarator<'tu>, TypeId, bool),
-    DeclaratorDone(Declarator<'tu>, TypeId, bool),
-    Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool),
+    Declarator(Declarator<'tu>, TypeId, bool, bool),
+    DeclaratorDone(Declarator<'tu>, TypeId, bool, bool),
+    Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool, bool),
     ArrayDone(
         TypeId,
         TypeQualifiers,
         &'tu Expression<'tu>,
         SourceVectors,
         usize,
+        bool,
     ),
     FunctionParameters(
         ArenaList<'tu, ParameterDeclaration<'tu>>,

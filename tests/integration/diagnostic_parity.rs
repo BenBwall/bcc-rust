@@ -51,6 +51,74 @@ mod tests {
     }
 
     #[test]
+    fn absolute_pointer_constant_contexts_match_clang() {
+        let cases = [
+            "int (*fn(void))[(long)((char *)0 + 4)];",
+            "int (*fn(void))[((char *)8 - (char *)4)];",
+            "int a[sizeof(char[(unsigned char)(long)(char *)260])];",
+            "int arr[8]; int *p = (int[&arr[4] - &arr[0]]){0};",
+            "int arr[8]; int f(void){int *p = (int[&arr[4] - &arr[0]]){0};return p[0];}",
+            "int *p = (int[(long)(char *)4]){0};",
+            "int a[(long)((char *)0 + 4)];",
+            "void f(void){static int a[(long)((char *)0 + 4)];}",
+            "struct S { int a[(long)((char *)0 + 4)]; };",
+            "int f2[sizeof(char[(long)((char *)0 + 2)])];",
+            "int f(int x){switch(x){case (long)((char *)0 + 1):return 11;default:return 0;}}",
+            "struct S {int a,b;}; int f(int x){switch(x){case (long)&((struct S *)0)->b:return \
+             11;default:return 0;}}",
+            "int f(int x){switch(x){case (long)(char *)4:return 11;default:return 0;}}",
+            "int f(int x){switch(x){case (char *)8 - (char *)0:return 11;default:return 0;}}",
+            "struct S {int a,b;}; int a[(long)&((struct S *)0)->b];",
+            "void f(void){int a[(long)((char *)0 + 4)];}",
+            "void f(void){typedef int A[(long)((char *)0 + 4)];}",
+        ];
+        for standard in ["-std=gnu17", "-std=c99"] {
+            for option in [
+                "",
+                "-Wgnu-folding-constant",
+                "-Wno-gnu-folding-constant",
+                "-Werror=gnu-folding-constant",
+                "-pedantic",
+                "-pedantic-errors",
+            ] {
+                let mut flags = vec![standard];
+                if !option.is_empty() {
+                    flags.push(option);
+                }
+                for source in cases {
+                    let reference = clang(source, &flags);
+                    let output = bcc(source, &flags);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let expected = String::from_utf8_lossy(&reference.stderr);
+                    // Inspection mode reports semantic errors but returns zero;
+                    // compare errors and warnings separately, by group and
+                    // text.
+                    assert_eq!(
+                        stderr.contains("error:"),
+                        expected.contains("error:"),
+                        "{flags:?} {source}: bcc={stderr} clang={expected}"
+                    );
+                    for group in ["gnu-folding-constant", "gnu-null-pointer-arithmetic"] {
+                        let tag = format!("-W{group}]");
+                        assert_eq!(
+                            stderr.matches(&tag).count(),
+                            expected.matches(&tag).count(),
+                            "{flags:?} {source}: bcc={stderr} clang={expected}"
+                        );
+                    }
+                    if expected.contains("variable length array folded to constant array") {
+                        assert!(
+                            stderr.contains("variable length array folded to constant array"),
+                            "{stderr}"
+                        );
+                    }
+                    assert!(!stderr.contains("internal error"), "{stderr}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn dll_attribute_spelling_target_and_warning_groups_match_clang() {
         for target in [
             "--target=x86_64-unknown-linux-gnu",

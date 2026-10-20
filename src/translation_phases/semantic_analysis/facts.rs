@@ -28,6 +28,7 @@ pub(super) mod entities;
 mod function_extensions;
 mod initializer_plans;
 mod parameters;
+mod reachability;
 pub(super) mod resolved;
 mod sizes;
 mod symbols;

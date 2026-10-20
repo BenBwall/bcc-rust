@@ -933,10 +933,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let value = |e| {
             let info = self.expression_info(e);
-            info.ice
-                .then_some(info.integer)
-                .flatten()
-                .map(|v| v.cast(bits, signed))
+            // RequireConstant already checked this expression. Retain the
+            // same additional arithmetic forms accepted by evaluate; keeping
+            // only strict ICEs would silently drop the switch dispatch edge.
+            // C99 §6.8.4.2p3, p. 134; PDF p. 146; §6.6p10, p. 96; PDF p. 108.
+            (info.ice
+                || (!info.atomic_cast()
+                    && info.constant == super::ConstantClass::Arithmetic
+                    && (self.context.configuration.gnu_extensions() || info.folded_address())))
+            .then_some(info.integer)
+            .flatten()
+            .map(|v| v.cast(bits, signed))
         };
         let Some(lower) = lower.and_then(value) else {
             return;

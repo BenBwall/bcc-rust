@@ -167,10 +167,6 @@ pub(super) fn generate_code<'tu>(
     let module = diagnosed.module;
     let target = context.configuration.target();
     let code = context.configuration.code_options();
-    if let Some(conflict) = options.back_end_conflict() {
-        report_stderr(format_args!("error: {conflict}"));
-        return FAILURE_STATUS;
-    }
     if llvm_output && !diagnosed.call_diagnostics.is_empty() {
         let output = options
             .output_path
@@ -408,7 +404,7 @@ impl CodeGeneration {
 
     /// Why the selected options do not fit the selected back end, if they
     /// do not.
-    fn back_end_conflict(&self) -> Option<&'static str> {
+    pub(super) fn back_end_conflict(&self) -> Option<&'static str> {
         let native = self.backend == BackEnd::Native;
         match self.emit {
             | Some(Emit::Asm) if !native =>
@@ -625,17 +621,37 @@ fn build_native(
         ));
         return FAILURE_STATUS;
     }
+    // Direct ELF and COFF encoding reads only the emitter's vocabulary.
+    if options.native_object && !module.module_asm().is_empty() {
+        report_stderr(format_args!(
+            "error: {}",
+            native::NativeError::ObjectModuleAsm
+        ));
+        return FAILURE_STATUS;
+    }
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
     if let Err(error) = native::emit_assembly_with(module, target, code, &mut text) {
         report_stderr(format_args!("error: {error}"));
         return FAILURE_STATUS;
     }
-    let result = if options.native_object {
-        native::build_object(&text, output, target, options.output_kind())
+    // Clang's assembler driver may unlink an output it cannot open. Check
+    // existing regular files first, preserving the C driver's read-only policy.
+    let writable = if output.is_file() {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(output)
+            .map(drop)
     } else {
-        native::assemble(&text, output, target, options.output_kind())
+        Ok(())
     };
+    let result = writable.and_then(|()| {
+        if options.native_object {
+            native::build_object(&text, output, target, options.output_kind())
+        } else {
+            native::assemble(&text, output, target, options.output_kind())
+        }
+    });
     match result {
         | Ok(()) => 0,
         | Err(error) => {
@@ -703,7 +719,7 @@ fn pass_list(value: &str) -> Result<PassList, String> {
 ///
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 (required diagnostics);
 /// handling a failed host write is a CLI policy.
-fn report_stderr(text: fmt::Arguments<'_>) {
+pub(super) fn report_stderr(text: fmt::Arguments<'_>) {
     drop(writeln!(io::stderr().lock(), "{text}"));
 }
 

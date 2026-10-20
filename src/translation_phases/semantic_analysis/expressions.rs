@@ -529,6 +529,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // GNU-folded address difference through enclosing arithmetic;
             // evaluate reports it through the existing extension policy.
             let folded_address = match e.kind {
+                | E::Cast {
+                    operand_expression, ..
+                }
                 | E::Unary {
                     operand_expression, ..
                 } => self.expression_info(operand_expression).folded_address(),
@@ -547,7 +550,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => false,
             };
             if folded_address {
-                info.folding = ConstantFolding::AddressDifference;
+                info.folding = ConstantFolding::Address;
             }
         }
         if let E::StatementExpression(block) = e.kind {

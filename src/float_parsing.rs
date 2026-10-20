@@ -11,6 +11,7 @@
 //! [`range::range_error`], then [`LongDouble`].
 //!
 //! Files by role:
+//! - Target constant bits shared by semantic checks and lowering: `bits.rs`.
 //! - Other floating carriers: `conversion.rs`.
 //! - Native long-double representation: `representation.rs`.
 //! - Classification and conversion errors: `range.rs`.
@@ -21,6 +22,9 @@
 //! Floating constants: §6.4.4.2 paragraphs 1-7, pp. 57-58;
 //! PDF pp. 69-70. Host conversion interfaces: §7.20.1.3 paragraphs 1-10,
 //! pp. 308-310; PDF pp. 320-322.
+
+// Target object representations
+pub(crate) mod bits;
 
 // Conversion
 mod complex;

@@ -8,9 +8,11 @@
 mod call_diagnostics;
 
 use std::{
+    cell::RefCell,
     ffi::{
         CStr,
         c_char,
+        c_void,
     },
     fmt,
     marker::PhantomData,
@@ -20,6 +22,7 @@ use std::{
 
 use llvm_sys::{
     LLVMDLLStorageClass,
+    LLVMDiagnosticSeverity,
     LLVMIntPredicate,
     LLVMLinkage,
     LLVMOpcode,
@@ -84,6 +87,7 @@ use llvm_sys::{
         LLVMConstTrunc,
         LLVMContextCreate,
         LLVMContextDispose,
+        LLVMContextSetDiagnosticHandler,
         LLVMCreateBuilderInContext,
         LLVMCreateEnumAttribute,
         LLVMCreateMemoryBufferWithMemoryRange,
@@ -100,6 +104,8 @@ use llvm_sys::{
         LLVMGetBufferSize,
         LLVMGetBufferStart,
         LLVMGetDataLayoutStr,
+        LLVMGetDiagInfoDescription,
+        LLVMGetDiagInfoSeverity,
         LLVMGetEnumAttributeKindForName,
         LLVMGetFirstFunction,
         LLVMGetIntrinsicDeclaration,
@@ -157,6 +163,7 @@ use llvm_sys::{
         LLVMBasicBlockRef,
         LLVMBuilderRef,
         LLVMContextRef,
+        LLVMDiagnosticInfoRef,
         LLVMMemoryBufferRef,
         LLVMModuleRef,
         LLVMTypeRef,
@@ -200,7 +207,10 @@ use crate::{
         Target,
         TlsModel,
     },
-    util::bump::Bump,
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 /// A session owns a context, module and builder in disposal order.
@@ -211,13 +221,14 @@ use crate::{
 /// arena lifetime is needed. Owned text, object buffers and errors are
 /// unbranded.
 pub(super) struct Session<'id> {
-    builder: LLVMBuilderRef,
-    module:  LLVMModuleRef,
-    context: LLVMContextRef,
-    arena:   &'id Bump,
+    builder:     LLVMBuilderRef,
+    module:      LLVMModuleRef,
+    context:     LLVMContextRef,
+    arena:       &'id Bump,
+    diagnostics: &'id dyn DiagnosticStatus,
     /// The relocation and thread-local storage models.
-    code:    CodeOptions,
-    _brand:  PhantomData<fn(&'id ()) -> &'id ()>,
+    code:        CodeOptions,
+    _brand:      PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
 /// The non-default linkages the back end assigns.
@@ -271,8 +282,19 @@ impl Session<'_> {
         code: CodeOptions,
         body: impl for<'id> FnOnce(&Session<'id>) -> R,
     ) -> R {
+        // The handler's state has a stable address until after the session
+        // disposes its context, including on early returns and unwinding.
+        let diagnostics = Diagnostics(RefCell::new(ArenaString::new_in(arena)));
         // SAFETY: Creates a new independently owned LLVM context.
         let context = unsafe { LLVMContextCreate() };
+        // SAFETY: The callback and its stack-owned state outlive this context.
+        unsafe {
+            LLVMContextSetDiagnosticHandler(
+                context,
+                Some(record_diagnostic),
+                (&raw const diagnostics).cast_mut().cast(),
+            );
+        }
         // SAFETY: The context is live and the module name is NUL terminated.
         let module = unsafe { LLVMModuleCreateWithNameInContext(c"bcc".as_ptr(), context) };
         // SAFETY: The context is live.
@@ -282,6 +304,7 @@ impl Session<'_> {
             module,
             context,
             arena,
+            diagnostics: &diagnostics,
             code,
             _brand: PhantomData,
         };
@@ -1417,6 +1440,7 @@ impl<'id> Session<'id> {
             )
         };
         let message = Message(error);
+        self.diagnostics.check()?;
         if failed != 0 { Err(message) } else { Ok(()) }
     }
 
@@ -1579,7 +1603,7 @@ impl<'id> Session<'id> {
         };
         // SAFETY: Verified live module and machine; outputs are separately
         // owned.
-        if unsafe {
+        let failed = unsafe {
             LLVMTargetMachineEmitToMemoryBuffer(
                 machine.0,
                 self.module,
@@ -1587,16 +1611,76 @@ impl<'id> Session<'id> {
                 &raw mut error,
                 &raw mut buffer,
             )
-        } != 0
-        {
-            return Err(Message(error));
+        };
+        let message = Message(error);
+        let buffer = (!buffer.is_null()).then(|| Buffer(buffer));
+        // MC can report errors through the context handler while the C API
+        // returns success and a corrupt object. Drop that buffer on any error.
+        self.diagnostics.check()?;
+        if failed != 0 {
+            return Err(message);
         }
-        Ok(Some(Buffer(buffer)))
+        Ok(buffer)
     }
 }
 
 fn count(length: usize) -> u32 {
     u32::try_from(length).expect("LLVM list fits u32")
+}
+
+/// All LLVM errors in one context, copied before their diagnostic handles
+/// expire. The caller prints the complete set before failing compilation.
+struct Diagnostics<'a>(RefCell<ArenaString<'a>>);
+
+trait DiagnosticStatus {
+    fn check(&self) -> Result<(), Message>;
+}
+
+impl DiagnosticStatus for Diagnostics<'_> {
+    fn check(&self) -> Result<(), Message> {
+        let mut errors = self.0.borrow_mut();
+        if errors.is_empty() {
+            return Ok(());
+        }
+        errors.push('\0');
+        // SAFETY: The collected descriptions contain no interior NUL and the
+        // appended terminator stays live while LLVM copies the text.
+        let message = Message(unsafe { LLVMCreateMessage(errors.as_ptr().cast()) });
+        errors.clear();
+        Err(message)
+    }
+}
+
+extern "C" fn record_diagnostic(info: LLVMDiagnosticInfoRef, state: *mut c_void) {
+    // SAFETY: LLVM supplies a live diagnostic for this callback invocation.
+    let severity = unsafe { LLVMGetDiagInfoSeverity(info) };
+    // The C callback receives optimization remarks even when the default
+    // handler would filter them. The CLI does not enable these remarks.
+    if severity == LLVMDiagnosticSeverity::LLVMDSRemark {
+        return;
+    }
+    // SAFETY: The description is copied to independently owned LLVM storage.
+    let message = Message(unsafe { LLVMGetDiagInfoDescription(info) });
+    // SAFETY: with_code keeps this state alive until the context is disposed;
+    // this context's synchronous compilation owns all accesses to it.
+    let diagnostics = unsafe { &*state.cast::<Diagnostics<'_>>() };
+    if severity == LLVMDiagnosticSeverity::LLVMDSError {
+        let mut errors = diagnostics.0.borrow_mut();
+        if !errors.is_empty() {
+            errors.push_str("\nerror: ");
+        }
+        errors.push_str(message.text());
+    } else {
+        let prefix = if severity == LLVMDiagnosticSeverity::LLVMDSWarning {
+            "warning"
+        } else {
+            "note"
+        };
+        drop(std::io::Write::write_fmt(
+            &mut std::io::stderr().lock(),
+            format_args!("{prefix}: {message}\n"),
+        ));
+    }
 }
 
 /// LLVM-owned IR text, kept distinct from external diagnostics.
@@ -1754,6 +1838,22 @@ const MODULE_FLAG_MAX: u64 = 7;
 const MODULE_FLAG_MIN: u64 = 8;
 
 impl Session<'_> {
+    /// Appends a file-scope assembly block to the module's inline assembly,
+    /// as Clang does for each top-level `asm`; LLVM ends each block with a
+    /// newline and assembles them, in order, before the functions.
+    /// GNU extension: GCC manual, "Basic Asm", outside functions.
+    pub(super) fn append_module_asm(&self, text: &str) {
+        // SAFETY: The module is live; LLVM copies `text.len()` bytes, which
+        // need no terminator.
+        unsafe {
+            llvm_sys::core::LLVMAppendModuleInlineAsm(
+                self.module,
+                text.as_ptr().cast(),
+                text.len(),
+            );
+        }
+    }
+
     /// Adds the integer module flag `key` with the merge `behavior`, as the
     /// `!{i32 behavior, !"key", i32 value}` operand of `llvm.module.flags`
     /// that `Module::addModuleFlag` creates; LLVM-C's `LLVMAddModuleFlag`

@@ -178,6 +178,9 @@ pub(crate) struct Module<'ir> {
     /// Functions run before or after the program's entry, in this order of
     /// registration; back ends sort them by priority.
     init_functions: ArenaVec<'ir, InitFunction>,
+    /// File-scope assembly blocks, in source order, each passed to the
+    /// assembler verbatim before any function or global.
+    asm_blocks:     ArenaVec<'ir, &'ir str>,
 }
 
 /// A function of a module. It is defined if it has a body.

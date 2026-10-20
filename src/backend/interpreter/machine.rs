@@ -573,6 +573,11 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
         limits: Limits,
         host: &dyn Host,
     ) -> Result<Self, Trap> {
+        // File-scope assembly can define or change anything the program
+        // reaches; running without it could silently differ.
+        if !module.module_asm().is_empty() {
+            return Err(Trap::BadEntry(EntryError::ModuleAsm));
+        }
         let mut memory = Memory::new(arena, limits.max_object_size);
         let mut functions = ArenaVec::new_in(arena);
         for (func, function) in module.functions() {

@@ -78,13 +78,23 @@ use crate::{
         Symbol,
         Visibility,
     },
-    target::Target,
+    target::{
+        Target,
+        sections::{
+            ElfSectionKind,
+            family as elf_section_family,
+        },
+    },
     util::bump::{
         ArenaSet,
         ArenaVec,
         Bump,
     },
 };
+
+/// The comment that opens the file-scope assembly in a listing, as Clang
+/// writes it.
+pub(crate) const MODULE_ASM_START: &str = "# Start of file scope inline assembly";
 
 /// Writes one module's assembly.
 pub(crate) struct Emitter<'o, 'm, 'ir> {
@@ -113,9 +123,54 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
     }
 
-    /// The file header.
-    pub(crate) fn header(&mut self) -> fmt::Result {
-        writeln!(self.out, "\t.text")
+    /// Validate named BSS contents before either output path writes a file.
+    /// GNU extension: GCC Common Variable Attributes, `section`.
+    pub(crate) fn header(&mut self) -> Result<(), super::NativeError<'m>> {
+        if self.elf {
+            for (_, function) in self.module.functions() {
+                if function.body.is_some()
+                    && let Some(section) = function.attributes.section
+                    && elf_section_type(section) == "nobits"
+                {
+                    return Err(SectionError {
+                        section,
+                        fixups: false,
+                    }
+                    .into());
+                }
+            }
+            for (_, global) in self.module.globals() {
+                if let Some(section) = global.attributes.section
+                    && elf_section_type(section) == "nobits"
+                    && let Some(GlobalInit::Bytes { bytes, relocations }) = global.init
+                    && (!relocations.is_empty() || bytes.iter().any(|&byte| byte != 0))
+                {
+                    return Err(SectionError {
+                        section,
+                        fixups: !relocations.is_empty(),
+                    }
+                    .into());
+                }
+            }
+        }
+        writeln!(self.out, "\t.text")?;
+        // File-scope assembly follows verbatim, in source order and before
+        // every function and object as Clang places it, then AT&T syntax
+        // again. GNU extension: GCC manual, "Basic Asm".
+        let blocks = self.module.module_asm();
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        writeln!(self.out, "{MODULE_ASM_START}")?;
+        for text in blocks {
+            self.out.write_str(text)?;
+            if !text.ends_with('\n') {
+                writeln!(self.out)?;
+            }
+        }
+        writeln!(self.out, "# End of file scope inline assembly")?;
+        writeln!(self.out, "\t.att_syntax")?;
+        Ok(())
     }
 
     /// One function: label, prologue, blocks, and the end of its unwind
@@ -138,8 +193,15 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 false,
                 name,
             )?,
-            | Some(section) if self.elf =>
-                writeln!(self.out, "\t.section\t{},\"ax\",@progbits", Name(section))?,
+            | Some(section) if self.elf => {
+                let kind = elf_section_type(section);
+                let flags = elf_section_flags(section, true, false);
+                writeln!(
+                    self.out,
+                    "\t.section\t{},\"{flags}\",@{kind}",
+                    Name(section)
+                )?;
+            },
             | Some(section) => writeln!(self.out, "\t.section\t{},\"xr\"", Name(section))?,
             | None => writeln!(self.out, "\t.text")?,
         }
@@ -232,6 +294,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
         if self.elf {
             let kind = section.map_or(if nobits { "nobits" } else { "progbits" }, elf_section_type);
+            let flags = section.map_or(flags, |section| {
+                elf_section_flags(section, flags.contains('x'), !flags.contains('w'))
+            });
             writeln!(self.out, ",\"{flags}G\",@{kind},{name},comdat")
         } else {
             writeln!(self.out, ",\"{flags}\",discard,{name}")
@@ -830,12 +895,12 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 self.comdat_section(global.attributes.section, base, flags, nobits, name)?;
             } else if let Some(section) = global.attributes.section {
                 let kind = elf_section_type(section);
+                let flags = elf_section_flags(section, false, global.constant && !relocated);
                 let section = Name(section);
                 // A position-independent executable relocates addresses at
                 // load time, so a relocated constant needs a writable section.
                 match (self.elf, global.constant && !relocated) {
-                    | (true, true) => writeln!(self.out, "\t.section\t{section},\"a\",@{kind}")?,
-                    | (true, false) => writeln!(self.out, "\t.section\t{section},\"aw\",@{kind}")?,
+                    | (true, _) => writeln!(self.out, "\t.section\t{section},\"{flags}\",@{kind}")?,
                     | (false, true) => writeln!(self.out, "\t.section\t{section},\"dr\"")?,
                     | (false, false) => writeln!(self.out, "\t.section\t{section},\"dw\"")?,
                 }
@@ -1174,19 +1239,40 @@ fn symbol_name<'m>(module: &Module<'m>, symbol: SymbolRef) -> Name<'m> {
 // LLVM's ELF lowering gives explicitly named array and BSS families their
 // semantic types too, so section attributes agree with constructor emission.
 fn elf_section_type(name: &str) -> &'static str {
-    let family =
-        |stem: &str| name == stem || name.strip_prefix(stem).is_some_and(|s| s.starts_with('.'));
-    if family(".init_array") {
-        "init_array"
-    } else if family(".fini_array") {
-        "fini_array"
-    } else if family(".preinit_array") {
-        "preinit_array"
-    } else if family(".bss") || family(".tbss") {
-        "nobits"
+    ElfSectionKind::named(name).asm_type()
+}
+
+// LLVM's named-section kind overrides the source entity kind for BSS/TLS;
+// large data is an x86-64 flag, not a request to make `.lbss` NOBITS.
+fn elf_section_flags(name: &str, function: bool, read_only: bool) -> &'static str {
+    if ElfSectionKind::named(name).is_thread_local() {
+        "awT"
+    } else if elf_section_type(name) == "nobits" {
+        "aw"
+    } else if function {
+        if elf_section_family(name, ".ltext") {
+            "axl"
+        } else {
+            "ax"
+        }
+    } else if [".ldata", ".lbss", ".lrodata"]
+        .iter()
+        .any(|stem| elf_section_family(name, stem))
+    {
+        if read_only { "al" } else { "awl" }
+    } else if read_only {
+        "a"
     } else {
-        "progbits"
+        "aw"
     }
+}
+
+/// LLVM MC's BSS diagnostic, shared by text and direct object emission.
+#[derive(Debug, thiserror::Error)]
+#[error("BSS section '{section}' cannot have {}", if *.fixups { "fixups" } else { "non-zero bytes" })]
+pub(crate) struct SectionError<'m> {
+    section: &'m str,
+    fixups:  bool,
 }
 
 /// A symbol name, quoted unless it is a plain identifier.
