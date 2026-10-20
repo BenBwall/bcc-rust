@@ -38,6 +38,11 @@ use crate::{
     util::bump::ArenaVec,
 };
 
+/// How many case labels after a `default` [`Analyzer::later_cases_collect`]
+/// collects from, bounding the work per `default` to that many walks of
+/// the body.
+const LATER_CASES: usize = 64;
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Starts folding switch `index` (statement `switch`, body `body`) when
     /// code generation folds its controlling `condition`, of promoted type
@@ -84,7 +89,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// inside the selected statements change nothing, and those after them
     /// stay skipped. A `default` met before a matching case is selected
     /// tentatively, unless the switch has a case range, which Clang does
-    /// not fold without a match.
+    /// not fold without a match, or a later case's collection fails
+    /// ([`Self::later_cases_collect`]).
     /// C99: §6.8.4.2 paragraph 4, p. 134; PDF p. 146.
     pub(in crate::translation_phases::semantic_analysis) fn switch_label_dead(
         &mut self,
@@ -100,9 +106,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match fold.phase {
             | Phase::Searching => {
                 if matches!(label.kind, StatementType::Default(_))
-                    && self
-                        .switch_labels(fold.switch)
-                        .is_some_and(|labels| labels.last_range.is_none())
+                    && self.later_cases_collect(fold, label)
                 {
                     self.select(index, label, true);
                 }
@@ -112,6 +116,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | Phase::Ended => true,
             | Phase::Unfolded => around,
         }
+    }
+
+    /// Whether `default` of folded switch `fold` may be selected
+    /// tentatively: the switch has no case range, and Clang's collection
+    /// succeeds from every case label after it. A matching later case
+    /// replaces the `default` then, while one whose collection fails would
+    /// leave the switch unfolded, which cannot undo what selecting the
+    /// `default` skipped. Past [`LATER_CASES`] later labels, the `default`
+    /// is not selected: the switch is analyzed as unfolded, which leaves
+    /// more code emitted than Clang's, never less.
+    fn later_cases_collect(
+        &mut self,
+        fold: FoldedSwitch<'tu>,
+        default: &'tu Statement<'tu>,
+    ) -> bool {
+        let Some(labels) = self.switch_labels(fold.switch) else {
+            return false;
+        };
+        let Some(position) = self.label_position(default) else {
+            return false;
+        };
+        let later = labels.labels.get(position + 1..).unwrap_or_default();
+        labels.last_range.is_none()
+            && later.len() <= LATER_CASES
+            && later
+                .iter()
+                .all(|&label| self.collect_case(fold.body, label).is_some())
     }
 
     /// Learns the value of case `label` of the innermost switch: a folded
