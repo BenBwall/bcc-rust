@@ -177,6 +177,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // The label resumes the code around the switch either way.
         self.functions.dead = self.functions.switch_dead;
         if range_after {
+            debug_assert!(!fold.tentative, "a tentative default precedes no case range");
             self.set_phase(index, Phase::Unfolded);
         } else {
             self.select(index, label, false);
@@ -187,11 +188,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// it succeeds, skipping what was analyzed since the body began; when
     /// it fails, a matching case leaves the switch unfolded, and a
     /// `default` leaves it searching.
+    ///
+    /// This is the one point where a selection changes: a matching case
+    /// replaces a tentative `default` here, and [`Self::skip_folded_region`]
+    /// then covers everything since the body began again, a superset of
+    /// what the `default`'s selection covered, its selected statements and
+    /// what followed their `break` included. A tentative selection is never
+    /// undone: [`Self::later_cases_collect`] admits one only when every case
+    /// after the `default` collects, so a failed collection cannot follow
+    /// it. What #104 marks under a tentative `default`, retroactively or
+    /// after its `break`, stays valid when a case replaces it.
     fn select(&mut self, index: usize, label: &'tu Statement<'tu>, tentative: bool) {
         let Some(fold) = self.functions.emission.folds.get(&index).copied() else {
             return;
         };
-        match self.collect_case(fold.body, label) {
+        let collected = self.collect_case(fold.body, label);
+        debug_assert!(
+            collected.is_some() || !fold.tentative,
+            "a case after a tentative default collects"
+        );
+        match collected {
             | Some(end) => {
                 self.skip_folded_region(fold.start..self.reference_count());
                 if let Some(fold) = self.functions.emission.folds.get_mut(&index) {
