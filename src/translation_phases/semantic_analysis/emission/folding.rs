@@ -100,7 +100,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn compute_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
         let info = self.expression_info(expression);
-        if info.constant == ConstantClass::Arithmetic && !info.unfolded_binary128 {
+        // Semantic analysis folds `__builtin_constant_p` as GCC's front end
+        // does, which differs from Clang's evaluator; recompute around it.
+        if info.constant == ConstantClass::Arithmetic
+            && !info.unfolded_binary128
+            && !self.holds_constant_p(expression)
+        {
             if let Some(integer) = info.integer {
                 return Some(Value::Integer(integer));
             }
@@ -312,7 +317,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Scalar::ComplexLongDouble
                 | Scalar::ComplexFloat128,
             ) => match value {
-                | Value::Integer(_) | Value::Floating(_) | Value::Other => Some(Value::Other),
+                | Value::Floating(floating) => Some(Value::Floating(floating)),
+                | Value::Integer(_) | Value::Other => Some(Value::Other),
                 | Value::Address(_) => None,
             },
             | _ => {
@@ -350,11 +356,53 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .constant_initializers
                     .get(&binding)
                     .copied()?;
-                let value = self.evaluate_value(initializer, depth)?;
-                self.cast_value(value, expression)
+                match self.evaluate_value(initializer, depth)? {
+                    | Value::Floating(floating) => Some(Value::Floating(floating)),
+                    | value => self.cast_value(value, expression),
+                }
             },
             | _ => None,
         }
+    }
+
+    /// Whether `expression` calls `__builtin_constant_p`, memoized.
+    fn holds_constant_p(&mut self, expression: &'tu Expression<'tu>) -> bool {
+        let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
+        work.push((expression, false));
+        while let Some((current, children_done)) = work.pop() {
+            let key = std::ptr::from_ref(current).addr();
+            if self.functions.emission.constant_p.contains_key(&key) {
+                continue;
+            }
+            if children_done {
+                let mut holds = matches!(current.kind, ExpressionType::Call { function_expression, .. }
+                if self.expression_info(function_expression).binding.is_some_and(|binding| {
+                    self.bindings[binding].origin
+                        == super::super::BindingOrigin::Intrinsic(BuiltinId::ConstantP)
+                }));
+                super::labels::expression_children(self.scratch, current, |child| {
+                    holds |= self
+                        .functions
+                        .emission
+                        .constant_p
+                        .get(&std::ptr::from_ref(child).addr())
+                        .copied()
+                        .unwrap_or(false);
+                });
+                _ = self.functions.emission.constant_p.insert(key, holds);
+            } else {
+                work.push((current, true));
+                super::labels::expression_children(self.scratch, current, |child| {
+                    work.push((child, false));
+                });
+            }
+        }
+        self.functions
+            .emission
+            .constant_p
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// The address of `operand`, when it designates an object or function
