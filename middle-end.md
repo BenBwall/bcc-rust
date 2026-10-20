@@ -661,6 +661,22 @@ refuses a plan operation whose destination it cannot represent (a vector,
 binary128, an unmodeled type, an empty scalar brace pair) with the refusal
 the walker gave.
 
+A range's later elements copy its first (issue #82) when the first
+element's leaves select no union member and write one run of whole bytes:
+every later element would get the same bytes and relocations from them.
+Replay then ends with one `Leaf::Replicate` instead of a leaf per element,
+so `{ [0 ... 999][0 ... 999] = 0 }` is one store and two replications.
+Static emission copies the run's bytes and relocations into the buffer,
+doubling adjacent copies, and an all-zero object still becomes `zero`. An
+automatic range of at least 16 elements whose run is the whole element and
+is not volatile becomes one `fill` of zero, or `copy` instructions that
+double the initialized elements (at most 64); shorter or volatile automatic
+ranges, ranges that select a union member, a whole copy that would forget a
+later element's selection, and partial-byte runs are still replayed element
+by element. Copied ranges keep exactly the bytes, relocations and effects
+of element stores; `lowering/tests/ranges.rs` compares both forms and
+counts the replay work of 2^20-element ranges.
+
 **M5 is complete.** Effects-only evaluation (an overflow predicate's third operand
 and the statements of a GNU block inside it) interprets retained
 `EffectRecipe`s: nothing, evaluate-and-discard, the node's type-site actions and

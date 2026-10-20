@@ -322,6 +322,14 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 ty,
                 mask,
             } => self.initialize_zero(object, offset, size, ty, mask),
+            | Task::InitializeCopies {
+                object,
+                offset,
+                size,
+                stride,
+                count,
+                zero,
+            } => self.initialize_copies(object, offset, size, stride, count, zero),
             | Task::InitializeString {
                 object,
                 offset,

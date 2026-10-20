@@ -16,7 +16,6 @@ use super::{
     Leaf,
     LoweringError,
     at,
-    types,
 };
 use crate::{
     translation_phases::{
@@ -135,26 +134,8 @@ impl<'s> CoverageIndex<'s> {
     ) -> Result<Self, LoweringError> {
         let mut ranges = ArenaVec::with_capacity_in(leaves.len(), arena);
         for (index, &leaf) in leaves.iter().enumerate() {
-            let layout = |ty| types::layout(&sema.types, ty).map_err(|kind| at(kind, source));
-            let (start, stop, ty) = match leaf {
-                | Leaf::Zero {
-                    offset, size, ty, ..
-                }
-                | Leaf::String {
-                    offset, size, ty, ..
-                } => (8 * offset, 8 * (offset + size), ty),
-                | Leaf::Scalar {
-                    offset,
-                    ty,
-                    bit_field: Some(bits),
-                    ..
-                } => {
-                    let start = 8 * offset + u64::from(bits.bit_offset);
-                    (start, start + u64::from(bits.width), ty)
-                },
-                | Leaf::Scalar { offset, ty, .. } | Leaf::Copy { offset, ty, .. } =>
-                    (8 * offset, 8 * (offset + layout(ty)?.size), ty),
-            };
+            let (start, stop) = leaf.bits(&sema.types).map_err(|kind| at(kind, source))?;
+            let ty = leaf.ty();
             ranges.push(Coverage {
                 index,
                 start,

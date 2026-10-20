@@ -20,6 +20,7 @@ use super::{
     initializers::{
         self,
         Leaf,
+        Storage,
     },
     types::{
         self,
@@ -1031,7 +1032,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         flexible: Option<TypeId>,
     ) -> Result<(ArenaVec<'a, u8>, ArenaVec<'a, Relocation>), LoweringError> {
         let tables = self.tables;
-        let (leaves, _) = initializers::leaves(self.sema, ty, initializer, tables)?;
+        let (leaves, _) =
+            initializers::leaves(self.sema, ty, initializer, Storage::Static, tables)?;
         let length = usize::try_from(size).map_err(|_| {
             LoweringError::unsupported(Construct::StaticInitializer, initializer.source_vectors)
         })?;
@@ -1097,6 +1099,25 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                         Construct::StaticInitializer,
                         expression.source_vectors,
                     )),
+                | Leaf::Replicate {
+                    offset,
+                    size,
+                    stride,
+                    count,
+                    ..
+                } => replicate(
+                    &mut bytes,
+                    &mut relocations,
+                    (offset, size),
+                    (stride, count),
+                    tables,
+                )
+                .ok_or_else(|| {
+                    LoweringError::unsupported(
+                        Construct::StaticInitializer,
+                        initializer.source_vectors,
+                    )
+                })?,
             }
         }
         bytes.truncate(length);
@@ -1496,6 +1517,61 @@ fn merge_bit_field(bytes: &mut [u8], start: usize, field: BitFieldBits, value: i
         } else {
             *byte |= mask;
         }
+    }
+    Some(())
+}
+
+/// Copies the first element of a GNU range, its `size` bytes at `offset`
+/// and the relocations inside them, into each of the `count` later elements
+/// `stride` bytes apart, whose relocations there it replaces in the order
+/// element-by-element stores would leave. Adjacent copies double the
+/// copied bytes each time. `None` if a copy is outside `bytes`.
+/// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+/// GNU extension: GCC manual, "Designated Initializers" (ranges).
+fn replicate(
+    bytes: &mut [u8],
+    relocations: &mut ArenaVec<'_, Relocation>,
+    (offset, size): (u64, u64),
+    (stride, count): (u64, u64),
+    scratch: &Bump,
+) -> Option<()> {
+    let start = usize::try_from(offset).ok()?;
+    let length = usize::try_from(size).ok()?;
+    let step = usize::try_from(stride).ok()?;
+    let elements = usize::try_from(count).ok()?;
+    let end = start
+        .checked_add(step.checked_mul(elements)?)?
+        .checked_add(length)?;
+    if end > bytes.len() || length == 0 || length > step {
+        return None;
+    }
+    if length == step {
+        let mut done = length;
+        while start + done < end {
+            let doubled = done.min(end - start - done);
+            bytes.copy_within(start..start + doubled, start + done);
+            done += doubled;
+        }
+    } else {
+        for copy in 1..=elements {
+            bytes.copy_within(start..start + length, start + copy * step);
+        }
+    }
+    let mut inside = ArenaVec::new_in(scratch);
+    inside.extend(relocations.iter().copied().filter(|relocation| {
+        relocation.offset >= offset && relocation.offset + relocation.size() <= offset + size
+    }));
+    // Of the copies ending after a relocation's start, the first overlaps
+    // it if it starts before the relocation ends.
+    relocations.retain(|relocation| {
+        let after = relocation.offset.saturating_sub(offset + size) / stride + 1;
+        after > count || offset + after * stride >= relocation.offset + relocation.size()
+    });
+    for copy in 1..=count {
+        relocations.extend(inside.iter().map(|&relocation| Relocation {
+            offset: relocation.offset + copy * stride,
+            ..relocation
+        }));
     }
     Some(())
 }

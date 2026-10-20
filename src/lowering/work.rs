@@ -94,6 +94,15 @@ pub(super) enum Task<'tu> {
         size:   u64,
         mask:   u8,
     },
+    /// Copy the first element of a GNU range into its `count` later ones.
+    InitializeCopies {
+        object: Object,
+        offset: u64,
+        size:   u64,
+        stride: u64,
+        count:  u64,
+        zero:   bool,
+    },
     /// Copy a string literal into a character array being initialized.
     InitializeString {
         ty:      TypeId,
