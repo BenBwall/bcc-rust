@@ -155,7 +155,9 @@ const ENTITY_FACTS: &str = "entity facts checked by Unit::new: every function an
 /// `arena`. `scratch` holds each function's working state and is reset
 /// between functions. A unit that any phase reported an error in is
 /// refused; any construct outside the supported subset is reported with its
-/// provenance, after every function has been attempted.
+/// provenance, after every function has been attempted. With
+/// `plain_inline`, plain inline-only bodies are lowered as copies for LLVM's
+/// optimizing pipelines ([`Unit::lower_plain_inline_bodies`]).
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 pub(crate) fn lower_with_sources<'tu, 'ir>(
     context: &Context<'tu>,
@@ -164,6 +166,7 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
     target: Target,
     arena: &'ir Bump,
     scratch: &mut Bump,
+    plain_inline: bool,
 ) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
     let mut errors = ArenaVec::new_in(arena);
     if !sema.lowerable(context) {
@@ -175,11 +178,38 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
             errors: arena.alloc_slice_copy(&errors),
         });
     }
+    match lower_unit(context, syntax, sema, target, arena, scratch, plain_inline) {
+        // A plain inline-only body that lowering refuses is dropped on its
+        // own, and so is one whose attribute refusals would apply. Other
+        // errors that only such bodies cause, such as an object they alone
+        // reach, are rarer: this backstop lowers the unit again without
+        // any, so that they never refuse it (C99 §6.7.4p6).
+        | (Err(_), true) => lower_unit(context, syntax, sema, target, arena, scratch, false).0,
+        | (result, _) => result,
+    }
+}
+
+/// [`lower_with_sources`], with the plain inline-only bodies when
+/// `plain_inline` is set; also returns whether there was any.
+fn lower_unit<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    target: Target,
+    arena: &'ir Bump,
+    scratch: &mut Bump,
+    plain_inline: bool,
+) -> (Result<LoweredUnit<'ir>, LoweringErrors<'ir>>, bool) {
+    let mut errors = ArenaVec::new_in(arena);
     let tables = Bump::new();
-    let mut unit =
-        Unit::new(context, sema, target, arena, &tables).map_err(|error| LoweringErrors {
-            errors: arena.alloc_slice_copy(&[error]),
-        })?;
+    let mut unit = match Unit::new(context, sema, target, arena, &tables) {
+        | Ok(unit) => unit,
+        | Err(error) => {
+            let errors = arena.alloc_slice_copy(&[error]);
+            return (Err(LoweringErrors { errors }), false);
+        },
+    };
+    let plain_inline = plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);
     for record in functions {
@@ -197,10 +227,19 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
             ));
         }
         if let Err(error) = FunctionLowerer::lower(&mut unit, record.0, func, scratch) {
-            errors.push(error);
+            // A plain inline-only body is optional: one that lowering
+            // refuses is not emitted, and calls keep reaching the external
+            // definition (C99 §6.7.4p6). Its copy stays bodiless.
+            if !record
+                .0
+                .binding
+                .is_some_and(|binding| unit.optional_inline_body(binding))
+            {
+                errors.push(error);
+            }
         }
     }
-    if errors.is_empty() {
+    let result = if errors.is_empty() {
         let call_diagnostics = arena.alloc_slice_copy(&unit.call_diagnostics);
         Ok(LoweredUnit {
             call_diagnostics,
@@ -211,7 +250,8 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
         Err(LoweringErrors {
             errors: arena.alloc_slice_copy(&errors),
         })
-    }
+    };
+    (result, plain_inline)
 }
 
 /// IR and the source owners recorded while its function definitions are
@@ -233,7 +273,7 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
     arena: &'ir Bump,
     scratch: &mut Bump,
 ) -> Result<Module<'ir>, LoweringErrors<'ir>> {
-    lower_with_sources(context, syntax, sema, target, arena, scratch).map(|unit| unit.module)
+    lower_with_sources(context, syntax, sema, target, arena, scratch, true).map(|unit| unit.module)
 }
 
 impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {

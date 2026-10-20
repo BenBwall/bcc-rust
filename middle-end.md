@@ -562,12 +562,30 @@ declarations in IR, so uninlined calls and addresses refer to the external
 symbol. An `always_inline` one (without inline assembly) is also lowered as
 an internal `name.always_inline` function, marked `alwaysinline`, that
 direct calls name; addresses keep the external symbol. The copy records the
-external function it stands for (`inline_copy_of @name`): the interpreter,
-the optimizer and the native back end run the copy, while the LLVM back end
+external function it stands for (`inline_copy_of @name`): the LLVM back end
 emits its body as that function's `available_externally` definition and
 points the copy's uses at it, as Clang emits the inline definition, so
 LLVM's always-inliner makes Clang's choices (a recursive body is not inline
-viable, and its calls reach the external definition). Functions carry
+viable, and its calls reach the external definition). bcc's optimizer
+expands the copy where it can; for the interpreter and the native back end,
+`optimizer/always_inline.rs` then repeats the always-inliner's walk (module
+order, with a copy in its external function's place, and inline viability
+rechecked as each expansion can make a body call itself) and points every
+call that still names a copy at the external function, so every back end
+reaches the same definition: a recursive `__forceinline` function calls the
+external definition at O0 on all of them (#109). The interpreter links
+nothing else, so such a call stops it with an undefined-function trap, as
+the program alone fails to link with Clang; it stops plain inline-only
+calls the same way. A plain inline-only body (without inline assembly,
+`noinline`, or a call of its own symbol through an assembler label or a
+builtin, Clang's `isTriviallyRecursive`) is lowered too, as a copy named
+`name.inline` that nothing calls: LLVM emits it as the external function's
+`available_externally` body, so LLVM's inliner can expand it at O1 and above
+as Clang's does and drops it at O0, while the other back ends drop it.
+Lowering refuses nothing for these bodies: if the unit does not lower with
+them it is lowered again without. A GNU `weak` inline definition is a weak
+definition, emitted where it is referenced, as Clang gives it weak linkage
+before inline-only emission. Functions carry
 their inline control in IR (`noinline` for GNU `noinline`/`noipa`,
 `alwaysinline`), which the inliner and the LLVM back end honor. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
 The interpreter and LLVM therefore share the same decision. Internal functions
@@ -1090,6 +1108,13 @@ the target representation: binary64 on MSVC is supported, while GNU `f80`
 execution retains the existing unsupported-operation trap. `%f` output uses
 the default six fractional digits. Guest errno and floating-environment APIs
 remain outside the host implementation.
+
+The interpreter runs one translation unit and links nothing else. A call
+that reaches the external definition of an inline-only function, because
+the always-inliner walk did not expand it (#109) or the function is plain
+`inline`, stops with an undefined-function trap, matching the link failure
+of that unit alone, rather than running the inline definition, which no
+linked program would run there.
 
 ### Native back end
 

@@ -22,9 +22,7 @@ use crate::{
     ir::{
         DllStorage,
         Entity,
-        FuncId,
         InitKind,
-        InlineControl,
         Linkage as IrLinkage,
         Module,
         Symbol,
@@ -54,9 +52,13 @@ pub(super) fn declare<'id, 'a, 'm>(
     for (id, function) in module.functions() {
         let signature = module.signature(function.signature);
         let ty = function::signature_type(api, signature, arena);
-        if function.attributes.alias.is_some() || available_externally(module, id).is_some() {
+        if function.attributes.alias.is_some()
+            || module.inline_copy_target(id).is_some()
+            || (function.inline_copy_of.is_some() && function.body.is_none())
+        {
             // Placeholder until the alias or the external function exists;
-            // nothing reads it before.
+            // nothing reads it before. A plain inline copy whose body did
+            // not lower is never named.
             functions.push(api.null(api.ty(Type::Ptr)));
             continue;
         }
@@ -84,7 +86,7 @@ pub(super) fn declare<'id, 'a, 'm>(
     // A private inline copy becomes its external function's
     // `available_externally` body, and its uses name that function.
     for (id, function) in module.functions() {
-        if let Some(external) = available_externally(module, id) {
+        if let Some(external) = module.inline_copy_target(id) {
             let value = functions[external.index()];
             api.linkage(value, Linkage::AvailableExternally);
             if let Some(keyword) = function.inlining.keyword() {
@@ -177,27 +179,6 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
     }
     Ok((functions, globals))
-}
-
-/// The external function whose `available_externally` body the private
-/// inline copy `func` supplies, as Clang emits an `always_inline` C99 inline
-/// definition: an ordinary external declaration of the same signature that
-/// this module neither defines nor aliases. Anything else keeps the
-/// internal copy. C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
-fn available_externally(module: &Module<'_>, func: FuncId) -> Option<FuncId> {
-    let function = module.function(func);
-    let Some(Symbol::Function(external)) = module.symbol(function.inline_copy_of?) else {
-        return None;
-    };
-    let declaration = module.function(external);
-    (function.body.is_some()
-        && declaration.body.is_none()
-        && declaration.attributes.alias.is_none()
-        && declaration.inline_copy_of.is_none()
-        && declaration.linkage == IrLinkage::External
-        && declaration.inlining != InlineControl::Never
-        && declaration.signature == function.signature)
-        .then_some(external)
 }
 
 /// The LLVM linkage of a symbol, when it differs from LLVM's external

@@ -14,6 +14,7 @@ use super::{
         BlockLabel,
         ConstId,
         Entity,
+        FuncId,
         Inst,
         StackSlot,
         Table,
@@ -88,6 +89,18 @@ impl<'ir> Body<'ir> {
 
     pub(crate) fn inst(&self, inst: Inst) -> &InstData {
         &self.insts[inst]
+    }
+
+    /// Makes every direct call to a function `retarget` maps call the
+    /// function it returns instead, which has the same signature.
+    pub(crate) fn retarget_calls(&mut self, retarget: impl Fn(FuncId) -> Option<FuncId>) {
+        for inst in self.insts.keys() {
+            if let InstData::Call { func, .. } = &mut self.insts[inst]
+                && let Some(target) = retarget(*func)
+            {
+                *func = target;
+            }
+        }
     }
 
     /// Frontend diagnostic associated with this call, if any.

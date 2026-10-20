@@ -69,6 +69,9 @@
 //!   and division rewrites), `gvn.rs` (value numbering over the dominator tree,
 //!   including load reuse and store forwarding) and `licm.rs` (loop-invariant
 //!   code motion).
+//! - Not a pass: `always_inline.rs` ([`resolve_inline_copies`]) makes LLVM's
+//!   always-inliner choices between inline definitions and external ones for
+//!   the interpreter and the native back end, after the pipeline if it runs.
 //! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
 //!   a whole, and run programs in the interpreter before and after
 //!   optimization.
@@ -95,6 +98,7 @@ mod loops;
 mod memory;
 
 // Passes
+mod always_inline;
 mod combine;
 mod dce;
 mod fold;
@@ -123,6 +127,7 @@ use std::{
     time::Instant,
 };
 
+pub(crate) use always_inline::resolve_inline_copies;
 use draft::Draft;
 pub(crate) use options::{
     OptimizerOptions,

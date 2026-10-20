@@ -73,10 +73,13 @@ use crate::{
             StringTokenType,
         },
         semantic_analysis::{
+            BindingKind,
             BodyEmission,
             ConstantClass,
+            Definition,
             DefinitionKind,
             FunctionRecord,
+            Inlining,
             Integer,
             LabelId,
             Linkage,
@@ -145,6 +148,10 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// with an assembler label (glibc's `__REDIRECT`) and must still call
     /// the external definition.
     private_bodies: ArenaMap<'a, StringCacheId, FuncId>,
+    /// The plain inline-only definitions lowered as unreferenced copies
+    /// that the LLVM back end emits as `available_externally` bodies
+    /// ([`Unit::lower_plain_inline_bodies`]).
+    plain_inline: ArenaSet<'a, usize>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -211,7 +218,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let mut functions = ArenaVec::with_capacity_in(self.sema.functions.len(), self.tables);
         let mut bodies = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
-        for record in self.sema.functions {
+        for record in self.declaration_order() {
             if record
                 .binding
                 .is_some_and(|binding| !self.reachable.contains(&binding))
@@ -269,6 +276,52 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         functions
     }
 
+    /// The function definitions in source order, except that the
+    /// `always_inline` bodies among them take their slots in the order Clang
+    /// creates their LLVM functions ([`Self::clang_creation_order`]). The
+    /// module's function order is LLVM's, so LLVM's always-inliner, which
+    /// visits bodies in it, and the resolution of inline copies for the
+    /// other back ends (`optimizer/always_inline.rs`) both follow it, and
+    /// both choose as Clang does where expanding one recursive body into
+    /// another decides which calls stay calls.
+    fn declaration_order(&self) -> ArenaVec<'a, &'tu FunctionRecord<'tu>> {
+        let mut records: ArenaVec<'a, &'tu FunctionRecord<'tu>> =
+            ArenaVec::with_capacity_in(self.sema.functions.len(), self.tables);
+        records.extend(self.sema.functions.iter());
+        let always = |binding: usize| {
+            self.sema
+                .entity_attributes(binding)
+                .is_some_and(|attributes| attributes.inlining == Inlining::Always)
+                && self.sema.function_policy(binding).is_some_and(|policy| {
+                    matches!(
+                        policy.body,
+                        BodyEmission::PrivateInline | BodyEmission::Definition
+                    )
+                })
+        };
+        let mut slots = ArenaVec::new_in(self.tables);
+        for (index, record) in records.iter().enumerate() {
+            if record
+                .binding
+                .is_some_and(|binding| self.reachable.contains(&binding) && always(binding))
+            {
+                slots.push(index);
+            }
+        }
+        if slots.len() < 2 {
+            return records;
+        }
+        let ranks = self.clang_creation_order();
+        let mut sorted: ArenaVec<'_, &'tu FunctionRecord<'tu>> =
+            ArenaVec::with_capacity_in(slots.len(), self.tables);
+        sorted.extend(slots.iter().map(|&index| records[index]));
+        sorted.sort_by_key(|record| record.binding.and_then(|binding| ranks[binding]));
+        for (&index, record) in slots.iter().zip(sorted) {
+            records[index] = record;
+        }
+        records
+    }
+
     /// Whether this unit defines the linked object `binding`, tentatively
     /// included. C99: §6.9.2p2, p. 143; PDF p. 155.
     pub(super) fn defines_object(&self, binding: usize) -> bool {
@@ -280,10 +333,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// p. 140; PDF p. 152.
     pub(super) fn emits_function(&self, binding: usize) -> bool {
         self.reachable.contains(&binding)
-            && self
+            && (self
                 .sema
                 .function_policy(binding)
                 .is_some_and(|policy| policy.body != BodyEmission::InlineOnly)
+                || self.plain_inline.contains(&binding))
     }
 
     /// Whether the inline-only definition `binding` is lowered as a private
@@ -296,6 +350,56 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         self.sema
             .function_policy(binding)
             .is_some_and(|policy| policy.body == BodyEmission::PrivateInline)
+            || self.plain_inline.contains(&binding)
+    }
+
+    /// Whether `binding` is a plain inline-only definition lowered as an
+    /// optional copy ([`Self::lower_plain_inline_bodies`]).
+    pub(super) fn optional_inline_body(&self, binding: usize) -> bool {
+        self.plain_inline.contains(&binding)
+    }
+
+    /// Lowers every plain inline-only definition without inline assembly,
+    /// attribute refusals or `noinline` as well, as a copy that nothing calls:
+    /// the LLVM back end emits it as the external function's
+    /// `available_externally` body, as Clang does when it optimizes, so
+    /// LLVM can expand calls where Clang does; the other back ends drop it.
+    /// Returns whether there is any such definition. These bodies were not
+    /// lowered before, and their constructs must not refuse the unit: one
+    /// that does not lower stays bodiless (`lowering::lower_unit`).
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    pub(super) fn lower_plain_inline_bodies(&mut self) -> bool {
+        for record in self.sema.functions {
+            let Some(binding) = record.binding else {
+                continue;
+            };
+            let refused = self
+                .sema
+                .symbols
+                .refusals
+                .iter()
+                .any(|refusal| refusal.owner == Some(binding))
+                || self
+                    .sema
+                    .entities
+                    .refusals
+                    .iter()
+                    .any(|refusal| refusal.owner == Some(binding));
+            if !record.assembly
+                && !refused
+                && self
+                    .sema
+                    .function_policy(binding)
+                    .is_some_and(|policy| policy.body == BodyEmission::InlineOnly)
+                && self
+                    .sema
+                    .entity_attributes(binding)
+                    .is_none_or(|attributes| attributes.inlining != Inlining::Never)
+            {
+                _ = self.plain_inline.insert(binding);
+            }
+        }
+        !self.plain_inline.is_empty()
     }
 
     /// Declares a function definition's symbol; `None` when its body is
@@ -366,6 +470,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         if !self.private_inline(binding) {
             return Ok(None);
         }
+        if self.plain_inline.contains(&binding) {
+            return self.plain_inline_body(binding, record);
+        }
         let source = record.syntax.source_vectors;
         let external = self.symbol_name(binding);
         let identity = self.binding_identity(binding);
@@ -384,10 +491,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         // Name the external function the copy stands in for, declaring it
         // when nothing else has, so the LLVM back end can emit Clang's
         // `available_externally` form. A symbol clash keeps the plain
-        // private copy.
+        // private copy, as does a wrapper of its own symbol (glibc's
+        // fortify wrappers before 2.40): as that body, its call to the
+        // symbol would call itself.
         if let Ok(external) = self.function(binding) {
             let name = self.module.function(external).name;
-            self.module.set_inline_copy_of(func, name);
+            if !self.calls_own_symbol(binding, name) {
+                self.module.set_inline_copy_of(func, name);
+            }
         }
         // Private copies keep the entity's attribute-only return contract.
         // C99: §7.13.2.1p4, p. 244; PDF p. 256 (longjmp resumes setjmp).
@@ -397,6 +508,64 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .is_some_and(|attributes| attributes.returns_twice);
         _ = self.private_bodies.insert(identity, func);
         Ok(Some(func))
+    }
+
+    /// The unreferenced copy of the plain inline-only definition `binding`
+    /// ([`Self::lower_plain_inline_bodies`]), when its external function is
+    /// an ordinary declaration with the same signature, which the LLVM back
+    /// end can give the body. Otherwise the body is not lowered, as before.
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    fn plain_inline_body(
+        &mut self,
+        binding: usize,
+        record: &FunctionRecord<'tu>,
+    ) -> Result<Option<FuncId>, LoweringError> {
+        let source = record.syntax.source_vectors;
+        let Ok(external) = self.function(binding) else {
+            return Ok(None);
+        };
+        let signature = self
+            .signature_for_binding(binding)
+            .map_err(|kind| at(kind, source))?;
+        let declaration = self.module.function(external);
+        if declaration.signature != signature
+            || declaration.linkage != IrLinkage::External
+            || declaration.body.is_some()
+            || self.calls_own_symbol(binding, declaration.name)
+        {
+            return Ok(None);
+        }
+        let name = declaration.name;
+        let base = format_in!(self.tables, "{name}.inline");
+        let copy = self.unique_name(base);
+        let func = self
+            .module
+            .declare_function(copy, signature, IrLinkage::Internal);
+        self.module.set_inline_copy_of(func, name);
+        self.module.function_mut(func).returns_twice = self
+            .sema
+            .entity_attributes(binding)
+            .is_some_and(|attributes| attributes.returns_twice);
+        Ok(Some(func))
+    }
+
+    /// Whether the inline definition `binding` refers to its own symbol
+    /// through another entity, an assembler label (glibc's `__REDIRECT`)
+    /// or a builtin's library name: such a body is no copy of the external
+    /// definition but a wrapper of it, and Clang does not emit it as
+    /// `available_externally` (its `isTriviallyRecursive`).
+    fn calls_own_symbol(&self, binding: usize, name: &str) -> bool {
+        let identity = self.binding_identity(binding);
+        self.sema.references.iter().any(|reference| {
+            let data = self.sema.bindings[reference.binding];
+            reference.owner == binding
+                && data.kind == BindingKind::Function
+                && (data.origin.library() == Some(name)
+                    || (data.needs_entity_policy()
+                        && data.linkage != Linkage::None
+                        && self.symbol_name(reference.binding) == name
+                        && self.binding_identity(reference.binding) != identity))
+        })
     }
 
     /// The function a direct call to `binding` runs: the private copy of an
@@ -1675,6 +1844,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             private_bodies: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            plain_inline: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
         })
     }
 }

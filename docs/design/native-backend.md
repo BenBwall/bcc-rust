@@ -119,6 +119,14 @@ signature onto registers and stack slots (see `abi/` for the decisions and
 "Calls" below for the mapping). This is the repository's root-cause rule: the
 source of truth for the convention stays in `src/abi`.
 
+One difference is deliberate: the LLVM back end receives the private copies
+of inline-only definitions (`inline_copy_of`) and lets LLVM's always-inliner
+choose between each copy and its external definition, while the native back
+end receives a module in which the middle end has already made those choices
+(`optimizer/always_inline.rs`, #109). Every call that remains names the
+external function, so a recursive `__forceinline` function calls the external
+definition, as LLVM and Clang do at O0. See `middle-end.md`, "Inputs".
+
 ### Comparison arms
 
 Two arms join the table in `middle-end.md`:

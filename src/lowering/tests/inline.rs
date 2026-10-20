@@ -470,19 +470,17 @@ fn private_inline_bodies_do_not_capture_redirected_symbols() {
         .expect("main is defined");
     let main = main.split("\nfunction ").next().unwrap_or(main);
     assert!(main.contains("call @read.always_inline("), "{text}");
-    // The copy names the external function whose `available_externally`
-    // body the LLVM back end makes it (#89), and the text round-trips.
+    // A wrapper of its own symbol is no `available_externally` body of it
+    // (#89): as that body, its call to `read` would call itself. Clang emits
+    // no body for it (its `isTriviallyRecursive`).
     let header = private.lines().next().unwrap_or_default();
-    assert!(
-        header.contains("alwaysinline inline_copy_of @read "),
-        "{text}"
-    );
+    assert!(!header.contains("inline_copy_of"), "{text}");
     let arena = Bump::new();
     let module = parse_module(&arena, &text).unwrap();
     let Some(crate::ir::Symbol::Function(copy)) = module.symbol("read.always_inline") else {
         panic!("{text}");
     };
-    assert_eq!(module.function(copy).inline_copy_of, Some("read"), "{text}");
+    assert_eq!(module.function(copy).inline_copy_of, None, "{text}");
 }
 
 /// GNU extern-inline bodies supply direct-call implementations while values
@@ -678,4 +676,225 @@ void call(void) { f(); }
     assert_eq!(text.matches("relocs [0: @f]").count(), 2, "{text}");
     assert!(text.contains("func_addr @f\n"), "{text}");
     assert!(text.contains("call @f.always_inline("), "{text}");
+}
+
+/// A plain inline-only body is lowered as a copy that names its external
+/// function and that nothing calls: calls keep naming the external
+/// function, and the LLVM back end makes the copy its
+/// `available_externally` body, as Clang emits it when optimizing (#109).
+/// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+#[test]
+fn plain_inline_only_bodies_are_unreferenced_copies() {
+    let text = lowered(
+        "inline int f(int x) { return x ? x * f(x - 1) : 1; } int u(int x) { return f(x); }",
+    );
+    let copy = text
+        .split("function @f.inline(")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the copy is defined\n{text}"));
+    assert!(
+        copy.lines()
+            .next()
+            .is_some_and(|header| header.ends_with("internal inline_copy_of @f {")),
+        "{text}"
+    );
+    // Its own recursive call names the external function too.
+    assert!(!text.contains("call @f.inline("), "{text}");
+    assert!(text.contains("call @f("), "{text}");
+    assert!(
+        text.contains("function @f(i32 noundef) -> i32 external\n"),
+        "{text}"
+    );
+}
+
+/// An `always_inline` wrapper that calls its own symbol through an
+/// assembler label, like glibc's fortify wrappers before 2.40, keeps a
+/// private copy that is not its external function's body: as that body,
+/// LLVM would inline its call to the symbol into itself.
+#[test]
+fn always_inline_wrappers_of_their_own_symbol_stay_private() {
+    let text = lowered(
+        "extern int real(int) __asm__(\"f\"); extern inline __attribute__((always_inline, \
+         gnu_inline)) int f(int x) { return real(x) + 1; } int u(int x) { return f(x); }",
+    );
+    let copy = text
+        .split("function @f.always_inline(")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the copy is defined\n{text}"));
+    assert!(
+        copy.lines()
+            .next()
+            .is_some_and(|header| !header.contains("inline_copy_of")),
+        "{text}"
+    );
+    assert!(text.contains("call @f.always_inline("), "{text}");
+}
+
+/// No copy where Clang emits no `available_externally` body: an unused,
+/// `noinline` or assembly body, or one that calls its own symbol through
+/// another entity (an assembler label or a builtin's library name).
+#[test]
+fn plain_inline_copies_follow_clang_emission() {
+    for source in [
+        "inline int f(int x) { return x + 1; } int u(int x) { return x; }",
+        "inline __attribute__((noinline)) int f(int x) { return x + 1; } int u(int x) { return \
+         f(x); }",
+        "inline int f(int x) { __asm__(\"\"); return x + 1; } int u(int x) { return f(x); }",
+        "extern int real(int) __asm__(\"f\"); inline int f(int x) { return real(x); } int u(int \
+         x) { return f(x); }",
+        "inline int abs(int x) { return __builtin_abs(x); } int u(int x) { return abs(x); }",
+    ] {
+        let text = lowered(source);
+        assert!(!text.contains(".inline("), "{source}\n{text}");
+    }
+}
+
+/// Plain inline-only bodies were not lowered before #109: a construct that
+/// lowering refuses in one keeps calling the external definition instead
+/// of refusing the unit.
+#[test]
+fn a_refused_plain_inline_body_keeps_the_external_call() {
+    let text = lowered(
+        "extern inline __attribute__((gnu_inline)) int readgs(void) { return *(int \
+         __attribute__((address_space(256))) *)0; } inline int f(int x) { return x + 1; } int \
+         main(void) { return readgs() + f(1); }",
+    );
+    assert!(!text.contains("readgs.inline"), "{text}");
+    assert!(text.contains("call @readgs("), "{text}");
+    // Only the refused body is dropped (#109 review).
+    assert!(text.contains("function @f.inline("), "{text}");
+}
+
+/// The `always_inline` bodies are declared in the order Clang creates
+/// their LLVM functions, from the first reference, not in definition
+/// order: LLVM's always-inliner visits them in module order, and the
+/// order decides which recursive calls stay calls (#109 review).
+#[test]
+fn always_inline_bodies_follow_clang_creation_order() {
+    let text = lowered(
+        "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); inline \
+         __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) int \
+         h(int); inline __attribute__((always_inline)) int f(int x) { return x ? 2 * g(x - 1) : \
+         1; } inline __attribute__((always_inline)) int h(int x) { return x ? 4 * f(x - 1) : 1; } \
+         inline __attribute__((always_inline)) int g(int x) { return x ? 3 * h(x - 1) : 1; } int \
+         main(void) { printf(\"%d\\n\", f(5)); return 0; }",
+    );
+    let position = |name: &str| {
+        text.find(&format!("function @{name}.always_inline("))
+            .unwrap_or_else(|| panic!("{name}\n{text}"))
+    };
+    assert!(
+        position("f") < position("g") && position("g") < position("h"),
+        "{text}"
+    );
+    // Code generation skips dead code, so a call there creates nothing:
+    // the unreachable `h` call, the code after `return`, and the
+    // constant-false operand leave Clang's order f, g, h (#109 review).
+    for dead in [
+        "if (0) h(0);",
+        "(void)(0 && h(0));",
+        "(void)(1 || h(0));",
+        "(void)(0 ? h(0) : 0);",
+    ] {
+        let text = lowered(&format!(
+            "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); \
+             inline __attribute__((always_inline)) int g(int); inline \
+             __attribute__((always_inline)) int h(int); inline __attribute__((always_inline)) int \
+             f(int x) {{ return x ? 2 * g(x - 1) : 1; }} inline __attribute__((always_inline)) \
+             int g(int x) {{ return x ? 3 * h(x - 1) : 1; }} inline \
+             __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : 1; }} int \
+             main(void) {{ {dead} printf(\"%d\\n\", f(6)); return 0; h(1); }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(
+            position("f") < position("g") && position("g") < position("h"),
+            "{dead}\n{text}"
+        );
+    }
+    // In an ordinary function before `main`, the forms whose skipped
+    // references a review found counted: a generic selection's controlling
+    // operand and unselected association, a comma condition that folds, and
+    // the code after `__builtin_unreachable()` (#109 review, round 3).
+    for dead in [
+        "(void)_Generic(h(0), int: 0, default: 1);",
+        "(void)_Generic(0, int: 0, default: h(0));",
+        "if ((0, 0)) h(0);",
+        "__builtin_unreachable(); h(0);",
+    ] {
+        let text = lowered(&format!(
+            "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); \
+             inline __attribute__((always_inline)) int g(int); inline \
+             __attribute__((always_inline)) int h(int); inline __attribute__((always_inline)) int \
+             f(int x) {{ return x ? 2 * g(x - 1) : 1; }} inline __attribute__((always_inline)) \
+             int g(int x) {{ return x ? 3 * h(x - 1) : 1; }} inline \
+             __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : 1; }} int \
+             probe(void) {{ {dead} return 0; }} int main(void) {{ printf(\"%d\\n\", f(6)); return \
+             0; }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(
+            position("f") < position("g") && position("g") < position("h"),
+            "{dead}\n{text}"
+        );
+    }
+    // The selected association and a live comma condition still count.
+    for live in [
+        "(void)_Generic(0, int: h(0), default: 0);",
+        "if ((0, 1)) h(0);",
+    ] {
+        let text = lowered(&format!(
+            "inline __attribute__((always_inline)) int f(int); inline \
+             __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) int \
+             h(int); inline __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - \
+             1) : 1; }} inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x \
+             - 1) : 1; }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * \
+             f(x - 1) : 1; }} int probe(void) {{ {live} return 0; }} int main(void) {{ return \
+             f(6); }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(position("h") < position("f"), "{live}\n{text}");
+    }
+}
+
+/// A weak inline definition is a weak definition, emitted where it is
+/// referenced, as Clang emits it; a strong definition elsewhere wins. A
+/// GNU89 plain inline definition is an external definition anyway.
+#[test]
+fn weak_inline_definitions_are_weak_definitions_when_referenced() {
+    for gnu89 in [false, true] {
+        let config = CompilerConfiguration::default().with_gnu89_inline(gnu89);
+        for (source, referenced) in [
+            (
+                "inline __attribute__((weak)) int f(int x) { return x ? x * f(x - 1) : 1; } int \
+                 u(int x) { return f(x); }",
+                true,
+            ),
+            (
+                "inline __attribute__((weak, always_inline)) int f(int x) { return x; } int u(int \
+                 x) { return f(x); }",
+                true,
+            ),
+            (
+                "inline __attribute__((weak)) int f(int x) { return x; }",
+                false,
+            ),
+        ] {
+            let text = lower_with(source, config).unwrap_or_else(|error| panic!("{error:?}"));
+            assert_eq!(
+                text.contains("function @f(i32 noundef) -> i32 weak"),
+                referenced || gnu89,
+                "gnu89={gnu89}: {source}\n{text}"
+            );
+            assert!(!text.contains("@f.always_inline"), "{text}");
+        }
+    }
 }

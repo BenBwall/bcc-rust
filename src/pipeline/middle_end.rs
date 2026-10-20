@@ -23,6 +23,7 @@ use crate::{
     optimizer::{
         OptimizerOptions,
         optimize,
+        resolve_inline_copies,
     },
     translation_phases::{
         Context,
@@ -34,8 +35,10 @@ use crate::{
 };
 
 /// Lowers the analyzed `syntax` for the configured target into `arena`,
-/// optimizes the module with `optimizer`, and, for [`Profile::PostAbi`],
-/// lowers its calls for the target's calling convention.
+/// optimizes the module with `optimizer`, resolves its inline copies for a
+/// back end other than LLVM ([`InlineCopies`]), and, for
+/// [`Profile::PostAbi`], lowers its calls for the target's calling
+/// convention.
 ///
 /// A unit that any phase reported an error in is refused (`sema.lowerable`)
 /// with a single [`UnitHasErrors`](crate::lowering::LoweringErrorKind) error;
@@ -52,6 +55,7 @@ pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     arena: &'ir Bump,
     optimizer: Option<&OptimizerOptions<'_>>,
     profile: Profile,
+    copies: InlineCopies,
 ) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
     let mut scratch = Bump::new();
     let target = context.configuration.target();
@@ -59,11 +63,23 @@ pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
         mut module,
         function_sources,
         call_diagnostics,
-    } = crate::lowering::lower_with_sources(context, syntax, sema, target, arena, &mut scratch)
-        .map_err(MiddleEndError::Lowering)?;
+    } = crate::lowering::lower_with_sources(
+        context,
+        syntax,
+        sema,
+        target,
+        arena,
+        &mut scratch,
+        copies == InlineCopies::Keep,
+    )
+    .map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {
         scratch.reset();
         _ = optimize(&mut module, options, &scratch);
+    }
+    if copies == InlineCopies::Resolve {
+        scratch.reset();
+        resolve_inline_copies(&mut module, &scratch);
     }
     scratch.reset();
     let retained_diagnostics =
@@ -100,7 +116,15 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
         module,
         retained_diagnostics: diagnostics,
         ..
-    } = lower_translation_unit_diagnosed(context, syntax, sema, arena, optimizer, profile)?;
+    } = lower_translation_unit_diagnosed(
+        context,
+        syntax,
+        sema,
+        arena,
+        optimizer,
+        profile,
+        InlineCopies::Keep,
+    )?;
     let mut errors = crate::util::bump::ArenaVec::new_in(arena);
     errors.extend(diagnostics.iter().filter(|d| !d.warning).map(|d| {
         crate::lowering::LoweringError {
@@ -114,6 +138,23 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
     } else {
         Err(MiddleEndError::Lowering(LoweringErrors { errors }))
     }
+}
+
+/// What the middle end does with the private copies of inline definitions
+/// ([`Function::inline_copy_of`](crate::ir::Function)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum InlineCopies {
+    /// Keep them for an optimizing LLVM pipeline, which gets each as its
+    /// external function's `available_externally` body, as Clang emits an
+    /// inline definition above O0: plain inline-only bodies are lowered too.
+    Keep,
+    /// Keep only the `always_inline` copies, as Clang emits no other
+    /// `available_externally` body at O0, where LLVM never reads one.
+    KeepAlwaysInline,
+    /// Make LLVM's inlining choices for the interpreter and the native back
+    /// end, which then call the external definition wherever a call is not
+    /// expanded ([`resolve_inline_copies`]).
+    Resolve,
 }
 
 /// A module and its source diagnostic table; numeric call IDs index the full

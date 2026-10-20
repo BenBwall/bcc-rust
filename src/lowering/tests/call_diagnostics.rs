@@ -50,7 +50,7 @@ fn diagnostics_for_target(
     }
     let ir = Bump::new();
     let mut scratch = Bump::new();
-    let mut result = lower_with_sources(&context, &unit, &sema, target, &ir, &mut scratch)
+    let mut result = lower_with_sources(&context, &unit, &sema, target, &ir, &mut scratch, true)
         .expect("source lowers");
     if optimized {
         scratch.reset();
@@ -278,9 +278,16 @@ fn diagnostic_attribute_warning_honors_group_controls() {
         assert!(context.take_pending_errors().is_empty());
         let ir = Bump::new();
         let mut scratch = Bump::new();
-        let result =
-            lower_with_sources(&context, &unit, &sema, Target::LinuxGnu, &ir, &mut scratch)
-                .unwrap();
+        let result = lower_with_sources(
+            &context,
+            &unit,
+            &sema,
+            Target::LinuxGnu,
+            &ir,
+            &mut scratch,
+            true,
+        )
+        .unwrap();
         assert_eq!(result.call_diagnostics.len(), 1);
         result.call_diagnostics[0].report(&mut context);
         let pending = context.take_pending_errors();

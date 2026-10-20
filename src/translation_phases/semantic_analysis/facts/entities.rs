@@ -304,10 +304,17 @@ impl<'tu> EntityFacts<'tu> {
                 .binary_search_by_key(&binding, |d| d.0)
                 .is_ok_and(|i| definitions[i].2 == DefinitionKind::Inline)
             {
-                if !function.assembly
-                    && sema
-                        .entity_attributes(binding)
-                        .is_some_and(|a| a.inlining == Inlining::Always)
+                let attributes = sema.entity_attributes(binding);
+                if attributes.is_some_and(|a| a.weak) {
+                    // A weak inline definition is a weak definition, emitted
+                    // where it is referenced, as Clang gives it weak linkage
+                    // before considering inline-only emission; a strong
+                    // definition elsewhere replaces it at link time. GNU
+                    // extension: GCC manual, "Common Function Attributes",
+                    // weak; C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+                    BodyEmission::Definition
+                } else if !function.assembly
+                    && attributes.is_some_and(|a| a.inlining == Inlining::Always)
                 {
                     BodyEmission::PrivateInline
                 } else {

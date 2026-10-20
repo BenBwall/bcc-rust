@@ -168,6 +168,30 @@ impl<'ir> Module<'ir> {
         self.functions[func].inline_copy_of = Some(external);
     }
 
+    /// The external function whose inline definition the copy `func`
+    /// supplies, as Clang emits a C99 inline definition as that function's
+    /// `available_externally` body: an ordinary external declaration of the
+    /// same signature that this module neither defines nor aliases, and
+    /// that `noinline` does not forbid expanding. A call that keeps naming
+    /// such a copy after inlining reaches the external definition. `None`
+    /// for anything else, which keeps an `always_inline` copy an ordinary
+    /// internal function. C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    pub(crate) fn inline_copy_target(&self, func: FuncId) -> Option<FuncId> {
+        let function = &self.functions[func];
+        let Some(Symbol::Function(external)) = self.symbol(function.inline_copy_of?) else {
+            return None;
+        };
+        let declaration = &self.functions[external];
+        (function.body.is_some()
+            && declaration.body.is_none()
+            && declaration.attributes.alias.is_none()
+            && declaration.inline_copy_of.is_none()
+            && declaration.linkage == Linkage::External
+            && declaration.inlining != InlineControl::Never
+            && declaration.signature == function.signature)
+            .then_some(external)
+    }
+
     /// Declares a global without an initializer. Panics if the name is
     /// taken.
     pub(crate) fn declare_global(&mut self, name: &str, declaration: GlobalDecl) -> GlobalId {
