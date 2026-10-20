@@ -598,6 +598,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn lowered_control_uses_the_same_fold_as_elision() {
+        assert_runs_like_clang(
+            "int printf(const char*,...); int f(void){if(__builtin_constant_p(\"abc\"))return \
+             1;return 2;} int g(void){int \
+             x=0;if(__builtin_constant_p(\"abc\")){x=1;}else{x=2;}return x;} int h(void){int \
+             x=5;if(!__builtin_constant_p(\"abc\")){x=1;}else{x=2;}return x;} int \
+             s(void){switch(__builtin_constant_p(\"abc\")){case 1:return 11;case 0:return \
+             10;}return -1;} int c(void){return __builtin_constant_p(\"abc\")?1:2;} int \
+             l(void){return __builtin_constant_p(\"abc\")||(printf(\"rhs\\n\"),0);} int \
+             main(void){printf(\"%d %d %d %d %d %d\\n\",f(),g(),h(),s(),c(),l());return 0;}",
+        );
+    }
+
     fn assert_runs_like_clang(source: &str) {
         let source_file = temporary("run.c");
         let executable = temporary("run.exe");

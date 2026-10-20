@@ -84,6 +84,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 phase: Phase::Searching,
                 end: None,
                 tentative: false,
+                selected: None,
                 after: false,
             },
         );
@@ -222,6 +223,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     fold.phase = Phase::Collecting;
                     fold.end = end;
                     fold.tentative = tentative;
+                    fold.selected = Some(label);
                 }
             },
             | None if !tentative => self.set_phase(index, Phase::Unfolded),
@@ -301,6 +303,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         index: usize,
     ) {
         let fold = self.functions.emission.folds.remove(&index);
+        if let Some(fold) = fold
+            && matches!(fold.phase, Phase::Collecting | Phase::Ended)
+        {
+            self.retain_folded_dispatch(fold.switch, fold.selected);
+        }
         self.functions.emission.switch_after = match fold.map(|fold| fold.phase) {
             | Some(Phase::Collecting) => Some(self.functions.dead),
             | Some(Phase::Ended) => fold.map(|fold| fold.after),
@@ -315,11 +322,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }) && !self.held(fold.body).label;
                 if elided {
                     self.skip_folded_region(fold.start);
+                    self.retain_folded_dispatch(fold.switch, None);
                 }
                 None
             },
             | _ => None,
         };
+    }
+
+    fn retain_folded_dispatch(
+        &mut self,
+        switch: &'tu Statement<'tu>,
+        label: Option<&'tu Statement<'tu>>,
+    ) {
+        if let Some(id) = self.control.statement_id(switch) {
+            self.control.statements[id.0].generated = super::super::GeneratedControl::Switch(label);
+        }
     }
 
     /// Clang's `CollectStatementsForCase` for `body` and the selected
@@ -521,6 +539,7 @@ pub(in crate::translation_phases::semantic_analysis) struct FoldedSwitch<'tu> {
     end:       Option<&'tu Statement<'tu>>,
     /// A `default` is selected tentatively: a matching case replaces it.
     tentative: bool,
+    selected:  Option<&'tu Statement<'tu>>,
     /// The skipped state the selected statements ended in.
     after:     bool,
 }

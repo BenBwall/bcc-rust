@@ -480,6 +480,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.emission.orphan = None;
             },
             | FunctionWork::DeadStatementArm {
+                owner,
                 condition,
                 live,
                 outer_dead,
@@ -491,7 +492,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .is_none_or(|statement| !self.statement_contains_label(statement, false));
                 self.functions.dead = outer_dead || skipped;
                 self.functions.elided = outer_elided || skipped;
-
+                if skipped && let Some(id) = self.control.statement_id(owner) {
+                    self.control.statements[id.0].generated = super::GeneratedControl::If(!live);
+                }
             },
             | FunctionWork::DeadArm {
                 condition,
@@ -2042,6 +2045,7 @@ pub(super) enum FunctionWork<'tu> {
     },
     /// Enters an `if` arm unless it holds a label.
     DeadStatementArm {
+        owner:        &'tu Statement<'tu>,
         condition:    &'tu Expression<'tu>,
         live:         bool,
         outer_dead:   bool,

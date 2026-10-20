@@ -337,13 +337,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::StatementWork(W::Substatement(child)));
                 }
                 if let Some(condition) = condition {
-                    self.dead_statement_arm(condition, false, else_statement);
+                    self.dead_statement_arm(s, condition, false, else_statement);
                 }
                 self.work.push(Work::FunctionWork(FunctionWork::ThenEnd));
                 self.work
                     .push(Work::StatementWork(W::Substatement(then_statement)));
                 if let Some(condition) = condition {
-                    self.dead_statement_arm(condition, true, Some(then_statement));
+                    self.dead_statement_arm(s, condition, true, Some(then_statement));
                 }
                 self.work.push(Work::Condition(condition_expression, false));
                 self.expression_slot(condition_expression);
@@ -510,12 +510,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146.
     fn dead_statement_arm(
         &mut self,
+        owner: &'tu Statement<'tu>,
         condition: &'tu Expression<'tu>,
         live: bool,
         statement: Option<&'tu Statement<'tu>>,
     ) {
         self.work
             .push(Work::FunctionWork(FunctionWork::DeadStatementArm {
+                owner,
                 condition,
                 live,
                 outer_dead: self.functions.dead,

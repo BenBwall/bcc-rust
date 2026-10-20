@@ -91,6 +91,27 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         }
+        match expression.kind {
+            | E::Conditional(c) if self.info(c.then_expression)?.elided => {
+                self.tasks.push(Task::Evaluate(c.else_expression));
+                return Ok(());
+            },
+            | E::Conditional(c) if self.info(c.else_expression)?.elided => {
+                self.tasks.push(Task::Evaluate(c.then_expression));
+                return Ok(());
+            },
+            | E::Binary {
+                operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
+                right_expression,
+                ..
+            } if self.info(right_expression)?.elided => {
+                let value =
+                    self.iconst(Type::I32, i128::from(operator == BinaryOperator::LogicalOr));
+                self.push_item(Operand::Value(value), info.ty);
+                return Ok(());
+            },
+            | _ => {},
+        }
         // An integer constant expression has an exact value (§6.6p6).
         if info.ice
             && let Some(value) = info.integer
