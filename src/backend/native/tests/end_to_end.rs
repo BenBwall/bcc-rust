@@ -55,6 +55,7 @@ use crate::{
     test_support::{
         TempDir,
         native::run_native,
+        wsl::run_wsl,
     },
     translation_phases::Context,
     util::bump::Bump,
@@ -146,7 +147,7 @@ fn runner(target: Target) -> Option<Runner> {
 
 /// Whether WSL is installed with a clang to assemble and link.
 fn wsl_has_clang() -> bool {
-    run_native(Command::new("wsl.exe").args(["-e", "sh", "-c", "command -v clang"]))
+    run_wsl(Command::new("wsl.exe").args(["-e", "sh", "-c", "command -v clang"]))
         .is_ok_and(|output| output.status.success())
 }
 
@@ -168,7 +169,7 @@ fn run_assembly(
         | Runner::Wsl => {
             std::fs::write(directory.join(format!("{name}.s")), text)
                 .map_err(|error| error.to_string())?;
-            let build = run_native(
+            let build = run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", "clang", "-o", name, &format!("{name}.s")])
                     .current_dir(directory),
@@ -180,7 +181,7 @@ fn run_assembly(
                     String::from_utf8_lossy(&build.stderr)
                 ));
             }
-            run_native(
+            run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", &format!("./{name}")])
                     .current_dir(directory),
