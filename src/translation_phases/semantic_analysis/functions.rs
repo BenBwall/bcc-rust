@@ -460,6 +460,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
+            | FunctionWork::RestoreUnemitted(unemitted) =>
+                self.functions.emission.unemitted = unemitted,
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
             | FunctionWork::JoinArms => {
@@ -477,10 +479,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && statement
                         .is_none_or(|statement| !self.statement_contains_label(statement, false));
                 self.functions.dead = outer || skipped;
+                self.functions.emission.unemitted |= skipped;
             },
             | FunctionWork::DeadArm(condition, live, outer) => {
-                let value = self.folded_condition(condition);
-                self.functions.dead = outer || value == Some(!live);
+                let skipped = self.folded_condition(condition) == Some(!live);
+                self.functions.dead = outer || skipped;
+                self.functions.emission.unemitted |= skipped;
             },
             | FunctionWork::GenericMark(generic) => {
                 let at = self.functions.uses.len();
@@ -1638,6 +1642,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             live,
             self.functions.dead,
         )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreUnemitted(
+                self.functions.emission.unemitted,
+            )));
     }
 
     /// Loop code generation folds arithmetic truth, including floating
@@ -1943,6 +1951,9 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whether the code being analyzed is emitted into a block
     /// without predecessors ([`super::emission::State::orphan`]).
     RestoreOrphan(Option<usize>),
+    /// Restores whether code generation never reaches the code being
+    /// analyzed ([`super::emission::State::unemitted`]).
+    RestoreUnemitted(bool),
     /// Restores the skipped state around the innermost switch.
     RestoreSwitchDead(bool),
     /// After a switch: code generation resumes with the code around it,

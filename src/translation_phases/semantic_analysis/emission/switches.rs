@@ -80,6 +80,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 end: None,
                 tentative: false,
                 after: false,
+                unemitted: self.functions.emission.unemitted,
             },
         );
     }
@@ -176,8 +177,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
         // The label resumes the code around the switch either way.
         self.functions.dead = self.functions.switch_dead;
+        self.functions.emission.unemitted = fold.unemitted;
         if range_after {
-            debug_assert!(!fold.tentative, "a tentative default precedes no case range");
+            debug_assert!(
+                !fold.tentative,
+                "a tentative default precedes no case range"
+            );
             self.set_phase(index, Phase::Unfolded);
         } else {
             self.select(index, label, false);
@@ -267,6 +272,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             fold.phase = Phase::Ended;
             fold.after = dead;
+            // Clang never reaches the statements after it.
+            self.functions.emission.unemitted = true;
         }
     }
 
@@ -503,6 +510,9 @@ pub(in crate::translation_phases::semantic_analysis) struct FoldedSwitch<'tu> {
     tentative: bool,
     /// The skipped state the selected statements ended in.
     after:     bool,
+    /// Whether code generation reaches the switch's body at all
+    /// ([`super::State::unemitted`]).
+    unemitted: bool,
 }
 
 /// Where the analysis of a folded switch's body stands.
