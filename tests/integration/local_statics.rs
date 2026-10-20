@@ -768,6 +768,37 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
     }
 
     #[test]
+    fn constant_queries_in_static_data_omit_operand_storage() {
+        for body in [
+            "static int v=__builtin_constant_p(({STATIC 0;}));return v;",
+            "static int v[]={__builtin_constant_p(({STATIC 0;}))};return v[0];",
+            "static _Thread_local int v=__builtin_constant_p(({STATIC 0;}));return v;",
+            "static int v=1?__builtin_constant_p(({STATIC 0;})):2;return v;",
+            "static int v=__builtin_constant_p(({L:;STATIC 0;}));return v;",
+        ] {
+            assert_o0_static_emission(
+                &format!("int f(void){{{body}}}int main(void){{return f();}}"),
+                false,
+            );
+            assert_runs_like_clang(&format!(
+                "int f(void){{{}}}int main(void){{return f();}}",
+                body.replace("STATIC", "static int a;")
+            ));
+        }
+        assert_o0_static_emission(
+            "static int h(void){STATIC return a;} int f(void){static int v= \
+             __builtin_constant_p(({static int (*p)(void)=h;0;}));return v;} int \
+             main(void){return f();}",
+            false,
+        );
+        assert_o0_static_emission(
+            "int f(void){int v=__builtin_constant_p(({STATIC 0;}));return v;} int \
+             main(void){return f();}",
+            true,
+        );
+    }
+
+    #[test]
     fn constant_queries_read_fresh_compound_literal_values() {
         assert_runs_like_clang(
             "int printf(const char*,...); struct S{int a;}; int main(void){ printf(\"%d %d %d \

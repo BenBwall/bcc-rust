@@ -474,9 +474,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             )
                         })
                 }) {
-                    self.enter_reference_context_kind(ReferenceContextKind::ConstantQuery(
-                        self.functions.initializer,
-                    ));
+                    // Clang visits query operands while emitting function code,
+                    // but emits only their value in static initializer data.
+                    let initializer = self.functions.initializer;
+                    let kind = if initializer.is_some_and(|binding| {
+                        self.bindings[binding].duration.is_static_or_thread()
+                    }) {
+                        ReferenceContextKind::Unevaluated
+                    } else {
+                        ReferenceContextKind::ConstantQuery(initializer)
+                    };
+                    self.enter_reference_context_kind(kind);
                 }
                 for &argument in arguments.iter().rev() {
                     self.work.push(Work::Expression(argument));
@@ -1870,9 +1878,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.reference_context_unevaluated_for_owner(index, None)
     }
 
-    /// Query operands keep nested static initializer data, while calls and
-    /// other executable references remain unevaluated. GNU extension:
-    /// Clang's `__builtin_constant_p` and statement expressions.
+    /// Query operands in function code keep nested static initializer data,
+    /// while calls and other executable references remain unevaluated. GNU
+    /// extension: Clang's `__builtin_constant_p` and statement expressions.
     fn reference_context_unevaluated_for_owner(
         &self,
         index: usize,
@@ -2327,9 +2335,9 @@ struct ReferenceContext<'tu> {
 enum ReferenceContextKind<'tu> {
     Typeof(&'tu super::ExtendedType<'tu>),
     Unevaluated,
-    /// Query operands keep declarations and their static initializer data.
-    /// The entry initializer distinguishes a query inside static data from
-    /// a static declaration nested inside a query.
+    /// Query operands in function code keep declarations and their static data.
+    /// Queries in static initializer data use `Unevaluated` instead. The
+    /// payload records the initializer active when the query was entered.
     ConstantQuery(Option<usize>),
 }
 

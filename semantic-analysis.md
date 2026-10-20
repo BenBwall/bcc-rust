@@ -987,17 +987,23 @@ operand of `__builtin_choose_expr` and a switch without a match can hide, so
 such code stays skipped after a jump, as before #113. After a call that does
 not return, a declaration that may be variably modified still ahead in the
 enclosing blocks keeps the code after the call emitted instead, as it is
-without the model of such calls. Bit-field, union and floating reads,
-GNU ranges in `const` initializers and the unselected operand of
-`__builtin_choose_expr` remain unmodeled; each leaves code emitted that Clang
-may skip. `functions.elided` omits lowering traversal and storage collection
+without the model of such calls. Bit-field, union and floating reads and GNU
+ranges in `const` initializers remain unmodeled. Distinct-object address comparisons such as `&x1 == &x2` also remain
+unfolded. Constant queries still miss `(long)"a" + 1 - 1`, `(long)"a" - 0`,
+`(char *)8`, `!(long)"a"`, `(long)"a" == 0`, `(long)"a" != 0` and `__func__[0]`.
+These gaps can leave code and local statics emitted that Clang skips; at O0,
+a retained nonzero BSS initializer can therefore reject a program Clang and
+main accept. The VLA-after-jump gap above instead omits code Clang revives.
+`functions.elided` omits lowering traversal and storage collection
 for whole skipped statements and operands; there is no separate `unemitted`
 state. A missing insertion point (`dead`) alone still permits simple
 statements to collect storage. In `0 && ({ L:; static int a; 1; })`, the
 label prevents elision and preserves the static even though the operand is
-not evaluated. Constant-query operands likewise preserve nested static
-declarations and their initializer references while dropping executable
-references. The module-item planner
+not evaluated. Constant-query operands in emitted function code likewise preserve
+nested static declarations and their initializer references while dropping executable
+references. Within a static or thread-local initializer, the query emits only
+its integer value: its operand declarations and all their references are omitted.
+The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.
