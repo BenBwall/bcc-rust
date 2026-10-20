@@ -454,13 +454,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         live: bool,
         statement: Option<&'tu Statement<'tu>>,
     ) {
-        if statement.is_some_and(|statement| self.statement_contains_label(statement, false)) {
-            self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+        // Labels matter only once the condition folds the arm away, so
+        // they are looked for then.
+        self.work
+            .push(Work::FunctionWork(FunctionWork::DeadStatementArm(
+                condition,
+                live,
                 self.functions.dead,
+                statement,
             )));
-        } else {
-            self.dead_arm(condition, live);
-        }
     }
 
     pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {

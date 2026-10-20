@@ -96,21 +96,54 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether `expression` holds an ordinary label, in a statement
     /// expression, as Clang's `ContainsLabel` asks of a condition before
-    /// folding it.
+    /// folding it; memoized, since conditions nest.
     pub(super) fn expression_contains_label(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
-        work.push(expression);
-        let mut statements = ArenaVec::new_in(self.scratch);
-        while let Some(expression) = work.pop() {
-            if let ExpressionType::StatementExpression(statement) = expression.kind {
-                statements.push(statement);
+        work.push((expression, false));
+        while let Some((current, children_done)) = work.pop() {
+            let key = std::ptr::from_ref(current).addr();
+            if self
+                .functions
+                .emission
+                .labeled_expressions
+                .contains_key(&key)
+            {
+                continue;
+            }
+            if let ExpressionType::StatementExpression(statement) = current.kind {
+                let labeled = self.holds(statement).label;
+                _ = self
+                    .functions
+                    .emission
+                    .labeled_expressions
+                    .insert(key, labeled);
+            } else if children_done {
+                let mut labeled = false;
+                expression_children(self.scratch, current, |child| {
+                    labeled |= self
+                        .functions
+                        .emission
+                        .labeled_expressions
+                        .get(&std::ptr::from_ref(child).addr())
+                        .copied()
+                        .unwrap_or(false);
+                });
+                _ = self
+                    .functions
+                    .emission
+                    .labeled_expressions
+                    .insert(key, labeled);
             } else {
-                expression_children(self.scratch, expression, |child| work.push(child));
+                work.push((current, true));
+                expression_children(self.scratch, current, |child| work.push((child, false)));
             }
         }
-        statements
-            .iter()
-            .any(|&statement| self.holds(statement).label)
+        self.functions
+            .emission
+            .labeled_expressions
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// The case and default labels of `switch` in source order, and the

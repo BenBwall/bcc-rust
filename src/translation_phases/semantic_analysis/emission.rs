@@ -102,6 +102,8 @@ pub(super) struct State<'tu, 's> {
     walked:                  ArenaMap<'s, usize, ()>,
     /// The values the evaluator found, by expression address.
     folded:                  ArenaMap<'s, usize, Option<folding::Value>>,
+    /// Whether an expression holds a label, by address.
+    labeled_expressions:     ArenaMap<'s, usize, bool>,
     /// Whether an expression calls `__builtin_constant_p`, by address.
     constant_p:              ArenaMap<'s, usize, bool>,
     /// The initializers of `const` non-volatile objects, which Clang's
@@ -128,6 +130,7 @@ impl<'s> State<'_, 's> {
             walked:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             folded:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_p:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }

@@ -472,6 +472,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.dead = outer || after.unwrap_or(false);
                 self.functions.emission.orphan = None;
             },
+            | FunctionWork::DeadStatementArm(condition, live, outer, statement) => {
+                let skipped = self.folded_condition(condition) == Some(!live)
+                    && statement
+                        .is_none_or(|statement| !self.statement_contains_label(statement, false));
+                self.functions.dead = outer || skipped;
+            },
             | FunctionWork::DeadArm(condition, live, outer) => {
                 let value = self.folded_condition(condition);
                 self.functions.dead = outer || value == Some(!live);
@@ -1949,6 +1955,14 @@ pub(super) enum FunctionWork<'tu> {
     /// Enters the arm of a condition taken when it is `live`, given whether
     /// the code around the condition is skipped.
     DeadArm(&'tu Expression<'tu>, bool, bool),
+    /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
+    /// the arm holds a label, which keeps Clang from skipping it.
+    DeadStatementArm(
+        &'tu Expression<'tu>,
+        bool,
+        bool,
+        Option<&'tu Statement<'tu>>,
+    ),
     /// Clang omits an infinite loop's exit block unless a generated break
     /// targets it. The loop's body is emitted even for a false condition.
     LoopEnd(&'tu Statement<'tu>, bool),
