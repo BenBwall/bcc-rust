@@ -24,7 +24,9 @@
 //!   `declarations.rs` constructs types and bindings; `expressions.rs` and
 //!   `expressions/` type expressions and conversions; `initializers.rs` walks
 //!   subobjects; `statements.rs` checks jumps and returns; `functions.rs`
-//!   checks definitions and completes the translation unit.
+//!   checks definitions and completes the translation unit; `emission.rs`
+//!   models which code Clang's code generation skips in folded switches and
+//!   after calls that do not return.
 //! - Retained facts: `facts/` records lexical/VM/block-expression regions and
 //!   resolved destinations on the same work stack, then finalizes compact
 //!   transitions using iterative heavy-light indexing. It also retains
@@ -63,6 +65,7 @@ mod state;
 
 // Syntax traversal and constraints
 mod declarations;
+mod emission;
 mod expressions;
 mod facts;
 mod functions;
@@ -1062,6 +1065,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         _ = self.binding_alignments.insert(binding, alignment);
                     }
                     self.retain_written_parameter(binding, original, written_functions);
+                    self.record_parameter_noreturn(binding, p.declaration_specifiers, p.declarator);
                     if let Some(minimum) = array_minimum {
                         _ = self
                             .correspondence
@@ -1230,6 +1234,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             .written_fields
                             .insert((tag, name.name), written);
                     }
+                    self.record_field_noreturn(tag, name.name, d, member, ty);
                 }
                 self.declaration_attributes(
                     attributes::Subject::Member,

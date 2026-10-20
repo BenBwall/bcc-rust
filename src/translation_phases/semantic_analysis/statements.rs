@@ -171,8 +171,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 self.work
                     .push(Work::StatementWork(StatementWork::Substatement(body)));
+                self.prepare_folded_switch(index, slot_expression(slot), body, ty);
             },
             | StatementWork::SwitchFinish(index, previous) => {
+                self.finish_folded_switch(index);
                 self.finish_switch(index);
                 self.statements.switch = previous;
                 _ = self.control.targets.pop();
@@ -931,20 +933,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some((bits, signed)) = self.integer_type(switch.ty) else {
             return;
         };
-        let value = |e| {
-            let info = self.expression_info(e);
-            // RequireConstant already checked this expression. Retain the
-            // same additional arithmetic forms accepted by evaluate; keeping
-            // only strict ICEs would silently drop the switch dispatch edge.
-            // C99 §6.8.4.2p3, p. 134; PDF p. 146; §6.6p10, p. 96; PDF p. 108.
-            (info.ice
-                || (!info.atomic_cast()
-                    && info.constant == super::ConstantClass::Arithmetic
-                    && (self.context.configuration.gnu_extensions() || info.folded_address())))
-            .then_some(info.integer)
-            .flatten()
-            .map(|v| v.cast(bits, signed))
-        };
+        let value = |e| self.case_value(e, bits, signed);
         let Some(lower) = lower.and_then(value) else {
             return;
         };
@@ -970,6 +959,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
         );
         self.statements.case_count += 1;
+    }
+
+    /// The value of case label expression `e`, converted to the promoted
+    /// controlling type of `bits` width and `signed`ness. `RequireConstant`
+    /// checks the expression. This retains the same additional arithmetic
+    /// forms accepted by evaluate; keeping only strict ICEs would silently
+    /// drop the switch dispatch edge.
+    /// C99: §6.8.4.2 paragraphs 3 and 5, p. 134; PDF p. 146; §6.6
+    /// paragraph 10, p. 96; PDF p. 108.
+    pub(super) fn case_value(
+        &self,
+        e: &'tu Expression<'tu>,
+        bits: u32,
+        signed: bool,
+    ) -> Option<super::Integer> {
+        let info = self.expression_info(e);
+        (info.ice
+            || (!info.atomic_cast()
+                && info.constant == super::ConstantClass::Arithmetic
+                && (self.context.configuration.gnu_extensions() || info.folded_address())))
+        .then_some(info.integer)
+        .flatten()
+        .map(|v| v.cast(bits, signed))
     }
 
     /// Sort once at switch exit rather than scanning preceding cases for each

@@ -140,13 +140,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::StatementExpression(s) => {
                 // Code generation resumes after the statement expression
                 // even when its body jumps away.
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
-                    self.functions.dead,
-                )));
+                self.begin_statement_expression(s);
                 self.enter_statement_expression(e.source_vectors);
                 self.work.push(Work::Statement(s, true));
             },
             | E::Generic(g) => {
+                // Code generation continues after the selection in the
+                // block its selected association ends in, which the
+                // selection restores (`skip_unselected_generic`).
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                        self.functions.orphan,
+                    )));
                 // Marks around each operand let the selection skip the
                 // references code generation does not emit.
                 for association in g.associations.iter().rev() {
@@ -194,7 +199,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 s.kind,
                 S::If { .. } | S::Switch { .. } | S::While { .. } | S::DoWhile { .. } | S::For(_)
             )
-            && self.statement_contains_label(s)
+            && self.statement_contains_label(s, !self.case_labels_resume())
         {
             self.functions.dead = false;
         }
@@ -225,8 +230,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Label(name, child) => {
                 self.label(s, name, true);
-                // A label is a jump target: code generation emits from it.
+                // A label is a jump target: code generation emits from it,
+                // in a block that the code before it can branch to.
                 self.functions.dead = false;
+                self.functions.orphan = None;
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Goto(name) => {
@@ -235,19 +242,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::LocalLabels(names) => self.local_labels(names),
             | S::Default(child) => {
-                self.functions.dead = self.functions.switch_dead;
+                self.functions.dead = self.switch_label_dead(s);
                 // The parser already diagnoses duplicate defaults, preserving
                 // its established diagnostic and recovery contract.
                 self.switch_label(s, s.source_vectors);
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Case(expression, child) => {
-                self.functions.dead = self.functions.switch_dead;
+                self.functions.dead = self.switch_label_dead(s);
                 self.work.push(Work::Statement(child, new_scope));
                 self.case_label(s, expression, None, s.source_vectors);
             },
             | S::CaseRange(c) => {
-                self.functions.dead = self.functions.switch_dead;
+                self.functions.dead = self.switch_label_dead(s);
                 self.work.push(Work::Statement(c.statement, new_scope));
                 self.case_label(s, c.lower, Some(c.upper), s.source_vectors);
             },
@@ -292,12 +299,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
                 // The body is skipped up to its first case label, which
-                // resumes the code around the switch.
+                // resumes the code around the switch, as does its end
+                // unless a folded switch's selected statements end skipped.
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreSwitchDead(
                         self.functions.switch_dead,
                     )));
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                self.work.push(Work::FunctionWork(FunctionWork::SwitchEnd(
                     self.functions.dead,
                 )));
                 self.functions.switch_dead = self.functions.dead;
@@ -409,6 +417,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ),
             | S::Break => {
                 self.generated_break();
+                self.switch_break(s);
                 self.control_jump(s, false);
                 self.functions.dead = true;
             },
@@ -418,10 +427,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Expression(e) => {
                 if let ExpressionSlot::Parsed(expression) = e {
-                    self.work
-                        .push(Work::FunctionWork(FunctionWork::ExpressionStatementEnd(
-                            expression,
-                        )));
+                    self.begin_expression_statement(s, expression);
                 }
                 self.expression_slot(e);
             },
@@ -448,7 +454,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         live: bool,
         statement: Option<&'tu Statement<'tu>>,
     ) {
-        if statement.is_some_and(|statement| self.statement_contains_label(statement)) {
+        if statement.is_some_and(|statement| self.statement_contains_label(statement, false)) {
             self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                 self.functions.dead,
             )));
@@ -457,16 +463,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Finds labels by an explicit syntax stack. A nested function has its
-    /// own label namespace, and a nested switch owns its case labels.
+    /// Finds labels by an explicit syntax stack, as Clang's `ContainsLabel`
+    /// does; case labels count unless `ignore_cases`. A nested function has
+    /// its own label namespace, and a nested switch owns its case labels.
     /// C99: §6.8.1p2-4, pp. 131-132; PDF pp. 143-144.
-    fn statement_contains_label(&self, statement: &'tu Statement<'tu>) -> bool {
+    pub(super) fn statement_contains_label(
+        &self,
+        statement: &'tu Statement<'tu>,
+        ignore_cases: bool,
+    ) -> bool {
         use crate::{
             translation_phases::parsing::syntax::BlockItem,
             util::bump::ArenaVec,
         };
         let mut work = ArenaVec::new_in(self.scratch);
-        work.push((statement, false));
+        work.push((statement, ignore_cases));
         while let Some((statement, ignore_cases)) = work.pop() {
             match statement.kind {
                 | StatementType::Label(..) => return true,

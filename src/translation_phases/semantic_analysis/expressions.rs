@@ -81,6 +81,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106.
     pub(super) fn expression_done(&mut self, e: &'tu Expression<'tu>) {
         use ExpressionType as E;
+        self.expression_emitted(e);
         self.retain_expression_actions(e);
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {

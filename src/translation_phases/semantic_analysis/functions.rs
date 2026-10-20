@@ -42,7 +42,6 @@ use crate::{
             },
             syntax::{
                 Expression,
-                ExpressionType,
                 FunctionDefinition,
                 Identifier,
                 Statement,
@@ -218,7 +217,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
             self.functions.dead,
         )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                self.functions.orphan,
+            )));
         self.functions.dead = false;
+        self.functions.orphan = None;
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
             self.functions.current,
             self.statements.loops,
@@ -351,6 +355,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 .insert(self.bindings.len() - 1, alignment);
                         }
                         parameter_aliases.push((prototype, self.bindings.len() - 1));
+                        if let Some(&typed) = self.functions.noreturn.get(&prototype) {
+                            _ = self
+                                .functions
+                                .noreturn
+                                .insert(self.bindings.len() - 1, typed);
+                        }
                         if let Some(&written) =
                             self.function_extensions.written_types.get(&prototype)
                         {
@@ -448,11 +458,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
+            | FunctionWork::RestoreOrphan(orphan) => self.functions.orphan = orphan,
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
             | FunctionWork::JoinArms => {
                 let then_end = self.functions.arm_ends.pop().expect("then arm ended");
                 self.functions.dead &= then_end;
+                self.functions.orphan = None;
+            },
+            | FunctionWork::FoldSwitch(index, bits, signed) =>
+                self.fold_switch(index, bits, signed),
+            | FunctionWork::SwitchEnd(outer) => {
+                let after = self.functions.switch_after.take();
+                self.functions.dead = outer || after.unwrap_or(false);
+                self.functions.orphan = None;
             },
             | FunctionWork::DeadArm(condition, live, outer) => {
                 let value = self.folded_condition(condition);
@@ -461,38 +480,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::GenericMark(generic) => {
                 let at = self.functions.uses.len();
                 let scratch = self.scratch;
-                self.functions
+                let marks = self
+                    .functions
                     .generic_marks
                     .entry(std::ptr::from_ref(generic).addr())
-                    .or_insert_with(|| ArenaVec::new_in(scratch))
-                    .push(at);
+                    .or_insert_with(|| ArenaVec::new_in(scratch));
+                // The controlling operand is not emitted, and only the
+                // selected association is: each starts from the block
+                // around the selection ([`super::emission`]).
+                if let Some(&(_, around)) = marks.first()
+                    && (marks.len() == 1 || marks.len() % 2 == 0)
+                {
+                    self.functions.orphan = around;
+                }
+                marks.push((at, self.functions.orphan));
             },
-            | FunctionWork::ExpressionStatementEnd(expression) => {
-                let mut expression = expression;
-                while let ExpressionType::Parenthesized { expression: inner }
-                | ExpressionType::Cast {
-                    operand_expression: inner,
-                    ..
-                } = expression.kind
-                {
-                    expression = inner;
+            | FunctionWork::ExpressionStatementEnd {
+                expression,
+                serial,
+                value,
+            } => self.end_expression_statement(expression, serial, value),
+            | FunctionWork::StatementExpressionEnd(outer) => {
+                // `StmtExprEvaluation` ensures an insertion point: a body that
+                // ends skipped leaves a new block without predecessors.
+                if self.functions.dead {
+                    self.functions.orphan = Some(self.functions.serial);
                 }
-                if let ExpressionType::Call {
-                    function_expression,
-                    ..
-                } = expression.kind
-                    && self
-                        .expression_info(function_expression)
-                        .binding
-                        .is_some_and(|binding| {
-                            self.bindings[binding].origin
-                                == super::BindingOrigin::Intrinsic(
-                                    crate::builtins::BuiltinId::Unreachable,
-                                )
-                        })
-                {
-                    self.functions.dead = true;
-                }
+                self.functions.dead = outer;
             },
             | FunctionWork::LoopEnd(statement, outer) => {
                 let infinite = match statement.kind {
@@ -513,6 +527,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .statement_id(statement)
                     .is_some_and(|id| self.has_generated_break(id));
                 self.functions.dead = outer || (infinite && !exits);
+                self.functions.orphan = None;
             },
         }
     }
@@ -1268,15 +1283,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 binding: index,
             });
         }
+        let previous = (binding.linkage != Linkage::None)
+            .then(|| {
+                self.functions
+                    .entities
+                    .get(&self.function_identity(index))
+                    .copied()
+            })
+            .flatten();
+        self.record_noreturn(
+            index,
+            spec,
+            declarator,
+            previous.map(|entity| entity.latest),
+        );
         if binding.linkage == Linkage::None {
             return;
         }
-        let mut entity = self
-            .functions
-            .entities
-            .get(&self.function_identity(index))
-            .copied()
-            .unwrap_or_default();
+        let mut entity = previous.unwrap_or_default();
         entity.latest = index;
         if binding.kind == BindingKind::Function {
             let explicit_extern = spec.storage_class == Some(StorageClass::Extern);
@@ -1545,32 +1569,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The truth value code generation folds `condition` to at `-O0`, as
-    /// `CodeGenFunction::ConstantFoldsToSimpleInteger` does: an integer
-    /// constant, or a comma expression whose left operand folds (so has no
-    /// side effects) and whose right operand folds. It does not fold bare
-    /// floating conditions, even though loop code generation can fold their
-    /// truth value when creating an exit block.
-    fn folded_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
-        let mut condition = condition;
-        loop {
-            match condition.kind {
-                | ExpressionType::Parenthesized { expression } => condition = expression,
-                | ExpressionType::Binary {
-                    operator: super::super::parsing::syntax::BinaryOperator::Comma,
-                    left_expression,
-                    right_expression,
-                } => {
-                    _ = self.folded_condition(left_expression)?;
-                    condition = right_expression;
-                },
-                | _ => break,
+    /// `CodeGenFunction::ConstantFoldsToSimpleInteger` does
+    /// ([`Self::folded_integer`]). It does not fold bare floating
+    /// conditions, even though loop code generation can fold their truth
+    /// value when creating an exit block.
+    pub(super) fn folded_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
+        self.folded_integer(condition)
+            .map(|integer| integer.value != 0)
+    }
+
+    /// The number of references recorded so far, which marks where the
+    /// references of the code analyzed next begin.
+    pub(super) fn reference_count(&self) -> usize {
+        self.functions.uses.len()
+    }
+
+    /// Marks the references recorded in `range` as skipped by code
+    /// generation, except those of nested function bodies, which are
+    /// emitted on their own.
+    pub(super) fn skip_references(&mut self, range: std::ops::Range<usize>) {
+        let function = self.functions.reference_function;
+        for usage in &mut self.functions.uses[range] {
+            if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
+            {
+                usage.dead = true;
             }
         }
-        let info = self.expression_info(condition);
-        (info.constant == super::ConstantClass::Arithmetic)
-            .then_some(info.integer)
-            .flatten()
-            .map(|integer| integer.value != 0)
     }
 
     /// Marks the references of a generic selection's controlling operand
@@ -1593,10 +1617,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
-        ranges.push(marks[0]..marks[1]);
+        ranges.push(marks[0].0..marks[1].0);
         for (index, association) in generic.associations.iter().enumerate() {
             if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
-                ranges.push(marks[2 + 2 * index]..marks[3 + 2 * index]);
+                ranges.push(marks[2 + 2 * index].0..marks[3 + 2 * index].0);
+            } else {
+                // Code generation continues in the block the selected
+                // association ends in.
+                self.functions.orphan = marks[3 + 2 * index].1;
             }
         }
         for range in ranges {
@@ -1917,8 +1945,18 @@ pub(super) enum FunctionWork<'tu> {
     RestoreReferenceContext(Option<usize>),
     /// Sets whether code generation skips the code that follows.
     RestoreDead(bool),
+    /// Restores whether the code being analyzed is emitted into a block
+    /// without predecessors ([`State::orphan`]).
+    RestoreOrphan(Option<usize>),
     /// Restores the skipped state around the innermost switch.
     RestoreSwitchDead(bool),
+    /// Selects what a folded switch emits once its case labels' values are
+    /// known: the switch's index and its promoted type's width and
+    /// signedness ([`super::emission::FoldedSwitch`]).
+    FoldSwitch(usize, u32, bool),
+    /// After a switch: code generation resumes with the code around it,
+    /// unless a folded switch's selected statements ended skipped.
+    SwitchEnd(bool),
     /// Saves the skipped state at the end of an `if` statement's first arm.
     ThenEnd,
     /// Skips the code after an `if` statement when both arms end skipped.
@@ -1932,9 +1970,18 @@ pub(super) enum FunctionWork<'tu> {
     /// Records where the references of a generic selection's next operand
     /// begin or end ([`State::generic_marks`]).
     GenericMark(&'tu GenericSelection<'tu>),
-    /// After an expression statement: Clang's code generation skips what
-    /// follows `__builtin_unreachable()`, which leaves no insertion point.
-    ExpressionStatementEnd(&'tu Expression<'tu>),
+    /// After an expression statement: Clang's code generation erases the
+    /// block without predecessors that a call that does not return left,
+    /// and skips what follows. `serial` numbers the statement; `value` is
+    /// the skipped state and reference count before a statement
+    /// expression's value statement ([`super::emission`]).
+    ExpressionStatementEnd {
+        expression: &'tu Expression<'tu>,
+        serial:     usize,
+        value:      Option<(bool, usize)>,
+    },
+    /// After a statement expression, given the skipped state around it.
+    StatementExpressionEnd(bool),
 }
 
 /// Definition and tentative-definition state for an identifier with linkage.
@@ -2060,7 +2107,7 @@ struct InlineObject {
 }
 
 pub(super) struct State<'tu, 's> {
-    reference_context: Option<usize>,
+    pub(super) reference_context: Option<usize>,
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
     pub(super) reference_function: Option<usize>,
     pub(super) initializer: Option<usize>,
@@ -2076,13 +2123,40 @@ pub(super) struct State<'tu, 's> {
     sizeof_contexts: ArenaVec<'s, SizeofContext<'tu>>,
     pub(super) sizeof: Option<usize>,
     /// Code generation skips the code being analyzed, as Clang's does at
-    /// `-O0`: the arm a constant condition does not take, and statements
-    /// after a jump or a loop without an exit until a label
-    /// (`CodeGenFunction::EmitStmt`).
+    /// `-O0`: the arm a constant condition does not take, the statements a
+    /// folded switch does not select, and statements after a jump, a loop
+    /// without an exit or an expression statement that ends in a call that
+    /// does not return, until a label (`CodeGenFunction::EmitStmt`;
+    /// [`super::emission`]).
     pub(super) dead: bool,
     /// The skipped state around the innermost switch, which its case
     /// labels resume.
     pub(super) switch_dead: bool,
+    /// Code generation emits the code being analyzed into a block without
+    /// predecessors, which a call that does not return created during the
+    /// expression statement numbered here or a later one
+    /// ([`super::emission`]).
+    pub(super) orphan: Option<usize>,
+    /// The number of expression statements begun so far.
+    pub(super) serial: usize,
+    /// The value statements of the statement expressions being analyzed,
+    /// by address, which Clang emits even after a jump.
+    pub(super) value_statements: ArenaMap<'s, usize, ()>,
+    /// Bindings that call nothing that returns: a function declared
+    /// `noreturn`, or an object, parameter or typedef whose function type
+    /// is, directly or by an earlier declaration of the same entity. The
+    /// value says whether the fact belongs to the type (GNU or Microsoft
+    /// `noreturn`), which `__typeof__` and typedefs carry, rather than to
+    /// the declaration (`_Noreturn`).
+    pub(super) noreturn: ArenaMap<'s, usize, bool>,
+    /// Members whose function type does not return, by tag and name.
+    pub(super) noreturn_fields: ArenaMap<'s, (usize, StringCacheId), ()>,
+    /// The switches being analyzed whose controlling expression code
+    /// generation folds, by switch index.
+    pub(super) folds: ArenaMap<'s, usize, super::emission::FoldedSwitch<'tu, 's>>,
+    /// The skipped state a folded switch's selected statements ended in,
+    /// passed from the end of its body to the code after it.
+    pub(super) switch_after: Option<bool>,
     /// The skipped state at the end of each enclosing `if` statement's
     /// first arm.
     arm_ends: ArenaVec<'s, bool>,
@@ -2094,8 +2168,9 @@ pub(super) struct State<'tu, 's> {
     pub(super) outside: [Option<usize>; 2],
     /// For each generic selection being analyzed, by address, the number
     /// of references recorded at the start and end of its controlling
-    /// operand and of each association's expression.
-    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, usize>>,
+    /// operand and of each association's expression, with the state of
+    /// [`Self::orphan`] there.
+    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, (usize, Option<usize>)>>,
 }
 
 impl<'s> State<'_, 's> {
@@ -2117,6 +2192,13 @@ impl<'s> State<'_, 's> {
             sizeof:             None,
             dead:               false,
             switch_dead:        false,
+            orphan:             None,
+            serial:             0,
+            value_statements:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn_fields:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            folds:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            switch_after:       None,
             arm_ends:           ArenaVec::new_in(scratch),
             generated_breaks:   ArenaVec::new_in(scratch),
             inline_objects:     ArenaVec::new_in(scratch),
