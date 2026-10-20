@@ -457,7 +457,7 @@ templates as invalid, in Clang's words, and refuses a template with NUL or
 bytes that are not UTF-8 as unsupported, each at its syntax. The LLVM back end appends each block to the module's inline
 assembly; the native listing writes the blocks verbatim after its first
 `.text`, before every function and object, as Clang's output places them, then
-`.att_syntax`. `--native-object` on Linux refuses such a module (its encoder
+`.att_syntax`. `--native-object` refuses such a module (its encoder
 reads only the emitter's own vocabulary), and the interpreter refuses to run
 it, since the assembly may define code or data it cannot see.
 

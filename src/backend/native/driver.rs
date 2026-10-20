@@ -38,7 +38,9 @@ pub(crate) fn assemble(
         return build_object(text, out_path, target, kind);
     }
     #[cfg(test)]
-    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) {
+    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc)
+        && !text.contains(super::emit::MODULE_ASM_START)
+    {
         super::tests::object_coff::equivalent(text, target)?;
         return build_object(text, out_path, target, kind);
     }

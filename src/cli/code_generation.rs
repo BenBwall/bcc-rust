@@ -621,12 +621,8 @@ fn build_native(
         ));
         return FAILURE_STATUS;
     }
-    // Direct ELF encoding reads only the emitter's vocabulary; COFF
-    // targets assemble the listing with clang either way.
-    if options.native_object
-        && matches!(target, Target::LinuxGnu | Target::LinuxMusl)
-        && !module.module_asm().is_empty()
-    {
+    // Direct ELF and COFF encoding reads only the emitter's vocabulary.
+    if options.native_object && !module.module_asm().is_empty() {
         report_stderr(format_args!(
             "error: {}",
             native::NativeError::ObjectModuleAsm

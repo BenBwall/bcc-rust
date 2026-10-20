@@ -119,25 +119,36 @@ __asm__(\"# last \\\"block\\\"\");
 
     #[test]
     fn direct_objects_and_the_interpreter_refuse_file_scope_asm() {
-        let object = temporary("asm-direct.o");
-        let refused = bcc(
-            PROGRAM,
-            &[
-                LINUX,
-                "--backend=native",
-                "--native-object",
-                "-c",
-                "-o",
-                object.to_str().unwrap(),
-            ],
-        );
-        assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr));
-        assert!(
-            text(&refused.stderr).contains("--native-object cannot encode file-scope assembly"),
-            "{}",
-            text(&refused.stderr)
-        );
-        assert!(!object.exists());
+        for target in [
+            LINUX,
+            "--target=x86_64-pc-windows-msvc",
+            "--target=x86_64-w64-windows-gnu",
+        ] {
+            let object = temporary("asm-direct.o");
+            let refused = bcc(
+                PROGRAM,
+                &[
+                    target,
+                    "--backend=native",
+                    "--native-object",
+                    "-c",
+                    "-o",
+                    object.to_str().unwrap(),
+                ],
+            );
+            assert_eq!(
+                refused.status.code(),
+                Some(1),
+                "{target}: {}",
+                text(&refused.stderr)
+            );
+            assert!(
+                text(&refused.stderr).contains("--native-object cannot encode file-scope assembly"),
+                "{target}: {}",
+                text(&refused.stderr)
+            );
+            assert!(!object.exists(), "{target}");
+        }
         let interpreted = bcc(PROGRAM, &[LINUX, "--interpret"]);
         assert_eq!(interpreted.status.code(), Some(70));
         assert!(
