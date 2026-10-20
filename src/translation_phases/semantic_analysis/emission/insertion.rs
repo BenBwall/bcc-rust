@@ -465,7 +465,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// paragraph 3, p. 131; PDF p. 143.
     fn variably_modified_ahead(&self) -> bool {
         let mut items = ArenaVec::new_in(self.scratch);
-        for work in self.work.iter() {
+        for work in &self.work {
             if let Work::BlockItem(item) = *work {
                 items.push(item);
             }
