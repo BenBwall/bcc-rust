@@ -965,7 +965,10 @@ or typedef of a variably modified type, although Clang's
 array sizes and the code after them: the rule needs to know that Clang reaches
 the declaration at all, which conditions only Clang folds, the unselected
 operand of `__builtin_choose_expr` and a switch without a match can hide, so
-such code stays skipped, as before #113. Bit-field, union and floating reads,
+such code stays skipped after a jump, as before #113. After a call that does
+not return, a declaration that may be variably modified still ahead in the
+enclosing blocks keeps the code after the call emitted instead, as it is
+without the model of such calls. Bit-field, union and floating reads,
 GNU ranges in `const` initializers and the unselected operand of
 `__builtin_choose_expr` remain unmodeled; each leaves code emitted that Clang
 may skip. The module-item planner
