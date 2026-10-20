@@ -913,8 +913,11 @@ every condition the flag folds (`if`, `switch`, scalar `?:`, `&&`, `||`), which
 must have an integer or enumerated type, as `EvaluateAsInt` requires: an
 integer constant, a comma whose left operand evaluates, a statement expression
 of side-effect-free expression statements, a `const` non-volatile object with
-a constant initializer, the address of a non-weak object or function,
-`__builtin_expect` and `__builtin_constant_p` as Clang's evaluator computes
+a constant initializer, a scalar inside a `const` non-volatile array or
+structure whose initializer evaluates (read from its initializer plan), an
+element of a string literal, the address of a non-weak object or function,
+`__builtin_expect`, `__builtin_strlen`, `__builtin_abs`, the count bit builtins
+and byte swaps, and `__builtin_constant_p` as Clang's evaluator computes
 them (a volatile read, also through `*`, `[]`, `.` or `->`, is a side effect),
 but no call, assignment, volatile or other object read, and no condition
 holding a label. Loops instead test the value IR emission produces. Two forms
@@ -955,8 +958,15 @@ builtin whose memory order is not a constant (unless a library call copies its
 object), and a System V `va_arg` of a type passed in registers; unevaluated and
 skipped operands change nothing. These rules read the expression's type, so
 they run once it is analyzed. A statement
-expression's value statement is emitted even after a jump. A declaration's initializer does not end the code
-after it. The module-item planner
+expression's value statement is emitted even after a jump. A declaration's
+initializer does not end the code after it, but a block-scope object or
+typedef of a variably modified type does: `EmitVariablyModifiedType` ensures
+an insertion point before it evaluates the array sizes, so they and the code
+after them are emitted, unless the declaration is in code Clang never
+reaches (a statement `EmitStmt` skips whole, a folded condition's other arm,
+a folded switch's statements after the selected `break`). Bit-fields, unions,
+GNU ranges, floating comparisons and a declaration in an unselected generic
+association remain unmodeled; each leaves code emitted that Clang may skip. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.
