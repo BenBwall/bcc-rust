@@ -26,6 +26,7 @@
 
 use super::super::{
     Analyzer,
+    DefinitionKind,
     Integer,
     TypeId,
 };
@@ -68,7 +69,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.switch_labels(switch).is_none() {
             return;
         }
-        let start = self.reference_count();
+        let start = SwitchMark {
+            references:  self.reference_count(),
+            definitions: self.definitions.len(),
+            statements:  self.control.statements.len(),
+        };
         _ = self.functions.emission.folds.insert(
             index,
             FoldedSwitch {
@@ -212,7 +217,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
         match collected {
             | Some(end) => {
-                self.skip_folded_region(fold.start..self.reference_count());
+                self.skip_folded_region(fold.start);
                 if let Some(fold) = self.functions.emission.folds.get_mut(&index) {
                     fold.phase = Phase::Collecting;
                     fold.end = end;
@@ -224,12 +229,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Marks the references recorded in `range` of a folded switch's body
-    /// as skipped: Clang emits nothing of the statements before the
-    /// selected label. #104 can also omit the statements and definitions
-    /// recorded there that hold no label of the switch.
-    fn skip_folded_region(&mut self, range: std::ops::Range<usize>) {
-        self.skip_references(range);
+    /// Omits the already analyzed region before the selected label, including
+    /// a tentative default replaced by a later matching case. Keep case-label
+    /// ancestors: lowering still dispatches through the ordinary switch.
+    fn skip_folded_region(&mut self, start: SwitchMark) {
+        self.skip_references(start.references..self.reference_count());
+        for definition in &mut self.definitions[start.definitions..] {
+            if definition.kind == DefinitionKind::Object {
+                definition.elided = true;
+            }
+        }
+        for index in start.statements..self.control.statements.len() {
+            let syntax = self.control.statements[index].syntax;
+            let holds = self.held(syntax);
+            if !holds.case && !holds.label {
+                self.control.statements[index].elided = true;
+            }
+        }
+    }
+
+    /// Clang collects nothing after the selected break. A case-label
+    /// ancestor must still reach lowering's dispatch targets.
+    pub(in crate::translation_phases::semantic_analysis) fn folded_statement_elided(
+        &self,
+        statement: &'tu Statement<'tu>,
+    ) -> bool {
+        self.statements
+            .switch
+            .and_then(|index| self.functions.emission.folds.get(&index))
+            .is_some_and(|fold| fold.phase == Phase::Ended)
+            && {
+                let holds = self.held(statement);
+                !holds.case && !holds.label
+            }
     }
 
     fn set_phase(&mut self, index: usize, phase: Phase) {
@@ -297,7 +329,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .any(|label| matches!(label.kind, StatementType::Default(_)))
                 }) && !self.held(fold.body).label;
                 if elided {
-                    self.skip_folded_region(fold.start..self.reference_count());
+                    self.skip_folded_region(fold.start);
                 }
                 None
             },
@@ -497,8 +529,8 @@ pub(in crate::translation_phases::semantic_analysis) struct FoldedSwitch<'tu> {
     value:     Integer,
     switch:    &'tu Statement<'tu>,
     body:      &'tu Statement<'tu>,
-    /// The number of references recorded when the body began.
-    start:     usize,
+    /// Emission facts recorded when the body began.
+    start:     SwitchMark,
     phase:     Phase,
     /// The `break` the selected statements end at, if any.
     end:       Option<&'tu Statement<'tu>>,
@@ -506,6 +538,14 @@ pub(in crate::translation_phases::semantic_analysis) struct FoldedSwitch<'tu> {
     tentative: bool,
     /// The skipped state the selected statements ended in.
     after:     bool,
+}
+
+/// Append-only semantic stores at the start of a folded switch body.
+#[derive(Clone, Copy)]
+struct SwitchMark {
+    references:  usize,
+    definitions: usize,
+    statements:  usize,
 }
 
 /// Where the analysis of a folded switch's body stands.

@@ -927,11 +927,13 @@ controlling expression folds emits only the statements Clang's
 `CollectStatementsForCase` gathers from the matching case, else `default`
 (§6.8.4.2p4-5, printed p. 134, PDF p. 146). Analysis still runs in source
 order: the body is analyzed as unfolded until a label is selected, which then
-marks the references recorded since the body began as skipped; a `default` is
-selected tentatively, and a later matching case replaces it, when the
-collection from every case label after it succeeds; otherwise, or past 64 later
-labels, the switch is analyzed as unfolded, which may leave more code emitted
-than Clang does but never less. After the
+marks the references recorded since the body began as skipped and the object
+definitions and label-free statement facts there as elided; a `default` is
+selected tentatively only when collection from every later case succeeds.
+A later matching case replaces it and elides the default region too.
+Otherwise, or past 64 later labels, the switch stays unfolded, which may
+retain more code than Clang. Case-label statements and their ancestors remain
+available to lowering. After the
 selection, labels inside the selected statements resume nothing, and the code
 after the switch follows the selected statements' end. When Clang's collection
 fails (a label or declaration it would skip, a `break` inside a collected

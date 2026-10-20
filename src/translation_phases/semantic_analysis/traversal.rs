@@ -244,7 +244,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             false
         };
-        if omitted && !self.functions.elided {
+        if (omitted || self.folded_statement_elided(s)) && !self.functions.elided {
             // Clang EmitSimpleStmt handles declarations and compounds even
             // without an insertion point; EmitStmt skips other label-free
             // statements, including all declarations nested inside them.
