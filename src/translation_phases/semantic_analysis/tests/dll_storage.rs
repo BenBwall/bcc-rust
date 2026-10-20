@@ -801,6 +801,115 @@ fn review_forms_fix_generated_import_state() {
     }
 }
 
+/// The forms the second #113 review found counted differently from Clang,
+/// pinned against Clang 23 on both Windows ABIs at -O0: a `default` before
+/// a matching case whose collection fails skips nothing, a pointer
+/// condition does not fold, the join rules read the expression's own type,
+/// a `void` operand is no constant, a decrement of an atomic `_Bool` loops,
+/// a run-time memory order switches unless a library call copies the
+/// object, and a volatile read through a pointer is a side effect.
+#[test]
+fn second_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
+                            int x; __attribute__((noreturn)) void die(void); int c; int \
+                            tick(void); ";
+    for (suffix, imported) in [
+        (
+            "int h(void) { switch (2) { case 1: x; break; default: tick(); break; case 2: if (c) \
+             break; tick(); break; } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (3) { case 1: x; break; default: tick(); break; case 2: tick(); \
+             break; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (2) { case 1: x; break; default: break; case 2: break; } return \
+             0; }",
+            true,
+        ),
+        ("int h(void) { if ((void *)0) x; return 0; }", false),
+        (
+            "int h(void) { int *const p = 0; if (p) x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { die(), ((void *)0 && c); x; return 0; }",
+            false,
+        ),
+        ("int h(void) { if ((void *)0 != 0) x; return 0; }", true),
+        (
+            "_Complex double z; int h(void) { die(), (1 ? z : z); x; return 0; }",
+            false,
+        ),
+        (
+            "struct s { int a; } s1, s2; int h(void) { die(), (1 ? s1 : s2); x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { die(), (c ? (void)0 : (void)0); x; return 0; }",
+            false,
+        ),
+        (
+            "_Atomic _Bool b; int h(void) { die(), b--; x; return 0; }",
+            false,
+        ),
+        (
+            "_Atomic _Bool b; int h(void) { die(), b++; x; return 0; }",
+            true,
+        ),
+        (
+            "int e; int h(void) { die(), __atomic_load_n(&e, c); x; return 0; }",
+            false,
+        ),
+        (
+            "int e; int h(void) { const int o = 5; die(), __atomic_load_n(&e, o); x; return 0; }",
+            true,
+        ),
+        (
+            "struct b { char a[24]; } b1, b2; int h(void) { die(), __atomic_load(&b1, &b2, c); x; \
+             return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { die(), __atomic_thread_fence(c); x; return 0; }",
+            false,
+        ),
+        (
+            "volatile int *vp; int h(void) { if (__builtin_constant_p(*vp)) x; return 0; }",
+            true,
+        ),
+        (
+            "struct v { volatile int m; } *vq; int h(void) { if (__builtin_constant_p(vq->m)) x; \
+             return 0; }",
+            true,
+        ),
+        (
+            "volatile int vx; int h(void) { if (__builtin_constant_p(&vx)) x; return 0; }",
+            false,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{suffix}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {suffix}"
+            );
+        }
+    }
+    // `long double` is `double` on MSVC, which `atomicrmw` adds to; MinGW's
+    // x87 `long double` loops.
+    let source =
+        format!("{IMPORTED}_Atomic long double ld; int h(void) {{ die(), ld++; x; return 0; }}");
+    assert_eq!(
+        facts(&source, Target::WindowsMsvc, "x").0,
+        Some(DllStorage::Import)
+    );
+    assert_eq!(facts(&source, Target::WindowsGnu, "x").0, None);
+}
+
 /// Generated-reference filtering does not change semantic uses: an internal
 /// function still needs a definition even after an infinite loop.
 /// C99: §6.9p3, p. 140; PDF p. 152.

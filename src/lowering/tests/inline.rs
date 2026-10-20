@@ -1047,6 +1047,76 @@ fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_call
         ),
         ("if (__builtin_constant_p(c)) h(0);", c99, true),
         ("if (__builtin_constant_p((0, 1)) - 1) h(0);", c99, false),
+        // The second review's forms: a `default` before a matching case
+        // whose collection fails skips nothing; pointer conditions do not
+        // fold; the join rules read the expression's type, `va_arg` of
+        // what the System V ABI passes in registers among them; a `void`
+        // operand is no constant; an atomic `_Bool` decrement and a
+        // run-time memory order branch; a volatile read through a pointer
+        // is a side effect.
+        (
+            "switch (2) { case 1: h(0); break; default: other(); break; case 2: if (c) break; \
+             other(); break; }",
+            c99,
+            true,
+        ),
+        (
+            "switch (3) { case 1: h(0); break; default: other(); break; case 2: other(); break; }",
+            c99,
+            false,
+        ),
+        ("if ((void *)0) h(0);", c99, true),
+        ("int *const p = 0; if (p) h(0);", c99, true),
+        ("die(), ((void *)0 && c); h(0);", c99, true),
+        ("if ((void *)0 != 0) h(0);", c99, false),
+        (
+            "_Complex double z = 1; die(), (1 ? z : z); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "struct t { int a; } t1 = {0}; die(), (1 ? t1 : t1); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, int); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "struct t { float a, b; }; __builtin_va_list ap; die(), __builtin_va_arg(ap, struct \
+             t); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "struct t { long double a; }; __builtin_va_list ap; die(), __builtin_va_arg(ap, \
+             struct t); h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "struct t { long a, b, c; }; __builtin_va_list ap; die(), __builtin_va_arg(ap, struct \
+             t); h(0);",
+            gnu,
+            false,
+        ),
+        ("die(), (c ? (void)0 : (void)0); h(0);", c99, true),
+        ("static _Atomic _Bool b; die(), b--; h(0);", gnu, true),
+        ("static _Atomic _Bool b; die(), b++; h(0);", gnu, false),
+        ("int e; die(), __atomic_load_n(&e, c); h(0);", gnu, true),
+        ("int e; die(), __atomic_load_n(&e, 5); h(0);", gnu, false),
+        (
+            "volatile int *vp = 0; if (__builtin_constant_p(*vp)) h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "static volatile int vx; if (__builtin_constant_p(&vx)) h(0);",
+            gnu,
+            true,
+        ),
     ] {
         assert_eq!(h_first(probe, config), emitted, "{probe}");
     }
