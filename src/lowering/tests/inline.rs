@@ -865,6 +865,30 @@ fn always_inline_bodies_follow_clang_creation_order() {
     }
 }
 
+/// Whether `probe`, the body of a function `probe` in a file whose
+/// `always_inline` functions f, g and h call one another in a cycle, makes
+/// lowering create h first: whether it references h where Clang does.
+fn h_first(probe: &str, config: CompilerConfiguration) -> bool {
+    let source = format!(
+        "int c; int other(void); __attribute__((noreturn)) void die(void); _Noreturn void \
+         stop(void); void exit(int); void _exit(int); void (*fp)(void) __attribute__((noreturn)); \
+         typedef void nr(void) __attribute__((noreturn)); nr *fpt; struct s {{ void (*m)(void) \
+         __attribute__((noreturn)); }} holder; inline __attribute__((always_inline)) int f(int); \
+         inline __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) \
+         int h(int); inline __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - \
+         1) : 1; }} inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x - 1) \
+         : 1; }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : \
+         1; }} int probe(void) {{ {probe} return 0; }} int main(void) {{ return f(6); }}"
+    );
+    let text = lower_with(&source, config).unwrap_or_else(|error| panic!("{error:?}\n{probe}"));
+    let position = |name: &str| {
+        text.find(&format!("function @{name}.always_inline("))
+            .unwrap_or_else(|| panic!("{name}: {probe}\n{text}"))
+    };
+    assert!(position("f") < position("g"), "{probe}\n{text}");
+    position("h") < position("f")
+}
+
 /// A switch whose condition folds emits only the statements Clang's
 /// `CollectStatementsForCase` selects, and an expression statement ending
 /// in a call that does not return skips what follows. References there
@@ -873,27 +897,6 @@ fn always_inline_bodies_follow_clang_creation_order() {
 /// `-O0 -Xclang -disable-llvm-passes` module.
 #[test]
 fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_calls() {
-    let h_first = |probe: &str, config: CompilerConfiguration| {
-        let source = format!(
-            "int c; int other(void); __attribute__((noreturn)) void die(void); _Noreturn void \
-             stop(void); void exit(int); void _exit(int); void (*fp)(void) \
-             __attribute__((noreturn)); typedef void nr(void) __attribute__((noreturn)); nr *fpt; \
-             struct s {{ void (*m)(void) __attribute__((noreturn)); }} holder; inline \
-             __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) int \
-             g(int); inline __attribute__((always_inline)) int h(int); inline \
-             __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - 1) : 1; }} \
-             inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x - 1) : 1; \
-             }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : \
-             1; }} int probe(void) {{ {probe} return 0; }} int main(void) {{ return f(6); }}"
-        );
-        let text = lower_with(&source, config).unwrap_or_else(|error| panic!("{error:?}\n{probe}"));
-        let position = |name: &str| {
-            text.find(&format!("function @{name}.always_inline("))
-                .unwrap_or_else(|| panic!("{name}: {probe}\n{text}"))
-        };
-        assert!(position("f") < position("g"), "{probe}\n{text}");
-        position("h") < position("f")
-    };
     let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
     let gnu = c99.with_gnu_extensions(true);
     for (probe, config, emitted) in [
@@ -1047,13 +1050,26 @@ fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_call
         ),
         ("if (__builtin_constant_p(c)) h(0);", c99, true),
         ("if (__builtin_constant_p((0, 1)) - 1) h(0);", c99, false),
-        // The second review's forms: a `default` before a matching case
-        // whose collection fails skips nothing; pointer conditions do not
-        // fold; the join rules read the expression's type, `va_arg` of
-        // what the System V ABI passes in registers among them; a `void`
-        // operand is no constant; an atomic `_Bool` decrement and a
-        // run-time memory order branch; a volatile read through a pointer
-        // is a side effect.
+    ] {
+        assert_eq!(h_first(probe, config), emitted, "{probe}");
+    }
+}
+
+/// The forms the second #113 review and the #104 review found counted
+/// differently from Clang, pinned as above: a `default` before a matching
+/// case whose collection fails skips nothing; pointer conditions do not
+/// fold; the join rules read the expression's type, `va_arg` of what the
+/// System V ABI passes in registers among them; a `void` operand is no
+/// constant; an atomic `_Bool` decrement and a run-time memory order
+/// branch; a volatile read through a pointer is a side effect; string
+/// literal elements, `const` arrays and structures, and the bit and
+/// `strlen` builtins fold; a variably modified declaration after a jump
+/// resumes code generation, but not where Clang never reaches it.
+#[test]
+fn always_inline_order_follows_folding_joins_and_variably_modified_declarations() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (probe, config, emitted) in [
         (
             "switch (2) { case 1: h(0); break; default: other(); break; case 2: if (c) break; \
              other(); break; }",
@@ -1117,6 +1133,29 @@ fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_call
             gnu,
             true,
         ),
+        ("if (\"a\"[0] == 98) h(0);", c99, false),
+        ("if (*\"a\" == 0) h(0);", c99, false),
+        ("if (*(\"ab\" + 3) == 0) h(0);", c99, true),
+        ("const int a[2] = {0, 1}; if (a[0]) h(0);", c99, false),
+        ("const int a[2] = {c, 0}; if (a[1]) h(0);", c99, true),
+        ("static const int a[4] = {1}; if (a[3]) h(0);", c99, false),
+        ("static int a[2] = {0, 1}; if (a[0]) h(0);", c99, true),
+        (
+            "const struct t { int x, y; } p = {.y = 1}; if (p.x) h(0);",
+            c99,
+            false,
+        ),
+        ("if (__builtin_strlen(\"abc\") == 0) h(0);", gnu, false),
+        ("if (__builtin_clz(1) == 0) h(0);", gnu, false),
+        ("if (__builtin_clz(0) == 32) h(0);", gnu, true),
+        ("if (__builtin_popcount(3) == 1) h(0);", gnu, false),
+        ("return 0; int v[c]; h(0);", c99, true),
+        ("return 0; typedef int t[c]; h(0);", c99, true),
+        ("return 0; int v[h(0)]; (void)v;", c99, true),
+        ("return 0; int v[3]; h(0);", c99, false),
+        ("return 0; if (c) { int v[c]; h(0); }", c99, false),
+        ("if (0) { int v[c]; h(0); }", c99, false),
+        ("return 0; int w = h(0), v[c]; (void)v;", c99, false),
     ] {
         assert_eq!(h_first(probe, config), emitted, "{probe}");
     }

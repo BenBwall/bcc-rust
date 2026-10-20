@@ -807,7 +807,11 @@ fn review_forms_fix_generated_import_state() {
 /// condition does not fold, the join rules read the expression's own type,
 /// a `void` operand is no constant, a decrement of an atomic `_Bool` loops,
 /// a run-time memory order switches unless a library call copies the
-/// object, and a volatile read through a pointer is a side effect.
+/// object, and a volatile read through a pointer is a side effect. From
+/// the #104 review: string literal elements, `const` aggregates and
+/// `__builtin_strlen` fold (`strlen` only with the builtin's type, which
+/// `unsigned long` is not on LLP64), and a variably modified declaration
+/// after a jump resumes code generation.
 #[test]
 fn second_review_forms_fix_generated_import_state() {
     const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
@@ -889,6 +893,27 @@ fn second_review_forms_fix_generated_import_state() {
             "volatile int vx; int h(void) { if (__builtin_constant_p(&vx)) x; return 0; }",
             false,
         ),
+        ("int h(void) { if (\"ab\"[1] - 'b') x; return 0; }", true),
+        (
+            "int h(void) { static const int a[2] = {0, 1}; if (a[0]) x; return 0; }",
+            true,
+        ),
+        (
+            "struct p { int x, y; }; int h(void) { const struct p q = {0, 1}; if (q.x) x; return \
+             0; }",
+            true,
+        ),
+        (
+            "int h(void) { if (__builtin_strlen(\"abc\") == 0) x; return 0; }",
+            true,
+        ),
+        (
+            "unsigned long strlen(const char *); int h(void) { if (strlen(\"abc\") == 0) x; \
+             return 0; }",
+            false,
+        ),
+        ("int h(int n) { return 0; int v[n]; x; }", false),
+        ("int h(int n) { return 0; if (c) { int v[n]; x; } }", true),
     ] {
         let source = format!("{IMPORTED}{suffix}");
         for target in WINDOWS {
