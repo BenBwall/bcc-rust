@@ -111,7 +111,7 @@ function appendValue(container, value, names) {
   if (value.kind === "pointer" && value.target != null) {
     const offset = value.offset ? ` + ${value.offset}` : "";
     const target = names.get(String(value.target));
-    const label = `→ #${value.target}${target ? ` ${target}` : ""}${offset}${value.onePast ? " (one past)" : ""}`;
+    const label = `→ #${value.target}${target ? ` ${target}` : ""}${offset}${value.onePast ? " (one past)" : ""}${value.ended ? " (lifetime ended)" : ""}`;
     if (target) { const link = node("a", "pointer-link", label); link.href = `#${objectAnchor(value.target)}`; container.append(link); }
     else container.append(node("span", "pointer-link", `${label} · not in snapshot`));
     return;
@@ -121,8 +121,10 @@ function appendValue(container, value, names) {
 
 function renderEffects(snapshot) {
   element("event-description").textContent = snapshot?.event || (snapshot ? "Ready for the next engine evaluation." : "Load the Rust engine to begin stepping.");
-  element("sequence-state").textContent = snapshot?.sequencePoint ? "Sequence point" : snapshot ? "Between sequence points" : "Awaiting engine";
-  element("sequence-explanation").textContent = snapshot?.sequenceExplanation || "Side effects and sequence points are reported by the engine.";
+  element("sequence-state").textContent = snapshot ? "Atomic stores · prototype" : "Awaiting engine";
+  element("sequence-explanation").textContent = snapshot?.sequenceExplanation || "Load a program to inspect the prototype’s sequencing model.";
+  element("return-value").hidden = !snapshot?.returnValue;
+  element("return-value").textContent = snapshot?.returnValue ? `main returned ${snapshot.returnValue.text ?? snapshot.returnValue.kind}` : "";
   const effects = snapshot?.effects ?? [];
   element("effects-count").textContent = String(effects.length);
   element("effects-list").replaceChildren(...(effects.length ? effects.map(effect => node("li", "", effect)) : [node("li", "muted", snapshot ? "No pending effects." : "No execution state loaded.")]));
@@ -135,4 +137,4 @@ function syntaxTokens(source) {
 
 function node(tag, className, text) { const result = document.createElement(tag); if (className) result.className = className; if (text != null) result.textContent = String(text); return result; }
 function objectAnchor(id) { return `object-${encodeURIComponent(String(id))}`; }
-function statusLabel(status) { return ({ ready: "Ready", running: "Paused", finished: "Finished", undefined_behavior: "Undefined behavior", error: "Stopped" })[status] || status; }
+function statusLabel(status) { return ({ ready: "Ready", running: "Paused", finished: "Finished", undefined_behavior: "Undefined behavior", error: "Stopped", limit: "Resource limit" })[status] || status; }

@@ -4,7 +4,7 @@ import { element, renderDiagnostic, renderSnapshot, renderSource } from "./rende
 
 const HISTORY_LIMIT = 2000;
 const RUN_LIMIT = 1000;
-const MAX_SOURCE_BYTES = 256 * 1024;
+const MAX_SOURCE_BYTES = 32 * 1024;
 let engine;
 let source = demos.tour.source;
 let filename = demos.tour.name;
@@ -15,6 +15,7 @@ let targetLine;
 let busy = false;
 let running = false;
 let edited = false;
+let failed = false;
 
 element("source-editor").value = source;
 element("source-name").textContent = filename;
@@ -30,14 +31,12 @@ async function initialize() {
     engine?.dispose?.();
     engine = await connectEngine();
     element("engine-notice").hidden = true;
-    element("engine-label").textContent = "Rust / Wasm · local execution";
+    element("engine-label").textContent = "Rust / Wasm · bounded C subset";
     await loadProgram(source, filename);
   } catch (error) {
+    engine?.dispose?.();
     engine = undefined;
-    element("engine-notice").hidden = false;
-    element("notice-message").textContent = message(error);
-    element("engine-label").textContent = "Rust / Wasm unavailable";
-    announce("Rust WebAssembly engine unavailable. Build instructions are displayed.");
+    showUnavailable(error);
   } finally {
     busy = false;
     updateControls();
@@ -78,7 +77,7 @@ function bindControls() {
   element("file-input").addEventListener("change", () => action(async () => {
     const file = element("file-input").files[0];
     if (!file) return;
-    if (file.size > MAX_SOURCE_BYTES) throw new Error("Choose a C source file smaller than 256 KiB.");
+    if (file.size > MAX_SOURCE_BYTES) throw new Error("The bounded Rust engine accepts source files up to 32 KiB.");
     await stageProgram(await file.text(), file.name);
     element("file-input").value = "";
   }));
@@ -101,7 +100,7 @@ async function stageProgram(text, name) {
 }
 
 async function loadProgram(text, name) {
-  if (new TextEncoder().encode(text).length > MAX_SOURCE_BYTES) throw new Error("Keep source code below 256 KiB.");
+  if (new TextEncoder().encode(text).length > MAX_SOURCE_BYTES) throw new Error("The bounded Rust engine accepts at most 32 KiB of source.");
   source = text;
   filename = name;
   history = [];
@@ -109,10 +108,11 @@ async function loadProgram(text, name) {
   firstStep = 0;
   targetLine = undefined;
   edited = false;
+  failed = false;
   element("source-editor").value = text;
   element("source-name").textContent = name;
   element("cursor-line").textContent = "—";
-  element("cursor-label").textContent = "Select a line number to set a target.";
+  element("cursor-label").textContent = "Highlight: next operation. Select a target line.";
   showState();
   history.push(await engine.load(text, name));
   cursor = 0;
@@ -140,12 +140,18 @@ async function run(line) {
       await stepForward();
       steps += 1;
       showState();
-      if (line && current()?.location?.start.line === line) break;
+      if (line && containsLine(current(), line)) break;
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    if (steps === RUN_LIMIT && canStep()) announce(`Paused after ${RUN_LIMIT} evaluations. Run again to continue.`);
-    else if (line && current()?.location?.start.line === line) announce(`Reached line ${line}.`);
-    else announceState();
+    if (steps === RUN_LIMIT && canStep()) {
+      const text = `Paused after ${RUN_LIMIT} operations. Run again to continue.`;
+      element("cursor-label").textContent = text;
+      announce(text);
+    } else if (line) {
+      const text = containsLine(current(), line) ? `Reached line ${line}.` : canStep() ? `Paused before reaching line ${line}.` : `Stopped before reaching line ${line}: ${current().status.replaceAll("_", " ")}.`;
+      element("cursor-label").textContent = text;
+      announce(text);
+    } else announceState();
   } catch (error) { showError(error); }
   finally { running = false; updateControls(); revealCurrentLine(); }
 }
@@ -192,10 +198,17 @@ function setEditing(editing) {
   if (editing) element("source-editor").focus();
 }
 
-function canStep() { return !!engine && !!current() && !edited && !["finished", "undefined_behavior", "error"].includes(current().status); }
+function canStep() { return !!engine && engine.connected && !!current() && !edited && !failed && ["ready", "running"].includes(current().status); }
 function current() { return history[cursor]; }
 function announce(text) { element("announcement").textContent = text; }
 function announceState() { const snapshot = current(); if (snapshot) announce(`Step ${snapshot.step}. ${snapshot.status.replaceAll("_", " ")}. ${snapshot.event || ""}${snapshot.diagnostic ? ` ${snapshot.diagnostic.message}` : ""}`); }
 function revealCurrentLine() { const line = current()?.location?.start.line; if (line) element("code-view").querySelector(`.code-line[data-line="${line}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" }); }
-function showError(error) { renderDiagnostic({ title: "Unable to continue", message: message(error), citation: "Execution controls preserve the last available engine state." }); announce(message(error)); }
+function showError(error) {
+  failed = true;
+  if (engine && !engine.connected) { engine = undefined; showUnavailable(error); }
+  renderDiagnostic({ title: "Unable to continue", message: message(error), citation: "Reset or load a program to restart from a known engine state." });
+  announce(message(error));
+}
+function showUnavailable(error) { element("engine-notice").hidden = false; element("notice-message").textContent = message(error); element("engine-label").textContent = "Rust / Wasm unavailable"; announce("Rust WebAssembly engine unavailable. Build instructions are displayed."); }
+function containsLine(snapshot, line) { const range = snapshot?.location; return range && line >= range.start.line && line <= range.end.line && !(line === range.end.line && range.end.column === 1 && line !== range.start.line); }
 function message(error) { return error instanceof Error ? error.message : String(error); }
