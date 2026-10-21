@@ -54,7 +54,7 @@ case "${1:-native}" in
             --output "$study_dir/final-alignment.json"
         python3 scripts/parser_study.py diff --binary "$study_dir/study-release" \
             --alignment-binary "$study_dir/alignment-release" --modes machine alignment \
-            --files alignment-cache.c alignment-nested-16.c alignment-nested-128.c alignment-nested-1024.c lua-supported.i \
+            --files alignment-cache.c alignment-nested-16.c alignment-nested-128.c lua-supported.i \
             --output "$study_dir/final-alignment-diff.json"
         ;;
     profile)

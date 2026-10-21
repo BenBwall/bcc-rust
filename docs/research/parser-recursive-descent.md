@@ -293,3 +293,18 @@ by avoiding a vector-growth boundary. Do not generalize that isolated memory
 saving. Growing debug parsing uses 139.4 MiB peak RSS at 16,384 blocks, versus
 30.4 MiB for machine and 25.8 MiB for hybrid. Separate unsampled timing runs
 on a 1 MiB worker are added for these growth-heavy cases.
+
+Alignment-table reuse saves 242,544 bytes of clean-Lua scratch (616,016 to
+373,472), and 250,112 bytes on the 50K-declaration fixture. It removes the
+second bool table and allows the temporary delimiter stack's last allocation
+to be reclaimed by the bump allocator. Whole-process RSS changes are small.
+Timing CVs of roughly 10-40% in this concurrent batch do not establish a cheap
+speed win; simulated counters will be used to qualify it.
+
+Full provenance rendering of `alignment-nested-1024.c` was OS-killed (SIGKILL)
+in **both** unchanged-machine and alignment variants, after their successful
+parse-only measurements. This is an untimed inspection-memory limitation, not
+a successful deep AST identity check. Full checks through depth 128, the large
+flat alignment case and Lua pass. The repeat batch omits the resource-heavy
+1024 inspection; its timing/allocation case remains. The failed observations
+are retained in the raw data rather than silently removed.
