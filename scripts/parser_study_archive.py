@@ -44,6 +44,13 @@ def main():
         ("grammar.json", args.scratch / "grammar/manifest.json"),
     ]:
         shutil.copyfile(path, args.output / name)
+    for name, path in [
+        ("validation-build.log", args.scratch / "build-final-bundle-3.log"),
+        ("sse4a-proof.log", args.scratch / "sse4a-proof.log"),
+        ("production-valgrind-failure.log", args.scratch / "final-profile-baseline/lua-supported.i.machine.0.log"),
+    ]:
+        if path.exists():
+            shutil.copyfile(path, args.output / name)
     timing = []
     events = []
     calls = []
