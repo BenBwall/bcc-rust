@@ -7,6 +7,8 @@
 use super::super::{
     Analyzer,
     DefinitionKind,
+    Scalar,
+    TypeKind,
     Work,
     functions::FunctionWork,
 };
@@ -49,6 +51,71 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ExpressionType::Conditional(c) =>
                     work.extend([c.condition_expression, c.then_expression, c.else_expression]),
                 | _ => {},
+            }
+        }
+    }
+
+    /// Clang's scalar visitor alone folds a conditional's unselected arm.
+    /// C99: §6.5.15p3-6, pp. 90-91; PDF pp. 102-103.
+    pub(in crate::translation_phases::semantic_analysis) fn scalar_conditional_emission(
+        &self,
+        expression: &'tu Expression<'tu>,
+    ) -> bool {
+        let ty = self.expression_info(expression).ty;
+        // Keep main's conservative VM emission until composite pointer
+        // bounds follow the selected arm; eliding one exposes a missing bound.
+        !self.types.variably_modified(ty)
+            && (self.real(ty)
+                || matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Pointer(_) | TypeKind::Nullptr | TypeKind::Scalar(Scalar::Void)
+                ))
+    }
+
+    pub(in crate::translation_phases::semantic_analysis) fn complete_conditional_elision(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) {
+        let (ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c)) =
+            expression.kind
+        else {
+            return;
+        };
+        if self
+            .functions
+            .emission
+            .branches
+            .contains_key(&std::ptr::from_ref(expression).addr())
+            || !self.scalar_conditional_emission(expression)
+        {
+            return;
+        }
+        let info = self.expression_info(c.condition_expression);
+        let constant_context = self
+            .functions
+            .initializer
+            .is_some_and(|binding| self.bindings[binding].duration.is_static_or_thread());
+        let value = if info.runtime_query && constant_context {
+            Self::constant_truth(info)
+        } else {
+            self.folded_condition(c.condition_expression)
+        };
+        let omitted = match value {
+            | Some(true) => c.else_expression,
+            | Some(false) if matches!(expression.kind, ExpressionType::OmittedConditional(_)) =>
+                return,
+            | Some(false) => c.then_expression,
+            | None => return,
+        };
+        if !self.expression_contains_label(omitted) {
+            if let Some(&index) = self
+                .expression_indices
+                .get(&std::ptr::from_ref(omitted).addr())
+            {
+                self.expressions[index].elided = true;
+            }
+            if matches!(expression.kind, ExpressionType::Conditional(_)) {
+                self.elide_condition_references(c.condition_expression);
             }
         }
     }

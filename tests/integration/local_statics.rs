@@ -27,6 +27,59 @@ mod tests {
     use crate::native::run_native;
 
     #[test]
+    fn aggregate_and_complex_conditionals_keep_both_operands_emitted() {
+        for (definitions, selected, omitted) in [
+            (
+                "struct S { int a; }; static struct S g={3}; static struct S h(void){STATIC \
+                 return g;}",
+                "g",
+                "h()",
+            ),
+            (
+                "union S { int a; }; static union S g={3}; static union S h(void){STATIC return \
+                 g;}",
+                "g",
+                "h()",
+            ),
+            (
+                "static _Complex double g=3; static _Complex double h(void){STATIC return g;}",
+                "g",
+                "h()",
+            ),
+            (
+                "static _Complex double h(void){STATIC return 3;}",
+                "1.0",
+                "h()",
+            ),
+        ] {
+            for expression in [
+                format!("0?{omitted}:{selected}"),
+                format!("1?{selected}:{omitted}"),
+            ] {
+                let template =
+                    format!("{definitions} int main(void){{(void)({expression});return 0;}}");
+                assert_o0_static_emission(&template, true);
+                assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+            }
+        }
+    }
+
+    #[test]
+    fn nested_constant_queries_keep_unfolded_control_operands() {
+        for query in [
+            "__builtin_constant_p(g)",
+            "__builtin_constant_p(__builtin_constant_p(g))",
+        ] {
+            let template = format!(
+                "int g; static int h(void){{STATIC return a;}} int \
+                 main(void){{if(__builtin_constant_p({query})) return 0; else return h();}}"
+            );
+            assert_o0_static_emission(&template, true);
+            assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+        }
+    }
+
+    #[test]
     fn unsupported_unused_local_statics_keep_main_acceptance() {
         assert_runs_like_clang(
             r#"

@@ -42,6 +42,7 @@ use crate::{
             },
             syntax::{
                 Expression,
+                ExpressionType,
                 FunctionDefinition,
                 Identifier,
                 Statement,
@@ -556,6 +557,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.elide_condition_references(condition);
                 }
             },
+            | FunctionWork::ConditionalArm {
+                owner,
+                arm,
+                live,
+                outer_dead,
+                outer_elided,
+            } => {
+                let (ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c)) =
+                    owner.kind
+                else {
+                    unreachable!("conditional arm owner");
+                };
+                let info = self.expression_info(c.condition_expression);
+                let constant_context = self
+                    .functions
+                    .initializer
+                    .is_some_and(|binding| self.bindings[binding].duration.is_static_or_thread());
+                let value = if info.runtime_query && constant_context {
+                    Self::constant_truth(info)
+                } else {
+                    self.folded_condition(c.condition_expression)
+                };
+                let skipped = value == Some(!live) && !self.expression_contains_label(arm);
+                self.functions.dead = outer_dead || skipped;
+                // The result type is not known until both operands are typed.
+                // Clang's aggregate and complex visitors emit both operands.
+                self.functions.elided = outer_elided;
+                if skipped {
+                    self.enter_reference_context_kind(ReferenceContextKind::ConditionalArm {
+                        owner,
+                    });
+                }
+                self.work.push(Work::Expression(arm));
+            },
             | FunctionWork::DeadArm {
                 condition,
                 live,
@@ -733,6 +768,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
             let (skip_definitions, skip_uses) = match context.kind {
                 | ReferenceContextKind::ConstantQuery { emitted } => (!emitted, false),
+                | ReferenceContextKind::ConditionalArm { .. } =>
+                    (self.reference_context_unevaluated(index), false),
                 | _ => {
                     let unevaluated = self.reference_context_unevaluated(index);
                     (unevaluated, unevaluated)
@@ -1956,6 +1993,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> bool {
         match self.functions.reference_contexts[index].kind {
             | ReferenceContextKind::ConstantQuery { emitted } => !emitted,
+            | ReferenceContextKind::ConditionalArm { owner } =>
+                self.scalar_conditional_emission(owner),
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
                 .typeof_sites
@@ -2268,6 +2307,14 @@ pub(super) enum FunctionWork<'tu> {
         outer_elided: bool,
         arm:          Option<&'tu Expression<'tu>>,
     },
+    /// Defer conditional elision until its result type is known.
+    ConditionalArm {
+        owner:        &'tu Expression<'tu>,
+        arm:          &'tu Expression<'tu>,
+        live:         bool,
+        outer_dead:   bool,
+        outer_elided: bool,
+    },
     /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
     /// the arm holds a label, which keeps Clang from skipping it.
     DeadStatementArm {
@@ -2430,10 +2477,6 @@ struct ReferenceContext<'tu> {
 }
 
 #[derive(Clone, Copy)]
-#[expect(
-    variant_size_differences,
-    reason = "Typeof contexts retain their syntax for deferred VM checks"
-)]
 enum ReferenceContextKind<'tu> {
     Typeof(&'tu super::ExtendedType<'tu>),
     Unevaluated,
@@ -2441,6 +2484,10 @@ enum ReferenceContextKind<'tu> {
     /// consumers share it; its references remain C99 §6.9p3 uses either way.
     ConstantQuery {
         emitted: bool,
+    },
+    /// A folded-away conditional operand is omitted only for scalar results.
+    ConditionalArm {
+        owner: &'tu Expression<'tu>,
     },
 }
 

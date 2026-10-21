@@ -954,7 +954,12 @@ may still replace it. An `if` with an elided arm lowers only its selected arm.
 Every lowering consumer of a conditional or logical operator, as a value, as a
 branch condition or in an effects-only recipe, reads the same operand elision
 facts before ordinary constant shortcuts. The common operand of GNU `x ?: y`
-is always emitted, as Clang binds it before folding. In an `if` branch
+is always emitted, as Clang binds it before folding. Conditional elision waits
+for the result type: Clang's aggregate and complex visitors emit both arms.
+VM composite pointer results conservatively retain both operands, preserving
+main's behavior until their bound selection is repaired. Branch simplification
+operands live in sparse retained facts, keeping expression records at 160 bytes.
+In an `if` branch
 condition, the recursive logical emitter instead simplifies only `1 && X`,
 `X && 1`, `0 || X` and `X || 0`. Nested `0 && X` and `1 || X` retain
 both operands unless the whole condition folds. Branch operands record their
@@ -970,7 +975,9 @@ constant result: the expression records that its emitted value differs, so
 lowering evaluates the operators around such a query instead of taking their
 constant. Control folding accepts the array read but leaves a discarded-comma
 query unknown, since `ConstantFoldsToSimpleInteger` cannot discard its left
-operand; loop folding also treats the condition as unknown, and `__builtin_choose_expr` and static initializer data
+operand. Nested queries also stay unknown in control contexts when evaluating
+the inner query fails; the constant-context nested-query shortcut is not a
+control fold. Loop folding also treats the condition as unknown, and `__builtin_choose_expr` and static initializer data
 select by the constant-context value. A discarded comma counts only before an
 arithmetic constant; a pointer result is never constant in function code. An unknown query still
 emits zero while the control fold can remain unknown.

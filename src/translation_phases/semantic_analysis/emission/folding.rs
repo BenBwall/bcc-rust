@@ -210,7 +210,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether Clang emits the query operand, after its ordinary constant
     /// fold fails: only a real arithmetic operand without side effects feeds
-    /// `llvm.is.constant`. GNU extension: Clang `CGBuiltin` ConstantP.
+    /// `llvm.is.constant`. GNU extension: Clang `CGBuiltin` `ConstantP`.
     pub(in crate::translation_phases::semantic_analysis) fn constant_query_operand_emitted(
         &mut self,
         operand: &'tu Expression<'tu>,
@@ -1301,7 +1301,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if depth >= DEPTH {
             return false;
         }
-        self.is_constant_query(operand)
+        (context != QueryContext::Control && self.is_constant_query(operand))
             || self.constant_query_string_address(operand)
             || (context == QueryContext::Runtime && self.discarded_comma_constant(operand, depth))
             || (match self.evaluate_value(operand, depth) {
@@ -1387,7 +1387,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             } else {
                 work.push((expression, true));
                 super::labels::expression_children(self.scratch, expression, |child| {
-                    work.push((child, false))
+                    work.push((child, false));
                 });
             }
         }
@@ -1430,7 +1430,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     false,
                 | ExpressionType::StatementExpression(statement) if inspect_statements => {
                     super::labels::statement_expressions(self.scratch, statement, |child| {
-                        work.push((child, true))
+                        work.push((child, true));
                     });
                     false
                 },

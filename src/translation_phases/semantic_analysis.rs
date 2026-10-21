@@ -534,6 +534,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Expression(expression) => self.expression(expression),
             | Work::ExpressionDone(e) => {
                 self.expression_done(e);
+                self.complete_conditional_elision(e);
                 // The blocks `e` creates depend on its type.
                 self.expression_emitted(e);
             },

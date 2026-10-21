@@ -102,10 +102,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                     self.functions.dead,
                 )));
-                self.work.push(Work::Expression(c.else_expression));
-                if !branch { self.dead_arm(c.condition_expression, false, Some(c.else_expression)); }
-                self.work.push(Work::Expression(c.then_expression));
-                if !branch { self.dead_arm(c.condition_expression, true, Some(c.then_expression)); }
+                for (arm, live) in [(c.else_expression, false), (c.then_expression, true)] {
+                    if branch {
+                        self.work.push(Work::Expression(arm));
+                    } else {
+                        self.work.push(Work::FunctionWork(FunctionWork::ConditionalArm {
+                            owner: e,
+                            arm,
+                            live,
+                            outer_dead: self.functions.dead,
+                            outer_elided: self.functions.elided,
+                        }));
+                    }
+                }
                 // GNU `x ?: y` binds its common operand before folding the
                 // condition (Clang `OpaqueValueMapping`), so it is always
                 // emitted. GNU extension: GCC manual, "Conditionals".

@@ -579,7 +579,7 @@ pub(in crate::translation_phases::semantic_analysis) fn expression_children<'tu>
 }
 
 /// The expressions a statement contains, including declaration initializers.
-/// Query-side-effect inspection follows Clang's SideEffectFinder.
+/// Query-side-effect inspection follows Clang's `SideEffectFinder`.
 pub(super) fn statement_expressions<'tu>(
     scratch: &Bump,
     statement: &'tu Statement<'tu>,
