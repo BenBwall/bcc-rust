@@ -88,8 +88,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Follows the blocks code generation creates for expression `e`, once
     /// it is analyzed: an evaluated call that does not return leaves a block
     /// without predecessors, and an expression that joins its paths leaves
-    /// one with predecessors.
+    /// one with predecessors. The operands of a call of
+    /// `__builtin_constant_p`, `__builtin_object_size`,
+    /// `__builtin_dynamic_object_size` or `__builtin_classify_type` are not
+    /// emitted when they hold a call, so they leave the blocks as they were
+    /// when the call's callee, analyzed before them, ended.
     /// C99: §6.5.2.2 paragraph 10, p. 72; PDF p. 84.
+    /// GNU extension: GCC manual, "Other Builtins" and "Object Size
+    /// Checking".
     pub(in crate::translation_phases::semantic_analysis) fn expression_emitted(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -104,9 +110,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             function_expression,
             ..
         } = e.kind
-            && self.call_does_not_return(function_expression)
         {
-            self.functions.emission.orphan = Some(self.functions.emission.serial);
+            let callee = std::ptr::from_ref(unparenthesized(function_expression)).addr();
+            if let Some(orphan) = self.functions.emission.unevaluated_calls.remove(&callee) {
+                self.functions.emission.orphan = orphan;
+            } else if self.call_does_not_return(function_expression) {
+                self.functions.emission.orphan = Some(self.functions.emission.serial);
+            } else if self.joins_paths(e) {
+                self.functions.emission.orphan = None;
+            }
+        } else if matches!(e.kind, ExpressionType::Identifier(_))
+            && self.expression_info(e).binding.is_some_and(|binding| {
+                matches!(
+                    self.bindings[binding].origin,
+                    BindingOrigin::Intrinsic(
+                        BuiltinId::ConstantP
+                            | BuiltinId::ObjectSize
+                            | BuiltinId::DynamicObjectSize
+                            | BuiltinId::ClassifyType
+                    )
+                )
+            })
+        {
+            _ = self
+                .functions
+                .emission
+                .unevaluated_calls
+                .insert(std::ptr::from_ref(e).addr(), self.functions.emission.orphan);
         } else if self.joins_paths(e) {
             self.functions.emission.orphan = None;
         }
@@ -622,6 +652,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .insert(std::ptr::from_ref(last).addr(), ());
         }
     }
+}
+
+fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    while let ExpressionType::Parenthesized { expression: inner } = expression.kind {
+        expression = inner;
+    }
+    expression
 }
 
 /// The address of block item `item`'s syntax, which identifies it.

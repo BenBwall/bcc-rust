@@ -172,6 +172,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | E::Countof(operand) => self.syntax_operand(operand),
             | E::Builtin(b) => {
+                // Code generation emits only the selected operand of
+                // `__builtin_choose_expr`, which is known once both are
+                // analyzed; a call in either that does not return leaves
+                // the code after it emitted, as without the model.
+                if b.keyword
+                    == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr
+                {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                            self.functions.emission.orphan,
+                        )));
+                }
                 for &member in b.members.iter().rev() {
                     if let super::super::parsing::OffsetMember::Index(index) = member {
                         self.work.push(Work::Expression(index));

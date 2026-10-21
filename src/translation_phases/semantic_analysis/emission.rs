@@ -123,6 +123,9 @@ pub(super) struct State<'tu, 's> {
     /// has seen: each one's position and address, and whether it or an
     /// item below it may declare something of a variably modified type.
     variably_modified:       ArenaVec<'s, (usize, usize, bool)>,
+    /// The state [`State::orphan`] had where a call of a builtin that
+    /// leaves its operands unemitted began, by the address of its callee.
+    unevaluated_calls:       ArenaMap<'s, usize, Option<usize>>,
 }
 
 impl<'s> State<'_, 's> {
@@ -148,6 +151,7 @@ impl<'s> State<'_, 's> {
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified:     ArenaVec::new_in(scratch),
+            unevaluated_calls:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }
