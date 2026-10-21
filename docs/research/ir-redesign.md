@@ -231,11 +231,220 @@ the right user-facing semantics for a C abstract-machine engine.
 
 ## 2. Survey of alternatives
 
-Research in progress: CompCert's staged languages and memory model; Cerberus
-Core; CLIF and acyclic egraphs; QBE; Makarov MIR; multi-level dialects; RVSDG;
-and sea-of-nodes/Turboshaft. The comparison will evaluate semantic ownership,
-three-back-end reuse, implementation cost and abstract-machine tracing rather
-than visual similarity to LLVM.
+Primary sources below were read on 2026-10-21. Upstream `main`/`latest` links
+describe designs, not pinned dependencies proposed for bcc. Historical papers
+and contemporary implementations are distinguished. Evaluations of bcc cost
+and suitability are design judgments, not benchmark results.
+
+### CompCert: Clight → Csharpminor → Cminor → RTL
+
+Clight separates effect-free expressions from assignments, calls and control.
+The initial simplification chooses an evaluation order. Csharpminor makes
+type-dependent operations explicit; Cminor makes stack storage explicit;
+CminorSel introduces machine operations; RTL builds a CFG with pseudo-registers
+and three-address instructions. RTL is not simply LLVM SSA with a different
+name, and this is a chain with additional intermediate passes, not four
+interchangeable formats. The official
+[language/pass map](https://compcert.org/doc/) identifies each boundary.
+
+The shared [memory model](https://compcert.org/doc/html/compcert.common.Memory.html)
+has fresh blocks, offset-indexed contents, permissions, allocation and free.
+[Values](https://compcert.org/doc/html/compcert.common.Values.html) distinguish
+integers, floats, block-plus-offset pointers and `Vundef`; it is not LLVM
+poison. Memory injections relate allocations as lowering merges or lays out
+storage. This is an especially useful discipline: explain how source objects
+relate to target bytes instead of starting with target bytes as the definition
+of an object.
+
+**For bcc:** borrow the staged semantic contracts and explicit object identity.
+A Clight-like executable layer can feed I directly and lower to the existing
+pre-ABI CFG for L/N, preserving the native MIR. Dense arena IDs can represent
+blocks/objects without importing a proof assistant or CompCert's containers.
+Do not adopt `Vundef` and assume indeterminate C behavior is solved, or assume
+CompCert's abstract pointer model covers every systems-C integer-pointer idiom
+bcc accepts. Its supported C subset/extensions and proof-specific choices are
+not bcc's feature set. A faithful port/proof effort is far more work than an
+object-aware Rust IR. For the website, Clight after evaluation-order selection
+would still need source choice/sequencing annotations; it does not automatically
+explore all C orders.
+
+### Cerberus Core
+
+Cerberus elaborates a substantial C11 fragment to executable Core and separates
+the thread-local semantics from the memory-object model. It can explore one or
+many behaviors. Its [project description](https://www.cl.cam.ac.uk/~pes20/cerberus/)
+explicitly treats unclear memory rules as a design space informed by systems
+practice, not a claim that every detail follows unambiguously from ISO prose.
+Core exposes sequencing: `unseq` permits action interleavings, and binding forms
+distinguish sequencing obligations; overlapping unsequenced accesses are
+checked. The [2023 semantics thesis, chapters 4–6](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-981.pdf)
+gives the elaboration, memory interface and operational rules.
+
+**For bcc:** this is the best semantic reference for the sibling site, including
+why a single deterministic run does not settle UB freedom, and why a function
+argument's chosen order is not a source sequencing edge. Reuse the separation
+between an evaluation layer and a replaceable object model. Full Core is a
+semantic exploration language rather than a ready-made scalar optimizer; bcc
+would still need scheduling, CFG construction, scalarization and ABI lowering
+for L/N. A wholesale integration would duplicate the existing frontend and
+introduce a substantial toolchain/runtime dependency. Implement a bounded
+Core-inspired layer from bcc's existing sema facts and use Cerberus as a
+reference on carefully matched subsets, with target/memory-policy differences
+recorded. Do not promise to reproduce Core's full nondeterministic evaluator in
+the first experiment.
+
+### Cranelift CLIF and the acyclic-egraph mid-end
+
+CLIF is a typed SSA CFG with block parameters, explicit memory and low-level
+calls. It is function-oriented; a frontend supplies module and C-ABI policies.
+The [IR reference](https://github.com/bytecodealliance/wasmtime/blob/main/cranelift/docs/ir.md)
+itself directs readers to current instruction documentation. Arithmetic is
+specified directly: wrapping integer operations, explicit overflow results and
+trapping operations/conversions are available in the
+[instruction API](https://docs.rs/cranelift-codegen/latest/cranelift_codegen/ir/trait.InstBuilder.html).
+This avoids importing LLVM poison as the universal scalar value algebra; it
+does not supply C object/effective-type semantics.
+
+The egraph design keeps an ordered effect/control skeleton and optimizes pure
+expressions using acyclic equivalence classes, eager rewrites and scoped
+elaboration back into scheduled code. It is not unrestricted equality
+saturation over arbitrary effectful C operations. Read both the
+[original RFC](https://github.com/bytecodealliance/rfcs/blob/main/accepted/cranelift-egraph.md)
+and the implementer's [2026 account](https://cfallin.org/blog/2026/04/09/aegraph/),
+which describes the evolved implementation.
+
+**For bcc:** most useful as inspiration for a poison-free scalar layer and,
+later, cooperative pure-expression optimization. The existing dense IDs,
+block arguments and rebuild-based optimizer already fit that direction.
+Replacing the IR with library CLIF would require custom adapters for globals,
+extended floats, aggregates and C varargs, and still require an LLVM translator
+and independent I semantics. Using Cranelift codegen would also displace the
+native back end the owner wants to retain. Preserve bcc's MIR and ABI work;
+experiment with egraphs only after operation semantics stabilize. Egraphs
+cannot decide whether a C load is well typed or an indeterminate read is UB.
+
+### QBE
+
+QBE's [IL specification](https://c9x.me/compile/doc/il.html) defines a small SSA
+language with four temporary base types (`w/l/s/d`), phi nodes, integer-typed
+addresses, loads/stores, calls and varargs. Aggregates are described for C
+interfacing and supplied through memory addresses; the back end handles ABI
+classification. Its compact type system and direct arithmetic avoid much of
+LLVM's contract surface.
+
+**For bcc:** QBE demonstrates that by-value aggregate intent can survive until
+a backend ABI pass without general aggregate SSA values—something bcc already
+does. Borrow small operation families and self-contained pass boundaries.
+Adopting it wholesale would give up or separately legalize bcc's i128,
+x87/binary128 and richer extension/atomic surface, require another native
+backend, and leave L/I translation to maintain. Integer addresses make C
+provenance and object explanation harder unless a higher layer preserves them.
+The benefit is engineering restraint, not a ready C abstract machine. Compare
+the vocabulary, not just QBE's textual terseness; fewer documented contracts can
+also mean more work defining an independent interpreter oracle.
+
+### Vladimir Makarov's MIR
+
+This is the separate [MIR project](https://github.com/vnmakarov/mir), not Rust MIR
+and not `src/backend/native/mir.rs`. It combines a compact machine-independent
+representation, interpreter/JIT and a C frontend. The
+[MIR specification](https://github.com/vnmakarov/mir/blob/master/MIR.md)
+describes imperative local registers, labels/branches, typed memory operands,
+prototype-based calls and block arguments/results for ABI use. Pointers have
+target integer representations; `long double` is target-dependent. The public
+representation does not require source SSA construction; optimizations can use
+their own internal forms.
+
+**For bcc:** attractive if the goal were a small executable/JIT substrate with
+straightforward mutable locals. A direct interpreter could be simpler than
+today's post-ABI SSA interpreter, and the instruction selector might be easy
+to feed. But changing bcc to imperative registers would either replace much
+of O or rebuild SSA for it, while L still requires SSA construction. MIR does
+not provide the missing C object lifetimes, sequencing graph or effective
+types, and its C/allocator/runtime integration is another dependency to own.
+Borrow the idea of a simple executable contract and explicit call prototypes,
+not its low-level address model as the meaning of C. It has little advantage
+over retaining bcc's existing scalar CFG plus a new C layer.
+
+### MLIR-style levels: a C dialect over a scalar dialect
+
+MLIR separates extensible operations/types, regions and dialect legality from
+lowering machinery. It can represent high and low levels together; neither
+regions nor dialects require LLVM semantics. Its
+[rationale](https://mlir.llvm.org/docs/Rationale/Rationale/) describes the
+multi-level approach; [dialect conversion](https://mlir.llvm.org/docs/DialectConversion/)
+makes legal/illegal operations and type conversion explicit. A C dialect can
+retain `object.begin`, typed reads, member places and C calls, lowering to
+scalar operations only when the relevant facts are no longer needed.
+
+**For bcc:** this is the best architectural fit **as a pattern**. Implement two
+small Rust representations using the existing arenas and verifier discipline;
+do not make adopting the MLIR C++ framework a prerequisite. L/N consume the
+lower level; I and the site can consume the C level. A full MLIR dependency
+adds binding/build/version costs and still requires bcc to specify the C
+dialect. Merely using an existing LLVM-oriented C dialect can reproduce
+`nsw/freeze` in a higher-looking syntax. The risks are duplicate operations,
+poorly defined mixed levels and accidental fallbacks that silently erase
+unsupported C constructs. Distinct typed stages and an explicit legality
+check are more useful here than an open-ended dialect registry.
+
+### RVSDG
+
+The Regionalized Value State Dependence Graph represents computation through
+dependencies and nested regions. Value edges carry data; state edges order
+effects. Structural nodes represent alternatives (gamma), loops (theta),
+functions (lambda), globals (delta), recursion (phi) and a translation unit
+(omega). Its [specification and evaluation](https://arxiv.org/html/1912.05036v2)
+also discuss constructing it from control flow and recovering control flow for
+code generation. These phi nodes describe recursive environments, not LLVM
+block-entry phis. The [jlm research compiler](https://github.com/phate/jlm)
+provides an implementation to investigate.
+
+**For bcc:** promising for research into unified interprocedural/loop
+transformations and making dependence explicit. Objects and UB would still
+need separate operation semantics. C's irreducible gotos, computed goto,
+setjmp/longjmp and arbitrary exits impose restructuring and escape-handling
+costs before either L or N can consume the graph. The existing CFG optimizer
+would mostly be rewritten, while I would need a new region evaluator and the
+site would still need source sequencing distinctions. Keep it as an optional
+future optimization form for suitable regions, not the source semantic
+backbone. A global memory state edge is easy but serializes effects; splitting
+state demands the alias/provenance analysis this study is trying to define.
+
+### Sea of nodes, and V8's retreat to Turboshaft
+
+A sea-of-nodes IR lets pure computations float among value, effect and control
+dependencies, delaying scheduling. It does not by itself choose C semantics.
+V8's [March 2025 explanation](https://v8.dev/blog/leaving-the-sea-of-nodes)
+reports that many operations were pinned by guards/effects anyway; manually
+maintaining parallel control/effect chains was difficult; scheduling could
+undo earlier commoning; graph traversal and in-place pointer-heavy layouts
+cost compilation time and locality. V8 moved its JavaScript backend and Wasm
+pipeline to the CFG-based Turboshaft, while some earlier/builtin paths still
+used the old form at the time of that report. This is engineering evidence
+from V8, not a theorem that sea of nodes is always inferior.
+
+**For bcc:** C's static types reduce some JavaScript guard traffic, but calls,
+aliasing, volatile, atomics and partial operations still constrain effects.
+Changing the whole optimizer and scheduler would leave the LLVM poison issue
+untouched and introduce a large graph maintenance burden, contrary to bcc's
+dense arena/rebuild design. Keep the CFG; if pure expressions need flexible
+commoning, study CLIF's bounded graph-within-a-skeleton approach. For the site,
+a scheduling freedom graph is less useful than a source sequencing graph: an
+optimization dependency and a C sequence point are different facts.
+
+### Decision comparison for these three back ends
+
+| Design influence | What it resolves for bcc | Main cost or remaining gap | Disposition |
+| --- | --- | --- | --- |
+| CompCert staged languages | Explicit semantic erasure boundaries and object-to-storage relation | Full proof chain/subset is not bcc's compiler | Borrow stage discipline and object identities |
+| Cerberus Core | Sequencing, UB explanation, parameterized memory policy | Exploration and lowering complexity | Primary semantic reference; bounded implementation |
+| CLIF/aegraph | Direct scalar semantics; optimizer cooperation | Does not preserve C objects on its own | Borrow scalar contract; defer egraph experiment |
+| QBE | Small IL and backend-owned ABI | Narrower primitive surface; no C object oracle | Borrow simplicity; retain bcc backends |
+| Makarov MIR | Simple imperative executable substrate | SSA rebuild/optimizer rewrite; still low-level | Reference, not replacement |
+| Multi-level dialect pattern | C execution plus low-level optimization/three consumers | Two verifiers and one carefully tested erasure | Recommended architecture without MLIR dependency |
+| RVSDG | Region/dependence optimization research | CFG restructuring, escape semantics, broad rewrite | Optional later regional experiment |
+| Sea of nodes | Flexible pure scheduling | Effect-chain/scheduler cost; semantics unchanged | Reject as the main redesign objective |
 
 ## 3. Recommendation and migration
 
