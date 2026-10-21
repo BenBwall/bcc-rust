@@ -246,3 +246,16 @@ RSS validation passed: with a Python parent holding a live 128 MiB buffer, the
 old `getrusage` binary reported 146,518,016 bytes for a tiny parse; the final
 `VmHWM` baseline reported 2,879,488 bytes before parsing and 3,076,096 after.
 The final native RSS tables will use only the corrected binaries.
+
+Final release batch (seven interleaved samples) is complete: clean Lua medians
+are 35.608 ms production baseline, 36.813 ms study machine, 22.765 ms recursive,
+22.888 ms growing, and 24.841 ms hybrid 16. This is a 36.1% recursive and 30.2%
+hybrid time reduction against production. CVs are 1.89%, 2.73%, 5.26%, 1.41%
+and 1.41%, respectively. Peak RSS is approximately 33.6 MiB in every mode;
+there is no meaningful process-memory reduction on this real input.
+
+On the release 1 MiB worker, raw recursion overflows by 4,096 parentheses or
+1,024 nested blocks. Machine, growing and hybrid survive all 48 generated
+kind/depth combinations through 16,384. A limit of 256 rejects the combined
+C99-floor probe; limit 512 accepts it in release. Debug validation and isolated
+counter collection remain in progress.
