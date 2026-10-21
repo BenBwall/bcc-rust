@@ -87,3 +87,24 @@ Wasm builds will use --target-dir target/abstract-machine/build through the
 shared wrapper to keep browser artifacts safe from later shared-cache cleans.
 Expected stable artifact path after success:
   target/abstract-machine/build/wasm32-unknown-unknown/release/bcc_rust.wasm
+
+ROOT HANDOFF
+All owned source is committed; root may take ownership. No bridge edits are
+pending. Narrow rustfmt checks on build.rs, src/lib.rs and the bridge passed,
+and git diff --check passed. No Cargo.lock changes or new dependencies.
+Raw ABI smoke passed against the web owner's existing generated artifact at
+web/pkg/bcc_rust.wasm (1,312,782 bytes), with no host imports and all 12 expected
+exports (memory plus 11 functions). It checked allocation zeroing/limits/null,
+input bounds and UTF-8 rejection, compile diagnostics, actual C execution to
+return 7, state, step/back/replay, reset, terminal fixed points and trace JSON.
+Log: target/abstract-machine/existing-artifact-smoke.log. This artifact predates
+final engine fixes and is not claimed to be the final source build.
+Final wasm Clippy/build/smoke pipeline remains queued on the shared build lock;
+there is no final target-check success or newly produced handoff artifact yet.
+Root should consume the existing pipeline's logs/exit markers and avoid another
+long duplicate job. PID 1171260 owns the detached pipeline; its process group
+can be terminated if root's final checks supersede it. On success it writes:
+  target/abstract-machine/bcc_rust.wasm
+  target/abstract-machine/{wasm-clippy-final,wasm-build,smoke}.exit (each 0)
+Initial target Clippy's five bridge lints were fixed; final target Clippy is
+still pending, not reported as passing. Native default Clippy/check are passing.
