@@ -50,6 +50,7 @@
 
 use super::super::{
     Analyzer,
+    ArrayBound,
     BindingOrigin,
     TagKind,
     TypeKind,
@@ -475,7 +476,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// integer, pointer, `float`, `double`, `__float128` or vector, a complex
     /// `float` or `double`, or a structure or union of at most 16 bytes, but
     /// nothing with an x87 class (`long double`), a misaligned member or a
-    /// flexible array member, nor an empty one, which are read from memory.
+    /// flexible array member, which are read from memory, nor one with no
+    /// class at all, which is ignored. An array of no elements and an
+    /// unnamed bit-field have no class; a named bit-field is an integer.
     fn register_class(&self, ty: TypeId) -> bool {
         let Some(layout) = self.types.layout(ty) else {
             return false;
@@ -483,6 +486,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !(1..=16).contains(&layout.size) {
             return false;
         }
+        let mut classified = false;
         // Each object within `ty`, with its offset.
         let mut work = ArenaVec::new_in(self.scratch);
         work.push((ty, 0));
@@ -498,29 +502,42 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | TypeKind::Scalar(
                     Scalar::LongDouble | Scalar::ComplexLongDouble | Scalar::Void,
                 ) => return false,
-                | TypeKind::Scalar(_) | TypeKind::Pointer(_) | TypeKind::Vector { .. } =>
+                | TypeKind::Scalar(_) | TypeKind::Pointer(_) | TypeKind::Vector { .. } => {
                     if !aligned {
                         return false;
-                    },
-                | TypeKind::Array(element, _) => work.push((element, offset)),
+                    }
+                    classified = true;
+                },
+                | TypeKind::Array(element, bound) => {
+                    if !aligned {
+                        return false;
+                    }
+                    if bound != ArrayBound::Constant(0) {
+                        work.push((element, offset));
+                    }
+                },
                 | TypeKind::Tag(id) => {
                     let tag = &self.types.tags[id];
                     if tag.contains_flexible.get() || !aligned {
                         return false;
                     }
-                    if tag.kind != TagKind::Enum {
-                        for member in tag.members.get() {
-                            // A bit-field's own alignment is not checked.
-                            if member.width.is_none() {
-                                work.push((member.ty, offset + member.offset));
-                            }
+                    if tag.kind == TagKind::Enum {
+                        classified = true;
+                        continue;
+                    }
+                    for member in tag.members.get() {
+                        // A bit-field's own alignment is not checked.
+                        if member.width.is_none() {
+                            work.push((member.ty, offset + member.offset));
+                        } else if member.name.is_some() {
+                            classified = true;
                         }
                     }
                 },
                 | _ => return false,
             }
         }
-        true
+        classified
     }
 
     /// Begins expression statement `statement`. A statement expression's
