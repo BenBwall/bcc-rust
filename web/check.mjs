@@ -39,6 +39,12 @@ for (const key of ["indeterminate", "bounds"]) {
 const rejected = session.load("#include <stdio.h>\nint main(void) { return 0; }\n");
 assert.equal(rejected.status, "error", "Unsupported source must be rejected explicitly");
 assert(rejected.diagnostic?.message);
+for (const source of [
+  "int main(void) { int a[2] = {3, 7}; int *p = a; *p++; return a[0]; }",
+  "int main(void) { return later(); } int later(void) { return 7; }",
+]) {
+  assert.equal(session.load(source).status, "error", "Unsupported postfix nesting and undeclared calls must be rejected");
+}
 assert.equal(session.load("int main(void) { return 42; }\n").status, "ready", "A new program must recover after rejected source");
 assert.equal(execute("int main(void) { return 42; }\n").at(-1).returnValue.text, "42");
 const unicodeSource = "/* π 🧭 */ int main(void) { return 42; }\n";
