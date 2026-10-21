@@ -599,6 +599,42 @@ mod tests {
     }
 
     #[test]
+    fn folded_switch_regions_lower_only_the_selection_path() {
+        // Clang's CollectStatementsForCase skips every statement before the
+        // selected label, case-label ancestors included, and lowering jumps
+        // straight to the selection, so none of their conditions or
+        // declarations may be lowered.
+        assert_runs_like_clang(
+            "int printf(const char*,...); static int g=1; static int more(void){return 0;} static \
+             int h(void){return 4;} int a(void){switch(1){case 0:if(g){case 2:return 2;}return \
+             0;case 1:return 1;}return 3;} int b(void){int k=0;switch(1){case \
+             0:while(more()){case 2:k++;}case 1:k+=10;}return k;} int c(void){switch(1){case \
+             0:{static int s=1;if(s){case 2:return 2;}return 0;}case 1:return 1;}return 3;} int \
+             d(void){switch(1){case 0:{int y=h();case 2:return 2;}case 1:return 1;}return 3;} int \
+             e(void){switch(5){case 0:if(g){case 2:return 2;}}return 3;} int f(void){int \
+             r=0;switch(1){case 0:do{case 2:r=2;}while(more());case 1:r+=1;}return r;} int t(int \
+             r){switch(2){default:r=1;break;case 0:if(h()){case 7:r=7;}case 2:r+=2;}return r;} \
+             int u(int r){switch(1){case 1:r=1;break;case 0:if(h()){case 7:r=7;}}return r;} int \
+             main(void){printf(\"%d %d %d %d %d %d %d \
+             %d\\n\",a(),b(),c(),d(),e(),f(),t(0),u(0));return 0;}",
+        );
+        for body in [
+            "switch(1){case 0:if(h()){case 2:return 2;}case 1:return 0;}return 3;",
+            "switch(1){case 0:while(h()){case 2:;}case 1:return 0;}return 3;",
+            "switch(5){case 0:if(h()){case 2:return 2;}}return 0;",
+            "switch(1){case 0:{int y=h();case 2:return y;}case 1:return 0;}return 3;",
+            "int r=0;switch(2){default:r=1;break;case 0:if(h()){case 7:r=7;}case 2:r+=2;}return \
+             r-2;",
+            "int r=0;switch(1){case 1:r=1;break;case 0:if(h()){case 7:r=7;}}return r-1;",
+        ] {
+            assert_o0_static_emission(
+                &format!("static int h(void){{STATIC return a;}} int main(void){{{body}}}"),
+                false,
+            );
+        }
+    }
+
+    #[test]
     fn lowered_control_uses_the_same_fold_as_elision() {
         assert_runs_like_clang(
             "int printf(const char*,...); int f(void){if(__builtin_constant_p(\"abc\"))return \
