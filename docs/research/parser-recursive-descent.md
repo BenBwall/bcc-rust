@@ -151,3 +151,9 @@ malformed), documented in [parser-study-coverage.md](parser-study-coverage.md).
 
 See [parser-frame-audit.md](parser-frame-audit.md) for source-cost hypotheses,
 existing pooling/layout constraints, recovery costs, and normative C99 floors.
+
+Checkpoint: the first broad debug differential completed all 192 comparisons
+without crashes or inspection differences. The separate 150-case grammar corpus
+is exposing malformed-condition recovery differences; these remain under review.
+Linux RSS collection is being changed from inherited `getrusage` high-water marks
+to `/proc/self/status` `VmHWM`, outside the measured interval.
