@@ -121,6 +121,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
         let tree = context.tu_arena();
         Self {
+            #[cfg(feature = "parser-recursive-descent-study")]
+            study: super::recursive_descent::StudyState::default(),
             cursor: TokenCursor::new(upstream),
             arena,
             tree,

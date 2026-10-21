@@ -266,3 +266,10 @@ impl<'p> CompoundStatementFrame<'_, 'p> {
         }
     }
 }
+
+#[cfg(feature = "parser-recursive-descent-study")]
+impl CompoundStatementFrame<'_, '_> {
+    pub(in crate::translation_phases::parsing) fn study_function_body(&self) -> bool {
+        self.function_body
+    }
+}
