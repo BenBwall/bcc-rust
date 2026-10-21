@@ -633,26 +633,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// it is without the model of such calls. A bound that is not an
     /// integer literal, a `typeof` specifier and a typedef name of a
     /// variably modified or unknown type count.
-    /// C99: §6.7.5.2 paragraphs 2 and 4, p. 116; PDF p. 128; §6.8
-    /// paragraph 3, p. 131; PDF p. 143.
+    /// C99: §6.7.5.2 paragraphs 2 and 4, pp. 116-117; PDF pp. 128-129;
+    /// §6.8 paragraph 3, p. 131; PDF p. 143.
     ///
     /// The work stack holds the items still to be analyzed. The answer for
     /// each is kept with its position: the work below an item stays as it
-    /// is until the item is popped, so only items pushed since the last
-    /// question are examined, and a run of calls that do not return costs
-    /// time linear in the function.
+    /// is until the item is popped, so only the work above the lowest the
+    /// stack has been since the last question is examined
+    /// (`State::work_low`). Each block item's own answer is kept by
+    /// address, judged from the typedefs visible when it is first examined,
+    /// so the items of nested blocks are examined once, and a run of calls
+    /// that do not return costs time linear in the function.
     fn variably_modified_ahead(&mut self) -> bool {
-        let (start, mut ahead) = loop {
-            let Some(&(position, key, ahead)) = self.functions.emission.variably_modified.last()
-            else {
-                break (0, false);
-            };
-            if matches!(self.work.get(position), Some(&Work::BlockItem(item)) if item_key(item) == key)
-            {
-                break (position + 1, ahead);
-            }
-            _ = self.functions.emission.variably_modified.pop();
-        };
+        // The work below the lowest the stack has been since the last
+        // question is as it was then, and was examined then or before.
+        let start = self.functions.emission.work_low.min(self.work.len());
+        let cache = &mut self.functions.emission.variably_modified;
+        while cache
+            .last()
+            .is_some_and(|&(position, ..)| position >= start)
+        {
+            _ = cache.pop();
+        }
+        let mut ahead = cache.last().is_some_and(|&(position, key, ahead)| {
+            debug_assert!(
+                matches!(self.work.get(position), Some(&Work::BlockItem(item)) if item_key(item) == key),
+                "work below the low-water mark is unchanged"
+            );
+            ahead
+        });
+        self.functions.emission.work_low = self.work.len();
         for position in start..self.work.len() {
             if let Work::BlockItem(item) = self.work[position] {
                 ahead = ahead || self.item_may_be_variably_modified(item);
@@ -666,45 +676,59 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether block item `item` may declare something of a variably
-    /// modified type: see [`Self::variably_modified_ahead`].
-    fn item_may_be_variably_modified(&self, item: BlockItem<'tu>) -> bool {
+    /// modified type: see [`Self::variably_modified_ahead`]. Memoized for
+    /// each item it holds, in postorder.
+    fn item_may_be_variably_modified(&mut self, item: BlockItem<'tu>) -> bool {
+        // Each item, with whether the items of the block it holds are
+        // judged.
         let mut items = ArenaVec::new_in(self.scratch);
-        items.push(item);
-        while let Some(item) = items.pop() {
-            let mut statement = match item {
-                | BlockItem::Declaration(declaration) => {
-                    if self.declaration_may_be_variably_modified(declaration) {
-                        return true;
+        items.push((item, false));
+        while let Some((item, inner_judged)) = items.pop() {
+            let key = item_key(item);
+            if self
+                .functions
+                .emission
+                .variably_modified_items
+                .contains_key(&key)
+            {
+                continue;
+            }
+            let (declaration, block) = item_parts(item);
+            if inner_judged {
+                let mut ahead =
+                    declaration.is_some_and(|d| self.declaration_may_be_variably_modified(d));
+                if let Some(StatementType::Compound { items: inner }) = block.map(|b| b.kind) {
+                    for &inner in inner {
+                        ahead = ahead
+                            || self
+                                .functions
+                                .emission
+                                .variably_modified_items
+                                .get(&item_key(inner))
+                                .copied()
+                                .unwrap_or(true);
                     }
-                    continue;
-                },
-                | BlockItem::Statement(statement) => statement,
-                | BlockItem::FunctionDefinition(_) => continue,
-            };
-            loop {
-                match statement.kind {
-                    | StatementType::Label(_, child)
-                    | StatementType::Case(_, child)
-                    | StatementType::Default(child) => statement = child,
-                    | StatementType::CaseRange(range) => statement = range.statement,
-                    | StatementType::Attributed(attributed) => statement = attributed.statement,
-                    | StatementType::Compound { items: inner } => {
-                        for &inner in inner {
-                            items.push(inner);
-                        }
-                        break;
-                    },
-                    | StatementType::Declaration(declaration) => {
-                        if self.declaration_may_be_variably_modified(declaration) {
-                            return true;
-                        }
-                        break;
-                    },
-                    | _ => break,
+                }
+                _ = self
+                    .functions
+                    .emission
+                    .variably_modified_items
+                    .insert(key, ahead);
+            } else {
+                items.push((item, true));
+                if let Some(StatementType::Compound { items: inner }) = block.map(|b| b.kind) {
+                    for &inner in inner {
+                        items.push((inner, false));
+                    }
                 }
             }
         }
-        false
+        self.functions
+            .emission
+            .variably_modified_items
+            .get(&item_key(item))
+            .copied()
+            .unwrap_or(true)
     }
 
     /// Whether `declaration` may declare something of a variably modified
@@ -799,6 +823,30 @@ fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression
         expression = inner;
     }
     expression
+}
+
+/// The declaration block item `item` makes, or the block it holds, through
+/// labels and attributes.
+fn item_parts<'tu>(
+    item: BlockItem<'tu>,
+) -> (Option<&'tu Declaration<'tu>>, Option<&'tu Statement<'tu>>) {
+    let mut statement = match item {
+        | BlockItem::Declaration(declaration) => return (Some(declaration), None),
+        | BlockItem::Statement(statement) => statement,
+        | BlockItem::FunctionDefinition(_) => return (None, None),
+    };
+    loop {
+        match statement.kind {
+            | StatementType::Label(_, child)
+            | StatementType::Case(_, child)
+            | StatementType::Default(child) => statement = child,
+            | StatementType::CaseRange(range) => statement = range.statement,
+            | StatementType::Attributed(attributed) => statement = attributed.statement,
+            | StatementType::Compound { .. } => return (None, Some(statement)),
+            | StatementType::Declaration(declaration) => return (Some(declaration), None),
+            | _ => return (None, None),
+        }
+    }
 }
 
 /// The address of block item `item`'s syntax, which identifies it.

@@ -314,6 +314,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                   concern modules."
     )]
     fn step(&mut self, work: Work<'tu, 's>) {
+        self.functions.emission.work_popped(self.work.len());
         match work {
             | Work::Root(root) => match root {
                 | ExternalDeclaration::Declaration(d)

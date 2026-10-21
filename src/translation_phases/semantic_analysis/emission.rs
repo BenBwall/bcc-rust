@@ -144,41 +144,55 @@ pub(super) struct State<'tu, 's> {
     /// has seen: each one's position and address, and whether it or an
     /// item below it may declare something of a variably modified type.
     variably_modified:       ArenaVec<'s, (usize, usize, bool)>,
+    /// The lowest length the work stack has had since the last variably
+    /// modified lookahead, below which that lookahead's answers hold.
+    work_low:                usize,
+    /// Whether each block item a variably modified lookahead examined, or
+    /// an item inside it, may declare something of a variably modified
+    /// type, by address.
+    variably_modified_items: ArenaMap<'s, usize, bool>,
     /// The state [`State::orphan`] had where a call of a builtin that
     /// leaves its operands unemitted began, by the address of its callee.
     unevaluated_calls:       ArenaMap<'s, usize, Option<usize>>,
 }
 
 impl<'s> State<'_, 's> {
+    /// Notes that the work stack has `length` items after a pop.
+    pub(super) fn work_popped(&mut self, length: usize) {
+        self.work_low = self.work_low.min(length);
+    }
+
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            orphan:                None,
-            serial:                0,
-            open_statements:       0,
-            context_joins:         ArenaVec::new_in(scratch),
-            value_statements:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn_results:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn_fields:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            jmp_buf:               false,
-            sigjmp_buf:            false,
-            folds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            switch_after:          None,
-            holds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            switches:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            label_positions:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            walked:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            folded:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            depth_cut:             false,
-            refolds:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            weak_names:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            plan_covers:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            literal_units:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            variably_modified:     ArenaVec::new_in(scratch),
-            unevaluated_calls:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            orphan:                  None,
+            serial:                  0,
+            open_statements:         0,
+            context_joins:           ArenaVec::new_in(scratch),
+            value_statements:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn_results:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn_fields:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            jmp_buf:                 false,
+            sigjmp_buf:              false,
+            folds:                   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            switch_after:            None,
+            holds:                   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            switches:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            label_positions:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            walked:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            folded:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            depth_cut:               false,
+            refolds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            labeled_expressions:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            weak_names:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_initializers:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_aggregates:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            plan_covers:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            literal_units:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            variably_modified:       ArenaVec::new_in(scratch),
+            work_low:                0,
+            variably_modified_items: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            unevaluated_calls:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }
