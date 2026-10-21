@@ -28,7 +28,8 @@
 //! defined, and anywhere for one it emits after the whole unit. A value
 //! that is a whole result (`?:` operands, initializers) holds no address of
 //! an automatic, thread-local or `dllimport` object, which
-//! `CheckLValueConstantExpression` refuses.
+//! `CheckLValueConstantExpression` refuses, and a literal and an object
+//! compare distinct only where Clang's evaluator can tell.
 //! C99: §6.6 paragraphs 2-3, 6 and 10, pp. 95-96; PDF pp. 107-108;
 //! §6.5.13-§6.5.15, pp. 89-91; PDF pp. 101-103; §6.5.17 paragraph 2, p. 94;
 //! PDF p. 106.
@@ -145,7 +146,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// such as a comparison with null, any address still evaluates.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
     fn constant_result(&mut self, value: Value) -> bool {
-        let Value::Address(Some((base, _))) = value else {
+        let Value::Address(base, _) = value else {
             return true;
         };
         let Some(&data) = self.bindings.get(base) else {
@@ -291,7 +292,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let mut right = self.evaluate_value(right_expression, depth)?;
                 // An address's offset counts bytes, and a step elements of
                 // the pointer operand's type.
-                if let (Value::Address(Some(_)), Value::Integer(step)) = (left, right)
+                if let (Value::Address(..), Value::Integer(step)) = (left, right)
                     && matches!(
                         operator,
                         BinaryOperator::Addition | BinaryOperator::Subtraction
@@ -447,36 +448,39 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 Some(Value::Integer(Integer::int(i128::from(
                     operator == B::NotEqual,
                 )))),
-            // Distinct objects never compare equal; two literals may share
-            // storage, so Clang does not fold their comparison.
-            | (Value::String(..), Value::Address(Some(_)))
-            | (Value::Address(Some(_)), Value::String(..))
-                if matches!(operator, B::Equal | B::NotEqual) =>
+            // A literal and an object are distinct, unless Clang's evaluator
+            // cannot tell; two literals may share storage, so Clang does
+            // not fold their comparison.
+            | (
+                Value::String(literal, at) | Value::CastString(literal, at),
+                Value::Address(base, offset),
+            )
+            | (
+                Value::Address(base, offset),
+                Value::String(literal, at) | Value::CastString(literal, at),
+            ) if matches!(operator, B::Equal | B::NotEqual) => self
+                .distinct_from_string(literal, at, base, offset)
+                .then(|| Value::Integer(Integer::int(i128::from(operator == B::NotEqual)))),
+            | (Value::CastString(..), Value::Integer(zero))
+            | (Value::Integer(zero), Value::CastString(..))
+                if zero.value == 0 && matches!(operator, B::Equal | B::NotEqual) =>
                 Some(Value::Integer(Integer::int(i128::from(
                     operator == B::NotEqual,
                 )))),
             | (Value::Integer(left), Value::Integer(right)) =>
                 left.binary(operator, right).map(Value::Integer),
-            | (Value::Address(left), Value::Address(right))
-                if matches!(operator, B::Equal | B::NotEqual) =>
-            {
-                let equal = match (left, right) {
-                    | (Some((a, x)), Some((b, y))) if a == b => x == y,
-                    | (Some(_), Some(_)) | (None, None) => return None,
-                    // String literal addresses are not null either.
-                    | _ => false,
-                };
+            | (Value::Address(a, x), Value::Address(b, y))
+                if a == b && matches!(operator, B::Equal | B::NotEqual) =>
                 Some(Value::Integer(Integer::int(i128::from(
-                    equal == (operator == B::Equal),
-                ))))
-            },
-            | (Value::Address(_), Value::Integer(zero))
-            | (Value::Integer(zero), Value::Address(_))
+                    (x == y) == (operator == B::Equal),
+                )))),
+            | (Value::Address(..), Value::Integer(zero))
+            | (Value::Integer(zero), Value::Address(..))
                 if zero.value == 0 && matches!(operator, B::Equal | B::NotEqual) =>
                 Some(Value::Integer(Integer::int(i128::from(
                     operator == B::NotEqual,
                 )))),
-            | (Value::Address(Some((base, offset))), Value::Integer(step))
+            | (Value::Address(base, offset), Value::Integer(step))
                 if matches!(operator, B::Addition | B::Subtraction) =>
             {
                 let step = step.to_i128()?;
@@ -485,10 +489,45 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 } else {
                     offset.checked_sub(step)?
                 };
-                Some(Value::Address(Some((base, offset))))
+                Some(Value::Address(base, offset))
             },
             | _ => None,
         }
+    }
+
+    /// Whether Clang's evaluator decides that element `at` of string
+    /// literal `literal` and byte `offset` of entity `base` are distinct
+    /// addresses (`EvaluateComparisonBinaryOperator`). It cannot when one
+    /// is the start of its object and the other may be one past the end of
+    /// its own: a literal past its terminator, or an object of incomplete
+    /// type or at its size. Nor when the object is an array of unknown or
+    /// zero size (`isZeroSized`), whose type is that of its first
+    /// declaration.
+    /// C99: §6.5.9 paragraph 6, p. 87; PDF p. 99.
+    fn distinct_from_string(
+        &mut self,
+        literal: StringTokenType,
+        at: i128,
+        base: usize,
+        offset: i128,
+    ) -> bool {
+        let length = i128::from(self.string_length(literal));
+        if offset == 0 && at == length + 1 {
+            return false;
+        }
+        let data = self.bindings[base];
+        if data.kind == BindingKind::Function {
+            return true;
+        }
+        let ty = self.types.non_atomic(data.ty);
+        let complete = self.types.complete_object(ty);
+        let size = self.types.layout(ty).map(|layout| i128::from(layout.size));
+        if matches!(self.types.nodes[ty.index], TypeKind::Array(..))
+            && (!complete || size == Some(0))
+        {
+            return false;
+        }
+        !(at == 0 && (!complete || size.is_none_or(|size| size == offset)))
     }
 
     /// A cast of an evaluated operand to `expression`'s type: integers,
@@ -509,14 +548,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .map(|truth| Value::Integer(Integer::int(i128::from(truth)).cast(8, false))),
             | TypeKind::Pointer(_) => match value {
                 | Value::Integer(zero) if zero.value == 0 => Some(Value::Integer(zero)),
-                | Value::Address(address) => Some(Value::Address(address)),
+                | Value::Address(..) | Value::CastString(..) => Some(value),
                 // A conversion to a pointer to another type invalidates the
                 // evaluator's designator: the literal is no longer read
                 // through.
                 | Value::String(literal, offset) => Some(if self.string_pointer(literal, ty) {
                     Value::String(literal, offset)
                 } else {
-                    Value::Address(None)
+                    Value::CastString(literal, offset)
                 }),
                 | _ => None,
             },
@@ -532,7 +571,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ) => match value {
                 | Value::Floating(floating) => Some(Value::Floating(floating)),
                 | Value::Integer(_) | Value::Other => Some(Value::Other),
-                | Value::Address(_) | Value::String(..) => None,
+                | Value::Address(..) | Value::String(..) | Value::CastString(..) => None,
             },
             | _ => {
                 let (bits, signed) = self.integer_type(ty)?;
@@ -1100,7 +1139,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         {
             return None;
         }
-        Some(Value::Address(Some((self.entity_of(binding).0, 0))))
+        Some(Value::Address(self.entity_of(binding).0, 0))
     }
 
     /// Whether the entity of `binding` is weak for Clang's evaluator when
@@ -1128,10 +1167,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// The builtins Clang's evaluator folds that a condition may call:
     /// `__builtin_expect` takes its first operand, converted to `long`;
-    /// `__builtin_constant_p` is 1 for an operand that folds and 0 for one
-    /// with side effects; `__builtin_abs`, the count-bit and byte-swap
-    /// builtins compute their value; `strlen` and `__builtin_strlen` count
-    /// a string's elements.
+    /// `__builtin_constant_p` is 1 for an arithmetic operand that folds or
+    /// a pointer to the start of a string literal, and 0 for one with side
+    /// effects (`EvaluateBuiltinConstantP`); `__builtin_abs`, the count-bit and
+    /// byte-swap builtins compute their value; `strlen` and
+    /// `__builtin_strlen` count a string's elements.
     fn builtin_value(
         &mut self,
         callee: &'tu Expression<'tu>,
@@ -1154,11 +1194,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | BuiltinId::ConstantP => {
                 let operand = *arguments.first()?;
-                let constant = match self.evaluate_value(operand, depth) {
-                    | Some(Value::Address(Some(_))) | None => false,
-                    | Some(Value::String(_, offset)) => offset == 0,
-                    | Some(_) => true,
+                // Only an arithmetic or pointer operand may be constant,
+                // not a `void` or structure one.
+                let ty = self.types.non_atomic(self.expression_info(operand).ty);
+                let scalar = match self.types.nodes[ty.index] {
+                    | TypeKind::Scalar(Scalar::Void) => false,
+                    | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
+                    | _ => true,
                 };
+                let constant = scalar
+                    && match self.evaluate_value(operand, depth) {
+                        | Some(Value::Address(..)) | None => false,
+                        | Some(Value::String(_, offset) | Value::CastString(_, offset)) =>
+                            offset == 0,
+                        | Some(_) => true,
+                    };
                 if constant {
                     Some(Value::Integer(Integer::int(1)))
                 } else if self.has_side_effects(operand) {
@@ -1548,16 +1598,18 @@ pub(in crate::translation_phases::semantic_analysis) struct Memo<T> {
     cut:     Option<u32>,
     horizon: Option<usize>,
 }
+
 /// A value Clang's evaluator computed.
 #[derive(Clone, Copy)]
 pub(in crate::translation_phases::semantic_analysis) enum Value {
     Integer(Integer),
-    /// The address of an entity with a byte offset, or a non-null address
-    /// the evaluator cannot read through (`None`): a string literal cast to
-    /// another pointer type.
-    Address(Option<(usize, i128)>),
+    /// The address of an entity with a byte offset.
+    Address(usize, i128),
     /// A pointer to element `offset` of a string literal.
     String(StringTokenType, i128),
+    /// A pointer to element `offset` of a string literal converted to
+    /// another pointer type, which the evaluator no longer reads through.
+    CastString(StringTokenType, i128),
     Floating(Floating),
     /// A converted floating or a void value, which only matters as
     /// evaluated.
@@ -1569,7 +1621,7 @@ impl Value {
     fn truth(self) -> Option<bool> {
         match self {
             | Self::Integer(integer) => Some(integer.value != 0),
-            | Self::Address(_) | Self::String(..) => Some(true),
+            | Self::Address(..) | Self::String(..) | Self::CastString(..) => Some(true),
             | Self::Floating(floating) => Some(floating.truth()),
             | Self::Other => None,
         }
