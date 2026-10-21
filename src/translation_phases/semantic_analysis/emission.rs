@@ -73,6 +73,13 @@ pub(super) struct State<'tu, 's> {
     pub(super) orphan:       Option<usize>,
     /// The number of expression statements begun so far.
     pub(super) serial:       usize,
+    /// The number of expression statements begun and not yet ended.
+    open_statements:         usize,
+    /// The joins in `sizeof`, `alignof` and `typeof` operands of the
+    /// expression statements being analyzed, each with the number of its
+    /// statement and its sizeof and reference contexts, which tell once the
+    /// operands are analyzed whether code generation emits them.
+    context_joins:           ArenaVec<'s, (usize, Option<usize>, Option<usize>)>,
     /// The value statements of the statement expressions being analyzed,
     /// by address, which Clang emits even after a jump.
     value_statements:        ArenaMap<'s, usize, ()>,
@@ -147,6 +154,8 @@ impl<'s> State<'_, 's> {
         Self {
             orphan:                None,
             serial:                0,
+            open_statements:       0,
+            context_joins:         ArenaVec::new_in(scratch),
             value_statements:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             noreturn:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             noreturn_results:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),

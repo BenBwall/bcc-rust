@@ -175,12 +175,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Code generation emits only the selected operand of
                 // `__builtin_choose_expr`, which is known once both are
                 // analyzed; a call in either that does not return leaves
-                // the code after it emitted, as without the model.
+                // the code after it emitted, as without the model, and a
+                // join in either is kept.
                 if b.keyword
                     == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr
                 {
                     self.work
-                        .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                        .push(Work::FunctionWork(FunctionWork::RestoreUnjoinedOrphan(
                             self.functions.emission.orphan,
                         )));
                 }

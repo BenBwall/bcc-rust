@@ -23,12 +23,17 @@
 //! Each rule reads the expression's type, so it runs once the expression is
 //! analyzed.
 //!
-//! Only an evaluated, emitted expression counts: neither a `sizeof`,
-//! `alignof` or `typeof` operand nor an operand a folded condition skips.
-//! A statement expression's value statement is emitted even after a jump
-//! when the expression has a value, and keeps its block. A statement
-//! expression whose body ends skipped leaves a block without predecessors,
-//! but only when it is emitted itself, not in such an operand.
+//! Only an evaluated, emitted expression leaves a block without
+//! predecessors: neither one in a `sizeof`, `alignof` or `typeof` operand
+//! nor one in an operand a folded condition skips. A join in an operand
+//! that code generation may emit still counts, so the model never skips
+//! code for a join it cannot see: a variably modified `sizeof` or `typeof`
+//! operand, and an operand of `__builtin_constant_p` or the object-size
+//! builtins without side effects, are emitted. A statement expression's
+//! value statement is emitted even after a jump when the expression has a
+//! value, and keeps its block. A statement expression whose body ends
+//! skipped leaves a block without predecessors, but only when it is
+//! emitted itself, not in such an operand.
 //! C99: §6.8.3 paragraph 2, p. 132; PDF p. 144; §6.5.13-§6.5.15,
 //! pp. 89-91; PDF pp. 101-103; §6.5.5 paragraph 3, p. 82; PDF p. 94.
 //! C11: §6.5.16.2 paragraph 3, pp. 103-104; PDF pp. 121-122 (atomic
@@ -88,11 +93,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Follows the blocks code generation creates for expression `e`, once
     /// it is analyzed: an evaluated call that does not return leaves a block
     /// without predecessors, and an expression that joins its paths leaves
-    /// one with predecessors. The operands of a call of
-    /// `__builtin_constant_p`, `__builtin_object_size`,
-    /// `__builtin_dynamic_object_size` or `__builtin_classify_type` are not
-    /// emitted when they hold a call, so they leave the blocks as they were
-    /// when the call's callee, analyzed before them, ended.
+    /// one with predecessors. In a `sizeof`, `alignof` or `typeof` operand,
+    /// only a join counts (see the module map). The operands of a call of
+    /// `__builtin_constant_p`, `__builtin_object_size` or
+    /// `__builtin_dynamic_object_size` are not emitted when they have side
+    /// effects, as a call that does not return has, and those of
+    /// `__builtin_classify_type` never are, so they leave the blocks as they
+    /// were when the call's callee, analyzed before them, ended, unless they
+    /// may have joined paths.
     /// C99: §6.5.2.2 paragraph 10, p. 72; PDF p. 84.
     /// GNU extension: GCC manual, "Other Builtins" and "Object Size
     /// Checking".
@@ -100,10 +108,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         e: &'tu Expression<'tu>,
     ) {
-        if self.functions.dead
-            || self.functions.sizeof.is_some()
-            || self.functions.reference_context.is_some()
-        {
+        if self.functions.dead {
+            return;
+        }
+        if self.functions.sizeof.is_some() || self.functions.reference_context.is_some() {
+            // Whether the operand is evaluated is known once it is analyzed
+            // ([`Self::end_expression_statement`]).
+            if self.joins_paths(e) {
+                self.functions.emission.context_joins.push((
+                    self.functions.emission.serial,
+                    self.functions.sizeof,
+                    self.functions.reference_context,
+                ));
+            }
             return;
         }
         if let ExpressionType::Call {
@@ -111,9 +128,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ..
         } = e.kind
         {
-            let callee = std::ptr::from_ref(unparenthesized(function_expression)).addr();
-            if let Some(orphan) = self.functions.emission.unevaluated_calls.remove(&callee) {
-                self.functions.emission.orphan = orphan;
+            let callee = unparenthesized(function_expression);
+            let key = std::ptr::from_ref(callee).addr();
+            if let Some(before) = self.functions.emission.unevaluated_calls.remove(&key) {
+                let classify = self.expression_info(callee).binding.is_some_and(|binding| {
+                    self.bindings[binding].origin
+                        == BindingOrigin::Intrinsic(BuiltinId::ClassifyType)
+                });
+                let after = self.functions.emission.orphan;
+                self.functions.emission.orphan = if classify { before } else { after.and(before) };
             } else if self.call_does_not_return(function_expression) {
                 self.functions.emission.orphan = Some(self.functions.emission.serial);
             } else if self.joins_paths(e) {
@@ -447,6 +470,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) {
         let emission = &mut self.functions.emission;
         emission.serial += 1;
+        emission.open_statements += 1;
         let serial = emission.serial;
         let value = emission
             .value_statements
@@ -496,10 +520,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .is_some_and(|since| since >= serial)
                 {
                     self.functions.emission.orphan = None;
-                    if !self.variably_modified_ahead() {
+                    // A join in an operand that turned out evaluated, a
+                    // variably modified `sizeof` or `typeof` operand, may
+                    // have followed the call.
+                    let joined = self.functions.emission.context_joins.iter().any(
+                        |&(at, sizeof, context)| {
+                            at >= serial && self.context_evaluated(sizeof, context)
+                        },
+                    );
+                    if !joined && !self.variably_modified_ahead() {
                         self.functions.dead = true;
                     }
                 },
+        }
+        let emission = &mut self.functions.emission;
+        emission.open_statements -= 1;
+        if emission.open_statements == 0 {
+            emission.context_joins.clear();
         }
     }
 

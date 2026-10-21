@@ -460,6 +460,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
+            | FunctionWork::RestoreUnjoinedOrphan(orphan) =>
+                self.functions.emission.orphan = self.functions.emission.orphan.and(orphan),
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
             | FunctionWork::JoinArms => {
@@ -1673,25 +1675,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn has_generated_break(&self, target: StatementId) -> bool {
         self.functions.generated_breaks.iter().any(|jump| {
-            if jump.target != target {
+            jump.target == target && self.context_evaluated(jump.sizeof, jump.reference_context)
+        })
+    }
+
+    /// Whether code in sizeof context `sizeof` and reference context
+    /// `context`, both analyzed, is evaluated: neither they nor any context
+    /// around them leaves its operand unevaluated.
+    pub(super) fn context_evaluated(&self, sizeof: Option<usize>, context: Option<usize>) -> bool {
+        let mut sizeof = sizeof;
+        while let Some(index) = sizeof {
+            if self.sizeof_unevaluated(index) {
                 return false;
             }
-            let mut sizeof = jump.sizeof;
-            while let Some(index) = sizeof {
-                if self.sizeof_unevaluated(index) {
-                    return false;
-                }
-                sizeof = self.functions.sizeof_contexts[index].parent;
+            sizeof = self.functions.sizeof_contexts[index].parent;
+        }
+        let mut context = context;
+        while let Some(index) = context {
+            if self.reference_context_unevaluated(index) {
+                return false;
             }
-            let mut context = jump.reference_context;
-            while let Some(index) = context {
-                if self.reference_context_unevaluated(index) {
-                    return false;
-                }
-                context = self.functions.reference_contexts[index].parent;
-            }
-            true
-        })
+            context = self.functions.reference_contexts[index].parent;
+        }
+        true
     }
 
     /// Whether sizeof context `index` leaves its operand unevaluated: its
@@ -1958,6 +1964,9 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whether the code being analyzed is emitted into a block
     /// without predecessors ([`super::emission::State::orphan`]).
     RestoreOrphan(Option<usize>),
+    /// Restores that state after operands code generation may not emit,
+    /// unless they joined paths, which leaves a block with predecessors.
+    RestoreUnjoinedOrphan(Option<usize>),
     /// Restores the skipped state around the innermost switch.
     RestoreSwitchDead(bool),
     /// After a switch: code generation resumes with the code around it,
