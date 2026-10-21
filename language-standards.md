@@ -1540,7 +1540,11 @@ an evaluated use (a constant `sizeof` operand is no use), and one dropping
 `dllimport` drops it. Code generation exports what the declarations end
 exporting (an `/EXPORT` or `-export` linker directive) and imports, through
 `__imp_name`, what the unit's last evaluated reference in emitted code named
-imported; `dllexport` also retains MSVC inline bodies as described above.
+imported, or, when no emitted code references it, what its last evaluated
+reference anywhere named: lowering still emits some code Clang skips, such as
+the code after a call that does not return, and a reference there links only
+through the import it was written with. `dllexport` also retains MSVC inline
+bodies as described above.
 `noreturn` ends the code Clang emits after a call in an expression statement,
 which decides that last reference (`semantic-analysis.md`); `nothrow`,
 `deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
