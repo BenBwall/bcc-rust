@@ -1,5 +1,8 @@
 //! Bounded subset compilation. Blocks retain lexical scopes; loops emit jumps.
 //! C99: subset of §6.8-§6.9, pp. 131-144; PDF pp. 143-156.
+//! C99: §6.5.1 paragraph 2, p. 69; PDF p. 81 (declaration before use).
+//! C99: §6.5.2.4 paragraph 2, p. 75; PDF p. 87 and §6.5.3.1 paragraph 2,
+//! p. 78; PDF p. 90 (standalone increments; expression results are discarded).
 
 use super::{
     expressions::{
@@ -25,18 +28,20 @@ use super::{
 
 pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
     let mut parser = Parser {
-        tokens:      lexer::lex(source)?,
-        position:    0,
-        code:        Vec::new(),
-        expressions: Vec::new(),
-        symbols:     Vec::new(),
-        scope:       0,
-        nesting:     0,
-        calls:       Vec::new(),
+        tokens:         lexer::lex(source)?,
+        position:       0,
+        code:           Vec::new(),
+        expressions:    Vec::new(),
+        symbols:        Vec::new(),
+        scope:          0,
+        nesting:        0,
+        calls:          Vec::new(),
+        function_index: 0,
     };
     let mut functions: Vec<Function> = Vec::new();
     let mut total_code = 0;
     while !parser.at("") {
+        parser.function_index = functions.len();
         parser.expect("int")?;
         let name = parser.identifier()?;
         if functions.iter().any(|function| function.name == name.text) {
@@ -95,15 +100,25 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         name,
         arguments,
         range,
+        caller,
     } in &parser.calls
     {
-        let Some(function) = functions.iter().find(|function| function.name == *name) else {
+        let Some(index) = functions.iter().position(|function| function.name == *name) else {
             return Err(Diagnostic::new(
                 "unsupported",
                 *range,
                 "call to an undefined function; library functions are not supported",
             ));
         };
+        if index > *caller {
+            return Err(Diagnostic::new(
+                "unsupported",
+                *range,
+                "function must be declared before its call in C99; forward declarations are \
+                 outside this subset",
+            ));
+        }
+        let function = &functions[index];
         if function.parameters.len() != arguments.len() {
             return Err(Diagnostic::new(
                 "syntax",
@@ -129,14 +144,15 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
 }
 
 pub(super) struct Parser<'a> {
-    pub tokens:      Vec<Token<'a>>,
-    pub position:    usize,
-    pub code:        Vec<Instruction>,
-    pub expressions: Vec<Expr>,
-    pub symbols:     Vec<Symbol<'a>>,
-    pub scope:       usize,
-    pub nesting:     usize,
-    pub calls:       Vec<CallSite>,
+    pub tokens:         Vec<Token<'a>>,
+    pub position:       usize,
+    pub code:           Vec<Instruction>,
+    pub expressions:    Vec<Expr>,
+    pub symbols:        Vec<Symbol<'a>>,
+    pub scope:          usize,
+    pub nesting:        usize,
+    pub calls:          Vec<CallSite>,
+    pub function_index: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -395,6 +411,18 @@ impl<'a> Parser<'a> {
                 None
             }
         }) {
+            let operand = &self.expressions[expression];
+            if prefix.is_none()
+                && matches!(operand.kind, ExprKind::Unary("*", _))
+                && !operand.parenthesized
+            {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    range,
+                    "unparenthesized *p++ and *p-- contain nested side effects; use (*p)++ to \
+                     increment the pointed-to int",
+                ));
+            }
             self.emit_expression(expression, true)?;
             self.emit(Op::Increment(delta), range)?;
         } else {
@@ -587,4 +615,5 @@ pub(super) struct CallSite {
     pub name:      String,
     pub arguments: Vec<(Type, bool)>,
     pub range:     SourceRange,
+    pub caller:    usize,
 }

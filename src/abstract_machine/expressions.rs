@@ -97,7 +97,10 @@ impl Parser<'_> {
         }
         let mut value = if self.take("(") {
             let value = self.expression(0)?;
+            let closing = self.current().range;
             self.expect(")")?;
+            self.expressions[value].parenthesized = true;
+            self.expressions[value].range = combined(range, closing);
             value
         } else if text.as_bytes().first().is_some_and(u8::is_ascii_digit) {
             if text.len() > 1 && text.starts_with('0') {
@@ -149,6 +152,7 @@ impl Parser<'_> {
                     name: text.clone(),
                     arguments: types,
                     range,
+                    caller: self.function_index,
                 });
                 self.node(
                     ExprKind::Call(text, arguments),
@@ -216,6 +220,7 @@ impl Parser<'_> {
             call,
             range,
             height,
+            parenthesized: false,
         });
         Ok(index)
     }
@@ -309,11 +314,12 @@ impl Parser<'_> {
 
 #[derive(Debug, Clone)]
 pub(super) struct Expr {
-    pub kind:   ExprKind,
-    pub ty:     Type,
-    pub call:   bool,
-    pub range:  SourceRange,
-    pub height: usize,
+    pub kind:          ExprKind,
+    pub ty:            Type,
+    pub call:          bool,
+    pub range:         SourceRange,
+    pub height:        usize,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]
