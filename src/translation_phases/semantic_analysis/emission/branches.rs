@@ -101,9 +101,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return;
             };
             self.elide_branch_operand(omitted);
-            if let Some(&index) = self.expression_indices.get(&std::ptr::from_ref(e).addr()) {
-                self.expressions[index].branch_operand = Some(retained);
-            }
+            self.retain_branch_operand(e, retained);
         }
     }
 

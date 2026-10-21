@@ -95,7 +95,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         }
-        if let Some(operand) = info.branch_operand {
+        if let Some(operand) = self.unit.sema.branch_operand(expression) {
             let merge = self.draft.create_block(&[Type::I1]);
             self.tasks.push(Task::Merge {
                 merge,
@@ -833,7 +833,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         expression: &'tu Expression<'tu>,
     ) -> Result<Option<Folded<'tu>>, LoweringError> {
         use ExpressionType as E;
-        if let Some(operand) = self.info(expression)?.branch_operand {
+        if let Some(operand) = self.unit.sema.branch_operand(expression) {
             return Ok(Some(Folded::Live(operand)));
         }
         Ok(match expression.kind {
@@ -867,7 +867,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             !info.elided,
             "lowering reached a condition semantic analysis elided"
         );
-        if let Some(operand) = info.branch_operand {
+        if let Some(operand) = self.unit.sema.branch_operand(expression) {
             self.tasks.push(Task::Condition {
                 expression: operand,
                 then,
