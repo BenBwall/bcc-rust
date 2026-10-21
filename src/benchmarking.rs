@@ -22,6 +22,7 @@ mod input;
 
 // Compiler stages
 mod inspection;
+mod parser_study;
 mod prepared;
 mod preprocessing;
 mod semantic;
@@ -42,6 +43,11 @@ pub use inspection::{
 pub use measurements::{
     ArenaUsage,
     arena_usage,
+};
+pub use parser_study::{
+    StudyMeasurement,
+    StudyPrepared,
+    with_study_source,
 };
 pub use prepared::{
     PreparedParse,
