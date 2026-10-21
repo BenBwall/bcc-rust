@@ -198,7 +198,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | ExpressionType::Call {
                 function_expression,
                 arguments,
-            } => self.atomic_call_branches(function_expression, arguments.as_slice()),
+            } =>
+                self.atomic_call_branches(function_expression, arguments.as_slice())
+                    || self.fpclassify_branches(e, function_expression),
             | ExpressionType::Builtin(builtin)
                 if builtin.keyword == KeywordTokenType::BuiltinVaArg =>
                 !matches!(
@@ -363,6 +365,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|layout| layout.size.is_power_of_two() && layout.size <= 16)
     }
 
+    /// Whether a call of `function` is `__builtin_fpclassify`, whose code
+    /// generation branches over the classes and joins in `fpclassify_end`,
+    /// unless the call evaluates to a constant, which Clang emits instead.
+    /// C99: §7.12.3.1 paragraph 3, p. 216; PDF p. 228.
+    fn fpclassify_branches(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        function: &'tu Expression<'tu>,
+    ) -> bool {
+        self.expression_info(function)
+            .binding
+            .is_some_and(|binding| {
+                self.bindings[binding].origin == BindingOrigin::Intrinsic(BuiltinId::Fpclassify)
+            })
+            && !self.evaluatable(e)
+    }
+
     /// Whether the System V ABI passes a `va_arg` of type `ty` in registers,
     /// which Clang reads with a branch (`X86_64ABIInfo::EmitVAArg`): an
     /// integer, pointer, `float`, `double`, `__float128` or vector, a complex
@@ -381,10 +400,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         work.push((ty, 0));
         while let Some((ty, offset)) = work.pop() {
             let ty = self.types.non_atomic(ty);
+            // The ABI classifies a member by its type's natural alignment,
+            // whatever a typedef's `aligned` makes of its storage.
             let aligned = self
                 .types
-                .layout(ty)
-                .is_some_and(|layout| layout.align == 0 || offset % layout.align == 0);
+                .natural_alignment(ty)
+                .is_some_and(|align| align == 0 || offset % align == 0);
             match self.types.nodes[ty.index] {
                 | TypeKind::Scalar(
                     Scalar::LongDouble | Scalar::ComplexLongDouble | Scalar::Void,
