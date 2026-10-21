@@ -3,7 +3,8 @@ export const demos = {
   tour: {
     name: "objects.c",
     source: `int bump(int *value) {
-    *value = *value + 1;
+    int before = *value;
+    *value = before + 1;
     return *value;
 }
 
@@ -13,7 +14,8 @@ int main(void) {
     int *cursor = &values[0];
 
     for (int i = 0; i < 3; i = i + 1) {
-        total = total + bump(cursor);
+        int next = bump(cursor);
+        total = total + next;
         cursor = cursor + 1;
     }
 

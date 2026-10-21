@@ -58,6 +58,11 @@
   button.primary:hover:not(:disabled) { background: #b6f3de; color: #102a21; border-color: #b6f3de; }
   .transport button span:first-child { margin-right: 5px; font-size: 16px; }
   .small-button { min-height: 32px; padding: 3px 10px; font-size: 11px; }
+  .model-note { margin: -9px 0 22px; padding: 9px 13px; border: 1px solid var(--border); border-radius: 5px; font-size: 11px; color: var(--muted); }
+  .model-note summary { cursor: pointer; color: var(--amber); }
+  .model-note summary span { margin-left: 8px; color: var(--muted); }
+  .model-note p { margin-top: 8px; max-width: 110ch; }
+  .return-value { color: var(--accent); font-family: var(--mono); }
   .tag, .status-chip { display: inline-flex; align-items: center; padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; font: 10px/1.6 var(--mono); color: var(--muted); }
   .status-chip { color: var(--accent); background: #20372f; border-color: #395e50; }
   .status-chip[data-status="undefined_behavior"], .status-chip[data-status="error"] { color: var(--red); background: #3c2627; border-color: #76413e; }
@@ -76,8 +81,8 @@
   .source-tabs button[aria-pressed="true"] { border-bottom-color: var(--accent); color: var(--accent); }
   .source-tabs > span { margin-left: auto; font-size: 10px; text-align: right; }
   .code-view { flex: 1; background: #12171e; min-height: 390px; max-height: 620px; overflow: auto; padding: 16px 0; font: 12px/1.9 var(--mono); tab-size: 4; }
-  .code-line { display: flex; width: max-content; min-width: 100%; min-height: 23px; white-space: pre; border-left: 3px solid transparent; }
-  .line-number { flex: 0 0 48px; border: 0; border-radius: 0; background: transparent; padding: 0 14px 0 7px; min-height: 23px; font: 11px/23px var(--mono); color: #8794a6; text-align: right; }
+  .code-line { display: flex; width: max-content; min-width: 100%; min-height: 24px; line-height: 24px; white-space: pre; border-left: 3px solid transparent; }
+  .line-number { flex: 0 0 48px; border: 0; border-radius: 0; background: transparent; padding: 0 14px 0 7px; min-height: 24px; font: 11px/24px var(--mono); color: #8794a6; text-align: right; }
   .line-number:hover:not(:disabled) { background: #27392f; color: var(--accent); border: 0; }
   .line-code { padding-right: 22px; }
   .code-line.is-current { background: #23372f; border-left-color: var(--accent); }

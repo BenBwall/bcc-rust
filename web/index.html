@@ -18,7 +18,8 @@
     </header>
 
     <main>
-      <div class="intro"><div><p class="eyebrow">INSIDE THE EXECUTION</p><h2>Every object. Every effect.</h2><p>Follow the C abstract machine, one evaluation at a time.</p></div><a class="quiet-link" href="./README.md">Build &amp; limitations <span aria-hidden="true">↗</span></a></div>
+      <div class="intro"><div><p class="eyebrow">INSIDE THE EXECUTION</p><h2>Every object. Every effect.</h2><p>Explore a bounded C subset, one Rust engine operation at a time.</p></div><a class="quiet-link" href="./README.md">Build &amp; limitations <span aria-hidden="true">↗</span></a></div>
+      <details class="model-note"><summary>Prototype model <span>Independent C subset · 32-bit int · left-to-right evaluation</span></summary><p>This Rust evaluator is independent of bcc’s full C frontend. It supports local integers, pointers, fixed arrays, named calls, and basic control flow. It has no preprocessing, globals, library I/O, or allocation. Nested side effects are rejected. Stores are atomic; deferred effects and full C99 sequencing checks are not implemented. A completed run does not establish that a program is free of undefined behavior.</p></details>
 
       <section id="engine-notice" class="notice" aria-labelledby="notice-title" hidden>
         <div class="notice-icon" aria-hidden="true">!</div><div><h2 id="notice-title">Rust / Wasm engine unavailable</h2><p id="notice-message"></p><p>From the repository root, build the local engine and serve this directory:</p><pre><code>sh web/build.sh
@@ -46,7 +47,7 @@ python3 -m http.server 8080 --bind 127.0.0.1 --directory web</code></pre><p>Open
             <div class="source-tabs" role="group" aria-label="Source view"><button id="view-source" type="button" aria-pressed="true">Execution</button><button id="edit-source" type="button" aria-pressed="false">Edit source</button><span id="source-location" class="mono muted">No current evaluation</span></div>
             <div id="code-view" class="code-view" aria-label="Source code; select a line to run to it"></div>
             <div id="editor-view" class="editor-view" hidden><label class="sr-only" for="source-editor">C source code</label><textarea id="source-editor" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-describedby="editor-help"></textarea><div class="editor-footer"><span id="editor-help">Load edits to restart execution.</span><button id="load-source" type="button" class="primary" disabled>Load program</button></div></div>
-            <div class="source-footer"><span id="cursor-label">Select a line number to set a target.</span><button id="run-to-cursor" type="button" class="small-button" disabled>Run to line <span id="cursor-line">—</span> <span aria-hidden="true">→</span></button></div>
+            <div class="source-footer"><span id="cursor-label">Highlight: next operation. Select a target line.</span><button id="run-to-cursor" type="button" class="small-button" disabled>Run to line <span id="cursor-line">—</span> <span aria-hidden="true">→</span></button></div>
           </section>
 
           <div class="machine-panels">
@@ -56,7 +57,7 @@ python3 -m http.server 8080 --bind 127.0.0.1 --directory web</code></pre><p>Open
           </div>
         </div>
 
-        <section class="effects-panel" aria-labelledby="effects-title"><div class="panel-heading"><div><span class="panel-index">04</span><h2 id="effects-title">Evaluation &amp; sequencing</h2></div><span class="tag" id="sequence-state">Awaiting engine</span></div><div class="effects-content"><div class="current-event"><p class="eyebrow">CURRENT EVALUATION</p><p id="event-description">Load the Rust engine to begin stepping.</p><p id="sequence-explanation" class="muted">Side effects and sequence points are reported by the engine.</p></div><div class="pending-effects"><h3>Pending effects <span id="effects-count" class="count">0</span></h3><ul id="effects-list"><li class="muted">No execution state loaded.</li></ul></div></div></section>
+        <section class="effects-panel" aria-labelledby="effects-title"><div class="panel-heading"><div><span class="panel-index">04</span><h2 id="effects-title">Evaluation &amp; sequencing</h2></div><span class="tag" id="sequence-state">Awaiting engine</span></div><div class="effects-content"><div class="current-event"><p class="eyebrow">LAST COMPLETED OPERATION</p><p id="event-description">Load the Rust engine to begin stepping.</p><p id="sequence-explanation" class="muted">Load a program to inspect the prototype’s sequencing model.</p><p id="return-value" class="return-value" hidden></p></div><div class="pending-effects"><h3>Pending effects <span id="effects-count" class="count">0</span></h3><ul id="effects-list"><li class="muted">No execution state loaded.</li></ul></div></div></section>
       </section>
 
       <section id="diagnostic" class="diagnostic" aria-labelledby="diagnostic-title" hidden><div class="diagnostic-label" id="diagnostic-kind">EXECUTION STOPPED</div><h2 id="diagnostic-title"></h2><p id="diagnostic-message"></p><pre id="diagnostic-detail" hidden></pre><p id="diagnostic-citation" class="citation"></p></section>
