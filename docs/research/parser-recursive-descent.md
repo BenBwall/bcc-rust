@@ -267,3 +267,11 @@ samples completed. One declaration/hybrid sample had large scheduling noise
 a small ordering difference there. The 64 MiB worker still overflows at 16,384
 blocks in debug. Growing and hybrid pass the exact and combined C99 floor probes
 on 1 MiB; raw recursion and limits 256/512 abort on those block cases.
+
+Final release differential checks: 196 broad comparisons and 16 large mixture
+comparisons are identical. All 108 valid/extension grammar cases match in all
+three candidate modes. Ten of 42 malformed grammar cases retain recovery
+structure/provenance differences (30 candidate comparisons); none crashes.
+The nine diagnostic/marker fixes reduced the original 19 differing cases to 10.
+Raw observations and input hashes are archived under
+`docs/research/parser-recursive-descent-data/`.
