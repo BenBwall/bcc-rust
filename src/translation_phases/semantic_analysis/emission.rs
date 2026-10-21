@@ -82,7 +82,9 @@ pub(super) struct State<'tu, 's> {
     /// Microsoft, or Clang's builtin type), which `__typeof__` and typedefs
     /// carry, rather than to the declaration (`_Noreturn`, `[[noreturn]]`).
     pub(super) noreturn:     ArenaMap<'s, usize, bool>,
-    /// Functions whose result is a pointer to a `noreturn` function type.
+    /// Bindings whose function type's result is a pointer to a `noreturn`
+    /// function type: a function, a pointer to one, an array of such
+    /// pointers, or a typedef of one.
     noreturn_results:        ArenaMap<'s, usize, ()>,
     /// Members whose function type does not return, by tag and name.
     noreturn_fields:         ArenaMap<'s, (usize, StringCacheId), ()>,
