@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=7)
     parser.add_argument("--modes", nargs="+", default=["machine", "recursive", "growing", "hybrid:16", "limited:256"])
     parser.add_argument("--files", nargs="+")
+    parser.add_argument("--manifest", type=Path, help="use the grammar manifest's exact case list")
     parser.add_argument("--stack", type=int)
     args = parser.parse_args()
     args.binary = args.binary.resolve()
@@ -50,6 +51,8 @@ def main():
         scratch.mkdir(exist_ok=True)
     if args.files:
         files = [args.inputs / name for name in args.files]
+    elif args.manifest:
+        files = [args.inputs / case["name"] for case in json.loads(args.manifest.read_text())["cases"]]
     elif args.action == "bench":
         files = [args.inputs / name for name in ["lua-supported.i", "expression-mix.c", "statement-mix.c", "declaration-mix.c", "bytecode.i", "mandel.i", "parentheses-256.c", "unary-256.c", "assignment-256.c", "conditional-256.c", "statements-256.c", "blocks-256.c", "declarator-256.c", "initializer-256.c", "chain-10000.c", "initializer-list-10000.c"]]
     elif args.action == "diff":
@@ -126,6 +129,10 @@ def main():
                 if values:
                     cv = statistics.pstdev(values) / statistics.mean(values) * 100
                     print(source.name, mode, len(values), f"{min(values):.4f}", f"{statistics.median(values):.4f}", f"{cv:.2f}", flush=True)
+    elif args.action == "diff":
+        mismatches = [row for row in rows if row.get("identical") is not True]
+        print(f"Compared {len(rows)} runs; {len(mismatches)} mismatches or failed runs", flush=True)
+        print("Affected inputs: " + ", ".join(sorted({row["input"] for row in mismatches})), flush=True)
 
 
 if __name__ == "__main__":

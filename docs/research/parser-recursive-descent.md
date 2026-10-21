@@ -197,3 +197,8 @@ The exact 127-total-block C99 probe (`blocks-126.c`) also aborts in recursive
 mode on a 1 MiB debug stack. This is Linux evidence with an explicitly sized
 worker, not a Windows measurement. Portability, unwind behavior and stacker
 support on Windows still need a native-platform validation before deployment.
+
+The grammar run can now use `--manifest .scratch/parser-study/grammar/manifest.json`
+with `--inputs .scratch/parser-study/grammar`. The runner reports mismatches
+explicitly and retains their inspections. A completed study data-collection
+command may contain mismatches; its exit status alone is not a correctness gate.
