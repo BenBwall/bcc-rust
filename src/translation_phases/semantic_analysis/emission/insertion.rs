@@ -465,13 +465,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// variably modified or unknown type count.
     /// C99: §6.7.5.2 paragraphs 2 and 4, p. 116; PDF p. 128; §6.8
     /// paragraph 3, p. 131; PDF p. 143.
-    fn variably_modified_ahead(&self) -> bool {
-        let mut items = ArenaVec::new_in(self.scratch);
-        for work in &self.work {
-            if let Work::BlockItem(item) = *work {
-                items.push(item);
+    ///
+    /// The work stack holds the items still to be analyzed. The answer for
+    /// each is kept with its position: the work below an item stays as it
+    /// is until the item is popped, so only items pushed since the last
+    /// question are examined, and a run of calls that do not return costs
+    /// time linear in the function.
+    fn variably_modified_ahead(&mut self) -> bool {
+        let (start, mut ahead) = loop {
+            let Some(&(position, key, ahead)) = self.functions.emission.variably_modified.last()
+            else {
+                break (0, false);
+            };
+            if matches!(self.work.get(position), Some(&Work::BlockItem(item)) if item_key(item) == key)
+            {
+                break (position + 1, ahead);
+            }
+            _ = self.functions.emission.variably_modified.pop();
+        };
+        for position in start..self.work.len() {
+            if let Work::BlockItem(item) = self.work[position] {
+                ahead = ahead || self.item_may_be_variably_modified(item);
+                self.functions
+                    .emission
+                    .variably_modified
+                    .push((position, item_key(item), ahead));
             }
         }
+        ahead
+    }
+
+    /// Whether block item `item` may declare something of a variably
+    /// modified type: see [`Self::variably_modified_ahead`].
+    fn item_may_be_variably_modified(&self, item: BlockItem<'tu>) -> bool {
+        let mut items = ArenaVec::new_in(self.scratch);
+        items.push(item);
         while let Some(item) = items.pop() {
             let mut statement = match item {
                 | BlockItem::Declaration(declaration) => {
@@ -593,6 +621,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .value_statements
                 .insert(std::ptr::from_ref(last).addr(), ());
         }
+    }
+}
+
+/// The address of block item `item`'s syntax, which identifies it.
+fn item_key(item: BlockItem<'_>) -> usize {
+    match item {
+        | BlockItem::Declaration(declaration) => std::ptr::from_ref(declaration).addr(),
+        | BlockItem::Statement(statement) => std::ptr::from_ref(statement).addr(),
+        | BlockItem::FunctionDefinition(definition) => std::ptr::from_ref(definition).addr(),
     }
 }
 

@@ -57,6 +57,7 @@ use crate::{
     util::{
         bump::{
             ArenaMap,
+            ArenaVec,
             Bump,
         },
         string_cache::StringCacheId,
@@ -118,6 +119,10 @@ pub(super) struct State<'tu, 's> {
     /// The initializers of `const` non-volatile arrays and structures, by
     /// binding, whose retained plans Clang's evaluator may read.
     constant_aggregates:     ArenaMap<'s, usize, &'tu Initializer<'tu>>,
+    /// The block items on the work stack that a variably modified lookahead
+    /// has seen: each one's position and address, and whether it or an
+    /// item below it may declare something of a variably modified type.
+    variably_modified:       ArenaVec<'s, (usize, usize, bool)>,
 }
 
 impl<'s> State<'_, 's> {
@@ -142,6 +147,7 @@ impl<'s> State<'_, 's> {
             labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            variably_modified:     ArenaVec::new_in(scratch),
         }
     }
 }
