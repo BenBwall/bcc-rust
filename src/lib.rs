@@ -98,6 +98,8 @@ pub use benchmarking::{
     BenchmarkInput,
     ParseBenchmarkSummary,
     PreparedParse,
+    StudyMeasurement,
+    StudyPrepared,
     arena_usage,
     lex,
     parse,
@@ -110,6 +112,7 @@ pub use benchmarking::{
     sema,
     sema_source,
     with_prepared_parse,
+    with_study_source,
 };
 pub use cli::{
     CompileStep,
