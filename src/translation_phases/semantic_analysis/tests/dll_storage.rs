@@ -1365,3 +1365,116 @@ fn second_pr_review_forms_fix_generated_import_state() {
         }
     }
 }
+
+/// The forms PR #117's third review found decided differently from Clang
+/// 23 (`nm -u` on both Windows targets): a `return x` after the redeclaration
+/// without `dllimport` keeps the import only when it is skipped. A weak
+/// name applies to a body Clang emits where it is defined only from the
+/// declaration or `#pragma weak` before its end, a block-scope one
+/// included, and to a deferred body wherever it is; `sizeof` reads only
+/// its operand's type. A literal is not distinct from an object of unknown
+/// size, nor from an object's start when one past its end;
+/// `__builtin_constant_p` is not 1 for a `void` operand or a literal's
+/// element past its first. A block-scope static's initializer is emitted
+/// where Clang visits its declaration, even after a call that does not
+/// return. A typedef that may be variably modified counts wherever its
+/// name is used.
+#[test]
+fn third_pr_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
+                            int x; __attribute__((noreturn)) void die(void); int c; ";
+    for (source, imported) in [
+        (
+            "const int k = 0; int h(void) { if (k) return x; return 0; }\n#pragma weak k\n",
+            true,
+        ),
+        (
+            "const int k = 0; static int h(void) { if (k) return x; return 0; } int p(void) { \
+             return h(); }\n#pragma weak k\n",
+            false,
+        ),
+        (
+            "extern int w; static int h(void) { if (!&w) return x; return 0; } int p(void) { \
+             return h(); } int u(void) { extern int w __attribute__((weak)); return 0; }",
+            false,
+        ),
+        (
+            "extern int w; int h(void) { if (!&w) return x; return 0; } int u(void) { extern int \
+             w __attribute__((weak)); return 0; }",
+            true,
+        ),
+        (
+            "extern int w; int h(void) { if (!&w) return x; extern int w __attribute__((weak)); \
+             return 0; }",
+            false,
+        ),
+        (
+            "extern int w __attribute__((weak)); int h(void) { if (sizeof(w) == 4) return 0; \
+             return x; }",
+            true,
+        ),
+        (
+            "int h(void) { if (sizeof(__builtin_constant_p(c)) == 4) return 0; return x; }",
+            true,
+        ),
+        (
+            "extern char ua[]; int h(void) { if (ua == \"a\") return x; return 0; }",
+            false,
+        ),
+        (
+            "char oc[4]; int h(void) { if (\"abc\" + 4 == oc) return x; return 0; }",
+            false,
+        ),
+        (
+            "char oc[4]; int h(void) { if (\"abc\" == oc) return x; return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { if (!__builtin_constant_p((void)0)) return x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { if (!__builtin_constant_p((int *)(\"ab\" + 1))) return x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { if (!__builtin_constant_p((int *)\"ab\")) return x; return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { die(); static int *p = &x; return *p; }",
+            false,
+        ),
+        (
+            "int h(void) { return 0; { static int *p = &x; return *p; } }",
+            false,
+        ),
+        (
+            "int h(void) { die(); if (c) { static int *p = &x; return *p; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { if (0) { static int *p = &x; return *p; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: break; { static int *p = &x; return *p; } } \
+             return 0; }",
+            true,
+        ),
+        (
+            "typedef int T; int h(void) { die(); typedef int T[c]; die(); { T v; (void)v; return \
+             x; } }",
+            false,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}

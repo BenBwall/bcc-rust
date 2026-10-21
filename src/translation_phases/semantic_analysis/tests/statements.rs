@@ -843,6 +843,77 @@ fn unused_static_functions_follow_their_warning_group() {
     }
 }
 
+/// The emission model's queries stay linear on inputs that made them
+/// quadratic during PR #117's reviews: `strlen` of a long constant array,
+/// many reads of a large constant table, nested blocks that each begin
+/// with a call that does not return, and nested assignments and Microsoft
+/// call arguments after such a call, which code generation emits in
+/// another order.
+#[test]
+fn emission_model_queries_stay_linear() {
+    let length = 64_000;
+    let size = 20_000;
+    let depth = 16_000;
+    let mut table = format!("static const int t[{size}] = {{");
+    for index in 0..size {
+        write!(table, "{},", index % 7).unwrap();
+    }
+    table.push_str("}; int f(void) { int r = 0; ");
+    for index in 0..size {
+        write!(table, "if (t[{index}]) r++; ").unwrap();
+    }
+    table.push_str("return r; }");
+    let mut blocks = String::from("__attribute__((noreturn)) void die(void); void f(void) { ");
+    for index in 0..depth {
+        write!(blocks, "l{index}: {{ die(); ").unwrap();
+    }
+    blocks.push_str(&"}".repeat(depth + 1));
+    let assignment = format!(
+        "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} = 1; }}",
+        "a[".repeat(depth),
+        " = 1]".repeat(depth)
+    );
+    let compound = format!(
+        "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} += 1; }}",
+        "a[".repeat(depth),
+        " += 1]".repeat(depth)
+    );
+    let arguments = format!(
+        "void abort(void); int g(int, int); void f(void) {{ abort(), {}0{}; }}",
+        "g(".repeat(depth),
+        ", 0)".repeat(depth)
+    );
+    let msvc = crate::configuration::CompilerConfiguration::default()
+        .with_target(crate::target::Target::WindowsMsvc);
+    for (source, configuration) in [
+        (
+            format!(
+                "static const char s[] = \"{}\"; int f(void) {{ if (__builtin_strlen(s) == 0) \
+                 return 1; return 0; }}",
+                "a".repeat(length)
+            ),
+            None,
+        ),
+        (table, None),
+        (blocks, None),
+        (assignment, None),
+        (compound, None),
+        (arguments, Some(msvc)),
+    ] {
+        let start = std::time::Instant::now();
+        match configuration {
+            | Some(configuration) => with_configuration(&source, configuration, |_, _| {}),
+            | None => with_source(&source, |_, _| {}),
+        }
+        assert!(
+            start.elapsed().as_secs() < 15,
+            "{:?}: {}",
+            start.elapsed(),
+            &source[..80]
+        );
+    }
+}
+
 /// The fold evaluator recurses only as deep as keeps it within a 1 MiB
 /// stack, the default reserve of a Windows program's main thread, even
 /// unoptimized: through operands, `const` arrays read element by element
