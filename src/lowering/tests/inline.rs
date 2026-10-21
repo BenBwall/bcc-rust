@@ -869,6 +869,11 @@ fn always_inline_bodies_follow_clang_creation_order() {
 /// `always_inline` functions f, g and h call one another in a cycle, makes
 /// lowering create h first: whether it references h where Clang does.
 fn h_first(probe: &str, config: CompilerConfiguration) -> bool {
+    h_first_after("", probe, config)
+}
+
+/// [`h_first`] with the external declarations `extra` after f, g and h.
+fn h_first_after(extra: &str, probe: &str, config: CompilerConfiguration) -> bool {
     let source = format!(
         "int c; int other(void); __attribute__((noreturn)) void die(void); _Noreturn void \
          stop(void); void exit(int); void _exit(int); void (*fp)(void) __attribute__((noreturn)); \
@@ -878,7 +883,7 @@ fn h_first(probe: &str, config: CompilerConfiguration) -> bool {
          int h(int); inline __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - \
          1) : 1; }} inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x - 1) \
          : 1; }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : \
-         1; }} int probe(void) {{ {probe} return 0; }} int main(void) {{ return f(6); }}"
+         1; }} {extra} int probe(void) {{ {probe} return 0; }} int main(void) {{ return f(6); }}"
     );
     let text = lower_with(&source, config).unwrap_or_else(|error| panic!("{error:?}\n{probe}"));
     let position = |name: &str| {
@@ -1225,6 +1230,265 @@ fn always_inline_order_ignores_statement_expressions_code_generation_skips() {
         ("(void)(c ? ({ return 0; 1; }) : 0); h(0);", true),
     ] {
         assert_eq!(h_first(probe, gnu), emitted, "{probe}");
+    }
+}
+
+/// The forms PR #117's first review found counted differently from Clang,
+/// each checked against Clang 23's `-O0 -Xclang -disable-llvm-passes`
+/// module. A weak `const` object is never read, nor sema's GNU fold of it
+/// trusted; a floating initializer converts to its object's type, as
+/// `__builtin_expect`'s operand converts to `long`; addresses compare in
+/// bytes; an initializer holding an automatic object's address is no
+/// constant. A `noreturn` function pointer type named by a typedef belongs
+/// below the declarator's function derivations, and a written attribute to
+/// the derivation nearest the name, or after a `*` to its pointee. The
+/// operands of `__builtin_constant_p`, the object-size builtins,
+/// `__builtin_classify_type` and both of `__builtin_choose_expr` end
+/// nothing; `__builtin_fpclassify` and `va_arg` of a packed structure whose
+/// member a typedef aligns join paths. A case after a tentative `default`
+/// replaces it, and a parameter or redeclaration carries `noreturn`.
+#[test]
+fn always_inline_order_follows_the_first_pr_review_forms() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let c11 = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (extra, probe, config, emitted) in [
+        (
+            "const int wk __attribute__((weak)) = 0;",
+            "if (wk) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 0;",
+            "if (wk + 1 == 1) ; else h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 1;",
+            "switch (wk) { case 0: h(0); break; case 1: break; }",
+            c99,
+            true,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 1;",
+            "switch (wk) { case 0: h(0); break; case 1: break; }",
+            gnu,
+            true,
+        ),
+        ("", "const int k = 0.5; if (!k) h(0);", c99, true),
+        ("", "if (!__builtin_expect(0.5, 1)) h(0);", c99, true),
+        (
+            "",
+            "if ((char *)&c + 4 == (char *)(&c + 1)) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "if ((char *)&c + 1 == (char *)(&c + 1)) h(0);",
+            c99,
+            false,
+        ),
+        ("", "int y; int *const p = &y; if (!p) h(0);", c99, true),
+        (
+            "",
+            "int y; const struct { int *p; int a; } s = { &y, 0 }; if (s.a) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "static int y; int *const p = &y; if (!p) h(0);",
+            c99,
+            false,
+        ),
+        (
+            "",
+            "const double d = 1.0; if (!(unsigned __int128)d) h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*gp)(void);",
+            "gp(); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*gp)(void);",
+            "gp()(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*ga[1])(void);",
+            "ga[0](); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); struct m { NP (*m)(void); } sm;",
+            "sm.m(); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP np;",
+            "__typeof__(np) (*q)(void) = 0; q(); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); typedef NP G(void); G getnp;",
+            "getnp()(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP (*p)(void)) { p(); \
+             return h(0); }",
+            "",
+            c99,
+            true,
+        ),
+        (
+            "void plain(void); void (*getfp2(void))(void) __attribute__((noreturn));",
+            "__typeof__(getfp2()) q = plain; q(); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "void (*getfp2(void))(void) __attribute__((noreturn));",
+            "getfp2(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "__attribute__((noreturn)) void (*getfp4(void))(void);",
+            "getfp4(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "void (* __attribute__((noreturn)) getp(void))(void);",
+            "getp(); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void (* __attribute__((noreturn)) getp(void))(void);",
+            "getp()(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_constant_p(idie()); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_object_size((idie(), (char *)0), 0); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_dynamic_object_size((idie(), (char *)0), 0); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_classify_type(idie()); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "",
+            "__builtin_choose_expr(0, die(), (void)0); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "",
+            "double d = c; die(), (void)__builtin_fpclassify(0, 1, 2, 3, 4, d); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef char C4 __attribute__((aligned(4))); struct __attribute__((packed)) T { char \
+             c; C4 d; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct T); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "",
+            "switch (2) { default: h(0); break; case 2: break; }",
+            c99,
+            false,
+        ),
+        (
+            "",
+            "switch (2) { default: h(0); case 2: other(); break; }",
+            c99,
+            false,
+        ),
+        (
+            "",
+            "switch (2) { default: break; case 2: return 0; } h(0);",
+            c99,
+            false,
+        ),
+        (
+            "_Noreturn void d9(void); void d9(void) { for (;;); }",
+            "d9(); h(0);",
+            c11,
+            false,
+        ),
+        (
+            "void d8(void); __attribute__((noreturn)) void d8(void);",
+            "d8(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP p) { p(); return h(0); \
+             }",
+            "",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP p[1]) { p[0](); return \
+             h(0); }",
+            "",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP p); int pr(NP p) { \
+             p(); return h(0); }",
+            "",
+            c99,
+            false,
+        ),
+        (
+            "int pr(void (*p)(void) __attribute__((noreturn))) { p(); return h(0); }",
+            "",
+            c99,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            h_first_after(extra, probe, config),
+            emitted,
+            "{extra} {probe}"
+        );
     }
 }
 
