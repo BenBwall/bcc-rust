@@ -80,21 +80,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether a call through `callee` does not return: a direct call of a
     /// function declared `noreturn` in any spelling, of a library function
     /// Clang marks, or of `__builtin_unreachable` or `__builtin_abort`,
-    /// through casts too (the call then still names the function); or a
-    /// call whose callee's function type is `noreturn`.
+    /// through casts to pointer types too (the call then still names the
+    /// function); or a call whose callee's function type is `noreturn`. A
+    /// cast to an integer may lose the address, and `*` of a pointer to a
+    /// pointer loads one, so the call through them names no function.
     pub(super) fn call_does_not_return(&mut self, callee: &'tu Expression<'tu>) -> bool {
         let mut designator = callee;
-        while let ExpressionType::Parenthesized { expression }
-        | ExpressionType::Unary {
-            operator: UnaryOperator::Indirection | UnaryOperator::AddressOf,
-            operand_expression: expression,
-        }
-        | ExpressionType::Cast {
-            operand_expression: expression,
-            ..
-        } = designator.kind
-        {
-            designator = expression;
+        loop {
+            designator = match designator.kind {
+                | ExpressionType::Parenthesized { expression }
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::AddressOf,
+                    operand_expression: expression,
+                } => expression,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Indirection,
+                    operand_expression,
+                } if self.designates_function(operand_expression) => operand_expression,
+                | ExpressionType::Cast {
+                    operand_expression, ..
+                } if matches!(
+                    self.types.nodes[self.expression_info(designator).ty.index],
+                    TypeKind::Pointer(_)
+                ) =>
+                    operand_expression,
+                | _ => break,
+            };
         }
         if matches!(designator.kind, ExpressionType::Identifier(_))
             && let Some(binding) = self.expression_info(designator).binding
@@ -114,6 +125,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         self.noreturn_type(callee, 0)
+    }
+
+    /// Whether `expression` designates a function or points to one, so
+    /// that `*` of it names the same function.
+    fn designates_function(&self, expression: &'tu Expression<'tu>) -> bool {
+        let ty = self.types.non_atomic(self.expression_info(expression).ty);
+        match self.types.nodes[ty.index] {
+            | TypeKind::Function { .. } => true,
+            | TypeKind::Pointer(target) => matches!(
+                self.types.nodes[self.types.non_atomic(target).index],
+                TypeKind::Function { .. }
+            ),
+            | _ => false,
+        }
     }
 
     /// Whether the function type that `expression` designates or points to
