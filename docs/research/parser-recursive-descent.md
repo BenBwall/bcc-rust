@@ -73,8 +73,10 @@ Seven subprocess samples per input/mode rotate their order each round. Reported
 central values are medians; minima and population CVs are retained in
 [timing.tsv](parser-recursive-descent-data/timing.tsv), with every raw sample in
 JSON. This is a custom isolated harness, not a Criterion confidence estimate.
-Instruction/cache/branch counts come from one Callgrind simulation per case;
-the production Lua control is repeated twice. Hardware cycles are unavailable.
+Instruction/cache/branch counts come from one Callgrind simulation per case,
+with two additional repetitions of each study mode on Lua. Two attempted
+feature-disabled production controls failed in Valgrind as described below.
+Hardware cycles are unavailable.
 
 Run all commands from:
 
@@ -107,13 +109,18 @@ setsid nohup sh -c 'sh scripts/parser_study_collect.sh native > .scratch/parser-
 ```
 
 The scripts contain the exact feature sets, files and options for every main
-batch. Supplemental final checks were:
+batch. The default differential batch now also includes the combined-floor
+fixture, so rerunning it produces 200 comparisons; the archived 196 comparisons
+and separate four floor comparisons cover the same inputs. Supplemental final
+checks were:
 
 ```sh
 python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-debug --inputs .scratch/parser-study/grammar --manifest .scratch/parser-study/grammar/manifest.json --modes machine recursive growing hybrid:16 --output .scratch/parser-study/final-grammar-debug.json
 python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-release --modes machine recursive growing hybrid:16 --files c99-floors.c --output .scratch/parser-study/final-floors-diff.json
 # Here the runner's label "baseline" denotes the 1 GiB profiling binary.
 python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-release --baseline-binary .scratch/parser-study/study-profile --modes machine baseline --files lua-supported.i extensions.c malformed.c parentheses-256.c blocks-256.c --output .scratch/parser-study/final-profile-region-diff.json
+python3 scripts/parser_study_profile.py --binary .scratch/parser-study/study-profile --files lua-supported.i --modes machine recursive growing hybrid:16 --repeats 2 --output .scratch/parser-study/final-profile-repeat.json
+python3 scripts/parser_study_profile.py --binary .scratch/parser-study/alignment-profile --files alignment-cache.c alignment-nested-1024.c --modes machine --output .scratch/parser-study/final-profile-alignment-verify.json
 ```
 
 ### Inputs
@@ -191,9 +198,20 @@ Valgrind 3.26 rejects the production 100 GiB arena reservation with `EINVAL`.
 Only the profiling binaries enable `parser-study-small-regions` (1 GiB per
 region); native timing/RSS/capacity uses 100 GiB. A cross-binary inspection check
 matches native and small-region output on Lua, extensions, malformed input and
-deep expression/block cases. The profiling model uses 32 KiB/8-way/64-byte
-L1 instruction and data caches and a 64 MiB direct-mapped last-level cache.
-These model events must not be presented as physical processor misses.
+deep expression/block cases. Both attempts to profile the feature-disabled
+production control terminated with SIGILL: Valgrind cannot decode the native
+AMD SSE4a `EXTRQ` instruction (`66 0f 78 c0 18 00`). The
+[disassembly](parser-recursive-descent-data/sse4a-proof.log) and
+[failure log](parser-recursive-descent-data/production-valgrind-failure.log)
+are archived; no partial counts from those attempts are used. Consequently
+the model comparisons below use the feature-matched study machine and candidates;
+the separate production native timings remain valid. The profiling model uses
+32 KiB/8-way/64-byte L1 instruction and data caches and a 64 MiB direct-mapped
+last-level cache.
+These model events must not be presented as physical processor misses. The two
+additional release-Lua repetitions have identical event totals within each mode;
+compared with the original run, instruction counts remain identical and branch
+miss counts differ by at most three events.
 
 The exact phase boundary is a non-inlined function:
 
@@ -217,8 +235,10 @@ Clean-Lua **simulated** event totals (M = million, K = thousand):
 | debug | hybrid:16 | 1049.538 | 77.988 | 3.218 | 12839.7 | 2207.3 | 445.2 |
 
 Additional inputs and exact events are in
-[events.tsv](parser-recursive-descent-data/events.tsv). The release recursive
-parser executes 44.4% fewer model instructions than the study machine, while
+[events.tsv](parser-recursive-descent-data/events.tsv). Release and debug Lua
+self-cost annotations are retained alongside the raw JSON, with out-of-line
+call counts in [calls.tsv](parser-recursive-descent-data/calls.tsv). The release
+recursive parser executes 44.4% fewer model instructions than the study machine, while
 L1 data misses increase 9.3%. Last-level misses are nearly unchanged: AST and
 provenance storage still have to be written. This is principally a control and
 bookkeeping reduction, not evidence of universally better cache behavior.
@@ -339,9 +359,9 @@ prove equivalent semantics for every frame/node/provenance limit.
   selected subtree. Precedence-bounded expression frames retain operator
   ownership. It passes both stress grids and C99 probes; sampled stack span in
   the combined-floor debug case is 61,424 bytes, versus growing's per-segment
-  span near 956 KiB. Its Lua median costs 9.12% over raw recursion in release,
-  while retaining a 30.2% advantage over production. The model instruction cost
-  is 15.51% above raw recursion, reflecting 2,390 Lua fallback entries.
+  span of 956,336 bytes (934 KiB). Its Lua median costs 9.12% over raw recursion
+  in release, while retaining a 30.2% advantage over production. The model
+  instruction cost is 15.50% above raw recursion, reflecting 2,390 Lua fallback entries.
 
 Growth-heavy parsing on a 1 MiB worker, **without** stack sampling, seven rotating
 samples. Values are median parser ms / process peak RSS MiB:
@@ -415,7 +435,11 @@ The ordinary declaration control has identical scratch. Whole-process memory
 savings are much smaller than scratch percentages: Lua RSS falls about 0.15 MiB.
 Timing CVs in this later shared-load batch are 10-40%, and the no-alignment
 control also shifts. The medians above are observations, not proof of a speedup.
-Use the model counter results below to distinguish copy reduction from noise.
+The model instruction count falls from 433,669,573 to 433,419,461 on the
+50K-declaration case (250,112 instructions, 0.058%), and from 191,337,613 to
+191,323,402 at depth 1,024 (14,211 instructions, 0.007%). A repeat of the reuse
+measurements reproduces those totals. This supports a small copy/bookkeeping
+reduction, not the large speedups suggested by the noisy medians.
 
 Full syntax/provenance checks pass on the 50K-declaration case, alignment depths
 16/128 and Lua. At depth 1,024, both unchanged-machine and reuse variants were
@@ -432,7 +456,22 @@ make the machine faster.
 
 ## Validation and remaining owner decisions
 
-Final validation/counter status will be filled from the completed build bundle.
+The final wrapped build/check bundle completed successfully (`EXIT 0`):
+
+- `cargo test --all-targets`: 2,304 library tests, three additional integration
+  tests and 254 main integration tests passed; nine tests were ignored.
+- Allocation-count integration tests: 31 passed.
+- Focused recursive-parser tests: six passed.
+- Strict Clippy passed for default, `benchmarking-internals`, the study feature,
+  and all study/alignment/profiling features together.
+- Nightly rustfmt, Python syntax, shell syntax and `git diff --check` passed.
+
+[validation.json](parser-recursive-descent-data/validation.json) records the
+bundle revision, log hash and exact test result lines. Expected raw-recursion
+stack-overflow subprocesses are retained in the stack tables. The unresolved
+results are the ten malformed recovery cases, two deep inspection OS kills,
+and two unavailable production Valgrind controls; none is reported as a pass.
+Hardware cycles and native Windows behavior remain unmeasured.
 
 The architectural choice is whether a roughly 30% real-input parser speed gain
 justifies maintaining recursive and iterative grammar paths and closing the

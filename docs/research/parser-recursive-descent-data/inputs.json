@@ -424,6 +424,46 @@
     "sha256": "152dd25d7514653abe244861fb411b4ab4565845926a3271ef2308e57ea669bc",
     "origin": "generated depth=4096"
   },
+  "parentheses-16000.c": {
+    "bytes": 32023,
+    "sha256": "eaf2075723ecb6039f316a216049e70af3e9d2edf44bb371f9ad4893cb34266f",
+    "origin": "generated depth=16000"
+  },
+  "unary-16000.c": {
+    "bytes": 32023,
+    "sha256": "846576f1ba672ed807a6b7b6148bf8f802ecf37724ac13f952d399a747b80472",
+    "origin": "generated depth=16000"
+  },
+  "assignment-16000.c": {
+    "bytes": 32024,
+    "sha256": "2912a8a4b2a38e665b51e4d6df50da78bc04d92fa6630559b613068db23dc19c",
+    "origin": "generated depth=16000"
+  },
+  "conditional-16000.c": {
+    "bytes": 64024,
+    "sha256": "eebc0e20a572148ead46ca0e3a685f1e8c54defaaf5251be62da0427ff9283be",
+    "origin": "generated depth=16000"
+  },
+  "statements-16000.c": {
+    "bytes": 80034,
+    "sha256": "e4967132fc00d7df4977884d02f43764c72181105b4874125845f41457b9eb52",
+    "origin": "generated depth=16000"
+  },
+  "blocks-16000.c": {
+    "bytes": 32029,
+    "sha256": "ca519126c8a8f09e7bd6597cfdb3e877d763c99f2c2ea9c0578f91e491956500",
+    "origin": "generated depth=16000"
+  },
+  "declarator-16000.c": {
+    "bytes": 32007,
+    "sha256": "7494c022f823798a4b66a580032c5cfdab98d68d3968eaf02715c8b1ae76b53b",
+    "origin": "generated depth=16000"
+  },
+  "initializer-16000.c": {
+    "bytes": 32011,
+    "sha256": "b7d3634be6590e12eea3fee210229a6c495fbe60f474d8fa228c115ad8f0ae36",
+    "origin": "generated depth=16000"
+  },
   "parentheses-16384.c": {
     "bytes": 32791,
     "sha256": "393d95ccd800ccbb854d6e2ae5e995107d730a6306739d483636e81eec73e9ab",
@@ -463,6 +503,46 @@
     "bytes": 32779,
     "sha256": "7c0509cc6317864255761515c6c155ffc2766cefbef7851ac7ac9c358d371ac1",
     "origin": "generated depth=16384"
+  },
+  "parentheses-16500.c": {
+    "bytes": 33023,
+    "sha256": "4ea0b76d740ac4e8a1b39db248e30480aa2a8c2e7c678c6395b3451f2758ac95",
+    "origin": "generated depth=16500"
+  },
+  "unary-16500.c": {
+    "bytes": 33023,
+    "sha256": "959e0794e383c69a15fb552290a4dab42cbf3b8fdb16c3029065a50405f40fda",
+    "origin": "generated depth=16500"
+  },
+  "assignment-16500.c": {
+    "bytes": 33024,
+    "sha256": "56d50a09eeb07517479e69071b8c0c25459c8e12d36c8a33219ba3c87dad44e2",
+    "origin": "generated depth=16500"
+  },
+  "conditional-16500.c": {
+    "bytes": 66024,
+    "sha256": "f202644e0189ae5576ff17b1804c8512051da09530ffb368a5664ad5a1b3152e",
+    "origin": "generated depth=16500"
+  },
+  "statements-16500.c": {
+    "bytes": 82534,
+    "sha256": "39f6b843030c540ec79808ba0318d8a5503029a044434747a32d9d063fc4be7c",
+    "origin": "generated depth=16500"
+  },
+  "blocks-16500.c": {
+    "bytes": 33029,
+    "sha256": "9b70e9dbb36cd666380880c3e727c9fd609b7d2b0ae1eb0eb02c649c905d6f2b",
+    "origin": "generated depth=16500"
+  },
+  "declarator-16500.c": {
+    "bytes": 33007,
+    "sha256": "40c8411281858d5aed613253b83e0ecb4c95b379c4e742b5ed91f1bf053b06b8",
+    "origin": "generated depth=16500"
+  },
+  "initializer-16500.c": {
+    "bytes": 33011,
+    "sha256": "b82e81f98785198871554ff56ce68420d254ba0523f64fc91bb02a01f4fb486d",
+    "origin": "generated depth=16500"
   },
   "chain-1000.c": {
     "bytes": 2022,

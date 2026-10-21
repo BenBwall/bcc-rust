@@ -450,5 +450,6 @@ For Callgrind, both comparison arms must use the same 1 GiB
 change only `parser-study-leak-alignment`. Report simulated instructions and
 cache/branch events actually collected, normalized per token where useful.
 Retain default 100 GiB regions for the separate native timing/RSS comparison.
-Results are pending; this document does not claim a measured speedup or byte
-delta.
+The [completed study](parser-recursive-descent.md#cheap-frame-machine-optimization)
+records 242,544 bytes less Lua scratch and a small modeled instruction reduction.
+Shared-host timing did not establish a speedup; the feature remains opt-in.
