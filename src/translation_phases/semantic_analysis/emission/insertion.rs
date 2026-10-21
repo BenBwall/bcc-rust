@@ -88,8 +88,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Follows the blocks code generation creates for expression `e`, once
     /// it is analyzed: an evaluated call that does not return leaves a block
     /// without predecessors, and an expression that joins its paths leaves
-    /// one with predecessors.
+    /// one with predecessors. The operands of a call of
+    /// `__builtin_constant_p`, `__builtin_object_size`,
+    /// `__builtin_dynamic_object_size` or `__builtin_classify_type` are not
+    /// emitted when they hold a call, so they leave the blocks as they were
+    /// when the call's callee, analyzed before them, ended.
     /// C99: §6.5.2.2 paragraph 10, p. 72; PDF p. 84.
+    /// GNU extension: GCC manual, "Other Builtins" and "Object Size
+    /// Checking".
     pub(in crate::translation_phases::semantic_analysis) fn expression_emitted(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -104,9 +110,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             function_expression,
             ..
         } = e.kind
-            && self.call_does_not_return(function_expression)
         {
-            self.functions.emission.orphan = Some(self.functions.emission.serial);
+            let callee = std::ptr::from_ref(unparenthesized(function_expression)).addr();
+            if let Some(orphan) = self.functions.emission.unevaluated_calls.remove(&callee) {
+                self.functions.emission.orphan = orphan;
+            } else if self.call_does_not_return(function_expression) {
+                self.functions.emission.orphan = Some(self.functions.emission.serial);
+            } else if self.joins_paths(e) {
+                self.functions.emission.orphan = None;
+            }
+        } else if matches!(e.kind, ExpressionType::Identifier(_))
+            && self.expression_info(e).binding.is_some_and(|binding| {
+                matches!(
+                    self.bindings[binding].origin,
+                    BindingOrigin::Intrinsic(
+                        BuiltinId::ConstantP
+                            | BuiltinId::ObjectSize
+                            | BuiltinId::DynamicObjectSize
+                            | BuiltinId::ClassifyType
+                    )
+                )
+            })
+        {
+            _ = self
+                .functions
+                .emission
+                .unevaluated_calls
+                .insert(std::ptr::from_ref(e).addr(), self.functions.emission.orphan);
         } else if self.joins_paths(e) {
             self.functions.emission.orphan = None;
         }
@@ -168,7 +198,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | ExpressionType::Call {
                 function_expression,
                 arguments,
-            } => self.atomic_call_branches(function_expression, arguments.as_slice()),
+            } =>
+                self.atomic_call_branches(function_expression, arguments.as_slice())
+                    || self.fpclassify_branches(e, function_expression),
             | ExpressionType::Builtin(builtin)
                 if builtin.keyword == KeywordTokenType::BuiltinVaArg =>
                 !matches!(
@@ -333,6 +365,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|layout| layout.size.is_power_of_two() && layout.size <= 16)
     }
 
+    /// Whether a call of `function` is `__builtin_fpclassify`, whose code
+    /// generation branches over the classes and joins in `fpclassify_end`,
+    /// unless the call evaluates to a constant, which Clang emits instead.
+    /// C99: §7.12.3.1 paragraph 3, p. 216; PDF p. 228.
+    fn fpclassify_branches(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        function: &'tu Expression<'tu>,
+    ) -> bool {
+        self.expression_info(function)
+            .binding
+            .is_some_and(|binding| {
+                self.bindings[binding].origin == BindingOrigin::Intrinsic(BuiltinId::Fpclassify)
+            })
+            && !self.evaluatable(e)
+    }
+
     /// Whether the System V ABI passes a `va_arg` of type `ty` in registers,
     /// which Clang reads with a branch (`X86_64ABIInfo::EmitVAArg`): an
     /// integer, pointer, `float`, `double`, `__float128` or vector, a complex
@@ -351,10 +400,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         work.push((ty, 0));
         while let Some((ty, offset)) = work.pop() {
             let ty = self.types.non_atomic(ty);
+            // The ABI classifies a member by its type's natural alignment,
+            // whatever a typedef's `aligned` makes of its storage.
             let aligned = self
                 .types
-                .layout(ty)
-                .is_some_and(|layout| layout.align == 0 || offset % layout.align == 0);
+                .natural_alignment(ty)
+                .is_some_and(|align| align == 0 || offset % align == 0);
             match self.types.nodes[ty.index] {
                 | TypeKind::Scalar(
                     Scalar::LongDouble | Scalar::ComplexLongDouble | Scalar::Void,
@@ -465,13 +516,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// variably modified or unknown type count.
     /// C99: §6.7.5.2 paragraphs 2 and 4, p. 116; PDF p. 128; §6.8
     /// paragraph 3, p. 131; PDF p. 143.
-    fn variably_modified_ahead(&self) -> bool {
-        let mut items = ArenaVec::new_in(self.scratch);
-        for work in &self.work {
-            if let Work::BlockItem(item) = *work {
-                items.push(item);
+    ///
+    /// The work stack holds the items still to be analyzed. The answer for
+    /// each is kept with its position: the work below an item stays as it
+    /// is until the item is popped, so only items pushed since the last
+    /// question are examined, and a run of calls that do not return costs
+    /// time linear in the function.
+    fn variably_modified_ahead(&mut self) -> bool {
+        let (start, mut ahead) = loop {
+            let Some(&(position, key, ahead)) = self.functions.emission.variably_modified.last()
+            else {
+                break (0, false);
+            };
+            if matches!(self.work.get(position), Some(&Work::BlockItem(item)) if item_key(item) == key)
+            {
+                break (position + 1, ahead);
+            }
+            _ = self.functions.emission.variably_modified.pop();
+        };
+        for position in start..self.work.len() {
+            if let Work::BlockItem(item) = self.work[position] {
+                ahead = ahead || self.item_may_be_variably_modified(item);
+                self.functions
+                    .emission
+                    .variably_modified
+                    .push((position, item_key(item), ahead));
             }
         }
+        ahead
+    }
+
+    /// Whether block item `item` may declare something of a variably
+    /// modified type: see [`Self::variably_modified_ahead`].
+    fn item_may_be_variably_modified(&self, item: BlockItem<'tu>) -> bool {
+        let mut items = ArenaVec::new_in(self.scratch);
+        items.push(item);
         while let Some(item) = items.pop() {
             let mut statement = match item {
                 | BlockItem::Declaration(declaration) => {
@@ -593,6 +672,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .value_statements
                 .insert(std::ptr::from_ref(last).addr(), ());
         }
+    }
+}
+
+fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    while let ExpressionType::Parenthesized { expression: inner } = expression.kind {
+        expression = inner;
+    }
+    expression
+}
+
+/// The address of block item `item`'s syntax, which identifies it.
+fn item_key(item: BlockItem<'_>) -> usize {
+    match item {
+        | BlockItem::Declaration(declaration) => std::ptr::from_ref(declaration).addr(),
+        | BlockItem::Statement(statement) => std::ptr::from_ref(statement).addr(),
+        | BlockItem::FunctionDefinition(definition) => std::ptr::from_ref(definition).addr(),
     }
 }
 

@@ -1966,7 +1966,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// body, and an internal or
     /// Microsoft discardable inline body that neither GNU `used` nor a
     /// reference from emitted code keeps, as Clang defers such definitions
-    /// until their first use.
+    /// until their first use. An entity with no such reference, which
+    /// Clang never references, takes the last evaluated reference's
+    /// choice: lowering still emits some code Clang skips, after a call
+    /// that does not return and in a folded switch's unselected
+    /// statements, and a reference there must name the import it was
+    /// written with to link.
     pub(super) fn finish_dll_references(&mut self, symbols: &super::facts::SymbolFacts<'tu>) {
         let evaluated = self.functions.evaluated_imports;
         let mut kinds = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
@@ -1994,6 +1999,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     changed |= emitted.insert(entity, ()).is_none();
                 }
             }
+        }
+        // Any reference decides when none in emitted code does.
+        for &(_, binding, import, _) in evaluated {
+            self.dll_referenced(binding, import);
         }
         for &(owner, binding, import, dead) in evaluated {
             if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {

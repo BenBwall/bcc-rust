@@ -58,6 +58,7 @@ use crate::{
     util::{
         bump::{
             ArenaMap,
+            ArenaVec,
             Bump,
         },
         string_cache::StringCacheId,
@@ -83,7 +84,9 @@ pub(super) struct State<'tu, 's> {
     /// Microsoft, or Clang's builtin type), which `__typeof__` and typedefs
     /// carry, rather than to the declaration (`_Noreturn`, `[[noreturn]]`).
     pub(super) noreturn: ArenaMap<'s, usize, bool>,
-    /// Functions whose result is a pointer to a `noreturn` function type.
+    /// Bindings whose function type's result is a pointer to a `noreturn`
+    /// function type: a function, a pointer to one, an array of such
+    /// pointers, or a typedef of one.
     noreturn_results: ArenaMap<'s, usize, ()>,
     /// Members whose function type does not return, by tag and name.
     noreturn_fields: ArenaMap<'s, (usize, StringCacheId), ()>,
@@ -108,14 +111,22 @@ pub(super) struct State<'tu, 's> {
     folded: ArenaMap<'s, usize, Option<folding::Value>>,
     /// Whether an expression holds a label, by address.
     labeled_expressions: ArenaMap<'s, usize, bool>,
-    /// Whether an expression calls `__builtin_constant_p`, by address.
-    constant_p: ArenaMap<'s, usize, bool>,
+    /// Whether Clang's evaluator may fold an expression differently from
+    /// semantic analysis, by address.
+    refolds: ArenaMap<'s, usize, bool>,
     /// The initializers of `const` non-volatile objects, which Clang's
     /// evaluator may read.
     constant_initializers: ArenaMap<'s, usize, &'tu Expression<'tu>>,
     /// The initializers of `const` non-volatile arrays and structures, by
     /// binding, whose retained plans Clang's evaluator may read.
     constant_aggregates: ArenaMap<'s, usize, &'tu Initializer<'tu>>,
+    /// The block items on the work stack that a variably modified lookahead
+    /// has seen: each one's position and address, and whether it or an
+    /// item below it may declare something of a variably modified type.
+    variably_modified: ArenaVec<'s, (usize, usize, bool)>,
+    /// The state [`State::orphan`] had where a call of a builtin that
+    /// leaves its operands unemitted began, by the address of its callee.
+    unevaluated_calls: ArenaMap<'s, usize, Option<usize>>,
 }
 
 impl<'s> State<'_, 's> {
@@ -136,10 +147,12 @@ impl<'s> State<'_, 's> {
             label_positions:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             walked:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             folded:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            constant_p:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            refolds:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            variably_modified:     ArenaVec::new_in(scratch),
+            unevaluated_calls:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

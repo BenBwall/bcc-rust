@@ -1184,3 +1184,65 @@ fn aliases_and_initializers_root_generated_dll_references() {
         assert_eq!(facts(&source, Target::WindowsMsvc, "x").0, None, "{source}");
     }
 }
+
+/// The forms PR #117's first review found, against Clang 23 on both
+/// Windows ABIs at -O0: a weak `const` object's value is never read, and a
+/// `noreturn` type named by a typedef belongs below the declarator's
+/// function derivations, so these references are emitted and drop the
+/// import. Lowering still emits the code after a call that does not
+/// return and a folded switch's unselected statements, which Clang skips;
+/// when every reference is there, as in a static function only such code
+/// calls, they keep the import they were written with, or the object they
+/// name would not link.
+#[test]
+fn first_pr_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    for (source, imported) in [
+        (
+            "const int wk __attribute__((weak)) = 1; int h(void) { switch (wk) { case 1: break; \
+             default: return x; } return 0; }",
+            false,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 0; int h(void) { if (wk) return x; return 0; }",
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*gp)(void); int h(void) { \
+             gp(); return x; }",
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int h(NP p) { p(); return x; }",
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+    for source in [
+        "__declspec(dllimport) extern int x; __attribute__((noreturn)) void die(void); int \
+         h(void) { die(); return x; } extern int x;",
+        "__declspec(dllimport) extern int x; int h(void) { switch (0) { case 1: return x; \
+         default: break; } return 0; } extern int x;",
+        "__declspec(dllimport) extern int x; int h(void) { if (\"a\"[0] == 98) return x; return \
+         0; } extern int x;",
+        "__declspec(dllimport) extern int x; __attribute__((noreturn)) void die(void); static int \
+         s(void) { return x; } int h(void) { die(); return s(); } extern int x;",
+    ] {
+        for target in WINDOWS {
+            assert_eq!(
+                facts(source, target, "x").0,
+                Some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}

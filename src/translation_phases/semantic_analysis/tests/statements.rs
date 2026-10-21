@@ -533,6 +533,34 @@ fn gnu_statement_forms_keep_their_scopes_and_targets() {
     );
 }
 
+/// A case label in a statement expression of a type name, which the label
+/// walk of a folded switch does not record, is rejected after a tentative
+/// `default` as anywhere else (PR #117 review).
+#[test]
+fn folded_switch_rejects_a_case_label_in_a_type_name() {
+    for source in [
+        "void t(void) { switch (1) { default: break; case 2: { __typeof__(({ case 1: ; 0; })) x = \
+         0; (void)x; } } }",
+        "void t(void) { switch (1) { default: break; case 2: (void)sizeof(int[({ case 1: ; 1; \
+         })]); } }",
+    ] {
+        assert!(
+            kinds(source).contains(&SemanticErrorKind::SwitchIntoStatementExpression),
+            "{source}"
+        );
+    }
+}
+
+/// Whether a call does not return is decided without native recursion
+/// through nested `__typeof__` operands and casts (PR #117 review).
+#[test]
+fn noreturn_types_have_no_native_stack_limit() {
+    let operand = format!("{}p{}", "(__typeof__(".repeat(10_000), "))0".repeat(10_000));
+    clean(&format!(
+        "void (*p)(void); void t(void) {{ __typeof__({operand}) x = 0; (void)x; ({operand})(); }}"
+    ));
+}
+
 #[test]
 fn statement_analysis_has_no_native_stack_limit() {
     for prefix in ["if(1)", "while(1)", "{"] {

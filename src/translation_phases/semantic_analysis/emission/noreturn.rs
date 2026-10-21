@@ -8,7 +8,13 @@
 //! `__typeof__`, pointers, arrays, members and return types carry, and which
 //! a conditional keeps only when both operands have them. `_Noreturn` and
 //! standard `[[noreturn]]` belong to the declaration, so only a direct call
-//! sees them. A library function Clang's builtin table marks gets a
+//! sees them. A type attribute written in the declaration specifiers or on
+//! the declarator belongs to the function derivation nearest the declared
+//! name, and one written after a `*` to the function type that pointer
+//! points to; a typedef name or `__typeof__` brings its own function type,
+//! below every function derivation the declarator adds. The model records
+//! a fact for the declared entity's own function type or its result's.
+//! A library function Clang's builtin table marks gets a
 //! `noreturn` function type from Clang's implicit declaration, which every
 //! later declaration merges with: `abort`, `exit`, `_Exit` and, in GNU
 //! modes, `_exit` always; `longjmp` (and `_longjmp` in GNU modes) only when
@@ -25,6 +31,7 @@
 
 use super::super::{
     Analyzer,
+    AttributeSpecifier,
     BindingKind,
     BindingOrigin,
     ExtendedType,
@@ -42,6 +49,7 @@ use crate::{
         declaration_syntax::{
             DeclarationSpecifiers,
             Declarator,
+            DirectDeclarator,
             StructDeclaration,
             StructDeclarator,
             TypeName,
@@ -57,11 +65,15 @@ use crate::{
             UnaryOperator,
         },
     },
-    util::string_cache::StringCacheId,
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
+    },
 };
 
 /// How deep [`Analyzer::noreturn_type`] follows the operands of
-/// conditionals; deeper ones count as returning.
+/// conditionals and the operands of `__typeof__` in casts; deeper ones
+/// count as returning.
 const DEPTH: u32 = 64;
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -155,7 +167,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ExpressionType::CompoundLiteral {
                     type_name: target_type,
                     ..
-                } => return self.type_name_noreturn(target_type),
+                } => return depth < DEPTH && self.type_name_noreturn(target_type, depth + 1),
                 | ExpressionType::Identifier(_) => {
                     let Some(binding) = self.expression_info(expression).binding else {
                         return false;
@@ -211,7 +223,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether the function `callee` calls returns a pointer to a
-    /// `noreturn` function type: a function declared with such a result.
+    /// `noreturn` function type: `callee` names an entity declared with
+    /// such a result ([`State::noreturn_results`](super::State)).
     fn returns_noreturn(&self, callee: &'tu Expression<'tu>) -> bool {
         let mut callee = callee;
         while let ExpressionType::Parenthesized { expression }
@@ -232,19 +245,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether type name `name` is a `noreturn` function type, or a pointer
-    /// to or array of one.
-    fn type_name_noreturn(&mut self, name: &'tu TypeName<'tu>) -> bool {
+    /// to or array of one, `depth` operands of `__typeof__` and casts deep.
+    fn type_name_noreturn(&mut self, name: &'tu TypeName<'tu>, depth: u32) -> bool {
         let Some(&ty) = self
             .resolved_type_names
             .get(&super::super::type_name_identity(name))
         else {
             return false;
         };
-        self.noreturn_type_named(
+        self.noreturn_levels(
             name.declaration_specifiers,
             name.declaration_specifiers.extensions,
             name.declarator,
-        ) && self.holds_function_type(ty)
+            depth,
+        )
+        .own && self.holds_function_type(ty)
     }
 
     /// Whether `binding` is a library function Clang marks as not returning
@@ -264,13 +279,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Records whether the declaration of `binding` says that what it calls
-    /// does not return ([`State::noreturn`](super::State)), merging an
+    /// does not return ([`State::noreturn`](super::State)), or what its
+    /// result calls ([`State::noreturn_results`](super::State)), merging an
     /// earlier declaration of the same entity (`previous`), as Clang merges
-    /// the attribute and the function type's bit. Clang gives a type
-    /// attribute to the innermost function type, which is the result's for
-    /// a function that returns a function pointer. A first declaration of
-    /// `longjmp`, `_longjmp` or `siglongjmp` after its buffer typedef gets
-    /// Clang's builtin type.
+    /// the attribute and the function type's bit. Where the declaration
+    /// places the fact decides which ([`Self::noreturn_levels`]). A first
+    /// declaration of `longjmp`, `_longjmp` or `siglongjmp` after its buffer
+    /// typedef gets Clang's builtin type.
     pub(in crate::translation_phases::semantic_analysis) fn record_noreturn(
         &mut self,
         binding: usize,
@@ -302,17 +317,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
         // The type walks run only when the declaration names the fact, so
         // deep pointer chains cost nothing elsewhere.
-        let named = self.noreturn_type_named(spec, spec.extensions, Some(declarator))
-            && self.holds_function_type(data.ty);
-        let result = match self.types.nodes[data.ty.index] {
-            | TypeKind::Function { result, .. } => Some(result),
-            | _ => None,
-        };
-        let returns_function = result.is_some_and(|result| self.holds_function_type(result));
+        let levels = self.noreturn_levels(spec, spec.extensions, Some(declarator), 0);
+        let own = levels.own && self.holds_function_type(data.ty);
+        let result = levels.result && self.result_holds_function_type(data.ty);
         let builtin = data.kind == BindingKind::Function
             && previous.is_none()
             && self.builtin_longjmp(binding);
-        let typed = inherited == Some(true) || builtin || (named && !returns_function);
+        let typed = inherited == Some(true) || builtin || own;
         let declared = inherited.is_some()
             || (data.kind == BindingKind::Function
                 && (spec.function_specifiers.is_noreturn
@@ -320,7 +331,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if typed || declared {
             _ = self.functions.emission.noreturn.insert(binding, typed);
         }
-        if result_inherited || (named && returns_function) {
+        if result_inherited || result {
             _ = self.functions.emission.noreturn_results.insert(binding, ());
         }
     }
@@ -350,7 +361,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         spec: DeclarationSpecifiers<'tu>,
         declarator: Option<Declarator<'tu>>,
     ) {
-        if self.noreturn_type_named(spec, spec.extensions, declarator)
+        if self
+            .noreturn_levels(spec, spec.extensions, declarator, 0)
+            .own
             && self.holds_function_type(self.bindings[binding].ty)
         {
             _ = self.functions.emission.noreturn.insert(binding, true);
@@ -371,8 +384,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             type_specifiers: declaration.type_specifiers,
             ..DeclarationSpecifiers::default()
         };
-        if (self.noreturn_type_named(spec, declaration.extensions, declarator.declarator)
-            || self.noreturn_written(declarator.attributes, None))
+        if (self
+            .noreturn_levels(spec, declaration.extensions, declarator.declarator, 0)
+            .own
+            || self.noreturn_written(declarator.attributes))
             && self.holds_function_type(ty)
         {
             _ = self
@@ -405,41 +420,121 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether a declaration names a `noreturn` function type: by a type
-    /// attribute in `extensions` or `declarator`, or by the typedef name or
-    /// `__typeof__` operand of its specifiers. The declared type must still
-    /// hold a function type for the fact to apply.
-    fn noreturn_type_named(
+    /// Which function types a declaration with specifiers `spec` (and
+    /// their `extensions`) and `declarator` makes `noreturn`, counted in the
+    /// function derivations between the declared type and them. A type
+    /// attribute written in the specifiers or on the declarator belongs to
+    /// the derivation nearest the name (Clang's
+    /// `distributeFunctionTypeAttrToInnermost`), the declared entity's own
+    /// function type. One written after a `*` belongs to the function type
+    /// that pointer points to, below the function derivations written
+    /// nearer the name. A typedef name or `__typeof__` operand brings its
+    /// fact below every function derivation of the declarator, so
+    /// `NP (*gp)(void)`, with `NP` a `noreturn` function pointer type,
+    /// declares a pointer to a function whose result does not return. The
+    /// declared type must still hold the function type for a fact to
+    /// apply. `depth` counts the operands of `__typeof__` and casts walked.
+    /// C99: §6.7.5 paragraphs 3-6, pp. 114-115; PDF pp. 126-127.
+    fn noreturn_levels(
         &mut self,
         spec: DeclarationSpecifiers<'tu>,
         extensions: Option<&'tu SpecifierExtension<'tu>>,
         declarator: Option<Declarator<'tu>>,
-    ) -> bool {
-        if self.noreturn_written(extensions, declarator) {
-            return true;
+        depth: u32,
+    ) -> Levels {
+        let mut levels = Levels::default();
+        if self.noreturn_written(extensions) {
+            levels.add(0);
         }
-        match spec.type_specifiers {
+        // From the outermost declarator in.
+        let mut chain = ArenaVec::new_in(self.scratch);
+        let mut next = declarator;
+        while let Some(current) = next {
+            chain.push(current);
+            next = current.kind.iter().find_map(|direct| match *direct {
+                | DirectDeclarator::Parenthesized(group) => Some(group.declarator),
+                | _ => None,
+            });
+        }
+        // The function derivations nearer the name than each declarator's
+        // pointers.
+        let mut functions = 0;
+        for current in chain.iter().rev() {
+            for direct in current.kind {
+                match *direct {
+                    | DirectDeclarator::Function { .. }
+                    | DirectDeclarator::KAndRStyleFunction { .. } => functions += 1,
+                    | DirectDeclarator::Attributes(specifier)
+                        if self.noreturn_specifier(specifier).0 =>
+                        levels.add(0),
+                    | _ => {},
+                }
+            }
+            for level in current.pointer.levels {
+                if self.noreturn_written(level.attributes) {
+                    levels.add(functions);
+                }
+            }
+        }
+        let specified = match spec.type_specifiers {
             | TypeSpecifiers::TypedefName(name) => self
                 .lookup(Namespace::Ordinary, name.name)
-                .is_some_and(|entry| {
-                    self.functions.emission.noreturn.get(&entry.binding) == Some(&true)
+                .and_then(|entry| {
+                    let emission = &self.functions.emission;
+                    if emission.noreturn.get(&entry.binding) == Some(&true) {
+                        Some(0)
+                    } else {
+                        emission
+                            .noreturn_results
+                            .contains_key(&entry.binding)
+                            .then_some(1)
+                    }
                 }),
-            | TypeSpecifiers::Extended(&ExtendedType::Typeof { operand, .. }) => match operand {
-                | SyntaxOperand::Expression(operand) => self.noreturn_type(operand, 0),
-                | SyntaxOperand::Type(name) => self.type_name_noreturn(name),
-            },
-            | _ => false,
+            | TypeSpecifiers::Extended(&ExtendedType::Typeof { operand, .. }) => (depth < DEPTH
+                && match operand {
+                    | SyntaxOperand::Expression(operand) => self.noreturn_type(operand, depth + 1),
+                    | SyntaxOperand::Type(name) => self.type_name_noreturn(name, depth + 1),
+                })
+            .then_some(0),
+            | _ => None,
+        };
+        if let Some(level) = specified {
+            levels.add(level + functions);
+        }
+        levels
+    }
+
+    /// Whether `ty` is a function type, or a pointer to or array of one,
+    /// whose result holds a function type.
+    fn result_holds_function_type(&self, ty: TypeId) -> bool {
+        let mut ty = ty;
+        loop {
+            match self.types.nodes[self.types.non_atomic(ty).index] {
+                | TypeKind::Function { result, .. } => return self.holds_function_type(result),
+                | TypeKind::Pointer(inner) | TypeKind::Array(inner, _) => ty = inner,
+                | _ => return false,
+            }
         }
     }
 
     /// Whether a `noreturn` type attribute (GNU, `gnu::` or `__declspec`)
-    /// is written in `extensions` or `declarator`.
-    fn noreturn_written(
-        &self,
-        extensions: Option<&'tu SpecifierExtension<'tu>>,
-        declarator: Option<Declarator<'tu>>,
-    ) -> bool {
-        self.noreturn_spellings(extensions, declarator).0
+    /// is written in the attribute specifiers of `extensions`.
+    fn noreturn_written(&self, extensions: Option<&'tu SpecifierExtension<'tu>>) -> bool {
+        extensions.is_some()
+            && self
+                .declaration_attribute_lists(extensions, None)
+                .iter()
+                .any(|list| self.noreturn_specifier(list).0)
+    }
+
+    /// The `noreturn` attributes `specifier` writes: whether a type
+    /// attribute and whether a declaration attribute.
+    fn noreturn_specifier(&self, specifier: &'tu AttributeSpecifier<'tu>) -> (bool, bool) {
+        if specifier.recovered {
+            (false, false)
+        } else {
+            super::super::attributes::noreturn_spelling(specifier, self.context)
+        }
     }
 
     /// Whether a standard `[[noreturn]]` or `[[_Noreturn]]` declaration
@@ -467,12 +562,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut spellings = (false, false);
         for list in self.declaration_attribute_lists(extensions, declarator) {
-            if !list.recovered {
-                let (typed, declared) =
-                    super::super::attributes::noreturn_spelling(list, self.context);
-                spellings.0 |= typed;
-                spellings.1 |= declared;
-            }
+            let (typed, declared) = self.noreturn_specifier(list);
+            spellings.0 |= typed;
+            spellings.1 |= declared;
         }
         spellings
     }
@@ -486,6 +578,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | TypeKind::Pointer(inner) | TypeKind::Array(inner, _) => ty = inner,
                 | _ => return false,
             }
+        }
+    }
+}
+
+/// The function types a declaration makes `noreturn`, as
+/// [`Analyzer::noreturn_levels`] counts them: the declared entity's own,
+/// and its result's. Deeper ones are not modeled, so calls through them
+/// count as returning.
+#[derive(Clone, Copy, Default)]
+struct Levels {
+    own:    bool,
+    result: bool,
+}
+
+impl Levels {
+    /// Adds the function type `functions` derivations below the declared
+    /// entity's own.
+    fn add(&mut self, functions: u32) {
+        match functions {
+            | 0 => self.own = true,
+            | 1 => self.result = true,
+            | _ => {},
         }
     }
 }

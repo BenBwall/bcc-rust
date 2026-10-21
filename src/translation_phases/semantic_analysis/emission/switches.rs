@@ -174,17 +174,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !undecided || value.order_key() != fold.value.order_key() {
             return;
         }
-        let range_after = self
-            .switch_labels(fold.switch)
-            .zip(self.label_position(label))
-            .is_none_or(|(labels, position)| {
-                labels.last_range.is_some_and(|range| range > position)
-            });
+        let position = self.label_position(label);
+        let range_after =
+            self.switch_labels(fold.switch)
+                .zip(position)
+                .is_none_or(|(labels, position)| {
+                    labels.last_range.is_some_and(|range| range > position)
+                });
         // The label resumes the code around the switch either way.
         self.functions.dead = self.functions.switch_dead;
         if range_after {
+            // The label walk records every label but those in a statement
+            // expression of a type name, where a case label is an error.
             debug_assert!(
-                !fold.tentative,
+                !fold.tentative || position.is_none(),
                 "a tentative default precedes no case range"
             );
             self.set_phase(index, Phase::Unfolded);
