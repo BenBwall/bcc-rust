@@ -56,6 +56,7 @@ depending on an operation can refuse it; refusal is called out below.
 | Signless `i1/i8/i16/i32/i64/i128`, `f32/f64/f80/f128`, opaque 64-bit `ptr` (`src/ir/types.rs:15`) | Integers, `float/double/x86_fp80/fp128`, opaque `ptr` | **bcc/LLVM** low-level vocabulary; C signedness/rank/qualifiers have already been erased. `_Bool` is i8 in storage and comparisons use i1. | L direct mapping; N register classes/pairs and x87 helpers; I runtime variants. I does not implement all extended floating operations. A retains some narrow signedness in signatures. |
 | Constants, `null`, addresses, constant pool (`src/ir/instructions.rs:82`) | Constants, null, global/function addresses | **bcc** encoding of target/C values | L/N/I materialize them; O folds them. Wide bits live outside the 16-byte instruction record. |
 | Integer arithmetic, bitwise operations, signed/unsigned division and shifts (`src/ir/instructions.rs:295`) | `add/sub/mul`, `sdiv/udiv`, shifts, bitwise ops | **C** motivates choices; ordinary unflagged arithmetic is **bcc/LLVM** fixed-width arithmetic. Division has immediate UB cases; excessive shifts produce poison. | O's evaluator, L, N, I. Native uses hardware operations/refinements rather than runtime poison. |
+| Floating arithmetic and negation (`src/ir/instructions.rs:308`) | `fadd/fsub/fmul/fdiv/frem/fneg` | **bcc/LLVM** format-specific primitives implementing C real/complex operations; no fast-math flag family or explicit rounding/exception-state operand. `frem` is a low-level remainder, not C's integer `%`. | L maps operations directly; N uses SSE/x87 or helpers; I uses host f32/f64 arithmetic and refuses extended-format arithmetic (`src/backend/interpreter/arithmetic.rs:109`). O must preserve the chosen primitive contract. |
 | `nsw`, `nuw`, `exact` (`src/ir/instructions.rs:513`, `src/ir/instructions.rs:567`) | Same flags | **LLVM** deferred-UB contracts. C's signed-overflow rule motivates `nsw`, but C has no poison value or `exact` flag. | O folding/SCCP/GVN/known-bits; L attaches flags; I tests them; N drops them as refinement. |
 | Integer/floating comparisons, `select`, numeric conversions/bitcasts (`src/ir/instructions.rs:341`, `src/ir/instructions.rs:526`) | `icmp/fcmp/select`, casts | **bcc/LLVM** primitive semantics implementing C conversions. Ordered/unordered FP predicates mirror LLVM. `select` masks poison in the unchosen arm. | O/L/N/I; conditional expressions initially use control flow, and O may form selects. FP rounding environment is not an explicit state in these instructions. |
 | `poison`, `freeze` (`src/ir/instructions.rs:344`, `src/ir/instructions.rs:359`) | `poison`, `freeze`; **no `undef`** | **LLVM-derived**, with **bcc** choices for uninitialized storage and a deterministic interpreter witness | O has poison-specific lattices/refinements and preserves freeze identity; L emits them; I tracks poison and freezes to zero; N uses concrete bits and copies. |
@@ -75,10 +76,10 @@ depending on an operation can refuse it; refusal is called out below.
 | `AccessTag` (`src/ir/entities.rs:92`) | TBAA descriptor reference | **bcc** reserved carrier for C alias facts; not an implemented effective-type model | Parser/printer preserve numeric tags. Lowering emits none; O's memory analysis explicitly does not use C type aliasing (`src/optimizer/memory.rs:12`); no semantic enforcement by I. |
 | Aggregate copies, fill, `may_overlap` (`src/ir/instructions.rs:143`) | `llvm.memcpy/memmove/memset` | **C** object-representation copying and assignment; **bcc** byte operations distinguish overlap. Aggregate values remain in storage. | O SROA/memory passes; L intrinsics; N memory expansion; I copies byte state and pointer fragments. |
 | Direct/indirect calls and interned signatures (`src/ir/instructions.rs:150`, `src/ir/module.rs:486`) | `call`, function types, call attributes | **C** calls lowered to **bcc** signatures; no arbitrary per-call LLVM calling-convention ID | O inlining; A call rewriting; L/N/I consume signatures and argument lists. Signature matching includes semantic attributes, not only machine types. |
-| Aggregate/result descriptors, `byval/sret/registers`, narrow `signext/zeroext` (`src/ir/module.rs:574`, `src/ir/module.rs:633`) | ABI coercions and parameter/return attributes | Pre-ABI copy semantics are **bcc** implementing C by-value calls; post-ABI choices are **target ABI**, expressed partly in LLVM terms | A creates them; O sees pre-ABI descriptors; L/N/I all unpack/pack target calls. Internal I execution pays ABI complexity unnecessarily for C explanation. |
+| Aggregate/result descriptors, `byval/sret/registers`, narrow `signext/zeroext` (`src/ir/module.rs:574`, `src/ir/module.rs:633`) | ABI coercions and parameter/return attributes | Pre-ABI copy semantics are **bcc** implementing C by-value calls; post-ABI choices are **target ABI**, expressed partly in LLVM terms | A creates them; O sees pre-ABI descriptors; L/N/I support target packing. I also supports pre-ABI calls; the ordinary CLI currently selects post-ABI interpretation. |
 | Parameter, result and variadic `noundef` (`src/ir/module.rs:501`) | LLVM `noundef` | **LLVM** contract plus a **bcc** C-lowering policy matched to Clang | A remaps indices; O uses entry-parameter definedness; L emits attributes; I raises boundary UB; N relies on refinement, with no extra machine checks. |
 | `va_start/va_arg/va_copy/va_end`, aggregate `va_arg` (`src/ir/instructions.rs:373`) | `llvm.va_*`, `va_arg`, target expansion | **C99** functionality; cursor representation is **bcc/target**, intrinsic spelling is LLVM-facing | A expands `va_arg`; L retains some intrinsics; N supports target vararg setup but refuses residual `va_arg`; I has cursor and ABI machinery (`src/backend/interpreter/varargs.rs:1`). |
-| `returns_twice`, external setjmp/longjmp contracts (`src/ir.rs:196`, `src/backend/interpreter/nonlocal.rs:1`) | Function/call `returns_twice`; library calls | **C99** nonlocal jumps plus **bcc** external-symbol recognition; attribute is an LLVM-oriented summary, not a full continuation model | O avoids unsafe inlining; L marks calls/declarations; I saves/resumes frames; N refuses returns-twice calls/addresses (`src/backend/native/support.rs:160`). |
+| `returns_twice`, external setjmp/longjmp contracts (`src/ir.rs:197`, `src/backend/interpreter/nonlocal.rs:1`) | Function/call `returns_twice`; library calls | **C99** nonlocal jumps plus **bcc** external-symbol recognition; attribute is an LLVM-oriented summary, not a full continuation model | O avoids unsafe inlining; L marks calls/declarations; I saves/resumes frames; N refuses returns-twice calls/addresses (`src/backend/native/support.rs:160`). |
 
 #### Extensions, atomics and module/linker policy
 
@@ -92,8 +93,31 @@ depending on an operation can refuse it; refusal is called out below.
 | Target triple and LLVM data-layout string (`src/ir/module.rs:290`) | `target triple`, `target datalayout` | Target selection is **bcc**; raw LLVM string in shared Module is a **representation leak** | Lowering supplies it (`src/lowering/module_items.rs:1807`); text format preserves it; L consumes it. N/I need target layout facts, not LLVM string grammar. |
 | Globals: bytes, zero initialization, relocations, constant/TLS flags (`src/ir/module.rs:1056`) | Global variables/constants, `thread_local`, initializers | **C/target/bcc** flattened object representation | L/N emit global storage and relocations; I builds static/thread storage. C nominal type and subobject identities are absent. |
 | External/internal/weak/selectany/linkonce, aliases, sections, retention, visibility and DLL storage (`src/ir/module.rs:872`, line 925) | Linkage, aliases, `llvm.used`, visibility, DLL attributes; own-name `any` COMDAT | **C** internal/external linkage plus **platform/GNU/MSVC** requirements. Selectany/linkonce policies are described with LLVM `weak_odr/linkonce_odr` terminology. | L maps flags and owns COMDAT (`src/backend/llvm/api.rs:569`); N independently emits ELF/COFF COMDAT sections (`src/backend/native/emit.rs:269`); I resolves aliases/weak symbols but has no real linker/interposition. Not all of this belongs to expression semantics. |
-| Constructors/destructors, module assembly, inline-control and private inline copies (`src/ir/module.rs:1019`, `src/ir.rs:203`) | `llvm.global_ctors/dtors`, module asm, `noinline/alwaysinline`, `available_externally` | **bcc/extension** behavior, with LLVM-matched inline policy | L/N emit supported module features; I startup honors initialization policy but cannot execute assembly. O's inline-copy resolver reproduces LLVM choices for N/I (`src/pipeline/middle_end.rs:143`). |
+| Constructors/destructors, module assembly, inline-control and private inline copies (`src/ir/module.rs:1019`, `src/ir.rs:206`) | `llvm.global_ctors/dtors`, module asm, `noinline/alwaysinline`, `available_externally` | **bcc/extension** behavior, with LLVM-matched inline policy | L/N emit supported module features; I startup honors initialization policy but cannot execute assembly. O's inline-copy resolver reproduces LLVM choices for N/I (`src/pipeline/middle_end.rs:143`). |
 | Text parser/printer and verifier (`src/ir/parser.rs:1`, `src/ir/printer.rs:1`, `src/ir/verifier.rs:1`) | LLVM assembly and verifier play analogous roles | **bcc** grammar/invariants: not LLVM assembly | O tests, I textual runner and all backend entry checks depend on it. Verifier checks types/SSA/profiles/flags/orders, not that dynamic C preconditions or claimed `inbounds` facts hold. |
+
+### The consumer boundaries already present
+
+The native MIR is a distinct x86-64 machine representation, not another copy
+of the shared IR (`src/backend/native/mir.rs:1`). `MFunction` owns layout-ordered
+blocks, virtual-register classes, frame objects, outgoing/incoming call areas
+and constants (`src/backend/native/mir.rs:36`). GPR/SSE classes and register
+pairs represent scalar types; `MInst` has two-address operations and explicit
+machine operands (`src/backend/native/mir.rs:801`). Instruction selection starts
+at `src/backend/native/isel.rs:104`; branch arguments become parallel copies,
+with edge blocks and cycle breaking (`src/backend/native/isel/edges.rs:1`).
+The shared poison/flag contracts are resolved or dropped during selection;
+they are not carried through register allocation as MIR value states. Preserve
+this useful separation in either redesign.
+
+The interpreter API accepts either verified IR profile
+(`src/backend/interpreter.rs:135`). It already implements target-independent
+logical vararg cursors before ABI lowering and target `va_list` objects after
+it (`src/backend/interpreter/varargs.rs:1`). The CLI sends post-ABI IR to every
+backend (`src/cli/code_generation.rs:9`, `src/cli/code_generation.rs:120`). Thus
+interpreting pre-ABI IR is an available baseline experiment, not a feature
+that requires a new evaluator. It removes ABI noise but does not restore C
+object types, source sequencing or indeterminate-value reasons erased earlier.
 
 ### Concrete semantic coupling and its cost
 
@@ -132,9 +156,11 @@ affect interpreted C behavior as well as LLVM output.
 `src/lowering/bit_fields.rs:12` explains why partial bit-field writes load and
 freeze unwritten bytes. Any unwritten byte makes a scalar load poison
 (`src/backend/interpreter/memory.rs:181`), so careless widening would destroy
-defined neighbor bits. LLVM aggregate register-return packing consequently uses
-byte vectors and per-byte freeze (`src/backend/llvm/function.rs:644`), while I
-duplicates byte-sensitive register-return handling
+defined neighbor bits. Shared aggregate-argument ABI packing freezes scalar
+pieces and zeroes padding (`src/abi/rewrite.rs:571`), exposing the dependency
+outside L. LLVM aggregate register-return packing uses byte vectors and
+per-byte freeze (`src/backend/llvm/function.rs:644`), while I duplicates
+byte-sensitive register-return handling
 (`src/backend/interpreter/machine.rs:402`). C needs object representations,
 padding and bit-fields; it does not require this particular whole-scalar
 poison/freeze mechanism. The current byte granularity also cannot describe
@@ -581,7 +607,7 @@ Do not exploit a strict-provenance assumption in the release optimizer while
 the interpreter is still using permissive recovery. Test pointer-copy-through-
 bytes, integer round trips, tagged addresses, one-past boundaries, reuse after
 free and external pointers before enabling provenance optimizations. Cerberus's
-[provenance research](https://www.cl.cam.ac.uk/~km569/exploring_provenance.pdf)
+[provenance research](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n2311.pdf)
 is a reference for selecting and documenting a policy, not permission to label
 one experimental policy as the uniquely mandated C99 model.
 
@@ -600,8 +626,10 @@ Representation = {known_bits, indeterminate_bits, pointer_fragments,
 
 Signed addition is a partial C operation with an overflow precondition;
 unsigned addition wraps. Invalid shifts, bad pointer arithmetic, division by
-zero, out-of-range conversions and lifetime/type failures retain their own
-reasons. This detects the undefined C operation when evaluated, even if its
+zero, undefined floating-to-integer conversions and lifetime/type failures
+retain their own reasons. Out-of-range signed integer conversions instead
+follow the implementation-defined result or signal policy in C99 §6.3.1.3p3.
+This detects the undefined C operation when evaluated, even if its
 result would later be discarded. It does not turn UB into a C-defined runtime
 exception. The diagnostic evaluator stops and explains; compiled release code
 has no obligations on that undefined execution.
@@ -809,7 +837,9 @@ candidates ultimately need the same careful arithmetic/refinement tests.
    table for each new operation: inputs, outputs, preconditions, observable
    effects, allowed choices, C revision and implementation policy. Add an
    explicit compatibility note for today's poison and noundef behavior. Keep
-   the current textual format/tests working during the experiment.
+   the current textual format/tests working during the experiment. Exercise
+   the existing pre-ABI interpreter API first to separate ABI complexity from
+   missing C semantics; it is a cheap baseline for the new evaluator.
 2. **Build an isolated CModule slice.** Add a module behind a study/test-only
    entry point, using existing sema conversions, bindings, type layouts,
    effects and control facts. Support integer functions, fixed locals, loops,
@@ -969,5 +999,13 @@ risk of two competing C models.
 
 ## 4. Prototype and validation status
 
-No prototype yet. The inventory, primary-source survey and implementable
-design take priority. No cargo commands have been run.
+No prototype is included. This study prioritizes the source inventory,
+primary-source comparison and concrete semantic/migration contracts; the
+experiment above specifies the next implementation milestone. No compiler
+source or default pipeline changed.
+
+Validation covered source inspection at the pinned baseline, repository
+citation paths/line bounds, relevant C99/C11 paragraph checks, primary-source
+links and `git diff --check`. This is design evidence, not runtime validation:
+no cargo commands, differential program runs or performance measurements were
+performed, and no prototype-parity claim is made.
