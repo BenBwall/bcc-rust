@@ -358,10 +358,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Whether GNU `used` retains the internal entity `entity`'s definition.
     pub(in crate::translation_phases::semantic_analysis) fn retained_by_used(
-        &mut self,
+        &self,
         entity: EntityId,
     ) -> bool {
-        self.attributes.entity(entity).used
+        self.attributes
+            .entities
+            .get(&entity)
+            .is_some_and(|attributes| attributes.used)
     }
 
     /// The storage of the latest declaration of `binding`'s entity.
