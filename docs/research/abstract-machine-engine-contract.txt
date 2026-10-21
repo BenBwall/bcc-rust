@@ -1,0 +1,63 @@
+Engine contract v1 (implementation in progress, owned by engine agent)
+
+CHOICE: independent, explicitly bounded C subset evaluator. No compiler/LLVM,
+filesystem, virtual-memory arena, serde, wasm-bindgen, or other dependencies.
+The native frontend was evaluated: pipeline::parse_translation_unit and
+analyze_translation_unit expose the right syntax/semantic inputs for a future
+adapter, but retain Context/Bump/RegionVec and native compiler dependencies.
+This prototype must NOT be labelled as executing bcc's full C frontend.
+
+Integration owner: expose `pub mod abstract_machine` under abstract-machine;
+the module itself requires only std and builds on native and wasm32.
+Wasm owner: wrap the safe Rust API; engine will not define competing exports.
+
+PLANNED PUBLIC API (stable names):
+  pub const DEMO_SOURCE: &str;
+  pub fn compile(source: &str) -> Result<Program, Diagnostic>;
+  Program::session(&self) -> Session;
+  Program::source(&self) -> &str;
+  Session::step(&mut self) -> &State;
+  Session::back(&mut self) -> &State;
+  Session::state(&self) -> &State;
+  Session::state_json(&self) -> String;
+  Session::trace_json(&self) -> String;
+  Diagnostic::to_json(&self) -> String;
+No unsafe ABI in engine; wrapper can hold Session and return JSON bytes.
+
+JSON schema v1:
+  {schema_version:1, engine:"bounded-c-subset", step:number,
+   status:"ready"|"running"|"finished"|"undefined_behavior"|"error"|"limit",
+   source_range:{start:byteOffset,end:exclusiveByteOffset,line:oneBased,
+                 column:oneBased,end_line:oneBased,end_column:oneBased},
+   event:string, frames:[{id:number,function:string,depth:number}],
+   objects:[{id:number,name:string,type:string,frame_id:number,
+             storage_duration:"automatic",lifetime:"alive"|"ended",
+             value:Value}], pending_effects:[string], diagnostics:[Diagnostic],
+   return_value:null|Value}
+  Value = {kind:"indeterminate"} | {kind:"integer",value:number}
+        | {kind:"pointer",target:number|null,offset:number}
+        | {kind:"array",elements:[Value]}
+  Diagnostic = {kind:"unsupported"|"syntax"|"undefined_behavior"|"limit",
+                message:string,source_range:Range,citation:string|null}
+Pointer offsets are int elements, never host addresses. Object IDs never reused.
+source_range is the next operation; event describes the last completed step.
+Trace JSON: {schema_version:1,source:string,states:[State,...]}.
+Back restores a recorded complete machine state; forward replays existing states.
+
+Subset: signed 32-bit int, int pointers, fixed int arrays, int-returning named
+functions, named int/int* parameters, block locals/scopes, if/else, while, for,
+return, assignments, arithmetic/comparisons, address/dereference/subscript,
+prefix/postfix increment as standalone statements. Array brace initialization.
+No preprocessing, globals, library I/O, casts, structs, floating point, malloc,
+function pointers, arbitrary declarators, or compound side-effect expressions.
+Unsupported input is an explicit diagnostic, never scripted or ignored.
+Evaluation order: chosen left-to-right for side-effect-free operands; calls
+are allowed as a whole initializer/RHS/return/expression statement only.
+Assignments/increments nested in expressions are rejected to avoid claiming
+unimplemented C99 sequencing checks. pending_effects describes the next store;
+this prototype does not model deferred/unsequenced writes.
+
+Bounds: source <=32 KiB; parser nesting <=64; code <=8192 operations;
+runtime <=2048 steps, <=32 frames, <=128 total objects, <=512 int cells,
+<=1024 operands; recorded states have an 8 MiB conservative retention budget.
+Limits are explicit terminal diagnostics, not UB or silent truncation.
