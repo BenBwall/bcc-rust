@@ -7,7 +7,7 @@ export function renderSnapshot(snapshot, source, targetLine) {
   renderDiagnostic(snapshot?.diagnostic);
   element("step-count").textContent = snapshot ? String(snapshot.step) : "—";
   const status = element("machine-status");
-  status.textContent = snapshot ? statusLabel(snapshot.status) : "Not loaded";
+  status.textContent = snapshot ? snapshot.diagnostic?.kind === "indeterminate" ? "Indeterminate read" : statusLabel(snapshot.status) : "Not loaded";
   status.dataset.status = snapshot?.status ?? "idle";
   const location = snapshot?.location?.start;
   element("source-location").textContent = location ? `Ln ${location.line}, Col ${location.column}` : "No current evaluation";
@@ -59,7 +59,7 @@ export function renderSource(source, range, targetLine) {
 export function renderDiagnostic(diagnostic) {
   element("diagnostic").hidden = !diagnostic;
   if (!diagnostic) return;
-  element("diagnostic-kind").textContent = diagnostic.kind === "undefined_behavior" ? "UNDEFINED BEHAVIOR · EXECUTION STOPPED" : "PROGRAM DIAGNOSTIC";
+  element("diagnostic-kind").textContent = ({ undefined_behavior: "UNDEFINED BEHAVIOR · EXECUTION STOPPED", indeterminate: "INDETERMINATE VALUE · POLICY STOP", unsupported: "OUTSIDE THE SUPPORTED SUBSET", syntax: "COMPILATION DIAGNOSTIC", limit: "RESOURCE LIMIT · EXECUTION STOPPED" })[diagnostic.kind] || "PROGRAM DIAGNOSTIC";
   element("diagnostic-title").textContent = diagnostic.title || "Execution stopped";
   element("diagnostic-message").textContent = diagnostic.message || "The engine stopped execution.";
   element("diagnostic-citation").textContent = diagnostic.citation || "No standard citation was supplied by the engine.";

@@ -20,12 +20,13 @@ export function createWasmSession(instance) {
   return {
     load(source) {
       if (typeof source !== "string") throw new Error("Expected C source text.");
-      sourceBytes = encoder.encode(source);
-      if (sourceBytes.length > 32768) throw new Error("The bounded Rust engine accepts at most 32 KiB of source.");
-      const ptr = sourceBytes.length ? api.bcc_alloc(sourceBytes.length) : 0;
-      if (sourceBytes.length && !ptr) throw new Error("Rust could not allocate source storage.");
+      const bytes = encoder.encode(source);
+      if (bytes.length > 32768) throw new Error("The bounded Rust engine accepts at most 32 KiB of source.");
+      const ptr = bytes.length ? api.bcc_alloc(bytes.length) : 0;
+      if (bytes.length && !ptr) throw new Error("Rust could not allocate source storage.");
       try {
-        if (sourceBytes.length) new Uint8Array(api.memory.buffer, ptr, sourceBytes.length).set(sourceBytes);
+        if (bytes.length) new Uint8Array(api.memory.buffer, ptr, bytes.length).set(bytes);
+        sourceBytes = bytes;
         return response(api.bcc_compile(ptr, sourceBytes.length));
       } finally { if (ptr) api.bcc_free(ptr, sourceBytes.length); }
     },
