@@ -64,3 +64,15 @@ Wrapper overrides CARGO_TARGET_DIR to shared build/swarm-target[-2]; copy final
 wasm to this worktree target/abstract-machine/bcc_rust.wasm after validation so
 subsequent shared-cache cleans cannot remove the handoff artifact. UI/root owns
 any web/ artifact copy. Build command and final results will be appended here.
+
+STATUS: native default clippy --all-targets -- -D warnings PASSED; native
+check --all-targets PASSED with final manifest. Native artifact types remain
+unchanged: wasm is built with explicit cargo rustc --crate-type cdylib.
+Bridge adapted to observed Program/Session/State public API; no engine-owned
+files edited. Wasm Clippy is detached, waiting for engine module files. Logs:
+  target/abstract-machine/{native-clippy,native-check,wasm-clippy}.log
+  target/abstract-machine/wasm-clippy.exit (written when command finishes)
+Wasm builds will use --target-dir target/abstract-machine/build through the
+shared wrapper to keep browser artifacts safe from later shared-cache cleans.
+Expected stable artifact path after success:
+  target/abstract-machine/build/wasm32-unknown-unknown/release/bcc_rust.wasm
