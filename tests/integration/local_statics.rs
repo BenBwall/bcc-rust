@@ -635,6 +635,19 @@ mod tests {
     }
 
     #[test]
+    fn elided_logical_operands_stay_unlowered_in_branches() {
+        // Branch-form conditions and loop conditions follow the same operand
+        // elision as value contexts.
+        assert_runs_like_clang(
+            "int printf(const char*,...); static int g=1; static int h(void){return 1;} volatile \
+             int v=1; int main(void){int n=0;const int k=0;while((&g==0)&&h())n++;do{n+=2;}while( \
+             (&g==0)&&h());for(;v>5||(k&&h());n++);if(v&&((&g==0)&&h()))n+=100;if(!(k&&h()))n+=4; \
+             while(v-->5||(k&&h()))n+=1000;n+=(v&&(k&&h()))?16:32;if(v<0||(1||h()))n+=64; \
+             printf(\"%d\\n\",n);return 0;}",
+        );
+    }
+
+    #[test]
     fn lowered_control_uses_the_same_fold_as_elision() {
         assert_runs_like_clang(
             "int printf(const char*,...); int f(void){if(__builtin_constant_p(\"abc\"))return \

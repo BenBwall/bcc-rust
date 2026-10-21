@@ -72,14 +72,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 then,
                 otherwise,
             } => {
-                let condition = syntax(condition)?;
-                let then = then
-                    .map(|effect| syntax(effect.expression).map(|e| (e, effect.context)))
-                    .transpose()?;
-                let otherwise = otherwise
-                    .map(|effect| syntax(effect.expression).map(|e| (e, effect.context)))
-                    .transpose()?;
-                self.effect_branches(condition, then, otherwise);
+                // An elided operand is not lowered here either: only the
+                // live arm's effects remain, without the folded condition.
+                match self.folded(expression)? {
+                    | Some(super::expressions::Folded::Live(live)) =>
+                        for effect in [then, otherwise].into_iter().flatten() {
+                            let arm = syntax(effect.expression)?;
+                            if std::ptr::eq(arm, live) {
+                                self.tasks.push(Task::BuiltinEffects(arm, effect.context));
+                            }
+                        },
+                    | Some(super::expressions::Folded::Truth(_)) => {},
+                    | None => self.effect_branches(
+                        syntax(condition)?,
+                        then.map(|effect| syntax(effect.expression).map(|e| (e, effect.context)))
+                            .transpose()?,
+                        otherwise
+                            .map(|effect| syntax(effect.expression).map(|e| (e, effect.context)))
+                            .transpose()?,
+                    ),
+                }
             },
         }
         // The expression's own type-site actions run before its uses.

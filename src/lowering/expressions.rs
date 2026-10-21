@@ -84,6 +84,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Err(LoweringError::unsupported(construct, source));
         }
         let info = self.info(expression)?;
+        debug_assert!(
+            !info.elided,
+            "lowering reached an operand semantic analysis elided"
+        );
         if self.unit.sema.types.unanalyzed(info.ty) {
             return Err(LoweringError::unanalyzed(
                 &self.unit.sema.types,
@@ -91,26 +95,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         }
-        match expression.kind {
-            | E::Conditional(c) if self.info(c.then_expression)?.elided => {
-                self.tasks.push(Task::Evaluate(c.else_expression));
+        match self.folded(expression)? {
+            | Some(Folded::Live(operand)) => {
+                self.tasks.push(Task::Evaluate(operand));
                 return Ok(());
             },
-            | E::Conditional(c) if self.info(c.else_expression)?.elided => {
-                self.tasks.push(Task::Evaluate(c.then_expression));
-                return Ok(());
-            },
-            | E::Binary {
-                operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
-                right_expression,
-                ..
-            } if self.info(right_expression)?.elided => {
-                let value =
-                    self.iconst(Type::I32, i128::from(operator == BinaryOperator::LogicalOr));
+            | Some(Folded::Truth(truth)) => {
+                let value = self.iconst(Type::I32, i128::from(truth));
                 self.push_item(Operand::Value(value), info.ty);
                 return Ok(());
             },
-            | _ => {},
+            | None => {},
         }
         // An integer constant expression has an exact value (§6.6p6).
         if info.ice
@@ -183,14 +178,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 right_expression,
             } => match operator {
                 | BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => {
-                    if self.info(right_expression)?.elided {
-                        // The shared emission walk omitted this operand;
-                        // produce the short-circuit value without visiting it.
-                        let value = self
-                            .iconst(Type::I32, i128::from(operator == BinaryOperator::LogicalOr));
-                        self.push_item(Operand::Value(value), info.ty);
-                        return Ok(());
-                    }
                     let right = self.draft.create_block(&[]);
                     let merge = self.draft.create_block(&[Type::I1]);
                     self.tasks.push(Task::Merge {
@@ -318,14 +305,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::Evaluate(base_expression));
             },
             | E::Conditional(conditional) => {
-                if self.info(conditional.then_expression)?.elided {
-                    self.tasks.push(Task::Evaluate(conditional.else_expression));
-                    return Ok(());
-                }
-                if self.info(conditional.else_expression)?.elided {
-                    self.tasks.push(Task::Evaluate(conditional.then_expression));
-                    return Ok(());
-                }
                 let then = self.draft.create_block(&[]);
                 let otherwise = self.draft.create_block(&[]);
                 let merge_params = self.merge_params(info.ty, source)?;
@@ -369,10 +348,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.compound_literal(info.ty, initializer, source)?,
             | E::Builtin(b) => self.schedule_keyword(expression, b)?,
             | E::OmittedConditional(c) => {
-                if self.info(c.else_expression)?.elided {
-                    self.tasks.push(Task::Evaluate(c.condition_expression));
-                    return Ok(());
-                }
                 let merge_params = self.merge_params(info.ty, source)?;
                 let merge = self.draft.create_block(merge_params);
                 let otherwise = self.draft.create_block(&[]);
@@ -831,6 +806,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(self.icmp(IntCC::Ne, value, zero))
     }
 
+    /// What remains of `expression` once semantic analysis elided one of its
+    /// operands: every consumer of an operator whose operand is elided goes
+    /// through here, so lowering never reaches code whose references
+    /// reachability dropped. A folded `?:` keeps only its live arm, and a
+    /// folded `&&` or `||` only its short-circuit value; the condition, whose
+    /// fold has no side effects, is not evaluated (Clang
+    /// `ConstantFoldsToSimpleInteger`). The common operand of a GNU `x ?: y`
+    /// is evaluated even then. C99: §6.5.13p3-4, §6.5.14p3-4, pp. 89-90;
+    /// PDF pp. 101-102; §6.5.15p4, p. 90; PDF p. 102.
+    pub(super) fn folded(
+        &self,
+        expression: &'tu Expression<'tu>,
+    ) -> Result<Option<Folded<'tu>>, LoweringError> {
+        use ExpressionType as E;
+        Ok(match expression.kind {
+            | E::Conditional(c) if self.info(c.then_expression)?.elided =>
+                Some(Folded::Live(c.else_expression)),
+            | E::Conditional(c) if self.info(c.else_expression)?.elided =>
+                Some(Folded::Live(c.then_expression)),
+            | E::OmittedConditional(c) if self.info(c.else_expression)?.elided =>
+                Some(Folded::Live(c.condition_expression)),
+            | E::Binary {
+                operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
+                right_expression,
+                ..
+            } if self.info(right_expression)?.elided =>
+                Some(Folded::Truth(operator == BinaryOperator::LogicalOr)),
+            | _ => None,
+        })
+    }
+
     /// Evaluates a condition, branching straight on `&&`, `||` and `!`
     /// without materializing their `int` results.
     /// C99: §6.5.13-§6.5.14, pp. 89-90; PDF pp. 101-102.
@@ -840,8 +846,28 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         then: Block,
         otherwise: Block,
     ) -> Result<(), LoweringError> {
-        let folded = self.info(expression)?.integer.is_some();
+        let info = self.info(expression)?;
+        debug_assert!(
+            !info.elided,
+            "lowering reached a condition semantic analysis elided"
+        );
+        let folded = info.integer.is_some();
         if self.conversions(expression).is_empty() && !folded {
+            match self.folded(expression)? {
+                | Some(Folded::Live(operand)) => {
+                    self.tasks.push(Task::Condition {
+                        expression: operand,
+                        then,
+                        otherwise,
+                    });
+                    return Ok(());
+                },
+                | Some(Folded::Truth(truth)) => {
+                    self.draft.jump(if truth { then } else { otherwise }, &[]);
+                    return Ok(());
+                },
+                | None => {},
+            }
             match expression.kind {
                 | ExpressionType::Parenthesized { expression: inner }
                 | ExpressionType::Unary {
@@ -1936,4 +1962,18 @@ pub(super) fn compound_operator(operator: BinaryOperator) -> Option<BinaryOperat
         | B::BitwiseOrAssignment => B::BitwiseOr,
         | _ => return None,
     })
+}
+
+/// The part of an operator lowering still emits after semantic analysis
+/// elided an operand ([`FunctionLowerer::folded`]).
+#[derive(Clone, Copy)]
+#[expect(
+    variant_size_differences,
+    reason = "A live operand is a syntax reference; a short circuit is its truth"
+)]
+pub(super) enum Folded<'tu> {
+    /// The operand that stands for the whole expression.
+    Live(&'tu Expression<'tu>),
+    /// The short-circuit truth of a folded `&&` or `||`.
+    Truth(bool),
 }
