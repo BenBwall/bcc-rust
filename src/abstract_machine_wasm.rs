@@ -24,6 +24,10 @@ use crate::abstract_machine::{
 /// # Safety
 /// A nonempty input must be initialized bytes in a live `bcc_alloc` allocation.
 /// Calls into this instance must be single-threaded and non-reentrant.
+#[expect(
+    clippy::disallowed_types,
+    reason = "The ABI constructs an owned diagnostic snapshot when compilation fails."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bcc_compile(ptr: *const u8, len: usize) -> u32 {
     let memory_bytes = core::arch::wasm32::memory_size::<0>().saturating_mul(65_536);
@@ -61,10 +65,10 @@ pub unsafe extern "C" fn bcc_compile(ptr: *const u8, len: usize) -> u32 {
                     step:            0,
                     status:          "error",
                     source_range:    diagnostic.source_range,
-                    event:           Default::default(),
-                    frames:          Default::default(),
-                    objects:         Default::default(),
-                    pending_effects: Default::default(),
+                    event:           String::new(),
+                    frames:          Vec::new(),
+                    objects:         Vec::new(),
+                    pending_effects: Vec::new(),
                     diagnostics:     [diagnostic].into(),
                     return_value:    None,
                 }
@@ -158,7 +162,9 @@ pub unsafe extern "C" fn bcc_free(ptr: *mut u8, len: usize) {
         return;
     };
     // SAFETY: the caller promises the original pointer, layout and ownership.
-    unsafe { alloc::dealloc(ptr, layout) };
+    unsafe {
+        alloc::dealloc(ptr, layout);
+    }
 }
 
 /// Borrow the latest response bytes until the next operation.
