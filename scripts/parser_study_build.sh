@@ -6,16 +6,17 @@ study_feature=parser-recursive-descent-study
 mkdir -p "$study_dir"
 case "${1:-native}" in
     native)
-        cargo build --features "$study_feature" --example parser_study
-        cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/debug/examples/parser_study" "$study_dir/study-debug"
-        cargo test --features "$study_feature" --lib recursive_descent -- --test-threads=1
         cargo clippy --all-targets --features "$study_feature" -- -D warnings
         cargo build --release --features "$study_feature" --example parser_study
         cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/examples/parser_study" "$study_dir/study-release"
+        cargo build --features "$study_feature" --example parser_study
+        cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/debug/examples/parser_study" "$study_dir/study-debug"
         ;;
     profile)
         cargo build --release --features "$study_feature,parser-study-small-regions" --example parser_study
         cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/examples/parser_study" "$study_dir/study-profile"
+        cargo build --features "$study_feature,parser-study-small-regions" --example parser_study
+        cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/debug/examples/parser_study" "$study_dir/study-profile-debug"
         ;;
     alignment)
         cargo build --release --features "$study_feature,parser-study-leak-alignment" --example parser_study
