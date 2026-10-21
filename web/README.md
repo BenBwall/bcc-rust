@@ -12,6 +12,7 @@ toolchain and install its Wasm standard library once if needed:
 rustup target add wasm32-unknown-unknown
 sh web/build.sh
 node --experimental-default-type=module web/check.mjs
+node --experimental-default-type=module web/abi-check.mjs
 node --experimental-default-type=module web/worker-check.mjs
 node --experimental-default-type=module web/worker-check.mjs --missing
 python3 -m http.server 8080 --bind 127.0.0.1 --directory web
@@ -125,7 +126,8 @@ integration check. No C semantics or computed program values live in JavaScript.
 `check.mjs` executes the real Wasm artifact with the UI adapter and checks the
 demo's result, changed-source result, function calls, arrays/pointers, lifetimes,
 pending effects, UB citations, rejection, and Rust-native reverse replay/reset.
-`worker-check.mjs` also exercises the actual Worker/proxy modules through a
+`abi-check.mjs` checks raw export/allocation contracts, rejected input bytes,
+trace export and reverse replay. `worker-check.mjs` also exercises the actual Worker/proxy modules through a
 Node messaging/fetch shim, including compile/step, reload, cancellation and
 missing-artifact errors. It does not simulate C values or render the page.
 Generated artifacts belong in ignored `web/pkg/`; binary output is not committed.
