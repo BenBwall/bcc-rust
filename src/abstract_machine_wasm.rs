@@ -26,7 +26,7 @@ use crate::abstract_machine::{
 /// Calls into this instance must be single-threaded and non-reentrant.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bcc_compile(ptr: *const u8, len: usize) -> u32 {
-    let memory_bytes = core::arch::wasm32::memory_size::<0>() * 65_536;
+    let memory_bytes = core::arch::wasm32::memory_size::<0>().saturating_mul(65_536);
     if len > INPUT_LIMIT
         || (len != 0 && ptr.is_null())
         || ptr
@@ -85,7 +85,7 @@ pub extern "C" fn bcc_state() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn bcc_step() -> u32 {
     respond(|session| {
-        session.step();
+        _ = session.step();
         session.state_json()
     })
 }
@@ -94,7 +94,7 @@ pub extern "C" fn bcc_step() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn bcc_back() -> u32 {
     respond(|session| {
-        session.back();
+        _ = session.back();
         session.state_json()
     })
 }
@@ -202,6 +202,7 @@ fn fail(message: &str) -> u32 {
     reason = "The bridge retains the engine's owned JSON between browser calls."
 )]
 struct Bridge {
+    program:  Option<Program>,
     session:  Option<Session>,
     response: String,
 }
