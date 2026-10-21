@@ -115,7 +115,6 @@ pub(crate) mod util;
 
 // Measurements and test support
 #[cfg(feature = "benchmarking-internals")]
-#[cfg(feature = "native")]
 mod benchmarking;
 #[cfg(test)]
 #[expect(
