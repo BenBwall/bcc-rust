@@ -914,7 +914,8 @@ must have an integer or enumerated type, as `EvaluateAsInt` requires: an
 integer constant, a comma whose left operand evaluates, a statement expression
 of side-effect-free expression statements, a `const` non-volatile object that
 is not weak with a constant initializer (converted to its type; the address of
-an automatic object is no constant there), a scalar inside such an array or
+an automatic, thread-local or `dllimport` object is no constant there, nor a
+`?:` operand Clang selects), a scalar inside such an array or
 structure whose initializer evaluates (read from its initializer plan), an
 element of a string literal, the address of a non-weak object or function
 (compared within one object in bytes),
@@ -924,7 +925,10 @@ them (a volatile read, also through `*`, `[]`, `.` or `->`, is a side effect),
 but no call, assignment, volatile or other object read, and no condition
 holding a label. Semantic analysis's own constant is trusted except around
 `__builtin_constant_p` and weak entities, whose GNU-mode fold Clang's
-evaluator does not make. Loops instead test the value IR emission produces. Two forms
+evaluator does not make, and floating arithmetic with a NaN result, which it
+refuses as undefined. An entity is weak when any file-scope declaration in the
+unit writes `weak` or `weak_import`, or `#pragma weak` names it, as Clang
+emits deferred bodies after the whole unit. Loops instead test the value IR emission produces. Two forms
 take more than the statement walk (`emission/`). A `switch` whose
 controlling expression folds emits only the statements Clang's
 `CollectStatementsForCase` gathers from the matching case, else `default`
@@ -965,9 +969,18 @@ floating complex values, an atomic update `atomicrmw` cannot perform (an atomic
 builtin whose memory order is not a constant (unless a library call copies its
 object), a `__builtin_fpclassify` that does not evaluate, and a System V
 `va_arg` of a type passed in registers (its members judged by their types'
-natural alignment, as the ABI classifies them); unevaluated and skipped
-operands change nothing, nor do the operands of `__builtin_constant_p`, the
-object-size builtins, `__builtin_classify_type` and `__builtin_choose_expr`. These rules read the expression's type, so
+natural alignment, as the ABI classifies them, with no class for an array of no
+elements or an unnamed bit-field). A call that does not return changes nothing
+in an unevaluated or skipped operand, nor in an operand of
+`__builtin_constant_p`, the object-size builtins, `__builtin_classify_type` and
+`__builtin_choose_expr`, but a join in an operand Clang emits still counts: a
+variably modified `sizeof` or `typeof` operand, an operand of
+`__builtin_constant_p` or the object-size builtins without side effects, and
+either operand of `__builtin_choose_expr`, whose selection is not known yet.
+Where Clang emits an operand after
+one this analysis visits later (the left operand of a scalar or compound
+assignment, or on the Microsoft ABI the arguments before a call's last), a join
+in it ends the state too. These rules read the expression's type, so
 they run once it is analyzed. A statement
 expression's value statement is emitted even after a jump, and one whose body
 ends skipped ends its expression statement's code only where it is emitted
