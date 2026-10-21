@@ -177,3 +177,23 @@ profile, alignment, and canonical-check bundle is running via one shared-wrapper
 slot. `scripts/parser_study_profile.py` saves the exact Callgrind command, binary
 hash, simulated event totals, and self/inclusive callgraph annotations. Empty
 phase-7 collection is treated as an error.
+
+### Preliminary debug comparison (superseded by final tables below)
+
+Seven rotating repetitions, feature-enabled binary from before the final
+recovery-text and stack-sampling fixes; opt-level 0, no debug symbols. These
+are complete measurements, retained as a checkpoint, not the final release
+comparison. Times are medians in milliseconds; CV is population standard
+deviation divided by mean. No stack sampling or inspection during timing.
+
+| Input | Machine ms (CV %) | Recursive ms (CV %) | Growing ms (CV %) | Hybrid 16 ms (CV %) |
+|---|---:|---:|---:|---:|
+| Clean Lua | 306.196 (5.26) | 210.218 (3.89) | 212.756 (1.66) | 233.601 (2.24) |
+| Expression mix | 327.688 (6.19) | 225.991 (7.10) | 232.275 (4.67) | 218.880 (8.37) |
+| Statement mix | 412.823 (6.36) | 261.855 (1.65) | 266.188 (2.23) | 259.604 (1.99) |
+| Declaration mix | 256.690 (2.06) | 238.480 (1.94) | 231.191 (6.10) | 235.422 (8.85) |
+
+The exact 127-total-block C99 probe (`blocks-126.c`) also aborts in recursive
+mode on a 1 MiB debug stack. This is Linux evidence with an explicitly sized
+worker, not a Windows measurement. Portability, unwind behavior and stacker
+support on Windows still need a native-platform validation before deployment.
