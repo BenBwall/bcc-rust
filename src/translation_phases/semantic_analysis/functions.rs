@@ -1764,11 +1764,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Microsoft discardable inline body that neither GNU `used` nor a
     /// reference from emitted code keeps, as Clang defers such definitions
     /// until their first use. An entity with no such reference, which
-    /// Clang never references, takes the last evaluated reference's
-    /// choice: lowering still emits some code Clang skips, after a call
-    /// that does not return and in a folded switch's unselected
-    /// statements, and a reference there must name the import it was
-    /// written with to link.
+    /// Clang never references, stays imported when any evaluated reference
+    /// in a body lowering emits named an import, dead or not: lowering
+    /// still emits some code Clang skips, after a call that does not return
+    /// and in a folded switch's unselected statements, and such a reference
+    /// must name the import it was written with to link. Lowering emits a
+    /// deferred body that any reference reaches.
     pub(super) fn finish_dll_references(&mut self, symbols: &super::facts::SymbolFacts<'tu>) {
         let evaluated = self.functions.evaluated_imports;
         let mut kinds = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
@@ -1778,6 +1779,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             _ = kinds.insert(entity, definition.kind);
         }
         let mut emitted = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut lowered = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for binding in symbols
             .aliases
             .iter()
@@ -1786,20 +1788,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             let entity = self.entity_of(binding);
             _ = emitted.insert(entity, ());
+            _ = lowered.insert(entity, ());
         }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &(owner, binding, _, dead) in evaluated {
-                if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {
-                    let entity = self.entity_of(binding);
-                    changed |= emitted.insert(entity, ()).is_none();
+        for (reached, live_only) in [(&mut emitted, true), (&mut lowered, false)] {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for &(owner, binding, _, dead) in evaluated {
+                    if !(dead && live_only) && self.owner_emitted(owner, &kinds, &*reached, symbols)
+                    {
+                        let entity = self.entity_of(binding);
+                        changed |= reached.insert(entity, ()).is_none();
+                    }
                 }
             }
         }
-        // Any reference decides when none in emitted code does.
-        for &(_, binding, import, _) in evaluated {
-            self.dll_referenced(binding, import);
+        // Any reference lowering emits decides when none in emitted code
+        // does, an import over a plain one.
+        for &(owner, binding, import, _) in evaluated {
+            if self.owner_emitted(owner, &kinds, &lowered, symbols) {
+                self.dll_lowered(binding, import);
+            }
         }
         for &(owner, binding, import, dead) in evaluated {
             if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {
