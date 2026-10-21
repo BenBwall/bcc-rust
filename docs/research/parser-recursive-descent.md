@@ -107,3 +107,47 @@ The next build/check jobs are queued behind shared wrapper locks. The prototype
 now covers precedence-climbing expressions and recursive statements/blocks,
 with retained frame fallbacks for types, declarations, initializers and extension
 productions. It has not yet passed compilation or differential validation.
+
+## Reproduction checkpoints
+
+```sh
+# Run from the assigned worktree. Every Cargo command goes through the wrapper.
+python3 scripts/parser_study_inputs.py --lua
+python3 scripts/parser_study_cases.py
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh -c '
+  cargo clippy --all-targets --features parser-recursive-descent-study -- -D warnings &&
+  cargo build --release --features parser-recursive-descent-study --example parser_study &&
+  cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/examples/parser_study" .scratch/parser-study/study-release &&
+  cargo build --features parser-recursive-descent-study --example parser_study &&
+  cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/debug/examples/parser_study" .scratch/parser-study/study-debug'
+python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-release --output .scratch/parser-study/diff.json
+python3 scripts/parser_study.py bench --binary .scratch/parser-study/study-release --output .scratch/parser-study/release.json
+python3 scripts/parser_study.py bench --binary .scratch/parser-study/study-debug --output .scratch/parser-study/debug.json
+# Run crash probes in separate processes on an explicitly sized native stack.
+python3 scripts/parser_study.py stack --binary .scratch/parser-study/study-debug --stack 1048576 --output .scratch/parser-study/debug-stack-1m.json
+```
+
+The runner saves JSON after every sample and rotates mode order across timing
+repetitions. Phase-7 hooks surround only parser construction and parsing; global
+allocator counters exclude source loading, preparation, thread creation, output,
+inspection and destruction. A separate worker's launch latency is printed when
+`--stack BYTES` is used. Repeating a sample makes a fresh context and preprocesses
+once outside that sample's timer; it does not replay a consumed context or retain
+an earlier AST. The preprocessed `.i` inputs have already expanded system headers
+and real macros once with GCC; the harness still tokenizes/collects these before
+the phase-7 boundary. Macro/include provenance is tested separately on original C.
+
+Candidate comparison uses `machine` and recursive modes from the same feature
+binary; the extra study dispatch branch may affect the feature-enabled machine.
+Feature-disabled baseline results are retained to expose that overhead. Do not
+treat the experimental mode as the production pipeline.
+
+The inspection check includes syntax shape/order/labels, node source segments,
+expression operator/delimiter source segments, recovery markers, and rendered
+diagnostics. Addresses and arena handles are excluded. This is an observable
+structural differential check, not a proof of equality for every unrendered
+private field. The dedicated corpus has 150 cases (87 valid, 21 extension, 42
+malformed), documented in [parser-study-coverage.md](parser-study-coverage.md).
+
+See [parser-frame-audit.md](parser-frame-audit.md) for source-cost hypotheses,
+existing pooling/layout constraints, recovery costs, and normative C99 floors.
