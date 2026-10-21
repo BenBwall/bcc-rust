@@ -1983,11 +1983,16 @@ fn always_inline_order_bounds_weak_names_at_eager_bodies() {
         );
     }
     // `used` does not make a plain C99 inline-only body appear at O0.
-    let source = format!("const int k=0; {CYCLE} inline __attribute__((used)) int probe(void) {{ if(k) h(0); return 0; }}\n#pragma weak k\nint main(void) {{ return f(4); }}");
+    let source = format!(
+        "const int k=0; {CYCLE} inline __attribute__((used)) int probe(void) {{ if(k) h(0); \
+         return 0; }}\n#pragma weak k\nint main(void) {{ return f(4); }}"
+    );
     assert_eq!(always_inline_order(&source, gnu), "fgh");
-    let source = source.replace("inline __attribute__((used))", "inline __attribute__((used,always_inline))");
+    let source = source.replace(
+        "inline __attribute__((used))",
+        "inline __attribute__((used,always_inline))",
+    );
     assert_eq!(always_inline_order(&source, gnu), "fgh");
-
 }
 
 #[test]
@@ -2018,12 +2023,29 @@ fn always_inline_order_ignores_overridden_static_initializer_values() {
         "static union { int (*p)(int); int (*q)(int); } u = { .p=g, .q=h };",
         "static struct { int (*p)(int); int x; } s[1] = { [0].p=g, [0]={h,0} };",
         "static int (*p[1])(int) = { [0]=(int (*)(int))(void*)g, [0]=h };",
+        "static int (*p[2])(int) = { [0 ... 1]=g, [0 ... 1]=h };",
+        "static int (*p[100000])(int) = { [0 ... 99999]=g, [0 ... 99999]=h };",
+        "static struct { int (*p)(int); int x; } s[3] = { [0 ... 2].p=g, [0 ... 2].p=h };",
+        "static int (*p[2][3])(int) = { [0 ... 1][0 ... 2]=g, [0 ... 1][0 ... 2]=h };",
     ] {
         let source = format!(
             "{CYCLE} int probe(void) {{ {declaration} return 0; }} int main(void) {{ return f(4); \
              }} extern int g(int); extern int h(int);"
         );
         assert_eq!(always_inline_order(&source, c99), "hfg", "{source}");
+    }
+    // The source element is replaced, but its earlier copies still need g.
+    for declaration in [
+        "static int (*p[3])(int) = { [0 ... 2]=g, [0]=h };",
+        "static int (*p[2])(int) = { [1]=g, [0]=h };",
+        "static struct { int (*p)(int); int x; } s[3] = { [0 ... 2].p=g, [0].p=h };",
+        "static int (*p[2][3])(int) = { [0 ... 1][0 ... 2]=g, [0][0]=h };",
+    ] {
+        let source = format!(
+            "{CYCLE} int probe(void) {{ {declaration} return 0; }} int main(void) {{ return f(4); \
+             }} extern int g(int); extern int h(int);"
+        );
+        assert_eq!(always_inline_order(&source, c99), "hgf", "{source}");
     }
 }
 

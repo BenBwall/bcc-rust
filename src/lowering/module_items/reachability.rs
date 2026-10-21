@@ -18,8 +18,10 @@ use crate::{
         Leaf,
         Storage,
     },
-    translation_phases::semantic_analysis::InitOperation,
-    util::interval_cover::last_writes,
+    util::{
+        bump::Bump,
+        interval_cover::last_writes,
+    },
 };
 
 impl<'a> Unit<'a, '_, '_> {
@@ -116,19 +118,46 @@ impl<'a> Unit<'a, '_, '_> {
         let mut starts = ArenaVec::new_in(self.tables);
         starts.resize(canonical.len() + 1, 0usize);
         // Clang's code generation skips dead code, which creates nothing.
-        let live = || {
-            self.sema.references.iter().filter(|reference| {
-                !reference.dead
-                    && initializer_values
-                        .get(&reference.owner)
-                        .is_none_or(|values| {
-                            reference
-                                .initializer_value
-                                .is_none_or(|value| values.contains(&value))
-                        })
-            })
-        };
-        for reference in live() {
+        let mut live = ArenaVec::new_in(self.tables);
+        live.extend(
+            self.sema
+                .references
+                .iter()
+                .enumerate()
+                .filter(|(_, reference)| {
+                    !reference.dead
+                        && initializer_values
+                            .get(&reference.owner)
+                            .is_none_or(|values| {
+                                reference
+                                    .initializer_value
+                                    .is_none_or(|value| values.contains_key(&value))
+                            })
+                }),
+        );
+        // Constant aggregate emission visits the final elements, in layout
+        // order, rather than the overwritten source designators. References
+        // within one value retain their original expression order.
+        let mut begin = 0;
+        while begin < live.len() {
+            let owner = live[begin].1.owner;
+            let mut end = begin + 1;
+            while end < live.len() && live[end].1.owner == owner {
+                end += 1;
+            }
+            if let Some(values) = initializer_values.get(&owner) {
+                live[begin..end].sort_unstable_by_key(|(index, reference)| {
+                    (
+                        reference
+                            .initializer_value
+                            .and_then(|value| values.get(&value).copied()),
+                        *index,
+                    )
+                });
+            }
+            begin = end;
+        }
+        for &(_, reference) in &live {
             starts[owner_of(reference.owner) + 1] += 1;
         }
         for index in 1..starts.len() {
@@ -137,7 +166,7 @@ impl<'a> Unit<'a, '_, '_> {
         let mut next = starts.clone();
         let mut targets = ArenaVec::new_in(self.tables);
         targets.resize(starts[canonical.len()], 0usize);
-        for reference in live() {
+        for &(_, reference) in &live {
             let owner = owner_of(reference.owner);
             targets[next[owner]] = canonical[reference.binding];
             next[owner] += 1;
@@ -170,9 +199,14 @@ impl<'a> Unit<'a, '_, '_> {
         // once referenced; their special copies can affect this order.
         let creates_body = |definition: &Definition| {
             definition.kind != DefinitionKind::Inline
-                || self.sema.entity_attributes(definition.binding).is_some_and(|attributes| {
-                    attributes.weak || attributes.inlining == crate::translation_phases::semantic_analysis::Inlining::Always
-                })
+                || self
+                    .sema
+                    .entity_attributes(definition.binding)
+                    .is_some_and(|attributes| {
+                        attributes.weak
+                            || attributes.inlining
+                                == crate::translation_phases::semantic_analysis::Inlining::Always
+                    })
         };
         let mut deferred = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
         for definition in self.sema.definitions {
@@ -253,36 +287,84 @@ impl<'a> Unit<'a, '_, '_> {
     }
 
     /// Initializer values contributing to a static object's final bits.
-    /// Reuse lowering's plan replay for brace and union resets. GNU ranges
-    /// remain conservative here, without expanding their extent merely to
-    /// determine creation order.
+    /// Reuse lowering's plan replay for brace and union resets. Replications
+    /// copy the source's provenance at that point, before later stores can
+    /// replace it. A uniform contiguous range stays one interval; other
+    /// copies cost no more elements than static emission itself visits.
     /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
-    fn materialized_initializer_values(&self, binding: usize) -> Option<ArenaSet<'a, usize>> {
+    fn materialized_initializer_values(
+        &self,
+        binding: usize,
+    ) -> Option<ArenaMap<'a, usize, usize>> {
         let initializer = self.sema.entity(binding)?.initializer?;
         let plan = self.sema.initializers.plan(initializer)?;
-        if plan
-            .operations
-            .iter()
-            .any(|operation| matches!(operation, InitOperation::Repeat { .. }))
-        {
-            return None;
-        }
-        let (leaves, _) = initializers::leaves(
-            self.sema,
-            plan.ty,
-            initializer,
-            Storage::Static,
-            self.tables,
-        )
-        .ok()?;
-        let mut ranges = ArenaVec::with_capacity_in(leaves.len(), self.tables);
+        let scratch = Bump::new();
+        let (leaves, _) =
+            initializers::leaves(self.sema, plan.ty, initializer, Storage::Static, &scratch)
+                .ok()?;
+        let mut ranges: ArenaVec<'_, (u64, u64)> =
+            ArenaVec::with_capacity_in(leaves.len(), &scratch);
+        let mut writers: ArenaVec<'_, Option<usize>> =
+            ArenaVec::with_capacity_in(leaves.len(), &scratch);
         for &leaf in &leaves {
-            ranges.push(leaf.bits(&self.sema.types).ok()?);
+            if let Leaf::Replicate {
+                offset,
+                size,
+                stride,
+                count,
+                ..
+            } = leaf
+            {
+                let start = offset.checked_mul(8)?;
+                let end = offset.checked_add(size)?.checked_mul(8)?;
+                let replay = Bump::new();
+                let mut source = ArenaVec::new_in(&replay);
+                // Snapshot only the source run. Never read the final source
+                // after a later initializer has replaced its original value.
+                let mut inside = ArenaVec::new_in(&replay);
+                let mut origins = ArenaVec::new_in(&replay);
+                for (index, &(low, high)) in ranges.iter().enumerate() {
+                    if low < end && high > start {
+                        inside.push((low.max(start), high.min(end)));
+                        origins.push(writers[index]);
+                    }
+                }
+                for (low, high, index) in last_writes(&inside, &replay) {
+                    source.push((low, high, origins[index]));
+                }
+                if let &[(low, high, writer)] = source.as_slice()
+                    && low == start
+                    && high == end
+                    && size == stride
+                {
+                    ranges.push((
+                        end,
+                        end.checked_add(count.checked_mul(stride)?.checked_mul(8)?)?,
+                    ));
+                    writers.push(writer);
+                } else {
+                    for copy in 1..=count {
+                        let shift = copy.checked_mul(stride)?.checked_mul(8)?;
+                        for &(low, high, writer) in &source {
+                            ranges.push((low.checked_add(shift)?, high.checked_add(shift)?));
+                            writers.push(writer);
+                        }
+                    }
+                }
+            } else {
+                ranges.push(leaf.bits(&self.sema.types).ok()?);
+                writers.push(match leaf {
+                    | Leaf::Scalar { expression, .. } | Leaf::Copy { expression, .. } =>
+                        Some(std::ptr::from_ref(expression).addr()),
+                    | _ => None,
+                });
+            }
         }
-        let mut values = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
-        for (_, _, index) in last_writes(&ranges, self.tables) {
-            if let Leaf::Scalar { expression, .. } | Leaf::Copy { expression, .. } = leaves[index] {
-                _ = values.insert(std::ptr::from_ref(expression).addr());
+        let mut values = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        for (_, _, index) in last_writes(&ranges, &scratch) {
+            if let Some(value) = writers[index] {
+                let rank = values.len();
+                _ = values.entry(value).or_insert(rank);
             }
         }
         Some(values)
