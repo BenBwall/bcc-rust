@@ -99,8 +99,10 @@ Engine limits are explicit terminal diagnostics: 2,048 steps, 32 frames,
 128 total objects, 512 integer cells, 1,024 operands, 64 parser nesting levels,
 8,192 compiled operations, and a conservative 8 MiB trace-retention budget.
 The UI distinguishes resource limits and unsupported syntax from detected UB.
-Pointer offsets count int elements, not bytes or host addresses. Ended objects
-remain visible as lifetime tombstones. `main`'s return value appears at completion.
+Pointer offsets count int elements, not bytes or host addresses. Automatic
+lifetimes begin when declarations execute; C99 fixed objects instead begin
+lifetime at block entry and initialize when the declaration is reached. Ended
+objects remain visible as lifetime tombstones. `main`'s return value appears at completion.
 
 ## Files and integration boundary
 
