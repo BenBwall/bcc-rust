@@ -29,6 +29,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["bench", "diff", "stack"])
     parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--baseline-binary", type=Path)
+    parser.add_argument("--alignment-binary", type=Path)
     parser.add_argument("--inputs", type=Path, default=Path(".scratch/parser-study/inputs"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=7)
@@ -37,6 +39,11 @@ def main():
     parser.add_argument("--stack", type=int)
     args = parser.parse_args()
     args.binary = args.binary.resolve()
+    binaries = {"study": args.binary}
+    for label in ["baseline", "alignment"]:
+        path = getattr(args, label + "_binary")
+        if path:
+            binaries[label] = path.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     scratch = args.output.parent / (args.output.stem + "-inspections")
     if args.action == "diff":
@@ -53,13 +60,15 @@ def main():
         files = [args.inputs / f"{kind}-{depth}.c" for depth in [32, 127, 256, 1024, 4096, 16384] for kind in ["parentheses", "unary", "assignment", "conditional", "statements", "blocks", "declarator", "initializer"]]
 
     rows = []
-    metadata = {"binary": str(args.binary), "binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(), "action": args.action, "repeats": args.repeats, "modes": args.modes, "stack_bytes": args.stack}
+    metadata = {"binaries": {label: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for label, path in binaries.items()}, "action": args.action, "repeats": args.repeats, "modes": args.modes, "stack_bytes": args.stack}
 
     def save():
         args.output.write_text(json.dumps({"metadata": metadata, "rows": rows}, indent=2) + "\n")
 
     def execute(source, mode, repeat):
-        command = [str(args.binary), str(source), "1", "--mode", mode]
+        binary = binaries[mode] if mode in ["baseline", "alignment"] else args.binary
+        parser_mode = "machine" if mode in ["baseline", "alignment"] else mode
+        command = [str(binary), str(source), "1", "--mode", parser_mode]
         if args.stack:
             command += ["--stack", str(args.stack)]
         if args.action == "stack":
@@ -74,6 +83,9 @@ def main():
             row = {"input": source.name, "mode": mode, "repeat": repeat, "returncode": completed.returncode, "elapsed_seconds": time.monotonic() - before, "metrics": parse_metrics(completed.stdout)}
             if completed.stderr:
                 row["stderr"] = completed.stderr[:4000]
+            for line in completed.stdout.splitlines():
+                if line.startswith("thread_launch_ns="):
+                    row.update({key: int(value) for key, value in (part.split("=", 1) for part in line.split())})
             if args.action == "diff" and completed.returncode == 0:
                 row["inspection_sha256"] = hashlib.sha256(destination.read_bytes()).hexdigest()
                 baseline = scratch / (source.name + ".machine.ast")
