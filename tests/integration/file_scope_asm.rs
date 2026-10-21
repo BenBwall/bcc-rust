@@ -145,9 +145,9 @@ __asm__(\"# last \\\"block\\\"\");
                     .args(["--input", PROGRAM])
                     .env("NO_COLOR", "1");
                 if target.ends_with("windows-gnu") {
-                    // Clang's assembler driver asks for a MinGW root even for
-                    // an object, on every host; this header-free source needs
-                    // none.
+                    // bcc's toolchain lookup asks for a MinGW root before clang
+                    // assembles even an object, on every host; this header-free
+                    // source needs none.
                     _ = command.env("MINGW_ROOT", env::temp_dir());
                 }
                 let output = command.output().unwrap();
