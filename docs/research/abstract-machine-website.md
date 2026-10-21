@@ -363,6 +363,11 @@ These citations were verified against the searchable N1256 edition through
   this rule rather than silently substituting a later revision's terminology.
 - C99 §6.7.8p10, printed p. 126; PDF p. 138: automatic indeterminate values
   and static default initialization.
+- C99 §6.2.4p5, printed p. 32; PDF p. 44: fixed automatic object lifetime
+  starts at block entry; initialization occurs on reaching the declaration.
+- C99 §6.5.3.2p3, printed pp. 78-79; PDF pp. 90-91: address-of cancels
+  indirection in `&*E`, and `&E1[E2]` forms a pointer without the implied
+  indirection. This matters when displaying one-past and null pointers.
 
 ## Prototype and verification record
 
@@ -401,6 +406,14 @@ porting the real frontend. There is no preprocessing, globals/static/allocated
 storage, full C declarator or conversion system, floating point, structure or
 union representation, effective-type model, function pointers or C library.
 No native/LLVM output or other compiler inspection views are implemented.
+
+Automatic objects are allocated when their declarations execute. For fixed
+automatic objects C99 §6.2.4p5 instead starts lifetime on block entry and
+separately performs initialization when a declaration is reached (printed
+p. 32; PDF p. 44). The demo gets allocation identity, block exits and call
+activations, but does not yet reproduce that earlier lifetime boundary.
+Pointer tombstones retain historical target information for inspection;
+using a pointer after its target dies stops under the indeterminate policy.
 
 The evaluator uses a documented deterministic operand order and rejects
 nested side effects and calls in compound expressions rather than claiming
