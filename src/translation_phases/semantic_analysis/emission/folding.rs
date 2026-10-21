@@ -23,8 +23,9 @@
 //! builtins, and `strlen` of a string. Any other call, an assignment, an
 //! increment, a volatile or other object read, a declaration in a statement
 //! expression and anything this model does not know do not fold. An entity
-//! is weak when any file-scope declaration or `#pragma weak` makes it so,
-//! wherever it is: Clang emits some bodies after the whole unit. A value
+//! is weak when `#pragma weak` or any file-scope declaration before its
+//! definition makes it so, wherever it is: Clang emits some bodies after
+//! the whole unit. A value
 //! that is a whole result (`?:` operands, initializers) holds no address of
 //! an automatic, thread-local or `dllimport` object, which
 //! `CheckLValueConstantExpression` refuses.
@@ -32,6 +33,8 @@
 //! §6.5.13-§6.5.15, pp. 89-91; PDF pp. 101-103; §6.5.17 paragraph 2, p. 94;
 //! PDF p. 106.
 //! GNU extension: GCC manual, "Other Builtins" and "Statement Exprs".
+
+use rustc_hash::FxBuildHasher;
 
 use super::super::{
     Analyzer,
@@ -82,7 +85,10 @@ use crate::{
         },
     },
     util::{
-        bump::ArenaVec,
+        bump::{
+            ArenaMap,
+            ArenaVec,
+        },
         string_cache::StringCacheId,
     },
 };
@@ -1306,7 +1312,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Records the names [`Self::may_be_weak`] reads before the unit is
     /// analyzed: those of `#pragma weak`, and those of the file-scope
-    /// declarations in `roots` that write `weak` or `weak_import`.
+    /// declarations in `roots` that write `weak` or `weak_import` before
+    /// any definition of the name. Clang drops such an attribute after a
+    /// definition (`checkNewAttributesAfterDef`), while the pragma also
+    /// applies to an entity already defined.
     pub(in crate::translation_phases::semantic_analysis) fn record_weak_names(
         &mut self,
         roots: &[ExternalDeclaration<'tu>],
@@ -1315,6 +1324,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let name = self.context.weak_pragmas[index];
             _ = self.functions.emission.weak_names.insert(name, ());
         }
+        let mut defined = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for &root in roots {
             let (spec, declarators) = match root {
                 | ExternalDeclaration::Declaration(declaration)
@@ -1324,26 +1334,46 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ),
                 | ExternalDeclaration::FunctionDefinition(definition)
                 | ExternalDeclaration::RecoveredFunctionDefinition(definition) => {
-                    self.record_weak_name(definition.declaration_specifiers, definition.declarator);
+                    self.record_weak_name(
+                        definition.declaration_specifiers,
+                        definition.declarator,
+                        &defined,
+                    );
+                    if let Some(name) = definition.declarator.identifier() {
+                        _ = defined.insert(name.name, ());
+                    }
                     continue;
                 },
                 | ExternalDeclaration::Error(_) | ExternalDeclaration::Asm(_) => continue,
             };
             for init in declarators {
-                self.record_weak_name(spec, init.declarator);
+                self.record_weak_name(spec, init.declarator, &defined);
+                if init.initializer.is_some()
+                    && let Some(name) = init.declarator.identifier()
+                {
+                    _ = defined.insert(name.name, ());
+                }
             }
         }
     }
 
     /// Records the name `declarator` declares when its declaration writes
-    /// `weak` or `weak_import`.
-    fn record_weak_name(&mut self, spec: DeclarationSpecifiers<'tu>, declarator: Declarator<'tu>) {
+    /// `weak` or `weak_import` and no declaration in `defined` defined it.
+    fn record_weak_name(
+        &mut self,
+        spec: DeclarationSpecifiers<'tu>,
+        declarator: Declarator<'tu>,
+        defined: &ArenaMap<'_, StringCacheId, ()>,
+    ) {
         if !super::super::attributes::written_on(spec.extensions, declarator) {
             return;
         }
         let Some(name) = declarator.identifier() else {
             return;
         };
+        if defined.contains_key(&name.name) {
+            return;
+        }
         let weak = self
             .declaration_attribute_lists(spec.extensions, Some(declarator))
             .iter()

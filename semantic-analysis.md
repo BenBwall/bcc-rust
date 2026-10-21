@@ -926,9 +926,9 @@ but no call, assignment, volatile or other object read, and no condition
 holding a label. Semantic analysis's own constant is trusted except around
 `__builtin_constant_p` and weak entities, whose GNU-mode fold Clang's
 evaluator does not make, and floating arithmetic with a NaN result, which it
-refuses as undefined. An entity is weak when any file-scope declaration in the
-unit writes `weak` or `weak_import`, or `#pragma weak` names it, as Clang
-emits deferred bodies after the whole unit. Loops instead test the value IR emission produces. Two forms
+refuses as undefined. An entity is weak when `#pragma weak` names it or a
+file-scope declaration before its definition writes `weak` or `weak_import`,
+anywhere in the unit, as Clang emits deferred bodies after the whole unit. Loops instead test the value IR emission produces. Two forms
 take more than the statement walk (`emission/`). A `switch` whose
 controlling expression folds emits only the statements Clang's
 `CollectStatementsForCase` gathers from the matching case, else `default`

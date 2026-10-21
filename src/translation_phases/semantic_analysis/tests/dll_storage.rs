@@ -1250,7 +1250,9 @@ fn first_pr_review_forms_fix_generated_import_state() {
 /// The forms PR #117's second review found, against Clang 23 on both
 /// Windows ABIs at -O0. The address of a `dllimport` object is no constant
 /// result, a weak entity by `#pragma weak`, `weak_import` or a later
-/// declaration does not fold in a body Clang emits after the unit, and the
+/// declaration does not fold in a body Clang emits after the unit, though a
+/// `weak` attribute after the entity's definition, which Clang drops, does
+/// not make it weak; the
 /// Microsoft ABI emits a call's arguments from the last, so a join in an
 /// earlier one follows a call that does not return in a later one: the
 /// reference is emitted and drops the import. Where Clang references
@@ -1303,6 +1305,18 @@ fn second_pr_review_forms_fix_generated_import_state() {
              0; }",
             false,
             false,
+        ),
+        (
+            "const int k = 1; int h(void) { if (!k) return x; return 0; } extern const int k \
+             __attribute__((weak));",
+            true,
+            true,
+        ),
+        (
+            "void wd(void) {} int h(void) { if (!wd) return x; return 0; } void wd(void) \
+             __attribute__((weak));",
+            true,
+            true,
         ),
     ] {
         let source = format!("{IMPORTED}{source}");
