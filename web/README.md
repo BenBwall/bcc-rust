@@ -135,3 +135,19 @@ integration check. No C semantics or computed program values live in JavaScript.
 demo's result, changed-source result, function calls, arrays/pointers, lifetimes,
 pending effects, UB citations, rejection, and Rust-native reverse replay/reset.
 Generated artifacts belong in ignored `web/pkg/`; binary output is not committed.
+
+## Verification
+
+The documented `sh web/build.sh` path and the real-artifact `check.mjs` passed
+on 2026-10-21. The tour returns `15`; changing its input array to `{4, 6, 8}`
+returns `21`. Checks cover actual calls, pointer writes into arrays, indeterminate
+storage, ended lifetimes, pending stores, separate policy/UB stops with citations,
+Rust reverse replay/reset, rejected source, UTF-8 columns, and runtime limits.
+The local generated artifact is `web/pkg/bcc_rust.wasm` (about 1.3 MiB with the
+repository's release debug information).
+
+JavaScript and shell syntax checks, HTML ID/ARIA/asset checks, local HTTP asset
+checks, and `git diff --check` also passed. Browser interaction, mobile layout,
+and assistive-technology testing belong to the coordinating root's browser pass;
+this task did not start a competing browser session. The Rust engine and bridge
+owners are responsible for Rust tests, Clippy restriction lints, and Rustfmt.
