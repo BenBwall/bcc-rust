@@ -932,18 +932,29 @@ controlling expression folds emits only the statements Clang's
 (§6.8.4.2p4-5, printed p. 134, PDF p. 146). Analysis still runs in source
 order: the body is analyzed as unfolded until a label is selected, which then
 marks the references recorded since the body began as skipped and the object
-definitions and label-free statement facts there as elided; a `default` is
+definitions and statement facts there as elided, except the blocks and case
+labels leading to the selected label and statements holding an ordinary
+label; a `default` is
 selected tentatively only when collection from every later case succeeds.
 A later matching case replaces it and elides the default region too.
 Otherwise, or past 64 later labels, the switch stays unfolded, which may
-retain more code than Clang. Case-label statements and their ancestors remain
-available to lowering's label blocks. A retained generated-control fact directs
-lowering straight to the chosen label when collection succeeded, and an `if` with an
-elided arm lowers only its selected arm. Conditional and logical operands use
-the same elision facts before ordinary constant shortcuts. Constant-query
-integers use the emission evaluator at the builtin leaf, so semantic integer
-facts, static initializer data, standalone values and loop decisions agree.
-An unknown query still emits zero while the control fold can remain unknown.
+retain more code than Clang. A retained generated-control fact directs
+lowering straight to the chosen label when collection succeeded, so unselected
+case labels, also those after the selected `break`, are never lowered; only a
+tentative `default` keeps the case labels after its `break`, since a later case
+may still replace it. An `if` with an elided arm lowers only its selected arm.
+Every lowering consumer of a conditional or logical operator, as a value, as a
+branch condition or in an effects-only recipe, reads the same operand elision
+facts before ordinary constant shortcuts. The common operand of GNU `x ?: y`
+is always emitted, as Clang binds it before folding. Constant-query integers
+take Clang's constant-context value, so semantic integer facts, case labels,
+static assertions, static initializer data, standalone values and loop
+decisions agree: a comma whose left operand is not constant, and an element
+read through a non-`const` array compound literal, are not constant there.
+In function code Clang yields one for both, because its non-constant fold reads
+the compound literal and `llvm.is.constant` sees the comma's constant result;
+bcc keeps zero there, as `main` does. An unknown query still
+emits zero while the control fold can remain unknown.
 String-address queries require each integer cast to have exactly the pointer width;
 widening an integer after a narrowing cast does not recover the address.
 When lowering omits a folded condition, its executable references are unlowered
@@ -1003,6 +1014,10 @@ not evaluated. Constant-query operands in emitted function code likewise preserv
 nested static declarations and their initializer references while dropping executable
 references. Within a static or thread-local initializer, the query emits only
 its integer value: its operand declarations and all their references are omitted.
+Either way its operand is still used in an expression, so an internal
+identifier it names needs a definition (C99 §6.9p3, p. 140; PDF p. 152).
+A dead automatic initializer holding a label gives Clang an insertion point
+(`EmitAutoVarInit`), so the statements after its declaration are emitted.
 The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
@@ -2304,9 +2319,9 @@ statement or operand (`elided`). Clang `EmitSimpleStmt` still visits declaration
 compounds, attributed statements and labels (including case/default) after a
 jump or noreturn call. A non-simple statement without a label is skipped there,
 including its nested declarations; labels inside GNU statement expressions count.
-Folded switches elide unselected statements while preserving case labels and
-their ancestors for dispatch; the selected label resumes emission before its
-facts are captured. Unevaluated sizeof/typeof/alignof operands, generic control
+Folded switches elide unselected statements, unselected case labels included,
+and keep only the blocks and labels leading to the selected label; the selected
+label resumes emission before its facts are captured. Unevaluated sizeof/typeof/alignof operands, generic control
 and unselected associations, unselected choose-expression arms and folded-away
 label-free conditional/logical operands retain no local definitions. Runtime VLA operands
 remain evaluated. Declaration contexts are finalized after typing, together
