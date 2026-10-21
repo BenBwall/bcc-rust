@@ -827,9 +827,7 @@ fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression
 
 /// The declaration block item `item` makes, or the block it holds, through
 /// labels and attributes.
-fn item_parts<'tu>(
-    item: BlockItem<'tu>,
-) -> (Option<&'tu Declaration<'tu>>, Option<&'tu Statement<'tu>>) {
+fn item_parts(item: BlockItem<'_>) -> (Option<&Declaration<'_>>, Option<&Statement<'_>>) {
     let mut statement = match item {
         | BlockItem::Declaration(declaration) => return (Some(declaration), None),
         | BlockItem::Statement(statement) => statement,

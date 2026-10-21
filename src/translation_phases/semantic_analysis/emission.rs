@@ -136,7 +136,7 @@ pub(super) struct State<'tu, 's> {
     /// The byte ranges of each read aggregate and the operation that stores
     /// each, by binding, with the depth of a query `folding::DEPTH` cut
     /// short (`folding.rs`).
-    plan_covers:             ArenaMap<'s, usize, (Option<&'s [(u64, u64, u32)]>, Option<u32>)>,
+    plan_covers:             ArenaMap<'s, usize, (Option<folding::Cover<'s>>, Option<u32>)>,
     /// The elements of each string literal the evaluator reads, by literal
     /// and encoding.
     literal_units:           ArenaMap<'s, (u32, u8), &'s [u32]>,

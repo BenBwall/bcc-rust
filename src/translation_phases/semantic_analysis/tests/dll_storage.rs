@@ -1263,6 +1263,8 @@ fn first_pr_review_forms_fix_generated_import_state() {
 fn second_pr_review_forms_fix_generated_import_state() {
     const IMPORTED: &str =
         "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    const SKIPPED: &str = "__declspec(dllimport) extern int x; __attribute__((noreturn)) void \
+                           die(void); int h(void) { die(); return x; } extern int x; ";
     for (source, msvc, mingw) in [
         (
             "__declspec(dllimport) extern int di; int h(void) { int *const dp = &di; if (!dp) \
@@ -1328,44 +1330,32 @@ fn second_pr_review_forms_fix_generated_import_state() {
             );
         }
     }
-    const SKIPPED: &str = "__declspec(dllimport) extern int x; __attribute__((noreturn)) void \
-                           die(void); int h(void) { die(); return x; } extern int x; ";
-    for (source, name, imported) in [
+    for (prefix, rest, name, imported) in [
         (
-            format!("{SKIPPED}int k(void) {{ if (0) return x; return 0; }}"),
+            SKIPPED,
+            "int k(void) { if (0) return x; return 0; }",
             "x",
             true,
         ),
-        (
-            format!("{SKIPPED}inline int k(void) {{ return x; }}"),
-            "x",
-            true,
-        ),
-        (
-            format!("{SKIPPED}static int unused(void) {{ return x; }}"),
-            "x",
-            true,
-        ),
-        (
-            format!("{SKIPPED}int k(void) {{ die(); return x; }}"),
-            "x",
-            true,
-        ),
+        (SKIPPED, "inline int k(void) { return x; }", "x", true),
+        (SKIPPED, "static int unused(void) { return x; }", "x", true),
+        (SKIPPED, "int k(void) { die(); return x; }", "x", true),
         (
             "__declspec(dllimport) extern int x; int h(void) { switch (2) { case 1: return x; \
-             case 2: break; } return 0; } extern int x; int k(void) { if (0) return x; return 0; }"
-                .to_owned(),
+             case 2: break; } return 0; } extern int x; ",
+            "int k(void) { if (0) return x; return 0; }",
             "x",
             true,
         ),
         (
             "void fn(void); __attribute__((noreturn)) void die(void); int h(void) { die(); fn(); \
-             return 0; } __declspec(dllimport) void fn(void); static void u(void) { fn(); }"
-                .to_owned(),
+             return 0; } __declspec(dllimport) void fn(void); ",
+            "static void u(void) { fn(); }",
             "fn",
             false,
         ),
     ] {
+        let source = format!("{prefix}{rest}");
         for target in WINDOWS {
             assert_eq!(
                 facts(&source, target, name).0,

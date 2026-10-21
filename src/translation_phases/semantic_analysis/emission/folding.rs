@@ -672,12 +672,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let initializer = *self.functions.emission.constant_aggregates.get(&binding)?;
         let plan = *self.initializers.plan(initializer)?;
         let operation = *plan.operations.get(operation as usize)?;
-        let destination = match operation {
-            | InitOperation::Zero { destination, .. }
-            | InitOperation::Store { destination, .. }
-            | InitOperation::String { destination, .. }
-            | InitOperation::EmptyScalar { destination, .. } => destination,
-            | _ => return None,
+        let (InitOperation::Zero { destination, .. }
+        | InitOperation::Store { destination, .. }
+        | InitOperation::String { destination, .. }
+        | InitOperation::EmptyScalar { destination, .. }) = operation
+        else {
+            return None;
         };
         let exact = destination.offset == offset
             && self.types.non_atomic(destination.ty).unqualified() == ty.unqualified();
@@ -734,7 +734,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// range) and leaves nothing unmodeled. Computed once per object, so a
     /// read costs a search rather than a pass over the plan; kept as
     /// [`Self::evaluate_value`] keeps a value that [`DEPTH`] cut short.
-    fn plan_cover(&mut self, binding: usize, depth: u32) -> Option<&'s [(u64, u64, u32)]> {
+    fn plan_cover(&mut self, binding: usize, depth: u32) -> Option<Cover<'s>> {
         if let Some(&(cover, cut)) = self.functions.emission.plan_covers.get(&binding)
             && cut.is_none_or(|cut| depth >= cut)
         {
@@ -784,7 +784,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 index,
             );
         }
-        let cover: Option<&'s [(u64, u64, u32)]> = readable.then(|| &*cover.leak());
+        let cover: Option<Cover<'s>> = readable.then(|| &*cover.leak());
         _ = self
             .functions
             .emission
@@ -1418,6 +1418,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 }
+
+/// The byte ranges of a `const` aggregate, sorted and disjoint, each with the
+/// index of the plan operation that stores it last
+/// ([`Analyzer::plan_cover`]).
+pub(super) type Cover<'s> = &'s [(u64, u64, u32)];
 
 /// A value Clang's evaluator computed.
 #[derive(Clone, Copy)]
