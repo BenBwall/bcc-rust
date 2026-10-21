@@ -168,6 +168,9 @@ pub(super) struct State<'tu, 's> {
     /// an item inside it, may declare something of a variably modified
     /// type, by address.
     variably_modified_items: ArenaMap<'s, usize, bool>,
+    /// Whether an expression or one in it may join paths, by address
+    /// (`insertion.rs`).
+    may_join:                ArenaMap<'s, usize, bool>,
     /// The functions whose block-scope typedefs have been read, by address.
     vm_typedef_functions:    ArenaMap<'s, usize, ()>,
     /// The names a block-scope typedef may give a variably modified type,
@@ -217,6 +220,7 @@ impl<'s> State<'_, 's> {
             variably_modified:       ArenaVec::new_in(scratch),
             work_low:                0,
             variably_modified_items: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            may_join:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             vm_typedef_functions:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             vm_typedefs:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             unevaluated_calls:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),

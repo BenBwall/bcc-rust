@@ -220,16 +220,49 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
             | _ => return false,
         }
-        while let Some(operand) = work.pop() {
-            // A statement expression may join paths in its statements.
-            if matches!(operand.kind, ExpressionType::StatementExpression(_))
-                || self.joins_paths(operand)
-            {
-                return true;
+        work.into_iter().any(|operand| self.may_join(operand))
+    }
+
+    /// Whether `e` or an expression in it may join paths: one that
+    /// [`Self::joins_paths`], or a statement expression, which may in its
+    /// statements. Memoized for each expression it holds, in postorder, so
+    /// that nested operands are examined once.
+    fn may_join(&mut self, e: &'tu Expression<'tu>) -> bool {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push((e, false));
+        while let Some((current, children_done)) = work.pop() {
+            let key = std::ptr::from_ref(current).addr();
+            if self.functions.emission.may_join.contains_key(&key) {
+                continue;
             }
-            super::labels::expression_children(self.scratch, operand, |child| work.push(child));
+            let statement = matches!(current.kind, ExpressionType::StatementExpression(_));
+            if statement || children_done {
+                let mut joins = statement || self.joins_paths(current);
+                if !statement {
+                    super::labels::expression_children(self.scratch, current, |child| {
+                        joins |= self
+                            .functions
+                            .emission
+                            .may_join
+                            .get(&std::ptr::from_ref(child).addr())
+                            .copied()
+                            .unwrap_or(true);
+                    });
+                }
+                _ = self.functions.emission.may_join.insert(key, joins);
+            } else {
+                work.push((current, true));
+                super::labels::expression_children(self.scratch, current, |child| {
+                    work.push((child, false));
+                });
+            }
         }
-        false
+        self.functions
+            .emission
+            .may_join
+            .get(&std::ptr::from_ref(e).addr())
+            .copied()
+            .unwrap_or(true)
     }
 
     /// Whether Clang emits `e` with a branch whose paths join in a block
