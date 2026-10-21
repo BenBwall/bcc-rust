@@ -94,7 +94,7 @@ explicit exceptions: compatibility/composite checking can revisit shared typedef
 graphs on repeated redeclarations; layout queries strip shared array derivations;
 qualified array typedef construction traverses those derivations. These operations
 are linear in the queried type graph, not necessarily just newly written syntax.
-Conditional integer models and ICE operand eligibility are cached by syntax identity; deep conditional chains do not repeatedly scan their tails. No native-stack depth limit is imposed by semantic traversal.
+Conditional integer models and ICE operand eligibility are cached by syntax identity; deep conditional chains do not repeatedly scan their tails. No native-stack depth limit is imposed by semantic traversal; the emission model's fold evaluator and `noreturn` type walk recurse instead, bounded at 64 levels, and leave deeper forms unfolded or returning (see the emission model below).
 
 ## Type graph and target data model
 
@@ -918,17 +918,29 @@ an automatic, thread-local or `dllimport` object is no constant there, nor a
 `?:` operand Clang selects), a scalar inside such an array or
 structure whose initializer evaluates (read from its initializer plan), an
 element of a string literal, the address of a non-weak object or function
-(compared within one object in bytes),
+(compared within one object in bytes, and distinct from a string literal
+unless one may be one past its end while the other is at its start, or the
+object is an array of unknown or zero size, as Clang's evaluator refuses),
 `__builtin_expect`, `__builtin_strlen`, `__builtin_abs`, the count bit builtins
 and byte swaps, and `__builtin_constant_p` as Clang's evaluator computes
-them (a volatile read, also through `*`, `[]`, `.` or `->`, is a side effect),
+them (1 only for an arithmetic operand that folds or a pointer to a literal's
+first element) (a volatile read, also through `*`, `[]`, `.` or `->`, is a side effect),
 but no call, assignment, volatile or other object read, and no condition
 holding a label. Semantic analysis's own constant is trusted except around
 `__builtin_constant_p` and weak entities, whose GNU-mode fold Clang's
 evaluator does not make, and floating arithmetic with a NaN result, which it
-refuses as undefined. An entity is weak when `#pragma weak` names it or a
-file-scope declaration before its definition writes `weak` or `weak_import`,
-anywhere in the unit, as Clang emits deferred bodies after the whole unit. Loops instead test the value IR emission produces. Two forms
+refuses as undefined; a `sizeof`, `alignof` or `_Countof` operand does not
+count, as only its type is read. An entity is weak for a body when `#pragma
+weak` names it or a declaration, at file or block scope and before any
+definition of the entity, writes `weak` or `weak_import`: before the end of
+the body for an external function no declaration makes inline, which Clang
+emits where it is defined, and anywhere in the unit for every other body,
+which Clang emits after the whole unit. The pragmas and the ends of the
+external declarations are compared by output-token ordinal. The evaluator
+recurses through operands and object initializers, so it follows them at
+most 64 levels deep, which an unoptimized build runs within a 1 MiB stack;
+deeper conditions are left unfolded, emitted as without the evaluator, and
+`noreturn` types are followed as far. Loops instead test the value IR emission produces. Two forms
 take more than the statement walk (`emission/`). A `switch` whose
 controlling expression folds emits only the statements Clang's
 `CollectStatementsForCase` gathers from the matching case, else `default`
@@ -960,7 +972,14 @@ written type attribute belongs to the function derivation nearest the declared
 name, or, after a `*`, to the function type that pointer points to; one a
 typedef name or `__typeof__` brings belongs below the declarator's function
 derivations, so `NP (*gp)(void)` returns a `noreturn` pointer rather than not
-returning. The rest of the same expression is still emitted. An expression whose paths join in
+returning. The rest of the same expression is still emitted. Code generation
+still visits a block, a label or a declaration after such a call or a jump,
+but not a statement it skips whole (any other statement there, which holds no
+label), the arm or operand a folded condition skips, or what follows a folded
+switch's selected statements; a block-scope static object declared in code it
+visits is emitted with its initializer (`EmitStaticVarDecl`), so that
+initializer's references are not skipped, and they count as made by the
+function where it declares the object. An expression whose paths join in
 a block with predecessors ends that state: a `&&`, `||` or scalar or `void`
 `?:` whose condition does not fold (unless the `?:` selects between constants,
 which a `void` operand is not), a complex or aggregate `?:`, a product of two
@@ -994,7 +1013,9 @@ operand of `__builtin_choose_expr` and a switch without a match can hide, so
 such code stays skipped after a jump, as before #113. After a call that does
 not return, a declaration that may be variably modified still ahead in the
 enclosing blocks keeps the code after the call emitted instead, as it is
-without the model of such calls. Bit-field, union and floating reads,
+without the model of such calls. A typedef name counts as variably modified
+there when a block-scope typedef of the function may give it such a type, so
+that typedefs coming into scope later cannot change a kept answer. Bit-field, union and floating reads,
 GNU ranges in `const` initializers and the unselected operand of
 `__builtin_choose_expr` remain unmodeled; each leaves code emitted that Clang
 may skip. The module-item planner
