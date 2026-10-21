@@ -31,6 +31,9 @@ case "${1:-native}" in
                 initializer-16384.c chain-100000.c initializer-list-100000.c \
                 --modes machine growing hybrid:16 \
                 --output "$study_dir/final-$profile-deep.json"
+            python3 scripts/parser_study.py bench --binary "$binary" \
+                --files parentheses-16000.c parentheses-16500.c blocks-16000.c blocks-16500.c \
+                --modes machine growing hybrid:16 --output "$study_dir/final-$profile-neighbors.json"
         done
         python3 scripts/parser_study.py diff --binary "$study_dir/study-release" \
             --modes machine recursive growing hybrid:16 --output "$study_dir/final-diff.json"
