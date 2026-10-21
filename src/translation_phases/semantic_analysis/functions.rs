@@ -1317,6 +1317,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut entity = previous.unwrap_or_default();
         entity.latest = index;
+        // A file-scope declaration may make an inline body seen before it
+        // an external definition, which Clang then creates and emits.
+        let forcible = binding.kind == BindingKind::Function
+            && self.scopes[binding.scope].kind == ScopeKind::File
+            && entity.function_body.is_some()
+            && !self.body_external(&entity);
         if binding.kind == BindingKind::Function {
             let explicit_extern = spec.storage_class == Some(StorageClass::Extern);
             if self.scopes[binding.scope].kind == ScopeKind::File
@@ -1374,10 +1380,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        if forcible && self.body_external(&entity) {
+            self.functions.external_redeclarations.push(index);
+        }
         _ = self
             .functions
             .entities
             .insert(self.function_identity(index), entity);
+    }
+
+    /// Whether the body of function `entity` is an external definition by
+    /// the declarations so far: Clang's `isInlineDefinitionExternallyVisible`
+    /// for C99 and GNU inline semantics, and its Microsoft inline retention
+    /// (`doesDeclarationForceExternallyVisibleDefinition`) elsewhere.
+    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125. GNU extension:
+    /// GCC manual, "Inline"; Microsoft ABI extension under C99: §4p6, p. 7;
+    /// PDF p. 19.
+    fn body_external(&self, entity: &Entity) -> bool {
+        let gnu = entity.gnu_inline || self.context.configuration.gnu89_inline();
+        if !gnu && !self.context.configuration.target().c99_inline_definitions() {
+            entity.msvc_inline.emission == InlineEmission::Required
+        } else if gnu {
+            !matches!(entity.function_body, Some(FunctionBody::Replaceable(_)))
+                || entity.gnu_plain_inline
+        } else {
+            entity.non_inline
+        }
     }
 
     /// Inline object restrictions concern the object's own qualification,
@@ -2160,6 +2188,9 @@ pub(super) struct State<'tu, 's> {
     entities: ArenaMap<'s, StringCacheId, Entity>,
     previous: ArenaMap<'s, usize, SourceVectors>,
     uses: ArenaVec<'s, Use>,
+    /// The file-scope declarations that made an inline body seen before
+    /// them an external definition, in source order.
+    pub(super) external_redeclarations: ArenaVec<'s, usize>,
     /// Evaluated DLL references retained until aliases and init roots resolve.
     evaluated_imports: &'s [(Option<usize>, usize, bool, bool)],
     sizeof_contexts: ArenaVec<'s, SizeofContext<'tu>>,
@@ -2195,28 +2226,29 @@ pub(super) struct State<'tu, 's> {
 impl<'s> State<'_, 's> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            reference_context:  None,
-            reference_contexts: ArenaVec::new_in(scratch),
-            reference_function: None,
-            initializer:        None,
-            current:            None,
-            next_function:      0,
-            old_names:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            old_types:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:               ArenaVec::new_in(scratch),
-            evaluated_imports:  &[],
-            sizeof_contexts:    ArenaVec::new_in(scratch),
-            sizeof:             None,
-            dead:               false,
-            switch_dead:        false,
-            emission:           super::emission::State::new(scratch),
-            arm_ends:           ArenaVec::new_in(scratch),
-            generated_breaks:   ArenaVec::new_in(scratch),
-            inline_objects:     ArenaVec::new_in(scratch),
-            outside:            [None; 2],
-            generic_marks:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            reference_context:       None,
+            reference_contexts:      ArenaVec::new_in(scratch),
+            reference_function:      None,
+            initializer:             None,
+            current:                 None,
+            next_function:           0,
+            old_names:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses:                    ArenaVec::new_in(scratch),
+            external_redeclarations: ArenaVec::new_in(scratch),
+            evaluated_imports:       &[],
+            sizeof_contexts:         ArenaVec::new_in(scratch),
+            sizeof:                  None,
+            dead:                    false,
+            switch_dead:             false,
+            emission:                super::emission::State::new(scratch),
+            arm_ends:                ArenaVec::new_in(scratch),
+            generated_breaks:        ArenaVec::new_in(scratch),
+            inline_objects:          ArenaVec::new_in(scratch),
+            outside:                 [None; 2],
+            generic_marks:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

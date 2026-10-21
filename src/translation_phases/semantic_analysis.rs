@@ -290,6 +290,8 @@ pub(crate) fn analyze<'tu>(
         types: analyzer.types.finish(),
         bindings: analyzer.bindings.leak(),
         definitions: analyzer.definitions.leak(),
+        external_redeclarations: unit_arena
+            .alloc_slice_copy(&analyzer.functions.external_redeclarations),
         functions: analyzer.function_records.leak(),
         scopes: analyzer.scopes.leak(),
         type_names,
