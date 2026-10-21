@@ -127,7 +127,7 @@ fn run(
         if let Some(text) = &result.inspection {
             fs::write(inspection.expect("inspection destination"), text).expect("write inspection");
         }
-        _ = black_box(result);
+        drop(black_box(result));
     }
 }
 
