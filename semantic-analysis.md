@@ -963,8 +963,9 @@ Function code still yields one for both, as in Clang, whose non-constant fold
 reads the compound literal and whose `llvm.is.constant` sees the comma's
 constant result: the expression records that its emitted value differs, so
 lowering evaluates the operators around such a query instead of taking their
-constant, control folding uses the emitted value, loop folding treats the
-condition as unknown, and `__builtin_choose_expr` and static initializer data
+constant. Control folding accepts the array read but leaves a discarded-comma
+query unknown, since `ConstantFoldsToSimpleInteger` cannot discard its left
+operand; loop folding also treats the condition as unknown, and `__builtin_choose_expr` and static initializer data
 select by the constant-context value. A discarded comma counts only before an
 arithmetic constant; a pointer result is never constant in function code. An unknown query still
 emits zero while the control fold can remain unknown.
@@ -1039,9 +1040,10 @@ for whole skipped statements and operands; there is no separate `unemitted`
 state. A missing insertion point (`dead`) alone still permits simple
 statements to collect storage. In `0 && ({ L:; static int a; 1; })`, the
 label prevents elision and preserves the static even though the operand is
-not evaluated. Constant-query operands in emitted function code likewise preserve
-nested static declarations and their initializer references while dropping executable
-references. Within a static or thread-local initializer, the query emits only
+not evaluated. A constant-query operand has one deferred emission decision, shared by
+references, nested definitions and joins. After the ordinary constant fold
+fails, Clang emits a real arithmetic operand without side effects, retaining
+all its referents; other operands are unevaluated. Within a static or thread-local initializer, the query emits only
 its integer value: its operand declarations and all their references are omitted.
 Either way its operand is still used in an expression, so an internal
 identifier it names needs a definition (C99 §6.9p3, p. 140; PDF p. 152).

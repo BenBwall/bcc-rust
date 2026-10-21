@@ -474,18 +474,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             )
                         })
                 }) {
-                    // Clang visits query operands while emitting function code,
-                    // but emits only their value in static initializer data.
+                    // Decide after typing whether Clang emits the operand.
+                    // Every reference, definition and join shares this context.
                     let static_data = self.functions.initializer.is_some_and(|binding| {
                         self.bindings[binding].duration.is_static_or_thread()
                     });
                     self.enter_reference_context_kind(ReferenceContextKind::ConstantQuery {
-                        static_data,
+                        emitted: false,
                     });
+                    if let Some(&operand) = arguments.first() {
+                        self.work
+                            .push(Work::FunctionWork(FunctionWork::ConstantQueryEnd {
+                                index: self
+                                    .functions
+                                    .reference_context
+                                    .expect("query context entered"),
+                                operand,
+                                static_data,
+                            }));
+                    }
                 }
                 for &argument in arguments.iter().rev() {
                     self.work.push(Work::Expression(argument));
                 }
+            },
+            | FunctionWork::ConstantQueryEnd {
+                index,
+                operand,
+                static_data,
+            } => {
+                let emitted = !static_data && self.constant_query_operand_emitted(operand);
+                self.functions.reference_contexts[index].kind =
+                    ReferenceContextKind::ConstantQuery { emitted };
             },
             | FunctionWork::ConditionReferences(condition, mark) => {
                 let end = self.reference_count();
@@ -711,7 +731,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut ignored_uses = ArenaVec::new_in(self.scratch);
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
             let (skip_definitions, skip_uses) = match context.kind {
-                | ReferenceContextKind::ConstantQuery { static_data } => (static_data, false),
+                | ReferenceContextKind::ConstantQuery { emitted } => (!emitted, false),
                 | _ => {
                     let unevaluated = self.reference_context_unevaluated(index);
                     (unevaluated, unevaluated)
@@ -1878,9 +1898,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether code in sizeof context `sizeof` and reference context
     /// `context`, both analyzed, is evaluated: neither they nor any context
     /// around them leaves its operand unevaluated. A `__builtin_constant_p`
-    /// operand, whose references reachability ignores, counts as evaluated
-    /// here: code generation emits one without side effects, so a join in
-    /// it is kept ([`Self::expression_emitted`]).
+    /// operand counts only when its deferred emission decision says Clang
+    /// generates it, for references, definitions and joins alike.
     pub(super) fn context_evaluated(&self, sizeof: Option<usize>, context: Option<usize>) -> bool {
         let mut sizeof = sizeof;
         while let Some(index) = sizeof {
@@ -1891,11 +1910,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut context = context;
         while let Some(index) = context {
-            if !matches!(
-                self.functions.reference_contexts[index].kind,
-                ReferenceContextKind::ConstantQuery { .. }
-            ) && self.reference_context_unevaluated(index)
-            {
+            if self.reference_context_unevaluated(index) {
                 return false;
             }
             context = self.functions.reference_contexts[index].parent;
@@ -1917,17 +1932,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.reference_context_unevaluated_for_owner(index, None)
     }
 
-    /// Query operands in function code keep nested static initializer data,
-    /// while calls and other executable references remain unevaluated. GNU
-    /// extension: Clang's `__builtin_constant_p` and statement expressions.
+    /// Query operands use one decision made after typing. GNU extension:
+    /// Clang's `__builtin_constant_p` and statement expressions.
     fn reference_context_unevaluated_for_owner(
         &self,
         index: usize,
-        owner: Option<ReferenceOwner>,
+        _owner: Option<ReferenceOwner>,
     ) -> bool {
         match self.functions.reference_contexts[index].kind {
-            | ReferenceContextKind::ConstantQuery { static_data } =>
-                static_data || !matches!(owner, Some(ReferenceOwner::Object(_))),
+            | ReferenceContextKind::ConstantQuery { emitted } => !emitted,
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
                 .typeof_sites
@@ -2200,6 +2213,12 @@ pub(super) enum FunctionWork<'tu> {
     ),
     /// Enter operand contexts after resolving a builtin's callee.
     CallArguments(&'tu Expression<'tu>, ArenaList<'tu, &'tu Expression<'tu>>),
+    /// One deferred operand emission decision, shared by all contexts.
+    ConstantQueryEnd {
+        index:       usize,
+        operand:     &'tu Expression<'tu>,
+        static_data: bool,
+    },
     ConditionReferences(&'tu Expression<'tu>, ConditionMark),
     RestoreSizeof(Option<usize>),
     RestoreReferenceContext(Option<usize>),
@@ -2402,11 +2421,10 @@ struct ReferenceContext<'tu> {
 enum ReferenceContextKind<'tu> {
     Typeof(&'tu super::ExtendedType<'tu>),
     Unevaluated,
-    /// A `__builtin_constant_p` operand. In function code it keeps nested
-    /// static declarations and their initializer data; in static initializer
-    /// data nothing of it is emitted. Its references remain uses either way.
+    /// A `__builtin_constant_p` operand's deferred emission decision. All
+    /// consumers share it; its references remain C99 §6.9p3 uses either way.
     ConstantQuery {
-        static_data: bool,
+        emitted: bool,
     },
 }
 

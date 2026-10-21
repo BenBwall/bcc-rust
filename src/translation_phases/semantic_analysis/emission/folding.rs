@@ -98,6 +98,15 @@ use crate::{
 /// traversal tolerates; Clang would rarely fold them either.
 const DEPTH: u32 = 256;
 
+/// The constant evaluator and the emitted `llvm.is.constant` need different
+/// answers for a discarded comma. GNU extension: `__builtin_constant_p`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueryContext {
+    Constant,
+    Control,
+    Runtime,
+}
+
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Clang's `ConstantFoldsToSimpleInteger` for `condition`: its integer
     /// value, when it has an integer or enumerated type, evaluates without
@@ -178,20 +187,37 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         &mut self,
         operand: &'tu Expression<'tu>,
     ) -> Integer {
-        Integer::int(i128::from(self.constant_query_value(operand, 0, false)))
+        Integer::int(i128::from(self.constant_query_value(
+            operand,
+            0,
+            QueryContext::Constant,
+        )))
     }
 
     /// Whether function code emits one for a query whose constant-context
     /// value is zero: Clang's evaluator outside a constant context reads an
     /// array compound literal, and `llvm.is.constant` sees the arithmetic
     /// result of a comma whose left operand it cannot evaluate. Control
-    /// folding and lowering then use one where integer constant expressions
-    /// use zero. GNU extension: `__builtin_constant_p`.
+    /// folding accepts the array read; only lowering accepts the comma. GNU
+    /// extension: `__builtin_constant_p`.
     pub(in crate::translation_phases::semantic_analysis) fn constant_query_differs_at_runtime(
         &mut self,
         operand: &'tu Expression<'tu>,
     ) -> bool {
-        !self.constant_query_value(operand, 0, false) && self.constant_query_value(operand, 0, true)
+        !self.constant_query_value(operand, 0, QueryContext::Constant)
+            && self.constant_query_value(operand, 0, QueryContext::Runtime)
+    }
+
+    /// Whether Clang emits the query operand, after its ordinary constant
+    /// fold fails: only a real arithmetic operand without side effects feeds
+    /// `llvm.is.constant`. GNU extension: Clang `CGBuiltin` ConstantP.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_query_operand_emitted(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> bool {
+        self.real(self.expression_info(operand).ty)
+            && self.effects_pure(operand, super::super::EffectContext::Value)
+            && !self.constant_query_value(operand, 0, QueryContext::Control)
     }
 
     fn is_constant_query(&self, mut expression: &'tu Expression<'tu>) -> bool {
@@ -1138,7 +1164,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | BuiltinId::ConstantP => {
                 let operand = *arguments.first()?;
-                let constant = self.constant_query_value(operand, depth, true);
+                let constant = self.constant_query_value(operand, depth, QueryContext::Control);
                 if constant {
                     Some(Value::Integer(Integer::int(1)))
                 } else if self.has_side_effects(operand) {
@@ -1259,31 +1285,31 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Whether a query operand has a constant value: in Clang's evaluator in
-    /// a constant context, or, `at_runtime`, in the value function code
-    /// emits. The start of a string literal counts, while an interior
-    /// pointer or another non-null object's address does not. Only at run
-    /// time does an element read through a non-`const` array compound
-    /// literal count, or a comma that discards an ordinary nonvolatile read
+    /// a constant context, for control folding, or in function code's value.
+    /// The start of a string literal counts, while an interior pointer or
+    /// another non-null object's address does not. Only at run time does an
+    /// element read through a non-`const` array compound literal count, or
+    /// a comma that discards an ordinary nonvolatile read
     /// before an arithmetic constant. GNU extension: `__builtin_constant_p`.
     /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59 (pointer-to-integer casts).
     fn constant_query_value(
         &mut self,
         operand: &'tu Expression<'tu>,
         depth: u32,
-        at_runtime: bool,
+        context: QueryContext,
     ) -> bool {
         if depth >= DEPTH {
             return false;
         }
         self.is_constant_query(operand)
             || self.constant_query_string_address(operand)
-            || (at_runtime && self.discarded_comma_constant(operand, depth))
-            || ((at_runtime || !self.reads_array_literal(operand))
-                && match self.evaluate_value(operand, depth) {
-                    | Some(Value::Address(Some(_))) | None => false,
-                    | Some(Value::String(_, offset)) => offset == 0,
-                    | Some(_) => true,
-                })
+            || (context == QueryContext::Runtime && self.discarded_comma_constant(operand, depth))
+            || (match self.evaluate_value(operand, depth) {
+                | Some(Value::Address(Some(_))) | None => false,
+                | Some(Value::String(_, offset)) => offset == 0,
+                | Some(_) =>
+                    context != QueryContext::Constant || !self.reads_array_literal(operand),
+            })
     }
 
     /// A comma whose left operand is an ordinary nonvolatile read, before an
@@ -1306,7 +1332,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         else {
             return false;
         };
-        !self.has_side_effects(left_expression)
+        self.real(self.expression_info(operand).ty)
+            && !self.has_side_effects(left_expression)
             && (self.discarded_comma_constant(right_expression, depth + 1)
                 || matches!(
                     self.evaluate_value(right_expression, depth + 1),

@@ -27,6 +27,110 @@ mod tests {
     use crate::native::run_native;
 
     #[test]
+    fn discarded_comma_queries_keep_control_flow_and_pointer_answers() {
+        assert_runs_like_clang(
+            r#"
+            extern int puts(const char *);
+            int x;
+            static int slow(void) { static int count; return ++count; }
+            int f(void) {
+                int r = 0;
+                if (__builtin_constant_p((x, 1))) r += 2; else r += slow();
+                r += __builtin_constant_p((x, 1)) ? 3 : slow();
+                r += __builtin_constant_p((x, 1)) || slow();
+                r += __builtin_constant_p((x, 1)) && slow();
+                switch (__builtin_constant_p((x, 1))) {
+                    case 0: r += slow(); break; case 1: r += 4;
+                }
+                return r;
+            }
+            int main(void) {
+                if (__builtin_constant_p((x, (char *)0)) ||
+                    __builtin_constant_p((x, (void *)0))) return 1;
+                return f() != 11;
+            }
+        "#,
+        );
+        // Neither the evaluator nor the emitted-value shortcut may remove
+        // an arm's used section entry before the linker builds the table.
+        assert_runs_like_clang_with_linker_symbols(
+            r#"
+            extern int printf(const char *, ...);
+            extern int __start_tbl[], __stop_tbl[];
+            int f(int x) {
+                if (__builtin_constant_p((x, 1))) {
+                    static int a __attribute__((used, section("tbl"))) = 1;
+                } else {
+                    static int b __attribute__((used, section("tbl"))) = 2;
+                }
+                return 0;
+            }
+            int main(void) {
+                f(1);
+                printf("%ld %d\n", (long)(__stop_tbl - __start_tbl),
+                       __start_tbl[0] + __start_tbl[1]);
+                return 0;
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn constant_query_operands_share_one_emission_decision() {
+        assert_runs_like_clang(
+            r#"
+            int x;
+            static int g = 4;
+            static int h(void) { return 3; }
+            int (*fp)(void);
+            int main(void) {
+                int a = __builtin_constant_p(g + 1);
+                int b = __builtin_constant_p(fp == h);
+                int c = __builtin_constant_p(({ static int yes = 2; x + yes; }));
+                int d = __builtin_constant_p(({ static int no; &no; }));
+                int e = __builtin_constant_p(({ static int no2; ++x + no2; }));
+                return a + b + c + d + e;
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn constant_query_operand_referents_match_clang() {
+        for (operand, emitted) in [
+            ("a", true),
+            ("a + 1", true),
+            ("(long)&h", true),
+            ("fp == h", true),
+            ("a++", false),
+            ("&a", false),
+        ] {
+            assert_o0_static_emission(
+                &format!(
+                    "static int a; static int h(void){{STATIC return 0;}} int (*fp)(void); int \
+                     main(void){{return __builtin_constant_p({operand});}}"
+                ),
+                emitted && operand.contains('h'),
+            );
+        }
+        for (operand, emitted) in [("a", true), ("a + 1", true), ("(x, 1)", true)] {
+            assert_o0_static_emission(
+                &format!(
+                    "static int h(void){{STATIC return 0;}} int main(void){{int x=0; static int \
+                     a; return __builtin_constant_p({operand}) ? 0 : h();}}"
+                ),
+                emitted,
+            );
+        }
+        for operand in ["({STATIC &a;})", "({STATIC ++x; 1;})"] {
+            assert_o0_static_emission(
+                &format!("int main(void){{int x=0;return __builtin_constant_p({operand});}}"),
+                false,
+            );
+        }
+    }
+
+    #[test]
     fn local_statics_at_o0_follow_the_emitted_function() {
         let source_file = temporary("source.c");
         let object = temporary("object.o");
@@ -990,6 +1094,14 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
     }
 
     fn assert_runs_like_clang(source: &str) {
+        assert_run_arms(source, false);
+    }
+
+    fn assert_runs_like_clang_with_linker_symbols(source: &str) {
+        assert_run_arms(source, true);
+    }
+
+    fn assert_run_arms(source: &str, linker_symbols: bool) {
         // The sources target the default Linux C library, which only a Linux
         // host can link and run; the static-emission checks still run.
         if !cfg!(target_os = "linux") {
@@ -1020,6 +1132,10 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
             &["--interpret", "--opt=bcc"][..],
         ] {
             let interpreted = flags.contains(&"--interpret");
+            if linker_symbols && interpreted {
+                // The interpreter has no linker-synthesized section symbols.
+                continue;
+            }
             let mut args = vec!["-std=gnu99"];
             args.extend_from_slice(flags);
             if !interpreted {

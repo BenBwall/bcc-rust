@@ -1496,7 +1496,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Classifies integer and real floating types for relational operators.
     /// C99: §6.2.5 paragraph 17, p. 35; PDF p. 47.
-    fn real(&self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn real(&self, ty: TypeId) -> bool {
         self.integer_type(ty).is_some()
             || matches!(
                 self.types.nodes[ty.index],
