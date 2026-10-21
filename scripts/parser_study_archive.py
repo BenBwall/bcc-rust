@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -57,6 +58,10 @@ def main():
                 if raw and Path(raw).exists():
                     row["calls"] = call_counts(Path(raw))
                     calls.append({"run": path.stem, "input": row["input"], "mode": row["mode"], "repeat": row["repeat"], **row["calls"]})
+                    if row["input"] == "lua-supported.i" and row["mode"] in ["machine", "recursive"] and row["repeat"] == 0:
+                        annotation = Path(raw).with_suffix(".self.txt")
+                        if annotation.exists():
+                            shutil.copyfile(annotation, args.output / (path.stem + "-" + annotation.name))
         (args.output / path.name).write_text(json.dumps(data, separators=(",", ":")) + "\n")
         if data.get("metadata", {}).get("action") != "bench":
             continue
@@ -83,6 +88,16 @@ def main():
                 writer.writeheader()
                 writer.writerows(rows)
     print(f"Archived {len(timing)} timing groups and {len(events)} simulated counter samples")
+    build_log = args.scratch / "build-final-bundle-3.log"
+    if build_log.exists():
+        text = build_log.read_text()
+        validation = {
+            "build_log_sha256": hashlib.sha256(build_log.read_bytes()).hexdigest(),
+            "complete": text.rstrip().endswith("EXIT 0"),
+            "test_results": [line for line in text.splitlines() if line.startswith("test result:")],
+            "checks_revision": (args.scratch / "checks-revision").read_text().strip() if (args.scratch / "checks-revision").exists() else None,
+        }
+        (args.output / "validation.json").write_text(json.dumps(validation, indent=2) + "\n")
 
 
 if __name__ == "__main__":
