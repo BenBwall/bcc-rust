@@ -1660,6 +1660,8 @@ pub(in crate::translation_phases::parsing) struct ExpressionOperand<'tu> {
 #[derive(Debug)]
 pub(in crate::translation_phases::parsing) struct ExpressionFrame<'tu, 'p> {
     mode: ExpressionMode,
+    #[cfg(feature = "parser-recursive-descent-study")]
+    study_precedence_limit: Option<u32>,
     boundary: ExpressionBoundary,
     recovery_boundary: ExpressionBoundary,
     phase: ExpressionPhase<'tu>,
@@ -1818,7 +1820,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// Aggregate bodies: §6.7.2.1 paragraph 1, p. 101; PDF p. 113.
     /// C23: compound-literal storage, §6.5.3.6 paragraph 1,
     /// p. 78; PDF p. 91.
-    fn type_name_is_compound_literal(parser: &Parser<'_, 'tu, 'p>) -> bool {
+    pub(in crate::translation_phases::parsing) fn type_name_is_compound_literal(
+        parser: &Parser<'_, 'tu, 'p>,
+    ) -> bool {
         let mut groups = 0usize;
         let mut braces = 0usize;
         let mut offset = 0usize;
@@ -1859,7 +1863,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// take are diagnosed by the type-name frame, as in `(static int)x`.
     /// C23: compound-literal storage-class specifiers §6.5.3.6 paragraph 1,
     /// p. 78; PDF p. 91.
-    fn parenthesized_type_name_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
+    pub(in crate::translation_phases::parsing) fn parenthesized_type_name_follows(
+        parser: &mut Parser<'_, 'tu, 'p>,
+    ) -> bool {
         let storage = |token: Token| {
             matches!(
                 token.kind,
@@ -2093,6 +2099,28 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// p. 91; PDF p. 103); a `constant-expression` ends before a comma or an
     /// assignment operator (§6.6 paragraph 1, p. 95; PDF p. 107).
     fn is_boundary(&self, token: Option<TokenType>) -> bool {
+        #[cfg(feature = "parser-recursive-descent-study")]
+        if let Some(limit) = self.study_precedence_limit {
+            let precedence = token
+                .and_then(binary_operator)
+                .map(|operator| {
+                    super::expression_operators::LanguageExpressionOperator::Binary {
+                        operator,
+                        source_vectors: SourceVectors::default(),
+                    }
+                    .precedence()
+                })
+                .or_else(|| {
+                    matches!(
+                        token,
+                        Some(TokenType::Operator(OperatorTokenType::QuestionMark))
+                    )
+                    .then_some(13)
+                });
+            if precedence.is_some_and(|precedence| precedence > limit) {
+                return true;
+            }
+        }
         if matches!(
             self.boundary,
             ExpressionBoundary::StructMember | ExpressionBoundary::Enumerator
@@ -2437,6 +2465,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     ) -> Self {
         Self {
             mode,
+            #[cfg(feature = "parser-recursive-descent-study")]
+            study_precedence_limit: None,
             boundary,
             recovery_boundary,
             phase: ExpressionPhase::Parse,
@@ -2448,5 +2478,22 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             pending_sizeof_prefix: None,
             stray_error_operand: false,
         }
+    }
+}
+
+#[cfg(feature = "parser-recursive-descent-study")]
+impl ExpressionFrame<'_, '_> {
+    pub(in crate::translation_phases::parsing) fn study_parameters(
+        &self,
+    ) -> (ExpressionMode, ExpressionBoundary) {
+        (self.mode, self.boundary)
+    }
+
+    pub(in crate::translation_phases::parsing) fn with_study_precedence(
+        mut self,
+        limit: u32,
+    ) -> Self {
+        self.study_precedence_limit = Some(limit);
+        self
     }
 }

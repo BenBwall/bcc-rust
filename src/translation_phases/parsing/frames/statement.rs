@@ -1945,3 +1945,12 @@ pub(in crate::translation_phases::parsing) fn is_statement_keyword(token: TokenT
         )
     )
 }
+
+#[cfg(feature = "parser-recursive-descent-study")]
+impl StatementFrame<'_> {
+    pub(in crate::translation_phases::parsing) fn study_parameters(
+        &self,
+    ) -> (Option<ScopeKind>, bool) {
+        (self.implicit_scope, self.block_item)
+    }
+}

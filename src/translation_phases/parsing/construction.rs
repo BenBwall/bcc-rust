@@ -120,6 +120,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             );
         }
         Self {
+            #[cfg(feature = "parser-recursive-descent-study")]
+            study: super::recursive_descent::StudyState::default(),
             cursor: TokenCursor::new(upstream),
             arena,
             tree: context.tu_arena(),
