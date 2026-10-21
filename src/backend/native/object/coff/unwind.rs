@@ -56,10 +56,9 @@ pub(super) fn generate(coff: &mut Coff<'_>) -> Result<()> {
                 if active.is_some() {
                     return Err(Error("nested SEH procedure"));
                 }
-                let entry = coff
-                    .unwind
-                    .iter()
-                    .position(|u| u.text == item.section)
+                let entry = *coff
+                    .unwound
+                    .get(&item.section)
                     .ok_or(Error("missing SEH sections"))?;
                 active = Some(entry);
                 start = item.offset;

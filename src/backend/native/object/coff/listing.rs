@@ -199,7 +199,7 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                     | ".seh_proc" => {
                         arity(args, 1, 1)?;
                         symbol_name(args)?;
-                        if !coff.unwind.iter().any(|u| u.text == section) {
+                        if !coff.unwound.contains_key(&section) {
                             // MinGW streams xdata, including discardable
                             // subsections. MSVC defers associative COMDAT
                             // unwind sections to EOF.
@@ -208,6 +208,7 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                             } else {
                                 None
                             };
+                            _ = coff.unwound.insert(section, coff.unwind.len());
                             coff.unwind.push(UnwindSections {
                                 text: section,
                                 xdata,
@@ -329,11 +330,7 @@ fn parse_section<'a>(coff: &mut Coff<'a>, args: &'a str) -> Result<usize> {
     }
     if flags.is_none()
         && group.is_none()
-        && let Some(id) = coff
-            .object
-            .sections
-            .iter()
-            .position(|s| s.name == name && s.group.is_none())
+        && let Some(&id) = coff.named.get(&(name, None))
     {
         return Ok(id);
     }
