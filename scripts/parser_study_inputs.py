@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Prepare reproducible real and synthetic phase-7 inputs inside local scratch."""
+
+import argparse
+import hashlib
+import io
+import json
+from pathlib import Path
+import subprocess
+import urllib.request
+import zipfile
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=Path(".scratch/parser-study/inputs"))
+    parser.add_argument("--sqlite", action="store_true", help="download SQLite 3.50.4 amalgamation")
+    parser.add_argument("--cc", default="gcc")
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    manifest = {}
+
+    def save(name, source, origin):
+        path = args.output / name
+        if isinstance(source, str):
+            source = source.encode()
+        path.write_bytes(source)
+        manifest[name] = {"bytes": len(source), "sha256": hashlib.sha256(source).hexdigest(), "origin": origin}
+
+    for path in sorted(Path("benches/c").glob("*.c")):
+        command = [args.cc, "-std=gnu99", "-E", "-P", str(path)]
+        result = subprocess.run(command, check=True, capture_output=True)
+        save(path.stem + ".i", result.stdout, " ".join(command))
+
+    # Preserve macro/include provenance in a separate differential fixture.
+    save("provenance.c", "#define INC(x) ((x)+1)\n#include \"stddef.h\"\nint f(int x){return INC(x);}\n", "generated")
+    save("extensions.c", """typedef int T;
+struct S { int x; int y; };
+int f(int x, int *p) {
+  int a = (T)x + sizeof(T) + sizeof x + _Alignof(T);
+  struct S s = (struct S){ .y = 2, .x = 1 };
+  a += __extension__ ({ int v = 3; v + x; });
+  if (a) { a = p[1]++; } else a = s.x;
+  do { a--; } while (a > 4);
+  for (int i=0; i<2; ++i) { if(i) continue; a += i; }
+  while (x--) { switch(x) { case 0: break; default: a ^= x; } }
+  goto end; end: return a ? p[0] : s.y;
+}
+""", "generated grammar differential fixture")
+    save("precedence.c", """int f(int a, int b, int c, int *p) {
+return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c + a * b / c % 2,
+       ++*p + --a + a++ + b-- + !a + ~b + -c + +a;
+}
+""", "generated grammar differential fixture")
+    save("malformed.c", "int f(void){ int a = ; if(1) return (2+); else return 3; } int following;\n", "generated recovery fixture")
+    for depth in [32, 127, 256, 1024, 4096, 16384]:
+        fixtures = {
+            "parentheses": "int f(void){return " + "(" * depth + "1" + ")" * depth + ";}\n",
+            "unary": "int f(void){return " + "! " * depth + "1;}\n",
+            "assignment": "int f(int a){return " + "a=" * depth + "1;}\n",
+            "conditional": "int f(int a){return " + "a?1:" * depth + "2;}\n",
+            "statements": "int f(int a){" + "if(a)" * depth + "return 1; return 0;}\n",
+            "blocks": "int f(void){" + "{" * depth + "int x;" + "}" * depth + "return 0;}\n",
+            "declarator": "int " + "(" * depth + "x" + ")" * depth + ";\n",
+            "initializer": "int x = " + "{" * depth + "1" + "}" * depth + ";\n",
+        }
+        for kind, source in fixtures.items():
+            save(f"{kind}-{depth}.c", source, f"generated depth={depth}")
+    for size in [1000, 10000, 100000]:
+        save(f"chain-{size}.c", "int f(int a){return " + "+".join(["a"] * size) + ";}\n", f"generated size={size}")
+        save(f"initializer-list-{size}.c", "int x[]={" + ",".join(["1"] * size) + "};\n", f"generated size={size}")
+
+    if args.sqlite:
+        url = "https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip"
+        archive_path = args.output / "sqlite-amalgamation-3500400.zip"
+        if not archive_path.exists():
+            with urllib.request.urlopen(url, timeout=120) as response:
+                archive_path.write_bytes(response.read())
+        payload = archive_path.read_bytes()
+        manifest[archive_path.name] = {"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload), "origin": url}
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            source = archive.read("sqlite-amalgamation-3500400/sqlite3.c")
+        save("sqlite3.c", source, url)
+        command = [args.cc, "-std=gnu99", "-DSQLITE_OMIT_LOAD_EXTENSION", "-E", "-P", str(args.output / "sqlite3.c")]
+        result = subprocess.run(command, check=True, capture_output=True)
+        save("sqlite3.i", result.stdout, " ".join(command))
+
+    manifest["_compiler"] = subprocess.check_output([args.cc, "--version"], text=True).splitlines()[0]
+    (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"Prepared {len(manifest) - 1} inputs in {args.output}")
+
+
+if __name__ == "__main__":
+    main()
