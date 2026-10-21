@@ -69,9 +69,20 @@ STATUS: native default clippy --all-targets -- -D warnings PASSED; native
 check --all-targets PASSED with final manifest. Native artifact types remain
 unchanged: wasm is built with explicit cargo rustc --crate-type cdylib.
 Bridge adapted to observed Program/Session/State public API; no engine-owned
-files edited. Wasm Clippy is detached, waiting for engine module files. Logs:
-  target/abstract-machine/{native-clippy,native-check,wasm-clippy}.log
-  target/abstract-machine/wasm-clippy.exit (written when command finishes)
+files edited. Engine state JSON uses schema_version=1, engine=bounded-c-subset;
+the separate ABI transport errors use version=1. The engine source limit is
+32 KiB, below the transport's 1 MiB allocation ceiling.
+Initial wasm Clippy found five bridge-only constructor/style lints, corrected
+and committed at fdefb3b3. Final detached validation is queued on the shared
+build lock (pipeline PID 1171260, replacing the canceled queued PID 762608).
+Bridge source ownership is available to root; this job only reads source.
+Logs and exit-code markers:
+  target/abstract-machine/{native-clippy,native-check}.log
+  target/abstract-machine/validation.log
+  target/abstract-machine/{wasm-clippy-final,wasm-build,smoke}.{log,exit}
+Pipeline order: wasm Clippy -D warnings, release cdylib build, raw ABI Node smoke.
+The web owner retained the raw ABI checks as web/abi-check.mjs.
+No further native checks are needed for the bridge's wasm-only lint fixes.
 Wasm builds will use --target-dir target/abstract-machine/build through the
 shared wrapper to keep browser artifacts safe from later shared-cache cleans.
 Expected stable artifact path after success:
