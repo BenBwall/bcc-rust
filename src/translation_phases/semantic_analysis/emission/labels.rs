@@ -500,7 +500,7 @@ fn initializer_expressions<'tu>(
 
 /// The operands of an expression, in source order: the syntax children
 /// Clang's `Stmt::children()` visits, without type names.
-pub(super) fn expression_children<'tu>(
+pub(in crate::translation_phases::semantic_analysis) fn expression_children<'tu>(
     scratch: &Bump,
     expression: &'tu Expression<'tu>,
     mut push: impl FnMut(&'tu Expression<'tu>),

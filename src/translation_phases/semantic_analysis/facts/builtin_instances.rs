@@ -207,7 +207,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             operands,
             result_type: info.ty,
             operation_type: info.operation_type,
-            integer: info.integer,
+            // Function code emits one for a query whose constant-context
+            // value is zero ([`ExpressionInfo::runtime_query`]).
+            integer: if info.runtime_query
+                && matches!(descriptor.operation, BuiltinOperation::Constant)
+            {
+                Some(Integer::int(1))
+            } else {
+                info.integer
+            },
         })
     }
 }

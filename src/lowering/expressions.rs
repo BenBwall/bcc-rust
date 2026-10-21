@@ -107,8 +107,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | None => {},
         }
-        // An integer constant expression has an exact value (§6.6p6).
+        // An integer constant expression has an exact value (§6.6p6), unless
+        // function code computes a constant query differently.
         if info.ice
+            && !info.runtime_query
             && let Some(value) = info.integer
             && let Ok(representation @ (Repr::Int { .. } | Repr::Bool)) =
                 repr(&self.unit.sema.types, info.ty)
@@ -123,7 +125,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(Operand::Value(value), info.ty);
             return Ok(());
         }
-        if let Some(folded) = info.floating
+        if let Some(folded) = info.floating.filter(|_| !info.runtime_query)
             && let Ok(Repr::Complex { component }) = repr(&self.unit.sema.types, info.ty)
         {
             let real = floats::constant_bits(&folded.real, component)
@@ -136,7 +138,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         // A folded floating constant has exact bits (§6.6 paragraph 8).
-        if let Some(folded) = info.floating
+        if let Some(folded) = info.floating.filter(|_| !info.runtime_query)
             && let Ok(Repr::Float { ty }) = repr(&self.unit.sema.types, info.ty)
         {
             let bits = floats::constant_bits(&folded.real, ty)

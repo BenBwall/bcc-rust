@@ -187,6 +187,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | CommonBuiltin::Constant => {
                 info.integer = Some(self.constant_query_integer(args[0]));
+                info.runtime_query = self.constant_query_differs_at_runtime(args[0]);
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },

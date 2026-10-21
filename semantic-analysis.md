@@ -951,9 +951,14 @@ take Clang's constant-context value, so semantic integer facts, case labels,
 static assertions, static initializer data, standalone values and loop
 decisions agree: a comma whose left operand is not constant, and an element
 read through a non-`const` array compound literal, are not constant there.
-In function code Clang yields one for both, because its non-constant fold reads
-the compound literal and `llvm.is.constant` sees the comma's constant result;
-bcc keeps zero there, as `main` does. An unknown query still
+Function code still yields one for both, as in Clang, whose non-constant fold
+reads the compound literal and whose `llvm.is.constant` sees the comma's
+constant result: the expression records that its emitted value differs, so
+lowering evaluates the operators around such a query instead of taking their
+constant, control folding uses the emitted value, loop folding treats the
+condition as unknown, and `__builtin_choose_expr` and static initializer data
+select by the constant-context value. A discarded comma counts only before an
+arithmetic constant; a pointer result is never constant in function code. An unknown query still
 emits zero while the control fold can remain unknown.
 String-address queries require each integer cast to have exactly the pointer width;
 widening an integer after a narrowing cast does not recover the address.

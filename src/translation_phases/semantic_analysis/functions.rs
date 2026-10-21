@@ -540,7 +540,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 outer_elided,
                 label_operand,
             } => {
-                let value = self.folded_condition(condition);
+                // A `__builtin_choose_expr` (no label operand) and static
+                // initializer data select by Clang's constant-context value,
+                // which differs from function code's for some queries.
+                let info = self.expression_info(condition);
+                let constant_context = label_operand.is_none()
+                    || self.functions.initializer.is_some_and(|binding| {
+                        self.bindings[binding].duration.is_static_or_thread()
+                    });
+                let value = if info.runtime_query && constant_context {
+                    Self::constant_truth(info)
+                } else {
+                    self.folded_condition(condition)
+                };
                 self.functions.dead = outer_dead || value == Some(!live);
                 let elided = value == Some(!live)
                     && label_operand.is_none_or(|operand| !self.expression_contains_label(operand));
@@ -1808,6 +1820,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Pushes the work that enters the arm of `condition` taken when it is
     /// `live`: code generation skips it when the condition folds to the
     /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
+    /// Without a `label_operand`, the arm belongs to a translation-time
+    /// selection (`__builtin_choose_expr`), which labels do not keep.
     pub(super) fn dead_arm(
         &mut self,
         condition: &'tu Expression<'tu>,
@@ -1828,7 +1842,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.5p4, p. 135; PDF p. 147.
     fn generated_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
         let info = self.expression_info(condition);
-        (info.constant == super::ConstantClass::Arithmetic)
+        // Function code computes a runtime constant query itself, which IR
+        // emission does not fold for a discarded comma.
+        (info.constant == super::ConstantClass::Arithmetic && !info.runtime_query)
             .then(|| Self::constant_truth(info))
             .flatten()
     }

@@ -119,17 +119,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         )
     }
 
-    /// Clang's constant-context query value, shared with semantic integer
-    /// facts, static initializer data and the emitted value, so that case
-    /// labels, enumerators and static assertions see Clang's value. An
-    /// unknown query emits zero, even when `EvaluateAsInt` cannot fold it as
-    /// a control condition.
+    /// Clang's constant-context query value: the semantic integer that
+    /// integer constant expressions, case labels, static assertions and
+    /// static initializer data read. An unknown query is zero, even when
+    /// `EvaluateAsInt` cannot fold it as a control condition.
     /// GNU extension: GCC manual, "Other Builtins", `__builtin_constant_p`.
     pub(in crate::translation_phases::semantic_analysis) fn constant_query_integer(
         &mut self,
         operand: &'tu Expression<'tu>,
     ) -> Integer {
-        Integer::int(i128::from(self.constant_query_value(operand, 0)))
+        Integer::int(i128::from(self.constant_query_value(operand, 0, false)))
+    }
+
+    /// Whether function code emits one for a query whose constant-context
+    /// value is zero: Clang's evaluator outside a constant context reads an
+    /// array compound literal, and `llvm.is.constant` sees the arithmetic
+    /// result of a comma whose left operand it cannot evaluate. Control
+    /// folding and lowering then use one where integer constant expressions
+    /// use zero. GNU extension: `__builtin_constant_p`.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_query_differs_at_runtime(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> bool {
+        !self.constant_query_value(operand, 0, false) && self.constant_query_value(operand, 0, true)
     }
 
     fn is_constant_query(&self, mut expression: &'tu Expression<'tu>) -> bool {
@@ -892,7 +904,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.evaluate_value(arguments.first()?, depth),
             | BuiltinId::ConstantP => {
                 let operand = *arguments.first()?;
-                let constant = self.constant_query_value(operand, depth);
+                let constant = self.constant_query_value(operand, depth, true);
                 if constant {
                     Some(Value::Integer(Integer::int(1)))
                 } else if self.has_side_effects(operand) {
@@ -1017,27 +1029,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether a query operand has a constant value in Clang's evaluator in
-    /// a constant context, which every use of the query shares: integer
-    /// constant expressions, static initializer data, control folding and
-    /// the emitted value. The start of a string literal counts, while an
-    /// interior pointer or another non-null object's address does not; so
-    /// does a comma whose left operand is not constant, and an element read
-    /// through a non-`const` array compound literal, which Clang's
-    /// evaluator refuses there. GNU extension: `__builtin_constant_p`.
+    /// Whether a query operand has a constant value: in Clang's evaluator in
+    /// a constant context, or, `at_runtime`, in the value function code
+    /// emits. The start of a string literal counts, while an interior
+    /// pointer or another non-null object's address does not. Only at run
+    /// time does an element read through a non-`const` array compound
+    /// literal count, or a comma that discards an ordinary nonvolatile read
+    /// before an arithmetic constant. GNU extension: `__builtin_constant_p`.
     /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59 (pointer-to-integer casts).
-    fn constant_query_value(&mut self, operand: &'tu Expression<'tu>, depth: u32) -> bool {
+    fn constant_query_value(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+        depth: u32,
+        at_runtime: bool,
+    ) -> bool {
         if depth >= DEPTH {
             return false;
         }
         self.is_constant_query(operand)
             || self.constant_query_string_address(operand)
-            || (!self.reads_array_literal(operand)
+            || (at_runtime && self.discarded_comma_constant(operand, depth))
+            || ((at_runtime || !self.reads_array_literal(operand))
                 && match self.evaluate_value(operand, depth) {
                     | Some(Value::Address(Some(_))) | None => false,
                     | Some(Value::String(_, offset)) => offset == 0,
                     | Some(_) => true,
                 })
+    }
+
+    /// A comma whose left operand is an ordinary nonvolatile read, before an
+    /// arithmetic constant: function code emits the read, and
+    /// `llvm.is.constant` sees only the constant result. A pointer result is
+    /// never constant there. GNU extension: `__builtin_constant_p`;
+    /// C99 §6.5.17p2, p. 94; PDF p. 106.
+    fn discarded_comma_constant(&mut self, mut operand: &'tu Expression<'tu>, depth: u32) -> bool {
+        if depth >= DEPTH {
+            return false;
+        }
+        while let ExpressionType::Parenthesized { expression } = operand.kind {
+            operand = expression;
+        }
+        let ExpressionType::Binary {
+            operator: BinaryOperator::Comma,
+            left_expression,
+            right_expression,
+        } = operand.kind
+        else {
+            return false;
+        };
+        !self.has_side_effects(left_expression)
+            && (self.discarded_comma_constant(right_expression, depth + 1)
+                || matches!(
+                    self.evaluate_value(right_expression, depth + 1),
+                    Some(Value::Integer(_) | Value::Floating(_))
+                ))
     }
 
     /// Whether evaluating `operand` reads through a non-`const` array

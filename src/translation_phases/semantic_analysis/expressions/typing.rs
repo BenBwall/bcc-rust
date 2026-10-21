@@ -1308,6 +1308,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         _ = self.retain_effect_recipes(info, effects);
         info.elided = self.functions.elided;
+        // A runtime query value reaches the operators evaluated around it,
+        // but not a `sizeof` or `_Alignof`, whose value is a constant.
+        if !matches!(
+            info.expression.kind,
+            ExpressionType::SizeofExpr(_)
+                | ExpressionType::SizeofType(_)
+                | ExpressionType::AlignofExpr(_)
+                | ExpressionType::AlignofType(_)
+        ) {
+            super::super::emission::expression_children(self.scratch, info.expression, |child| {
+                info.runtime_query |= self
+                    .expression_indices
+                    .get(&std::ptr::from_ref(child).addr())
+                    .is_some_and(|&index| self.expressions[index].runtime_query);
+            });
+        }
         self.expressions.push(info);
     }
 
@@ -1378,6 +1394,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             expression: e,
             selected_expression: None,
             elided: false,
+            runtime_query: false,
             place_alignment: None,
             ty,
             operation_type: None,

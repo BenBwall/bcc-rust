@@ -47,6 +47,7 @@ mod switches;
 // Statement facts
 mod labels;
 
+pub(super) use labels::expression_children;
 use rustc_hash::FxBuildHasher;
 
 use crate::{
