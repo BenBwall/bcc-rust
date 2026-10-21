@@ -41,8 +41,15 @@ assert.equal(rejected.status, "error", "Unsupported source must be rejected expl
 assert(rejected.diagnostic?.message);
 assert.equal(session.load("int main(void) { return 42; }\n").status, "ready", "A new program must recover after rejected source");
 assert.equal(execute("int main(void) { return 42; }\n").at(-1).returnValue.text, "42");
+const unicodeSource = "/* π 🧭 */ int main(void) { return 42; }\n";
+const unicodeState = session.load(unicodeSource);
+assert.deepEqual(unicodeState.location.start, { line: 1, column: unicodeSource.indexOf("{") + 1 }, "UTF-8 byte ranges must map to editor character columns");
 assert.throws(() => session.load(" ".repeat(32769)), /32 KiB/, "Browser source limit must match the engine");
-console.log("PASS: real Wasm demo, changed source, objects, calls, pointers, effects, UB, replay, reset, and rejection");
+assert.deepEqual(session.state(), unicodeState, "Rejected oversized input must preserve the source map and engine state");
+const limited = execute("int main(void) { while (1) {} }\n").at(-1);
+assert.equal(limited.status, "limit", "A nonterminating loop must stop with a resource limit");
+assert.equal(limited.diagnostic.kind, "limit", "Resource exhaustion must not be labeled UB");
+console.log("PASS: real Wasm demo, changed source, objects, calls, pointers, effects, diagnostic stops, replay, reset, rejection, UTF-8 ranges, and resource limits");
 
 function execute(source) {
   const result = [session.load(source)];
