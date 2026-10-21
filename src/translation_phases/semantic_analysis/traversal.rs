@@ -105,7 +105,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.dead_arm(c.condition_expression, false, Some(c.else_expression));
                 self.work.push(Work::Expression(c.then_expression));
                 self.dead_arm(c.condition_expression, true, Some(c.then_expression));
-                self.begin_condition_references(c.condition_expression);
+                // GNU `x ?: y` binds its common operand before folding the
+                // condition (Clang `OpaqueValueMapping`), so it is always
+                // emitted. GNU extension: GCC manual, "Conditionals".
+                if matches!(e.kind, E::Conditional(_)) {
+                    self.begin_condition_references(c.condition_expression);
+                }
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {

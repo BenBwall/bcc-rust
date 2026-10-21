@@ -648,6 +648,22 @@ mod tests {
     }
 
     #[test]
+    fn omitted_conditional_common_operands_are_emitted() {
+        // GNU `x ?: y` emits its common operand whichever way it folds.
+        assert_runs_like_clang(
+            "int printf(const char*,...); static int g=3; static int helper(void){return 1;} \
+             static int s; static const int zero=0; static const int two=2; static const char \
+             *const name=\"bcc\"; int f(void){static const int z=0;return z?:3;} int \
+             main(void){printf(\"%d %d %d %d %d %d %s\\n\",(&g==0)?:7,(helper==0)?:7,(&s!=0)?:5, \
+             zero?:3,two?:3,f(),name?:\"none\");return 0;}",
+        );
+        assert_o0_static_emission(
+            "static int h(void){STATIC return a;} int main(void){return (h==0)?:0;}",
+            true,
+        );
+    }
+
+    #[test]
     fn lowered_control_uses_the_same_fold_as_elision() {
         assert_runs_like_clang(
             "int printf(const char*,...); int f(void){if(__builtin_constant_p(\"abc\"))return \
