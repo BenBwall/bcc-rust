@@ -539,6 +539,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     fn rd_compound_body(&mut self, function_body: bool) -> Option<&'tu Statement<'tu>> {
         let errors = self.hard_error_count;
         let mut sources = ArenaVec::new_in(self.arena);
+        self.pools.source_vectors.lend(&mut sources);
         sources.push(self.rd_expect(
             OperatorTokenType::OpeningCurlyBrace,
             "`{` at start of compound statement",
@@ -550,6 +551,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.scopes.publish(name, NameClass::Ordinary);
         }
         let mut items = ArenaVec::new_in(self.arena);
+        self.pools.block_items.lend(&mut items);
         let mut has_statement = false;
         while let Some(token) = self.cursor.current() {
             if is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace) {
@@ -622,9 +624,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             "`}` after compound statement",
         ));
         let source_vectors = self.context.merge_vector_list(&sources);
-        let items = self.alloc_syntax_list(&mut items);
+        let stored_items = self.alloc_syntax_list(&mut items);
+        self.pools.block_items.reclaim(&mut items);
+        self.pools.source_vectors.reclaim(&mut sources);
         Some(self.alloc_syntax(Statement {
-            kind: StatementType::Compound { items },
+            kind: StatementType::Compound {
+                items: stored_items,
+            },
             source_vectors,
             recovered: self.hard_error_count > errors,
         }))

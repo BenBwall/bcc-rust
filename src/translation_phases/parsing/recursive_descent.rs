@@ -19,6 +19,9 @@
 mod expressions;
 mod statements;
 
+#[cfg(test)]
+mod tests;
+
 use super::{
     ExternalDeclaration,
     ParsedTranslationUnit,
@@ -142,7 +145,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
     }
 
-    fn study_enter(&mut self, kind: ParseFrameKind, address: usize) -> ParseFrameKind {
+    fn study_enter(&mut self, kind: ParseFrameKind, address: usize) -> StudyEntry {
+        let entry = StudyEntry {
+            active:    self.active_frame,
+            base:      self.study.base,
+            remaining: self.study.remaining,
+        };
         self.study.depth += 1;
         self.study.stats.max_depth = self.study.stats.max_depth.max(self.study.depth);
         // A new stacker segment has a different address interval. Only compare
@@ -163,15 +171,22 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 .native_stack_span
                 .max(self.study.base.abs_diff(address));
         }
-        let active = self.active_frame;
         self.active_frame = kind;
-        active
+        entry
     }
 
-    fn study_leave(&mut self, active: ParseFrameKind) {
+    fn study_leave(&mut self, entry: StudyEntry) {
         self.study.depth -= 1;
-        self.active_frame = active;
+        self.active_frame = entry.active;
+        self.study.base = entry.base;
+        self.study.remaining = entry.remaining;
     }
+}
+
+struct StudyEntry {
+    active:    ParseFrameKind,
+    base:      usize,
+    remaining: Option<usize>,
 }
 
 /// Study-only parser selection; no mode changes the default compiler path.

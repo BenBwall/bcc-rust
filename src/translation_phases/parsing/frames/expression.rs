@@ -1594,9 +1594,9 @@ enum ExpressionParserState {
 /// pp. 69-70; PDF pp. 81-82; function calls §6.5.2.2, p. 71; PDF p. 83.
 #[derive(Debug)]
 pub(in crate::translation_phases::parsing) struct CallState<'tu, 'p> {
-    pub(in crate::translation_phases::parsing) arguments: ArenaVec<'p, &'tu Expression<'tu>>,
-    source_vectors: ArenaVec<'p, SourceVectors>,
-    operator_sources: ArenaVec<'p, SourceVectors>,
+    pub(in crate::translation_phases::parsing) arguments:        ArenaVec<'p, &'tu Expression<'tu>>,
+    pub(in crate::translation_phases::parsing) source_vectors:   ArenaVec<'p, SourceVectors>,
+    pub(in crate::translation_phases::parsing) operator_sources: ArenaVec<'p, SourceVectors>,
 }
 
 /// The expression nonterminal a frame parses, which bounds the operators it
