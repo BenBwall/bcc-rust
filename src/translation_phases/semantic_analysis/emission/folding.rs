@@ -95,9 +95,12 @@ use crate::{
 };
 
 /// How deep the evaluator follows operands that semantic analysis did not
-/// fold itself. Deeper conditions are left unfolded, which the iterative
-/// traversal tolerates; Clang would rarely fold them either.
-const DEPTH: u32 = 256;
+/// fold itself, counting an operand and a read of an object's initializer
+/// each as a level. Deeper conditions are left unfolded, as without the
+/// evaluator, so code after them stays emitted; Clang folds them. The bound
+/// keeps the evaluator, which recurses, well within a 1 MiB stack in an
+/// unoptimized build.
+const DEPTH: u32 = 64;
 
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Clang's `ConstantFoldsToSimpleInteger` for `condition`: its integer
@@ -627,7 +630,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         initializer: &'tu Expression<'tu>,
         depth: u32,
     ) -> Option<Value> {
-        let value = self.evaluate_value(initializer, depth)?;
+        let value = self.evaluate_value(initializer, depth + 1)?;
         self.constant_result(value).then_some(value)
     }
 

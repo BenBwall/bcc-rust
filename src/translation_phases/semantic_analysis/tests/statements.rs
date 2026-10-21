@@ -842,3 +842,39 @@ fn unused_static_functions_follow_their_warning_group() {
         });
     }
 }
+
+/// The fold evaluator recurses only as deep as keeps it within a 1 MiB
+/// stack, the default reserve of a Windows program's main thread, even
+/// unoptimized: through operands, `const` arrays read element by element
+/// and `strlen` of such arrays (PR #117's third review).
+#[test]
+fn fold_evaluation_fits_a_one_mebibyte_stack() {
+    let mut sum = String::from("int x; void h(void); void t(void) { if (x");
+    sum.push_str(&" + x".repeat(1000));
+    sum.push_str(") h(); }");
+    let mut arrays = String::from("void h(void); void t(void) { const int a0[1] = {0}; ");
+    for index in 1..1000 {
+        write!(arrays, "const int a{index}[1] = {{a{}[0]}}; ", index - 1).unwrap();
+    }
+    arrays.push_str("if (a999[0]) h(); }");
+    let mut strings = String::from("void h(void); void t(void) { const char s0[2] = \"a\"; ");
+    for index in 1..400 {
+        write!(
+            strings,
+            "const char s{index}[2] = {{(char)__builtin_strlen(s{})}}; ",
+            index - 1
+        )
+        .unwrap();
+    }
+    strings.push_str("if (s399[0]) h(); }");
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            for source in [sum, arrays, strings] {
+                clean(&source);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

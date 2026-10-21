@@ -1714,11 +1714,11 @@ fn always_inline_order_does_not_remember_depth_cut_folds() {
     let terms = |count: usize| " + __builtin_popcount(1)".repeat(count);
     for deep in [false, true] {
         let first = if deep {
-            format!("if (k{}) other(); ", terms(100))
+            format!("if (k{}) other(); ", terms(30))
         } else {
             String::new()
         };
-        let probe = format!("const int k = 0{}; {first}if (!k) h(0);", terms(200));
+        let probe = format!("const int k = 0{}; {first}if (!k) h(0);", terms(40));
         assert!(!h_first(&probe, c99), "{probe}");
     }
 }
