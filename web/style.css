@@ -67,6 +67,7 @@
   .status-chip { color: var(--accent); background: #20372f; border-color: #395e50; }
   .status-chip[data-status="undefined_behavior"], .status-chip[data-status="error"] { color: var(--red); background: #3c2627; border-color: #76413e; }
   .status-chip[data-status="finished"] { color: var(--muted); background: var(--raised); border-color: var(--border); }
+  .status-chip[data-status="limit"] { color: var(--amber); background: #382f20; border-color: #695735; }
   .step-counter { color: var(--muted); font: 10px var(--mono); letter-spacing: 1px; white-space: nowrap; }
   .step-counter strong { display: inline-block; color: var(--text); margin-left: 7px; min-width: 3ch; font-size: 15px; letter-spacing: 0; }
   .panel-index { color: #a5b0c0; font: 10px var(--mono); }
