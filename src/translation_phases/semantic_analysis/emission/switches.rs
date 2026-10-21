@@ -273,6 +273,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })
     }
 
+    /// Declarations are block items rather than statements, but collection
+    /// skips them too after the selected break. C99 §6.8.4.2p4-5, p. 134;
+    /// PDF p. 146; emission follows Clang's CollectStatementsForCase.
+    pub(in crate::translation_phases::semantic_analysis) fn folded_declaration_elided(
+        &self,
+    ) -> bool {
+        self.statements
+            .switch
+            .and_then(|index| self.functions.emission.folds.get(&index))
+            .is_some_and(|fold| fold.phase == Phase::Ended)
+    }
+
     fn set_phase(&mut self, index: usize, phase: Phase) {
         if let Some(fold) = self.functions.emission.folds.get_mut(&index) {
             fold.phase = phase;

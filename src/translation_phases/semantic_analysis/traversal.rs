@@ -58,6 +58,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))
                 || matches!(e.kind, E::Countof(_)),
         );
+        let branch = self.begin_branch_operand(e);
         self.work.push(Work::ExpressionDone(e));
         match e.kind {
             | E::Parenthesized { expression }
@@ -87,7 +88,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )));
                 }
                 self.work.push(Work::Expression(right_expression));
-                if let Some(live) = live {
+                if let Some(live) = live.filter(|_| !branch) {
                     self.dead_arm(left_expression, live, Some(right_expression));
                     self.begin_condition_references(left_expression);
                 }
@@ -102,9 +103,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.functions.dead,
                 )));
                 self.work.push(Work::Expression(c.else_expression));
-                self.dead_arm(c.condition_expression, false, Some(c.else_expression));
+                if !branch { self.dead_arm(c.condition_expression, false, Some(c.else_expression)); }
                 self.work.push(Work::Expression(c.then_expression));
-                self.dead_arm(c.condition_expression, true, Some(c.then_expression));
+                if !branch { self.dead_arm(c.condition_expression, true, Some(c.then_expression)); }
                 // GNU `x ?: y` binds its common operand before folding the
                 // condition (Clang `OpaqueValueMapping`), so it is always
                 // emitted. GNU extension: GCC manual, "Conditionals".
@@ -375,6 +376,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Condition(condition_expression, false));
                 if let Some(condition) = condition {
                     self.begin_condition_references(condition);
+                    self.branch_condition(condition);
                 }
                 self.expression_slot(condition_expression);
             },

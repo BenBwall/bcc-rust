@@ -39,6 +39,7 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 
 // Rules
+mod branches;
 mod folding;
 mod insertion;
 mod noreturn;
@@ -47,6 +48,7 @@ mod switches;
 // Statement facts
 mod labels;
 
+pub(super) use branches::Position;
 pub(super) use labels::expression_children;
 use rustc_hash::FxBuildHasher;
 
@@ -72,6 +74,7 @@ pub(super) struct State<'tu, 's> {
     /// predecessors, which a call that does not return created during the
     /// expression statement numbered here or a later one.
     pub(super) orphan: Option<usize>,
+    pub(super) branches: ArenaMap<'s, usize, Option<(Position, Position)>>,
     /// The number of expression statements begun so far.
     pub(super) serial: usize,
     /// The number of expression statements begun and not yet ended.
@@ -124,6 +127,8 @@ pub(super) struct State<'tu, 's> {
     /// Whether Clang's evaluator may fold an expression differently from
     /// semantic analysis, by address.
     refolds: ArenaMap<'s, usize, bool>,
+    /// Syntactic array-literal reads, memoized across nested query operands.
+    pub(super) array_literal_reads: ArenaMap<'s, usize, bool>,
     /// The names that a file-scope declaration anywhere in the unit
     /// declares `weak` or `weak_import`, or that `#pragma weak` names: a
     /// function's body may be emitted after them.
@@ -166,6 +171,7 @@ impl<'s> State<'_, 's> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
             orphan:                  None,
+            branches:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             serial:                  0,
             open_statements:         0,
             context_joins:           ArenaVec::new_in(scratch),
@@ -184,6 +190,7 @@ impl<'s> State<'_, 's> {
             folded:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             depth_cut:               false,
             refolds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            array_literal_reads:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             labeled_expressions:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             weak_names:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),

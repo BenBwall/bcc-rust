@@ -49,6 +49,18 @@ impl SemanticTranslationUnit<'_> {
         arena: &'a Bump,
         copied: impl Fn(usize) -> bool,
     ) -> ArenaSet<'a, usize> {
+        self.reachable_bindings_with_locals(context, arena, copied, true)
+    }
+
+    /// Lowering may retry without optional O0 storage when that storage or
+    /// its referents are unsupported. Used and referenced objects still stay.
+    pub(crate) fn reachable_bindings_with_locals<'a>(
+        &self,
+        context: &Context<'_>,
+        arena: &'a Bump,
+        copied: impl Fn(usize) -> bool,
+        retain_locals: bool,
+    ) -> ArenaSet<'a, usize> {
         let mut entities = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
         let mut canonical = ArenaVec::new_in(arena);
         for (index, binding) in self.bindings.iter().enumerate() {
@@ -123,7 +135,8 @@ impl SemanticTranslationUnit<'_> {
                 definition.kind,
                 DefinitionKind::Object | DefinitionKind::Tentative
             ) || definition.elided
-                || (context.configuration.optimization().0 && !used(definition.binding))
+                || ((!retain_locals || context.configuration.optimization().0)
+                    && !used(definition.binding))
             {
                 continue;
             }

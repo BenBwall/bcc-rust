@@ -584,6 +584,8 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// constant context reads zero. Lowering evaluates it structurally.
     /// GNU extension: GCC manual, "Other Builtins".
     pub(crate) runtime_query: bool,
+    /// The sole operand left by a branch-context logical simplification.
+    pub(crate) branch_operand: Option<&'tu Expression<'tu>>,
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
     pub(crate) operation_type: Option<TypeId>,

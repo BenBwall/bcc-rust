@@ -179,15 +179,43 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
             errors: arena.alloc_slice_copy(&errors),
         });
     }
-    match lower_unit(context, syntax, sema, target, arena, scratch, plain_inline) {
-        // A plain inline-only body that lowering refuses is dropped on its
-        // own, and so is one whose attribute refusals would apply. Other
-        // errors that only such bodies cause, such as an object they alone
-        // reach, are rarer: this backstop lowers the unit again without
-        // any, so that they never refuse it (C99 §6.7.4p6).
-        | (Err(_), true) => lower_unit(context, syntax, sema, target, arena, scratch, false).0,
-        | (result, _) => result,
+    let (mut result, copied) = lower_unit(
+        context,
+        syntax,
+        sema,
+        target,
+        arena,
+        scratch,
+        (plain_inline, true),
+    );
+    // Optional inline bodies cannot refuse an otherwise supported unit.
+    let plain_inline = plain_inline && !copied;
+    if result.is_err() && copied {
+        result = lower_unit(context, syntax, sema, target, arena, scratch, (false, true)).0;
     }
+    // Retaining an unused local, or an implementation reached only through
+    // its initializer, must not expose a backend limitation main avoided.
+    // Semantic diagnostics (including nonzero BSS bytes) have already run.
+    if result.as_ref().is_err_and(|errors| {
+        errors.errors.iter().any(|error| {
+            matches!(
+                error.kind,
+                LoweringErrorKind::Unsupported(_) | LoweringErrorKind::UnmodeledType(_)
+            )
+        })
+    }) {
+        result = lower_unit(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            scratch,
+            (plain_inline, false),
+        )
+        .0;
+    }
+    result
 }
 
 /// [`lower_with_sources`], with the plain inline-only bodies when
@@ -199,7 +227,7 @@ fn lower_unit<'tu, 'ir>(
     target: Target,
     arena: &'ir Bump,
     scratch: &mut Bump,
-    plain_inline: bool,
+    emission: (bool, bool),
 ) -> (Result<LoweredUnit<'ir>, LoweringErrors<'ir>>, bool) {
     let mut errors = ArenaVec::new_in(arena);
     let tables = Bump::new();
@@ -210,6 +238,8 @@ fn lower_unit<'tu, 'ir>(
             return (Err(LoweringErrors { errors }), false);
         },
     };
+    let (plain_inline, retain_locals) = emission;
+    unit.retain_local_statics = retain_locals;
     let plain_inline = plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);

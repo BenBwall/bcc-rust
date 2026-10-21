@@ -1395,6 +1395,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             selected_expression: None,
             elided: false,
             runtime_query: false,
+            branch_operand: None,
             place_alignment: None,
             ty,
             operation_type: None,

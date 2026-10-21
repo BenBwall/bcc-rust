@@ -95,6 +95,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         }
+        if let Some(operand) = info.branch_operand {
+            let merge = self.draft.create_block(&[Type::I1]);
+            self.tasks.push(Task::Merge {
+                merge,
+                ty: info.ty,
+                truth: true,
+            });
+            self.tasks.push(Task::JumpWithValue { merge, truth: true });
+            self.tasks.push(Task::Evaluate(operand));
+            return Ok(());
+        }
         match self.folded(expression)? {
             | Some(Folded::Live(operand)) => {
                 self.tasks.push(Task::Evaluate(operand));
@@ -822,6 +833,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         expression: &'tu Expression<'tu>,
     ) -> Result<Option<Folded<'tu>>, LoweringError> {
         use ExpressionType as E;
+        if let Some(operand) = self.info(expression)?.branch_operand {
+            return Ok(Some(Folded::Live(operand)));
+        }
         Ok(match expression.kind {
             | E::Conditional(c) if self.info(c.then_expression)?.elided =>
                 Some(Folded::Live(c.else_expression)),
@@ -853,6 +867,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             !info.elided,
             "lowering reached a condition semantic analysis elided"
         );
+        if let Some(operand) = info.branch_operand {
+            self.tasks.push(Task::Condition {
+                expression: operand,
+                then,
+                otherwise,
+            });
+            return Ok(());
+        }
         let folded = info.integer.is_some();
         if self.conversions(expression).is_empty() && !folded {
             match self.folded(expression)? {
@@ -918,6 +940,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         expression: left_expression,
                         then,
                         otherwise,
+                    });
+                    return Ok(());
+                },
+                | ExpressionType::Conditional(c)
+                    if !self.info(c.then_expression)?.elided
+                        && !self.info(c.else_expression)?.elided =>
+                {
+                    let yes = self.draft.create_block(&[]);
+                    let no = self.draft.create_block(&[]);
+                    self.tasks.push(Task::Condition {
+                        expression: c.else_expression,
+                        then,
+                        otherwise,
+                    });
+                    self.tasks.push(Task::Enter {
+                        block: no,
+                        seal:  true,
+                    });
+                    self.tasks.push(Task::Condition {
+                        expression: c.then_expression,
+                        then,
+                        otherwise,
+                    });
+                    self.tasks.push(Task::Enter {
+                        block: yes,
+                        seal:  true,
+                    });
+                    self.tasks.push(Task::Condition {
+                        expression: c.condition_expression,
+                        then:       yes,
+                        otherwise:  no,
                     });
                     return Ok(());
                 },

@@ -17,10 +17,12 @@ impl<'a> Unit<'a, '_, '_> {
     /// which also decides its BSS checks, with the plain inline-only bodies
     /// whose copies lowering emits following their references too.
     pub(super) fn reachable_items(&self) -> ArenaSet<'a, usize> {
-        self.sema
-            .reachable_bindings(self.context, self.tables, |binding| {
-                self.plain_inline.contains(&binding)
-            })
+        self.sema.reachable_bindings_with_locals(
+            self.context,
+            self.tables,
+            |binding| self.plain_inline.contains(&binding),
+            self.retain_local_statics,
+        )
     }
 }
 

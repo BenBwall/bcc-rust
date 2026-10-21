@@ -27,6 +27,157 @@ mod tests {
     use crate::native::run_native;
 
     #[test]
+    fn unsupported_unused_local_statics_keep_main_acceptance() {
+        assert_runs_like_clang(
+            r#"
+            typedef int vector __attribute__((vector_size(16)));
+            typedef int extvector __attribute__((ext_vector_type(4)));
+            int f(int a) {
+                static __float128 quad = 1.5Q;
+                static vector v = {1,2,3,4};
+                static extvector e = {1,2,3,4};
+                static _BitInt(200) bits = 7;
+                return a + 1;
+            }
+            int main(void) { return f(4) != 5; }
+        "#,
+        );
+        assert_runs_like_clang(
+            r#"
+            static void unsupported(void) { __float128 q = 1.5Q; (void)q; }
+            int f(void) { static void (*hook)(void) = unsupported; return 42; }
+            int main(void) { return f() != 42; }
+        "#,
+        );
+        assert_runs_like_clang(
+            r#"
+            typedef long jb[8]; int _setjmp(jb);
+            int f(void) {
+                static __thread int t __attribute__((section(".tdata.mine"))) = 1;
+                static int (*sj)(jb) = _setjmp;
+                return 42;
+            }
+            int main(void) { return f() != 42; }
+        "#,
+        );
+        let used = bcc(
+            "int main(void){static __float128 q __attribute__((used))=1;return 0;}",
+            &["--emit=llvm"],
+        );
+        assert!(!used.status.success());
+        assert!(text(&used.stderr).contains("binary128"));
+    }
+
+    #[test]
+    fn folded_switch_paths_include_stacked_and_range_labels() {
+        assert_runs_like_clang(
+            r#"
+            int printf(const char *, ...);
+            static int h(void) { return 4; }
+            int a(void) { switch(sizeof(short)) { case 1: case 2: return 2; case 4: return 4; } return 0; }
+            int b(void) { switch(3) { default: case 3: return 3; case 4: return 4; } return 0; }
+            int c(void) { switch(1) { case 5 ... 6: case 1: return 1; } return 3; }
+            int d(void) { int r=0; switch(2) { case 0: if(h()) {case 7:r=7;} case 8: case 2: r+=2; } return r; }
+            int main(void) { printf("%d %d %d %d\n",a(),b(),c(),d());return 0; }
+        "#,
+        );
+    }
+
+    #[test]
+    fn floating_values_keep_the_emitted_constant_query_value() {
+        assert_runs_like_clang(
+            r#"
+            int printf(const char *, ...); int g=3;
+            int main(void) {
+                int x=g;
+                double d=__builtin_constant_p((x,1))+0.5;
+                float f=__builtin_constant_p((x,1))*2.0f;
+                _Complex double z=__builtin_constant_p((x,1))+0.5;
+                printf("%d %d %d\n",(int)(d*10),(int)(f*10),(int)(__real__ z*10));
+                return 0;
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn effects_only_recipes_skip_elided_operands_and_keep_live_effects() {
+        // Clang does not support GCC's overflow predicates. This result is
+        // independently pinned against main, including the two live calls.
+        assert_run_arms(
+            r#"
+            int printf(const char *, ...); static int g;
+            static int h(void) { printf("h\n");return 1; }
+            int main(void) {
+                int k=0; const int z=0;
+                int a=__builtin_add_overflow_p(1,2,(int)((&g==0)?h():k));
+                int b=__builtin_add_overflow_p(1,2,(int)((&g==0)&&h()));
+                int c=__builtin_add_overflow_p(1,2,(int)(z?h():k));
+                (void)__builtin_add_overflow_p(1,2,(int)((&g!=0)?h():k));
+                (void)__builtin_add_overflow_p(1,2,(int)((&g!=0)&&h()));
+                printf("%d %d %d\n",a,b,c);return 0;
+            }
+        "#,
+            false,
+            Some(b"h\nh\n0 0 0\n"),
+        );
+    }
+
+    #[test]
+    fn retroactive_skips_elide_static_declarations_and_initializers() {
+        for body in [
+            "switch(1){case 1: break; static int *p=&missing;} return 6;",
+            "switch(1){case 1: {break;} static int *p=&missing;} return 6;",
+            "({goto out; (void)({static int *p=&missing;0;});});out:return 6;",
+        ] {
+            assert_runs_like_clang(&format!("extern int missing; int main(void){{{body}}}"));
+        }
+        for body in [
+            "switch(1){case 1: break; STATIC} return 6;",
+            "switch(1){case 1: {break;} STATIC} return 6;",
+            "({goto out; (void)({STATIC 0;});});out:return 6;",
+        ] {
+            let source = format!("int f(void){{{body}}} int main(void){{return f()!=6;}}");
+            assert_o0_static_emission(&source, false);
+            assert_runs_like_clang(&source.replace("STATIC", "static int a;"));
+        }
+    }
+
+    #[test]
+    fn branch_conditions_emit_nested_short_circuit_operands() {
+        for condition in [
+            "v && (0 && h())",
+            "v || (1 || h())",
+            "v || !(0 && h())",
+            "v && !(1 || h())",
+            "v ? (0 && h()) : v",
+            "v ? v : (1 || h())",
+        ] {
+            let template = format!(
+                "static int h(void){{STATIC return a;}} int f(int v){{if({condition})return \
+                 1;return 0;}} int printf(const char*,...); int main(void){{printf(\"%d \
+                 %d\\n\",f(0),f(1));return 0;}}"
+            );
+            assert_o0_static_emission(&template, true);
+            assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+        }
+        for condition in [
+            "v && ((&h!=0) || 0)",
+            "v || ((&h==0) && 1)",
+            "v && (0 ? h() : 1)",
+            "v || (1 ? 0 : h())",
+        ] {
+            let template = format!(
+                "static int h(void){{STATIC return a;}} int f(int v){{if({condition})return \
+                 1;return 0;}} int printf(const char*,...); int main(void){{printf(\"%d \
+                 %d\\n\",f(0),f(1));return 0;}}"
+            );
+            assert_o0_static_emission(&template, false);
+            assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+        }
+    }
+
+    #[test]
     fn discarded_comma_queries_keep_control_flow_and_pointer_answers() {
         assert_runs_like_clang(
             r#"
@@ -1094,14 +1245,14 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
     }
 
     fn assert_runs_like_clang(source: &str) {
-        assert_run_arms(source, false);
+        assert_run_arms(source, false, None);
     }
 
     fn assert_runs_like_clang_with_linker_symbols(source: &str) {
-        assert_run_arms(source, true);
+        assert_run_arms(source, true, None);
     }
 
-    fn assert_run_arms(source: &str, linker_symbols: bool) {
+    fn assert_run_arms(source: &str, linker_symbols: bool, expected_output: Option<&[u8]>) {
         // The sources target the default Linux C library, which only a Linux
         // host can link and run; the static-emission checks still run.
         if !cfg!(target_os = "linux") {
@@ -1111,16 +1262,21 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
         let source_file = temporary("run.c");
         let executable = temporary("run.exe");
         std::fs::write(&source_file, source).unwrap();
-        let reference = Command::new(clang())
-            .args(["-std=gnu99", "-O0"])
-            .arg(&source_file)
-            .arg("-o")
-            .arg(&executable)
-            .output()
-            .unwrap();
-        assert!(reference.status.success(), "{}", text(&reference.stderr));
-        let expected = run_native(&mut Command::new(&executable)).unwrap();
-        std::fs::remove_file(&executable).unwrap();
+        let (expected_code, expected_stdout) = if let Some(output) = expected_output {
+            (Some(0), output.to_vec())
+        } else {
+            let reference = Command::new(clang())
+                .args(["-std=gnu99", "-O0"])
+                .arg(&source_file)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+            assert!(reference.status.success(), "{}", text(&reference.stderr));
+            let expected = run_native(&mut Command::new(&executable)).unwrap();
+            std::fs::remove_file(&executable).unwrap();
+            (expected.status.code(), expected.stdout)
+        };
         for flags in [
             &["-O0"][..],
             &["-O2"][..],
@@ -1143,7 +1299,7 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
             }
             let compiled = bcc(source, &args);
             assert!(
-                compiled.status.success(),
+                interpreted || compiled.status.success(),
                 "{flags:?}: {}",
                 text(&compiled.stderr)
             );
@@ -1156,11 +1312,11 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
             };
             assert_eq!(
                 actual.status.code(),
-                expected.status.code(),
+                expected_code,
                 "{flags:?}: {}",
                 text(&actual.stderr)
             );
-            assert_eq!(actual.stdout, expected.stdout, "{flags:?}");
+            assert_eq!(actual.stdout, expected_stdout, "{flags:?}");
         }
         std::fs::remove_file(source_file).unwrap();
     }

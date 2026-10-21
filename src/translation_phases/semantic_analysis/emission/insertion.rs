@@ -557,7 +557,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let value = emission
             .value_statements
             .remove(&std::ptr::from_ref(statement).addr())
-            .map(|()| (self.functions.dead, self.reference_count()));
+            .map(|()| {
+                let mut position = self.emission_position();
+                if let Some(id) = self.control.statement_id(statement) {
+                    position.statements = id.0;
+                }
+                (self.functions.dead, position)
+            });
         if let Some((dead, _)) = value {
             self.functions.dead = false;
             if dead {
@@ -582,7 +588,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         expression: &'tu Expression<'tu>,
         serial: usize,
-        value: Option<(bool, usize)>,
+        value: Option<(bool, super::Position)>,
     ) {
         let void = matches!(
             self.types.nodes[self.expression_info(expression).ty.index],
@@ -591,7 +597,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match value {
             | Some(_) if !void => {},
             | Some((true, start)) => {
-                self.skip_references(start..self.reference_count());
+                self.elide_references(start.references..self.reference_count());
+                for definition in &mut self.definitions[start.definitions..] {
+                    if definition.kind == super::super::DefinitionKind::Object {
+                        definition.elided = true;
+                    }
+                }
+                for statement in &mut self.control.statements[start.statements..] {
+                    statement.elided = true;
+                }
                 self.functions.dead = true;
             },
             | _ =>

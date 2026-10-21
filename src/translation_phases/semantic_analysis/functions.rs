@@ -507,6 +507,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.reference_contexts[index].kind =
                     ReferenceContextKind::ConstantQuery { emitted };
             },
+            | FunctionWork::BranchOperandEnd(e, start) => self.end_branch_operand(e, start),
             | FunctionWork::ConditionReferences(condition, mark) => {
                 let end = self.reference_count();
                 if end > mark.start {
@@ -1761,31 +1762,45 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         else {
             return;
         };
-        for usage in &mut self.functions.uses[uses.mark.start..uses.end] {
-            if usage.owner == uses.mark.owner {
+        let owner = uses.mark.owner;
+        let mut index = self.next_condition_reference(owner, uses.mark.start);
+        while index < uses.end {
+            let usage = &mut self.functions.uses[index];
+            if usage.owner == owner {
                 usage.dead = true;
                 usage.unlowered = true;
             }
+            let next = self.next_condition_reference(owner, index + 1);
+            _ = self
+                .functions
+                .condition_elisions
+                .insert((owner, index), next);
+            index = next;
         }
+    }
+
+    /// Successor links skip an already processed interval for this owner.
+    /// Path compression bounds repeated elision of nested conditions.
+    fn next_condition_reference(&mut self, owner: Option<ReferenceOwner>, start: usize) -> usize {
+        let mut end = start;
+        while let Some(&next) = self.functions.condition_elisions.get(&(owner, end)) {
+            end = next;
+        }
+        let mut index = start;
+        while let Some(&next) = self.functions.condition_elisions.get(&(owner, index)) {
+            _ = self
+                .functions
+                .condition_elisions
+                .insert((owner, index), end);
+            index = next;
+        }
+        end
     }
 
     /// The number of references recorded so far, which marks where the
     /// references of the code analyzed next begin.
     pub(super) fn reference_count(&self) -> usize {
         self.functions.uses.len()
-    }
-
-    /// Marks the references recorded in `range` as skipped by code
-    /// generation, except those of nested function bodies, which are
-    /// emitted on their own.
-    pub(super) fn skip_references(&mut self, range: std::ops::Range<usize>) {
-        let function = self.functions.reference_function;
-        for usage in &mut self.functions.uses[range] {
-            if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
-            {
-                usage.dead = true;
-            }
-        }
     }
 
     /// Marks references that lowering omits, independently of LLVM creation
@@ -2219,6 +2234,7 @@ pub(super) enum FunctionWork<'tu> {
         operand:     &'tu Expression<'tu>,
         static_data: bool,
     },
+    BranchOperandEnd(&'tu Expression<'tu>, super::emission::Position),
     ConditionReferences(&'tu Expression<'tu>, ConditionMark),
     RestoreSizeof(Option<usize>),
     RestoreReferenceContext(Option<usize>),
@@ -2276,7 +2292,7 @@ pub(super) enum FunctionWork<'tu> {
     ExpressionStatementEnd {
         expression: &'tu Expression<'tu>,
         serial:     usize,
-        value:      Option<(bool, usize)>,
+        value:      Option<(bool, super::emission::Position)>,
     },
     /// After a statement expression, given the skipped state around it.
     StatementExpressionEnd(bool),
@@ -2431,7 +2447,7 @@ enum ReferenceContextKind<'tu> {
 /// Parameter type sites execute as part of the definition, before its binding
 /// is installed. Resolve their syntactic owner to that binding at completion.
 /// C99: §6.9.1p10, p. 142; PDF p. 154.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum ReferenceOwner {
     Function(usize),
     Object(usize),
@@ -2496,6 +2512,8 @@ pub(super) struct State<'tu, 's> {
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
     condition_uses: ArenaMap<'s, usize, ConditionUses>,
+    /// Owner-specific successor links for uses already condition-elided.
+    condition_elisions: ArenaMap<'s, (Option<ReferenceOwner>, usize), usize>,
 }
 
 impl<'s> State<'_, 's> {
@@ -2526,6 +2544,7 @@ impl<'s> State<'_, 's> {
             generic_marks:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             definition_contexts: ArenaVec::new_in(scratch),
             condition_uses:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            condition_elisions:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

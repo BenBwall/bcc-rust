@@ -216,7 +216,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         operand: &'tu Expression<'tu>,
     ) -> bool {
         self.real(self.expression_info(operand).ty)
-            && self.effects_pure(operand, super::super::EffectContext::Value)
+            && !self.query_has_side_effects(operand)
             && !self.constant_query_value(operand, 0, QueryContext::Control)
     }
 
@@ -1167,7 +1167,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let constant = self.constant_query_value(operand, depth, QueryContext::Control);
                 if constant {
                     Some(Value::Integer(Integer::int(1)))
-                } else if self.has_side_effects(operand) {
+                } else if self.query_has_side_effects(operand) {
                     Some(Value::Integer(Integer::int(0)))
                 } else {
                     None
@@ -1344,25 +1344,59 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Whether evaluating `operand` reads through a non-`const` array
     /// compound literal, outside `sizeof` and `_Alignof`.
     /// C99: §6.5.2.5 paragraph 4, p. 75; PDF p. 87.
-    fn reads_array_literal(&self, operand: &'tu Expression<'tu>) -> bool {
+    fn reads_array_literal(&mut self, operand: &'tu Expression<'tu>) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
-        work.push(operand);
-        while let Some(expression) = work.pop() {
-            match expression.kind {
-                | ExpressionType::SizeofExpr(_)
-                | ExpressionType::SizeofType(_)
-                | ExpressionType::AlignofExpr(_)
-                | ExpressionType::AlignofType(_) => {},
-                | ExpressionType::CompoundLiteral { .. }
-                    if self.array_typed(expression)
-                        && !self.constant_object(self.expression_info(expression).ty) =>
-                    return true,
-                | _ => super::labels::expression_children(self.scratch, expression, |child| {
-                    work.push(child);
-                }),
+        work.push((operand, false));
+        while let Some((expression, done)) = work.pop() {
+            let key = std::ptr::from_ref(expression).addr();
+            if self
+                .functions
+                .emission
+                .array_literal_reads
+                .contains_key(&key)
+            {
+                continue;
+            }
+            let skip = matches!(
+                expression.kind,
+                ExpressionType::SizeofExpr(_)
+                    | ExpressionType::SizeofType(_)
+                    | ExpressionType::AlignofExpr(_)
+                    | ExpressionType::AlignofType(_)
+            );
+            if done || skip {
+                let mut reads = matches!(expression.kind, ExpressionType::CompoundLiteral { .. })
+                    && self.array_typed(expression)
+                    && !self.constant_object(self.expression_info(expression).ty);
+                if !skip {
+                    super::labels::expression_children(self.scratch, expression, |child| {
+                        reads |= self
+                            .functions
+                            .emission
+                            .array_literal_reads
+                            .get(&std::ptr::from_ref(child).addr())
+                            .copied()
+                            .unwrap_or(false);
+                    });
+                }
+                _ = self
+                    .functions
+                    .emission
+                    .array_literal_reads
+                    .insert(key, reads);
+            } else {
+                work.push((expression, true));
+                super::labels::expression_children(self.scratch, expression, |child| {
+                    work.push((child, false))
+                });
             }
         }
-        false
+        self.functions
+            .emission
+            .array_literal_reads
+            .get(&std::ptr::from_ref(operand).addr())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Clang's `Expr::HasSideEffects`, syntactically: an assignment, an
@@ -1373,12 +1407,33 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58; §5.1.2.3 paragraph 2,
     /// p. 13; PDF p. 25.
     fn has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
+        self.side_effects(expression, false)
+    }
+
+    fn query_has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
+        if self.effects_pure(expression, super::super::EffectContext::Value) {
+            return false;
+        }
+        self.side_effects(expression, true)
+    }
+
+    fn side_effects(&self, expression: &'tu Expression<'tu>, inspect_statements: bool) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         // Each expression, with whether its value is read if it is an
         // lvalue.
         work.push((expression, true));
         while let Some((expression, read)) = work.pop() {
             let effect = match expression.kind {
+                | ExpressionType::Call { .. }
+                    if inspect_statements
+                        && self.effects_pure(expression, super::super::EffectContext::Value) =>
+                    false,
+                | ExpressionType::StatementExpression(statement) if inspect_statements => {
+                    super::labels::statement_expressions(self.scratch, statement, |child| {
+                        work.push((child, true))
+                    });
+                    false
+                },
                 | ExpressionType::Call { .. }
                 | ExpressionType::StatementExpression(_)
                 | ExpressionType::Binary {

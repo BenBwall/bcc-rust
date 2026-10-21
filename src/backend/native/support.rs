@@ -20,6 +20,7 @@ use crate::{
     ir::{
         Body,
         Function,
+        GlobalId,
         GlobalInit,
         InstData,
         Linkage,
@@ -61,7 +62,7 @@ pub(crate) fn check_module<'m>(
             return Err(refuse(Some(function.name), Construct::RuntimeName(name)));
         }
     }
-    for (_, global) in module.globals() {
+    for (id, global) in module.globals() {
         if !plain_symbol(global.name) {
             return Err(refuse(Some(global.name), Construct::SymbolName));
         }
@@ -77,12 +78,16 @@ pub(crate) fn check_module<'m>(
                     RelocationTarget::Symbol(Symbol::Function(func)) if module.returns_twice(func)
                 )
             })
+            && !unused_internal_global(module, id)
         {
             return Err(refuse(Some(global.name), Construct::ReturnsTwice));
         }
         // A thread-local definition belongs in the thread-local data that
         // the TLS offsets count from, not in a named section.
-        if global.thread_local && global.attributes.section.is_some() {
+        if global.thread_local
+            && global.attributes.section.is_some()
+            && !unused_internal_global(module, id)
+        {
             return Err(refuse(Some(global.name), Construct::ThreadLocalSection));
         }
     }
@@ -97,6 +102,38 @@ pub(crate) fn check_module<'m>(
             .map_err(|construct| refuse(Some(function.name), construct))?;
     }
     Ok(())
+}
+
+/// Whether optional retained storage can be omitted without changing any
+/// address a body, initializer, alias or linker retention request observes.
+/// C99 §6.9p5, p. 140; PDF p. 152; omission follows the pre-retention policy.
+pub(super) fn unused_internal_global(module: &Module<'_>, id: GlobalId) -> bool {
+    let global = module.global(id);
+    if global.linkage != Linkage::Internal || global.attributes.used {
+        return false;
+    }
+    for (_, other) in module.globals() {
+        if other.attributes.alias == Some(Symbol::Global(id)) {
+            return false;
+        }
+        if let Some(GlobalInit::Bytes { relocations, .. }) = other.init
+            && relocations.iter().any(|relocation| {
+                matches!(relocation.target,
+                RelocationTarget::Symbol(Symbol::Global(target)) if target == id)
+            })
+        {
+            return false;
+        }
+    }
+    !module.functions().any(|(_, function)| {
+        function.body.as_ref().is_some_and(|body| {
+            body.blocks().any(|block| {
+                body.block_insts(block).iter().any(|&inst| {
+            matches!(body.inst(inst), InstData::GlobalAddr { global } if *global == id)
+        })
+            })
+        })
+    })
 }
 
 /// The per-function checks and what they need of the module and target.

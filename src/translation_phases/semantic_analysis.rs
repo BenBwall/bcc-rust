@@ -514,6 +514,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::OldSignature(f) => self.old_signature(f),
             | Work::BlockItem(item) => match item {
                 | BlockItem::Declaration(d) => {
+                    if !self.functions.elided && self.folded_declaration_elided() {
+                        self.work
+                            .push(Work::FunctionWork(functions::FunctionWork::RestoreElided(
+                                false,
+                            )));
+                        self.functions.elided = true;
+                    }
                     self.unsummarized_block_item();
                     self.work.push(Work::Declaration(d));
                 },

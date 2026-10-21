@@ -577,3 +577,22 @@ pub(in crate::translation_phases::semantic_analysis) fn expression_children<'tu>
         | _ => {},
     }
 }
+
+/// The expressions a statement contains, including declaration initializers.
+/// Query-side-effect inspection follows Clang's SideEffectFinder.
+pub(super) fn statement_expressions<'tu>(
+    scratch: &Bump,
+    statement: &'tu Statement<'tu>,
+    mut push: impl FnMut(&'tu Expression<'tu>),
+) {
+    let mut work = ArenaVec::new_in(scratch);
+    work.push(Step::Enter(statement));
+    while let Some(step) = work.pop() {
+        match step {
+            | Step::Enter(statement) =>
+                statement_children(scratch, statement, |step| work.push(step)),
+            | Step::Expression(expression) => push(expression),
+            | _ => {},
+        }
+    }
+}

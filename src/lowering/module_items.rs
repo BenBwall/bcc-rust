@@ -105,6 +105,8 @@ use crate::{
 pub(super) struct Unit<'a, 'tu, 'ir> {
     /// The module planner's emission closure, including static local objects.
     pub(super) reachable: ArenaSet<'a, usize>,
+    /// Best-effort O0-only storage; required uses and `used` remain mandatory.
+    pub(super) retain_local_statics: bool,
     /// Work spent associating retained parameter bindings (scaling regression).
     #[cfg(test)]
     pub(super) parameter_alias_visits: usize,
@@ -1874,6 +1876,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         Ok(Self {
+            retain_local_statics: true,
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             #[cfg(test)]
             parameter_alias_visits: 0,

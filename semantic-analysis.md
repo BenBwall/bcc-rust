@@ -954,7 +954,12 @@ may still replace it. An `if` with an elided arm lowers only its selected arm.
 Every lowering consumer of a conditional or logical operator, as a value, as a
 branch condition or in an effects-only recipe, reads the same operand elision
 facts before ordinary constant shortcuts. The common operand of GNU `x ?: y`
-is always emitted, as Clang binds it before folding. Constant-query integers
+is always emitted, as Clang binds it before folding. In an `if` branch
+condition, the recursive logical emitter instead simplifies only `1 && X`,
+`X && 1`, `0 || X` and `X || 0`. Nested `0 && X` and `1 || X` retain
+both operands unless the whole condition folds. Branch operands record their
+regions so a later simplification omits references, definitions and statements
+together; lowering reads the retained operand decision. Constant-query integers
 take Clang's constant-context value, so semantic integer facts, case labels,
 static assertions, static initializer data, standalone values and loop
 decisions agree: a comma whose left operand is not constant, and an element
@@ -1049,6 +1054,17 @@ Either way its operand is still used in an expression, so an internal
 identifier it names needs a definition (C99 §6.9p3, p. 140; PDF p. 152).
 A dead automatic initializer holding a label gives Clang an insertion point
 (`EmitAutoVarInit`), so the statements after its declaration are emitted.
+Declarations after a folded switch's selected break are elided just like its
+statements. A void statement-expression tail skipped after a jump retroactively
+elides its definitions, statements and references, and lowering supplies its
+void result without visiting the tail.
+O0-only local-static retention is best effort for unsupported constructs:
+lowering retries without unreferenced, non-`used` locals and the entities only
+their initializers reach. Semantic diagnostics, including BSS initializer
+checks, still run before this fallback. The native backend also omits unused
+internal TLS objects in named sections it cannot support, and allows an unread
+internal initializer to hold a returns-twice function's address. Required and
+`used` objects retain their support checks.
 The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
