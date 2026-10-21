@@ -1,5 +1,8 @@
 //! One-operation execution over real activations and an object-aware operand
 //! stack. C99: §6.2.4 paragraph 2, p. 32; PDF p. 44 (lifetime).
+//! C99: §5.1.2.2.3 paragraph 1, p. 13; PDF p. 25 (main fallthrough).
+//! C99: §6.9.1 paragraph 12, p. 142; PDF p. 154 (other fallthrough;
+//! conservatively rejected regardless of whether its value is used).
 
 use std::{
     fmt::{
@@ -18,6 +21,7 @@ use super::model::{
     Op,
     Program,
     State,
+    Type,
     Value,
 };
 
@@ -27,6 +31,7 @@ pub(super) struct Machine {
     pub activations: Vec<Activation>,
     pub next_frame:  usize,
     pub cells:       usize,
+    pub metadata:    Vec<ObjectMetadata>,
 }
 
 impl Machine {
@@ -65,7 +70,9 @@ impl Machine {
             | Op::Leave => {
                 let frame = &self.activations[top];
                 for object in &mut self.state.objects {
-                    if object.frame_id == frame.id && object.scope == frame.scope {
+                    if object.frame_id == frame.id
+                        && self.metadata[object.id - 1].scope == frame.scope
+                    {
                         object.lifetime = "ended";
                     }
                 }
@@ -143,7 +150,7 @@ impl Machine {
                 self.store(target, offset, result)?;
             },
             | Op::Pop => {
-                self.pop_value()?;
+                let _value = self.pop_value()?;
             },
             | Op::Jump(target) => self.activations[top].pc = *target,
             | Op::Branch(target) => {
@@ -216,7 +223,7 @@ impl Machine {
                 object.lifetime = "ended";
             }
         }
-        self.activations.pop();
+        let _frame = self.activations.pop();
         self.state.event = text(format_args!("returned from frame {id}"));
         if self.activations.is_empty() {
             self.state.return_value = Some(value);
@@ -251,14 +258,13 @@ impl Machine {
     }
 
     pub fn new(program: &Program) -> Self {
-        let mut activations = Vec::new();
-        activations.push(Activation {
+        let activations = Vec::from([Activation {
             id:       1,
             function: program.entry,
             pc:       0,
             scope:    0,
             operands: Vec::new(),
-        });
+        }]);
         let mut machine = Self {
             state: State {
                 step:            0,
@@ -274,6 +280,7 @@ impl Machine {
             activations,
             next_frame: 2,
             cells: 0,
+            metadata: Vec::new(),
         };
         machine.refresh(program);
         machine
@@ -341,6 +348,7 @@ impl Machine {
     // final terminal state can exceed the 8 MiB threshold by one bounded state.
     pub fn retention_cost(&self) -> usize {
         let mut bytes = size_of::<Self>()
+            + self.metadata.capacity() * size_of::<ObjectMetadata>()
             + self.state.objects.capacity() * size_of::<super::Object>()
             + self.activations.capacity() * size_of::<Activation>()
             + self.state.frames.capacity() * size_of::<Frame>();
@@ -410,4 +418,10 @@ fn operation_name(op: &Op) -> &'static str {
         | Op::Call(_, _) => "entered function",
         | Op::Return | Op::Fallthrough => "returned from function",
     }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ObjectMetadata {
+    pub scope: usize,
+    pub ty:    Type,
 }

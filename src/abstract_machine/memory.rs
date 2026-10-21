@@ -6,11 +6,14 @@
 //! C99: §6.5 paragraph 5, p. 67; PDF p. 79 (signed overflow).
 //! C99: §6.5.5 paragraph 5, p. 82; PDF p. 94 (division by zero).
 //! C99: §6.5.6 paragraph 8, p. 83; PDF p. 95 (pointer arithmetic).
+//! C99: §6.5.6 paragraph 7, p. 83; PDF p. 95 (scalar pointer arithmetic).
+//! C99: §6.7.8 paragraph 21, p. 127; PDF p. 139 (partial initialization).
 //! C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91 (invalid indirection).
 
 use super::{
     machine::{
         Machine,
+        ObjectMetadata,
         text,
     },
     model::{
@@ -67,9 +70,8 @@ impl Machine {
             storage_duration: "automatic",
             lifetime: "alive",
             value,
-            scope,
-            ty,
         });
+        self.metadata.push(ObjectMetadata { scope, ty });
         self.cells += cells;
         Ok(())
     }
@@ -123,13 +125,13 @@ impl Machine {
     ) -> Result<(), Diagnostic> {
         let index = self.checked_location(target, offset)?;
         let object = &self.state.objects[target - 1];
-        if object.ty == Type::Pointer && value == Value::Integer(0) {
+        if self.metadata[object.id - 1].ty == Type::Pointer && value == Value::Integer(0) {
             value = Value::Pointer {
                 target: None,
                 offset: 0,
             };
         }
-        let valid = match object.ty {
+        let valid = match self.metadata[object.id - 1].ty {
             | Type::Pointer => matches!(value, Value::Pointer { .. }),
             | _ => matches!(value, Value::Integer(_)),
         };
@@ -150,7 +152,7 @@ impl Machine {
                 target: Some(target),
                 offset,
             } => {
-                self.checked_location(target, offset)?;
+                let _index = self.checked_location(target, offset)?;
                 Ok((target, offset))
             },
             | Value::Pointer { target: None, .. } => Err(Diagnostic::ub(
@@ -164,7 +166,7 @@ impl Machine {
 
     fn checked_location(&self, target: usize, offset: i32) -> Result<usize, Diagnostic> {
         let object = self.live_object(target)?;
-        let length = match object.ty {
+        let length = match self.metadata[object.id - 1].ty {
             | Type::Array(count) => count,
             | _ => 1,
         };
@@ -202,23 +204,21 @@ impl Machine {
             target: Some(target),
             ..
         } = value
-        {
-            if self
+            && self
                 .state
                 .objects
                 .get(target - 1)
                 .is_some_and(|object| object.lifetime != "alive")
-            {
-                return Err(Diagnostic {
-                    citation: Some("C99 §6.2.4p2, p. 32; PDF p. 44"),
-                    ..Diagnostic::new(
-                        "indeterminate",
-                        self.state.source_range,
-                        "pointer became indeterminate when its target lifetime ended; prototype \
-                         policy stops on use",
-                    )
-                });
-            }
+        {
+            return Err(Diagnostic {
+                citation: Some("C99 §6.2.4p2, p. 32; PDF p. 44"),
+                ..Diagnostic::new(
+                    "indeterminate",
+                    self.state.source_range,
+                    "pointer became indeterminate when its target lifetime ended; prototype \
+                     policy stops on use",
+                )
+            });
         }
         Ok(())
     }
@@ -247,14 +247,14 @@ impl Machine {
                 if matches!(operator, "+" | "-") =>
             {
                 let delta = if operator == "-" {
-                    delta.checked_neg().ok_or_else(|| self.overflow())?
+                    -i64::from(delta)
                 } else {
-                    delta
+                    i64::from(delta)
                 };
-                self.offset(pointer, delta)
+                self.offset(&pointer, delta)
             },
             | (Value::Integer(delta), pointer @ Value::Pointer { .. }) if operator == "+" =>
-                self.offset(pointer, delta),
+                self.offset(&pointer, i64::from(delta)),
             | (left @ Value::Pointer { .. }, right @ Value::Pointer { .. })
                 if matches!(operator, "==" | "!=") =>
             {
@@ -270,12 +270,11 @@ impl Machine {
                         offset: y,
                     },
                 ) = (&left, &right)
+                    && a != b
+                    && (*x != 0 || *y != 0)
                 {
-                    if a != b && (*x != 0 || *y != 0) {
-                        return Err(self.error(
-                            "comparison of offsets in distinct objects is outside the subset",
-                        ));
-                    }
+                    return Err(self
+                        .error("comparison of offsets in distinct objects is outside the subset"));
                 }
                 Ok(Value::Integer(i32::from(
                     (left == right) == (operator == "=="),
@@ -326,11 +325,11 @@ impl Machine {
         result.map(Value::Integer).ok_or_else(|| self.overflow())
     }
 
-    fn offset(&self, pointer: Value, delta: i32) -> Result<Value, Diagnostic> {
+    fn offset(&self, pointer: &Value, delta: i64) -> Result<Value, Diagnostic> {
         let Value::Pointer {
             target: Some(target),
             offset,
-        } = pointer
+        } = *pointer
         else {
             return Err(Diagnostic::ub(
                 self.state.source_range,
@@ -340,11 +339,11 @@ impl Machine {
         };
         let object = self.live_object(target)?;
         // C99 §6.5.6p7 treats a scalar as a one-element array here.
-        let length = match object.ty {
+        let length = match self.metadata[object.id - 1].ty {
             | Type::Array(count) => count,
             | _ => 1,
         };
-        let result = offset.checked_add(delta).filter(|&value| {
+        let result = i64::from(offset).checked_add(delta).filter(|&value| {
             value >= 0 && usize::try_from(value).is_ok_and(|index| index <= length)
         });
         let Some(offset) = result else {
@@ -354,6 +353,8 @@ impl Machine {
                 "C99 §6.5.6p8, p. 83; PDF p. 95",
             ));
         };
+        let offset =
+            i32::try_from(offset).map_err(|_| self.error("pointer offset exceeds subset range"))?;
         Ok(Value::Pointer {
             target: Some(target),
             offset,

@@ -133,8 +133,7 @@ impl Program {
     pub fn session(&self) -> Session {
         let initial = Machine::new(self);
         let retained_bytes = initial.retention_cost();
-        let mut history = Vec::new();
-        history.push(initial);
+        let history = Vec::from([initial]);
         Session {
             program: self.clone(),
             history,

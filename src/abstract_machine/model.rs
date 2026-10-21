@@ -83,8 +83,6 @@ pub struct Object {
     pub lifetime:         &'static str,
     /// Stored scalar or aggregate contents.
     pub value:            Value,
-    pub(super) scope:     usize,
-    pub(super) ty:        Type,
 }
 
 /// A C value or the observable state of not-yet-initialized storage.

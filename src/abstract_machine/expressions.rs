@@ -12,6 +12,7 @@ use super::{
         Type,
     },
     parser::{
+        CallSite,
         Parser,
         is_identifier,
     },
@@ -27,10 +28,7 @@ impl Parser<'_> {
 
     fn expression_inner(&mut self, minimum: u8) -> Result<usize, Diagnostic> {
         let mut left = self.prefix()?;
-        loop {
-            let Some((operator, precedence)) = binary(self.current().text) else {
-                break;
-            };
+        while let Some((operator, precedence)) = binary(self.current().text) {
             if precedence < minimum {
                 break;
             }
@@ -44,10 +42,10 @@ impl Parser<'_> {
                 ));
             }
             let ty = match (operator, lhs.ty, rhs.ty) {
-                | (_, Type::Int, Type::Int) => Type::Int,
+                | (_, Type::Int, Type::Int) | ("==" | "!=", Type::Pointer, Type::Pointer) =>
+                    Type::Int,
                 | ("+" | "-", Type::Pointer, Type::Int) | ("+", Type::Int, Type::Pointer) =>
                     Type::Pointer,
-                | ("==" | "!=", Type::Pointer, Type::Pointer) => Type::Int,
                 | ("==" | "!=", Type::Pointer, Type::Int)
                     if matches!(rhs.kind, ExprKind::Number(0)) =>
                     Type::Int,
@@ -79,8 +77,7 @@ impl Parser<'_> {
                 return Err(self.error("nested calls are outside this subset"));
             }
             let ty = match (operator, expression.ty) {
-                | ("+" | "-" | "!", Type::Int) | ("!", Type::Pointer) => Type::Int,
-                | ("*", Type::Pointer) => Type::Int,
+                | ("+" | "-" | "!", Type::Int) | ("!" | "*", Type::Pointer) => Type::Int,
                 | ("&", Type::Int) => {
                     self.check_lvalue(child)?;
                     Type::Pointer
@@ -148,7 +145,11 @@ impl Parser<'_> {
                         self.expect(",")?;
                     }
                 }
-                self.calls.push((text.clone(), types, range));
+                self.calls.push(CallSite {
+                    name: text.clone(),
+                    arguments: types,
+                    range,
+                });
                 self.node(
                     ExprKind::Call(text, arguments),
                     Type::Int,
@@ -242,8 +243,20 @@ impl Parser<'_> {
                 }
             },
             | ExprKind::Unary("&", child) => {
-                self.emit_expression(child, true)?;
-                self.emit(Op::AddressOf, node.range)?;
+                // C99: §6.5.3.2 paragraph 3, pp. 78-79; PDF pp. 90-91.
+                // &*p and &a[n] cancel indirection.
+                match self.expressions[child].kind.clone() {
+                    | ExprKind::Unary("*", pointer) => self.emit_expression(pointer, false)?,
+                    | ExprKind::Index(base, index) => {
+                        self.emit_expression(base, false)?;
+                        self.emit_expression(index, false)?;
+                        self.emit(Op::Binary("+"), node.range)?;
+                    },
+                    | _ => {
+                        self.emit_expression(child, true)?;
+                        self.emit(Op::AddressOf, node.range)?;
+                    },
+                }
             },
             | ExprKind::Unary("*", child) => {
                 self.emit_expression(child, false)?;
