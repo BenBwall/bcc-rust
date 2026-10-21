@@ -241,3 +241,8 @@ command may contain mismatches; its exit status alone is not a correctness gate.
 final floor probes also compare limits 64, 256 and 512. This distinguishes a
 limit that merely passes isolated floors from one that permits their combination.
 Even a larger entry limit cannot protect a smaller native stack by itself.
+
+RSS validation passed: with a Python parent holding a live 128 MiB buffer, the
+old `getrusage` binary reported 146,518,016 bytes for a tiny parse; the final
+`VmHWM` baseline reported 2,879,488 bytes before parsing and 3,076,096 after.
+The final native RSS tables will use only the corrected binaries.
