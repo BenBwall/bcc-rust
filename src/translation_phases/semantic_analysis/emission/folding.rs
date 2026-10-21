@@ -60,7 +60,10 @@ use crate::{
         BuiltinId,
         BuiltinOperation,
     },
-    float_parsing::LongDouble,
+    float_parsing::{
+        LongDouble,
+        string_to_long_double,
+    },
     translation_phases::{
         parsing::{
             declaration_syntax::{
@@ -278,6 +281,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 left_expression,
                 right_expression,
             } => self.object_value(expression, depth).or_else(|| {
+                if self.volatile_lvalue(expression) {
+                    return None;
+                }
                 let left = self.evaluate_value(left_expression, depth)?;
                 let right = self.evaluate_value(right_expression, depth)?;
                 match (left, right) {
@@ -309,7 +315,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.binary_value(operator, left, right)
             },
-            | ExpressionType::Conditional(conditional) => {
+            | ExpressionType::Conditional(conditional)
+            | ExpressionType::OmittedConditional(conditional) => {
                 let taken = if self
                     .evaluate_value(conditional.condition_expression, depth)?
                     .truth()?
@@ -319,7 +326,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     conditional.else_expression
                 };
                 let value = self.evaluate_value(taken, depth)?;
-                Some(self.converted_value(value, expression))
+                self.cast_value(value, expression)
             },
             | ExpressionType::Unary {
                 operator,
@@ -332,6 +339,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | UnaryOperator::AddressOf => self.address_of_value(operand_expression),
                 | UnaryOperator::Indirection =>
                     self.object_value(expression, depth).or_else(|| {
+                        if self.volatile_lvalue(expression) {
+                            return None;
+                        }
                         match self.evaluate_value(operand_expression, depth)? {
                             | Value::String(literal, offset) =>
                                 self.string_element(literal, offset),
@@ -575,7 +585,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ) => match value {
                 | Value::Floating(floating) =>
                     self.round_floating(floating, ty).map(Value::Floating),
-                | Value::Integer(_) | Value::Other => Some(Value::Other),
+                | Value::Integer(integer) => {
+                    let text = crate::diagnostics::format_in!(self.scratch, "{}L\0", integer);
+                    let floating = Floating::real(string_to_long_double(text).ok()?);
+                    self.round_floating(floating, ty).map(Value::Floating)
+                },
+                | Value::Other => Some(Value::Other),
                 | Value::Address(..) | Value::String(..) | Value::CastString(..) => None,
             },
             | _ => {
@@ -606,7 +621,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 if !data.ty.qualifiers.contains(TypeQualifiers::CONST)
                     || data.ty.qualifiers.contains(TypeQualifiers::VOLATILE)
-                    || self.may_be_weak(binding)
+                    || self.value_may_be_weak(binding)
                 {
                     return None;
                 }
@@ -888,7 +903,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let data = self.bindings[binding];
                     if data.kind != BindingKind::Object
                         || !self.constant_object(data.ty)
-                        || self.may_be_weak(binding)
+                        || self.value_may_be_weak(binding)
                     {
                         return None;
                     }
@@ -1153,12 +1168,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// GNU extension: GCC manual, "Common Function Attributes", `weak`, and
     /// "Weak Pragmas".
     fn may_be_weak(&mut self, binding: usize) -> bool {
+        self.weak_at_horizon(binding, false)
+    }
+
+    /// A defined weak_import object has a readable initializer even when
+    /// an earlier declaration still makes its address weak.
+    fn value_may_be_weak(&mut self, binding: usize) -> bool {
+        self.weak_at_horizon(binding, true)
+    }
+
+    fn weak_at_horizon(&mut self, binding: usize, value: bool) -> bool {
         let data = self.bindings[binding];
         if data.linkage == Linkage::None {
             return false;
         }
         let emission = &mut self.functions.emission;
-        if let Some(&from) = emission.weak_names.get(&data.name.name) {
+        let names = if value {
+            &emission.weak_values
+        } else {
+            &emission.weak_names
+        };
+        if let Some(&from) = names.get(&data.name.name) {
             emission.weak_read = true;
             if from < emission.weak_horizon {
                 return true;
@@ -1348,7 +1378,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// literal's units.
     fn string_strlen(&mut self, literal: StringTokenType, offset: i128) -> Option<Value> {
         let start = usize::try_from(offset).ok()?;
-        let length = units_to_null(self.literal_units(literal).iter().copied(), start)?;
+        let units = self.literal_units(literal);
+        let key = (units.as_ptr().addr(), start);
+        let length = if let Some(&length) = self.functions.emission.literal_lengths.get(&key) {
+            length
+        } else {
+            let length = units_to_null(units.iter().copied(), start);
+            _ = self.functions.emission.literal_lengths.insert(key, length);
+            length
+        }?;
         Some(Value::Integer(Integer::int(i128::try_from(length).ok()?)))
     }
 
@@ -1366,8 +1404,55 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         work.push((expression, true));
         while let Some((expression, read)) = work.pop() {
             let effect = match expression.kind {
-                | ExpressionType::Call { .. }
-                | ExpressionType::StatementExpression(_)
+                | ExpressionType::Call {
+                    function_expression,
+                    arguments,
+                } => {
+                    let pure = self
+                        .expression_info(function_expression)
+                        .binding
+                        .is_some_and(|b| self.functions.emission.pure_functions.contains_key(&b));
+                    if !pure {
+                        return true;
+                    }
+                    work.push((function_expression, true));
+                    work.extend(arguments.iter().map(|&argument| (argument, true)));
+                    false
+                },
+                | ExpressionType::Generic(_) | ExpressionType::Builtin(_)
+                    if self
+                        .expression_info(expression)
+                        .selected_expression
+                        .is_some() =>
+                {
+                    work.push((
+                        self.expression_info(expression)
+                            .selected_expression
+                            .unwrap(),
+                        read,
+                    ));
+                    false
+                },
+                | ExpressionType::StatementExpression(block) => {
+                    let mut statements = ArenaVec::new_in(self.scratch);
+                    statements.push(block);
+                    while let Some(statement) = statements.pop() {
+                        match statement.kind {
+                            | StatementType::Compound { items } =>
+                                for item in items {
+                                    match *item {
+                                        | BlockItem::Statement(child) => statements.push(child),
+                                        | _ => return true,
+                                    }
+                                },
+                            | StatementType::Expression(ExpressionSlot::Parsed(value)) =>
+                                work.push((value, true)),
+                            | StatementType::Null => {},
+                            | _ => return true,
+                        }
+                    }
+                    false
+                },
                 | ExpressionType::Binary {
                     operator:
                         BinaryOperator::Assignment
@@ -1472,7 +1557,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) {
         for index in 0..self.context.weak_pragmas.len() {
             let (position, name) = self.context.weak_pragmas[index];
-            self.weak_from(name, position);
+            self.weak_from(name, position, false);
         }
         let blocks = ["weak", "__weak__", "weak_import", "__weak_import__"]
             .iter()
@@ -1532,7 +1617,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Records that `name` is weak from output-token ordinal `position`,
     /// unless it already is from an earlier one.
-    fn weak_from(&mut self, name: StringCacheId, position: usize) {
+    fn weak_from(&mut self, name: StringCacheId, position: usize, imported: bool) {
+        if !imported {
+            let from = self
+                .functions
+                .emission
+                .weak_values
+                .entry(name)
+                .or_insert(position);
+            *from = (*from).min(position);
+        }
         let from = self
             .functions
             .emission
@@ -1561,12 +1655,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if defined.contains_key(&name.name) {
             return;
         }
-        let weak = self
-            .declaration_attribute_lists(spec.extensions, Some(declarator))
-            .iter()
-            .any(|list| super::super::attributes::weak_spelling(list, self.context));
-        if weak {
-            self.weak_from(name.name, position);
+        let lists = self.declaration_attribute_lists(spec.extensions, Some(declarator));
+        let mut weak = false;
+        let mut imported = false;
+        for list in lists {
+            if !super::super::attributes::weak_spelling(list, self.context) {
+                continue;
+            }
+            for (_, attribute) in super::super::attributes::known_names(list, self.context) {
+                weak |= attribute == "weak";
+                imported |= attribute == "weak_import";
+            }
+        }
+        if weak || imported {
+            self.weak_from(name.name, position, !weak);
         }
     }
 

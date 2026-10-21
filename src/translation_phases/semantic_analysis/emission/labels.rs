@@ -20,7 +20,9 @@ use crate::{
         OffsetMember,
         declaration_syntax::{
             Declaration,
+            Declarator,
             DesignatorType,
+            DirectDeclarator,
             Initializer,
             InitializerType,
         },
@@ -494,10 +496,37 @@ fn declaration_children<'tu>(
     push: &mut dyn FnMut(Step<'tu>),
 ) {
     for init in declaration.init_declarators {
+        declarator_bounds(scratch, init.declarator, &mut |expression| {
+            push(Step::Expression(expression))
+        });
         if let Some(initializer) = init.initializer {
             initializer_expressions(scratch, initializer, &mut |expression| {
                 push(Step::Expression(expression));
             });
+        }
+    }
+}
+
+/// Array size expressions are statement children, including bounds of
+/// pointer-to-array and typedef declarations, but not prototype parameters.
+/// C99: §6.7.5.2 paragraph 5, p. 117; PDF p. 129.
+fn declarator_bounds<'tu>(
+    scratch: &Bump,
+    declarator: Declarator<'tu>,
+    push: &mut dyn FnMut(&'tu Expression<'tu>),
+) {
+    let mut work = ArenaVec::new_in(scratch);
+    work.push(declarator);
+    while let Some(declarator) = work.pop() {
+        for direct in declarator.kind {
+            match *direct {
+                | DirectDeclarator::Array {
+                    assignment_expression: Some(bound),
+                    ..
+                } => push(bound),
+                | DirectDeclarator::Parenthesized(inner) => work.push(inner.declarator),
+                | _ => {},
+            }
         }
     }
 }
@@ -549,6 +578,10 @@ pub(super) fn expression_children<'tu>(
     mut push: impl FnMut(&'tu Expression<'tu>),
 ) {
     match expression.kind {
+        | ExpressionType::SizeofType(name) =>
+            if let Some(declarator) = name.declarator {
+                declarator_bounds(scratch, declarator, &mut push);
+            },
         | ExpressionType::Parenthesized { expression }
         | ExpressionType::Unary {
             operand_expression: expression,
