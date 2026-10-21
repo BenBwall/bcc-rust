@@ -34,6 +34,13 @@
 //! value, and keeps its block. A statement expression whose body ends
 //! skipped leaves a block without predecessors, but only when it is
 //! emitted itself, not in such an operand.
+//!
+//! Code generation emits some operands in another order than this
+//! analysis: the right operand of a scalar or complex assignment or of a
+//! compound assignment first, and on the Microsoft ABI a call's arguments
+//! from the last. When a call that does not return leaves the code after
+//! such an expression in a block without predecessors, an operand emitted
+//! after it that may join paths ends that state.
 //! C99: §6.8.3 paragraph 2, p. 132; PDF p. 144; §6.5.13-§6.5.15,
 //! pp. 89-91; PDF pp. 101-103; §6.5.5 paragraph 3, p. 82; PDF p. 94.
 //! C11: §6.5.16.2 paragraph 3, pp. 103-104; PDF pp. 121-122 (atomic
@@ -123,6 +130,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             return;
         }
+        if self.functions.emission.orphan.is_some() && self.emitted_later_may_join(e) {
+            self.functions.emission.orphan = None;
+        }
         if let ExpressionType::Call {
             function_expression,
             ..
@@ -163,6 +173,61 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if self.joins_paths(e) {
             self.functions.emission.orphan = None;
         }
+    }
+
+    /// Whether an operand of `e` that this analysis visits first, but code
+    /// generation emits last, may join paths: the left operand of a scalar
+    /// or complex assignment or of a compound assignment, which
+    /// `ScalarExprEmitter` and `ComplexExprEmitter` emit after the right,
+    /// or on the Microsoft ABI the arguments of a call before its last,
+    /// which `EmitCallArgs` emits from the last. A structure assignment
+    /// emits its left operand first.
+    /// C99: §6.5.16 paragraph 4, p. 91; PDF p. 103; §6.5.2.2 paragraph 10,
+    /// p. 72; PDF p. 84.
+    fn emitted_later_may_join(&mut self, e: &'tu Expression<'tu>) -> bool {
+        let mut work = ArenaVec::new_in(self.scratch);
+        match e.kind {
+            | ExpressionType::Binary {
+                operator: BinaryOperator::Assignment,
+                left_expression,
+                ..
+            } if !matches!(
+                self.types.nodes[self.types.non_atomic(self.expression_info(e).ty).index],
+                TypeKind::Tag(_)
+            ) =>
+                work.push(left_expression),
+            | ExpressionType::Binary {
+                operator:
+                    BinaryOperator::MultiplicationAssignment
+                    | BinaryOperator::DivisionAssignment
+                    | BinaryOperator::ModuloAssignment
+                    | BinaryOperator::AdditionAssignment
+                    | BinaryOperator::SubtractionAssignment
+                    | BinaryOperator::LeftShiftAssignment
+                    | BinaryOperator::RightShiftAssignment
+                    | BinaryOperator::BitwiseAndAssignment
+                    | BinaryOperator::BitwiseXorAssignment
+                    | BinaryOperator::BitwiseOrAssignment,
+                left_expression,
+                ..
+            } => work.push(left_expression),
+            | ExpressionType::Call { arguments, .. }
+                if self.context.configuration.target() == Target::WindowsMsvc =>
+                if let Some((_, before)) = arguments.as_slice().split_last() {
+                    work.extend_from_slice(before);
+                },
+            | _ => return false,
+        }
+        while let Some(operand) = work.pop() {
+            // A statement expression may join paths in its statements.
+            if matches!(operand.kind, ExpressionType::StatementExpression(_))
+                || self.joins_paths(operand)
+            {
+                return true;
+            }
+            super::labels::expression_children(self.scratch, operand, |child| work.push(child));
+        }
+        false
     }
 
     /// Whether Clang emits `e` with a branch whose paths join in a block
