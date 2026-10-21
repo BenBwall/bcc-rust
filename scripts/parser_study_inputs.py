@@ -55,6 +55,16 @@ return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c
 }
 """, "generated grammar differential fixture")
     save("malformed.c", "int f(void){ int a = ; if(1) return (2+); else return 3; } int following;\n", "generated recovery fixture")
+    expressions = []
+    declarations = []
+    statements = []
+    for index in range(4000):
+        expressions.append(f"int expr{index}(int a,int b,int *p){{return (a+=b*3), (a<<2)+p[a&3] > b ? (int)(a||b&&p[0]) : (a^b)|(~b&7);}}\n")
+        declarations.append(f"struct S{index}{{int a[4];unsigned b:3;}};typedef int (*F{index})(int);int x{index}[4]={{[2]=sizeof(struct S{index}),[0]=1}};\n")
+        statements.append(f"int stmt{index}(int a){{int n=0;for(int i=0;i<a;++i){{if(i&1)continue;n+=i;}}while(n>100)n-=3;do{{n++;}}while(n<0);switch(a){{case 0:return n;default:break;}}return n;}}\n")
+    save("expression-mix.c", "".join(expressions), "generated 4000 expression-heavy functions")
+    save("declaration-mix.c", "".join(declarations), "generated 4000 aggregate/typedef/initializer groups")
+    save("statement-mix.c", "".join(statements), "generated 4000 control-flow-heavy functions")
     for depth in [32, 127, 256, 1024, 4096, 16384]:
         fixtures = {
             "parentheses": "int f(void){return " + "(" * depth + "1" + ")" * depth + ";}\n",

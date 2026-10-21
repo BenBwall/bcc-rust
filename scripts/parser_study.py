@@ -2,10 +2,8 @@
 """Run isolated, interleaved parser timings and AST/diagnostic comparisons."""
 
 import argparse
-import difflib
 import hashlib
 import json
-import os
 from pathlib import Path
 import statistics
 import subprocess
@@ -39,7 +37,7 @@ def main():
     if args.files:
         files = [args.inputs / name for name in args.files]
     elif args.action == "bench":
-        files = [args.inputs / name for name in ["lua.i", "bytecode.i", "mandel.i", "parentheses-256.c", "unary-256.c", "assignment-256.c", "conditional-256.c", "statements-256.c", "blocks-256.c", "declarator-256.c", "initializer-256.c", "chain-10000.c", "initializer-list-10000.c"]]
+        files = [args.inputs / name for name in ["lua.i", "expression-mix.c", "statement-mix.c", "declaration-mix.c", "bytecode.i", "mandel.i", "parentheses-256.c", "unary-256.c", "assignment-256.c", "conditional-256.c", "statements-256.c", "blocks-256.c", "declarator-256.c", "initializer-256.c", "chain-10000.c", "initializer-list-10000.c"]]
     elif args.action == "diff":
         files = sorted(args.inputs.glob("*.i")) + [args.inputs / name for name in ["provenance.c", "extensions.c", "precedence.c", "malformed.c"]]
         files += [args.inputs / f"{kind}-{depth}.c" for depth in [32, 127, 256] for kind in ["parentheses", "unary", "assignment", "conditional", "statements", "blocks", "declarator", "initializer"]]
