@@ -2104,7 +2104,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             let precedence = token
                 .and_then(binary_operator)
                 .map(|operator| {
-                    super::expression_operators::LanguageExpressionOperator::Binary {
+                    LanguageExpressionOperator::Binary {
                         operator,
                         source_vectors: SourceVectors::default(),
                     }

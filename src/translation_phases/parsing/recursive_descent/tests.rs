@@ -200,8 +200,9 @@ fn inspect(source: &str, mode: StudyMode, stack_samples: bool) -> (String, Study
         )
         .to_owned();
     let mut renderer = Renderer::new(ColorChoice::Plain);
-    for error in context.pending_errors.iter() {
-        let diagnostic = error.diagnostic_in(&context, error.source_vectors(), &tu);
+    while let Some(error) = context.pop_pending_error() {
+        let source = error.source_vectors(&mut context);
+        let diagnostic = error.diagnostic_in(&context, source, &tu);
         text.push_str(renderer.render_text(&diagnostic, &context));
     }
     (text, stats)
