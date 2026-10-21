@@ -312,6 +312,50 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 }
 
+/// Calls `visit` with each declaration in function body `body`: in its
+/// blocks, in `for` initializers and in the statement expressions of its
+/// expressions and initializers, but not in nested function definitions.
+pub(super) fn block_declarations<'tu>(
+    scratch: &Bump,
+    body: &'tu Statement<'tu>,
+    mut visit: impl FnMut(&'tu Declaration<'tu>),
+) {
+    let mut work: ArenaVec<'_, Step<'tu>> = ArenaVec::new_in(scratch);
+    work.push(Step::Enter(body));
+    while let Some(step) = work.pop() {
+        match step {
+            | Step::Enter(statement) => {
+                match statement.kind {
+                    | StatementType::Compound { items } =>
+                        for item in items {
+                            if let BlockItem::Declaration(declaration) = *item {
+                                visit(declaration);
+                            }
+                        },
+                    | StatementType::Declaration(declaration) => visit(declaration),
+                    | StatementType::For(for_loop) => {
+                        if let Some(ForInitializer::Declaration(declaration)) = for_loop.initializer
+                        {
+                            visit(declaration);
+                        }
+                    },
+                    | _ => {},
+                }
+                statement_children(scratch, statement, |child| work.push(child));
+            },
+            | Step::Expression(expression) =>
+                if let ExpressionType::StatementExpression(statement) = expression.kind {
+                    work.push(Step::Enter(statement));
+                } else {
+                    expression_children(scratch, expression, |child| {
+                        work.push(Step::Expression(child));
+                    });
+                },
+            | Step::EnterSwitch(_) | Step::Exit(_) => {},
+        }
+    }
+}
+
 /// What a statement holds, as Clang's code generation asks before skipping
 /// or folding it.
 #[derive(Clone, Copy, Default)]

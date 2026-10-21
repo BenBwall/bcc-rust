@@ -89,6 +89,7 @@ use crate::{
                 ExpressionType,
                 Statement,
                 StatementType,
+                StorageClass,
                 UnaryOperator,
             },
         },
@@ -219,16 +220,49 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
             | _ => return false,
         }
-        while let Some(operand) = work.pop() {
-            // A statement expression may join paths in its statements.
-            if matches!(operand.kind, ExpressionType::StatementExpression(_))
-                || self.joins_paths(operand)
-            {
-                return true;
+        work.into_iter().any(|operand| self.may_join(operand))
+    }
+
+    /// Whether `e` or an expression in it may join paths: one that
+    /// [`Self::joins_paths`], or a statement expression, which may in its
+    /// statements. Memoized for each expression it holds, in postorder, so
+    /// that nested operands are examined once.
+    fn may_join(&mut self, e: &'tu Expression<'tu>) -> bool {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push((e, false));
+        while let Some((current, children_done)) = work.pop() {
+            let key = std::ptr::from_ref(current).addr();
+            if self.functions.emission.may_join.contains_key(&key) {
+                continue;
             }
-            super::labels::expression_children(self.scratch, operand, |child| work.push(child));
+            let statement = matches!(current.kind, ExpressionType::StatementExpression(_));
+            if statement || children_done {
+                let mut joins = statement || self.joins_paths(current);
+                if !statement {
+                    super::labels::expression_children(self.scratch, current, |child| {
+                        joins |= self
+                            .functions
+                            .emission
+                            .may_join
+                            .get(&std::ptr::from_ref(child).addr())
+                            .copied()
+                            .unwrap_or(true);
+                    });
+                }
+                _ = self.functions.emission.may_join.insert(key, joins);
+            } else {
+                work.push((current, true));
+                super::labels::expression_children(self.scratch, current, |child| {
+                    work.push((child, false));
+                });
+            }
         }
-        false
+        self.functions
+            .emission
+            .may_join
+            .get(&std::ptr::from_ref(e).addr())
+            .copied()
+            .unwrap_or(true)
     }
 
     /// Whether Clang emits `e` with a branch whose paths join in a block
@@ -570,6 +604,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.emission.orphan = Some(serial);
             }
         }
+        // Code generation skips the statement whole, without visiting it.
+        if self.functions.dead && !self.functions.unvisited {
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(false)));
+            self.functions.unvisited = true;
+        }
         self.work
             .push(Work::FunctionWork(FunctionWork::ExpressionStatementEnd {
                 expression,
@@ -655,9 +695,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// is until the item is popped, so only the work above the lowest the
     /// stack has been since the last question is examined
     /// (`State::work_low`). Each block item's own answer is kept by
-    /// address, judged from the typedefs visible when it is first examined,
-    /// so the items of nested blocks are examined once, and a run of calls
-    /// that do not return costs time linear in the function.
+    /// address, judged so that typedefs coming into scope later cannot
+    /// change it ([`Self::declaration_may_be_variably_modified`]), so the
+    /// items of nested blocks are examined once, and a run of calls that do
+    /// not return costs time linear in the function.
     fn variably_modified_ahead(&mut self) -> bool {
         // The work below the lowest the stack has been since the last
         // question is as it was then, and was examined then or before.
@@ -746,16 +787,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether `declaration` may declare something of a variably modified
-    /// type, judged from its syntax and the typedefs visible now.
-    fn declaration_may_be_variably_modified(&self, declaration: &'tu Declaration<'tu>) -> bool {
+    /// type, judged from its syntax and the typedefs visible now. A typedef
+    /// name that a block-scope typedef of the function may give a variably
+    /// modified type counts wherever it is, since the answer is kept while
+    /// typedefs that shadow it come into scope and leave it.
+    fn declaration_may_be_variably_modified(&mut self, declaration: &'tu Declaration<'tu>) -> bool {
         let specifiers = match declaration.declaration_specifiers.type_specifiers {
             | TypeSpecifiers::Extended(ExtendedType::Typeof { .. }) => true,
-            | TypeSpecifiers::TypedefName(name) => self
-                .lookup(Namespace::Ordinary, name.name)
-                .is_none_or(|entry| {
-                    self.types
-                        .variably_modified(self.bindings[entry.binding].ty)
-                }),
+            | TypeSpecifiers::TypedefName(name) =>
+                self.block_typedef_may_be_variably_modified(name.name)
+                    || self
+                        .lookup(Namespace::Ordinary, name.name)
+                        .is_none_or(|entry| {
+                            self.types
+                                .variably_modified(self.bindings[entry.binding].ty)
+                        }),
             | _ => false,
         };
         specifiers
@@ -763,6 +809,57 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .init_declarators
                 .iter()
                 .any(|init| self.declarator_has_variable_bound(init.declarator))
+    }
+
+    /// Whether a block-scope typedef of the current function declares
+    /// `name` with a type that may be variably modified: a `typeof`
+    /// specifier, a typedef name or a bound that is not an integer literal.
+    /// The function's typedefs are read once, the first time it asks.
+    /// C99: §6.7.7 paragraphs 2-3, p. 123; PDF p. 135.
+    fn block_typedef_may_be_variably_modified(
+        &mut self,
+        name: crate::util::string_cache::StringCacheId,
+    ) -> bool {
+        let Some(function) = self.functions.current else {
+            return false;
+        };
+        let key = std::ptr::from_ref(function.syntax).addr();
+        if self
+            .functions
+            .emission
+            .vm_typedef_functions
+            .insert(key, ())
+            .is_none()
+        {
+            let mut typedefs = ArenaVec::new_in(self.scratch);
+            super::labels::block_declarations(self.scratch, function.syntax.body, |declaration| {
+                if declaration.declaration_specifiers.storage_class == Some(StorageClass::Typedef) {
+                    typedefs.push(declaration);
+                }
+            });
+            for declaration in typedefs {
+                let specifiers = matches!(
+                    declaration.declaration_specifiers.type_specifiers,
+                    TypeSpecifiers::Extended(ExtendedType::Typeof { .. })
+                        | TypeSpecifiers::TypedefName(_)
+                );
+                for init in declaration.init_declarators {
+                    if (specifiers || self.declarator_has_variable_bound(init.declarator))
+                        && let Some(declared) = init.declarator.identifier()
+                    {
+                        _ = self
+                            .functions
+                            .emission
+                            .vm_typedefs
+                            .insert((key, declared.name), ());
+                    }
+                }
+            }
+        }
+        self.functions
+            .emission
+            .vm_typedefs
+            .contains_key(&(key, name))
     }
 
     /// Whether `declarator` has an array bound that is not an integer

@@ -12,10 +12,19 @@ use std::{
 };
 
 use crate::{
-    backend::llvm::{
-        OutputKind,
-        Toolchain,
+    backend::{
+        llvm::{
+            OutputKind,
+            Toolchain,
+        },
+        native::{
+            NativeError,
+            ObjectWriter,
+            RequestedWriter,
+            object_writer,
+        },
     },
+    ir::parse_module,
     target::Target,
     test_support::TempDir,
     util::bump::Bump,
@@ -637,6 +646,88 @@ fn coff_option_preserves_unwind_comdats_refptr_and_exports() {
             assert!(dump.contains(section), "missing {section}: {dump}");
         }
     }
+}
+
+/// Both Windows targets write direct COFF objects unless the assembler is
+/// requested, and assemble what the encoder refuses unless direct objects
+/// are; Linux keeps the assembler unless direct objects are requested.
+/// File-scope assembly, which only the assembler reads, takes it by default
+/// on every target and is refused when direct objects are requested.
+#[test]
+fn object_writer_defaults_to_direct_coff_and_assembles_file_scope_asm() {
+    let arena = Bump::new();
+    let plain = parse_module(&arena, "global @g external size 4, align 4 = zero\n").unwrap();
+    let assembly = parse_module(
+        &arena,
+        "module asm \"nop\"\n\nglobal @g external size 4, align 4 = zero\n",
+    )
+    .unwrap();
+    for (target, default) in [
+        (Target::LinuxGnu, ObjectWriter::Assembler),
+        (Target::LinuxMusl, ObjectWriter::Assembler),
+        (Target::WindowsGnu, ObjectWriter::DirectOrAssembler),
+        (Target::WindowsMsvc, ObjectWriter::DirectOrAssembler),
+    ] {
+        assert_eq!(object_writer(&plain, target, None).unwrap(), default);
+        assert_eq!(
+            object_writer(&assembly, target, None).unwrap(),
+            ObjectWriter::Assembler,
+            "{target:?}"
+        );
+        for module in [&plain, &assembly] {
+            assert_eq!(
+                object_writer(module, target, Some(RequestedWriter::Assembler)).unwrap(),
+                ObjectWriter::Assembler,
+                "{target:?}"
+            );
+        }
+        assert_eq!(
+            object_writer(&plain, target, Some(RequestedWriter::Direct)).unwrap(),
+            ObjectWriter::Direct,
+            "{target:?}"
+        );
+        assert!(
+            matches!(
+                object_writer(&assembly, target, Some(RequestedWriter::Direct)),
+                Err(NativeError::ObjectModuleAsm)
+            ),
+            "{target:?}"
+        );
+    }
+}
+
+/// The default Windows writer has the bundled clang assemble a listing its
+/// encoder refuses, in test builds too, where `assemble` would encode the
+/// listing again and panic on the refusal.
+#[test]
+fn default_coff_writer_assembles_a_refused_listing_with_clang() {
+    let text = ".section \"my data\",\"dw\"\n.globl x\nx:\n.long 1\n";
+    let directory = TempDir::new("native-coff-fallback");
+    let assembly = directory.join("reference.s");
+    let reference = directory.join("reference.obj");
+    let fallback = directory.join("fallback.obj");
+    std::fs::write(&assembly, text).unwrap();
+    Toolchain::bundled(Target::WindowsMsvc)
+        .unwrap()
+        .assemble(
+            &assembly,
+            &reference,
+            Target::WindowsMsvc,
+            OutputKind::Object,
+        )
+        .unwrap();
+    super::super::build(
+        text,
+        &fallback,
+        Target::WindowsMsvc,
+        OutputKind::Object,
+        ObjectWriter::DirectOrAssembler,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fallback).unwrap(),
+        std::fs::read(reference).unwrap()
+    );
 }
 
 #[test]

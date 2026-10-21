@@ -40,56 +40,62 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
-    pub(crate) entities:            super::EntityFacts<'tu>,
+    pub(crate) entities:                super::EntityFacts<'tu>,
     /// Evaluated entity references, owned by a function or object initializer.
-    pub(crate) references:          &'tu [EntityReference],
-    pub(crate) resolved:            super::ResolvedFacts<'tu>,
-    pub(crate) correspondence:      super::CorrespondenceFacts<'tu>,
-    pub(crate) sizes:               super::SizeFacts<'tu>,
-    pub(crate) runtime_bounds:      &'tu [super::RuntimeBound<'tu>],
-    pub(crate) control:             super::ControlFacts<'tu>,
-    pub(crate) effects:             super::EffectFacts<'tu>,
-    pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(crate) references:              &'tu [EntityReference],
+    pub(crate) resolved:                super::ResolvedFacts<'tu>,
+    pub(crate) correspondence:          super::CorrespondenceFacts<'tu>,
+    pub(crate) sizes:                   super::SizeFacts<'tu>,
+    pub(crate) runtime_bounds:          &'tu [super::RuntimeBound<'tu>],
+    pub(crate) control:                 super::ControlFacts<'tu>,
+    pub(crate) effects:                 super::EffectFacts<'tu>,
+    pub(super) expression_actions:      ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Validated entity attributes, aliases, constructors, destructors and
     /// attribute capability refusals.
-    pub(crate) symbols:             super::SymbolFacts<'tu>,
-    pub(crate) function_extensions: super::FunctionExtensions<'tu>,
-    pub(crate) types:               Types<'tu>,
-    pub(crate) bindings:            &'tu [Binding],
-    pub(crate) definitions:         &'tu [Definition],
+    pub(crate) symbols:                 super::SymbolFacts<'tu>,
+    pub(crate) function_extensions:     super::FunctionExtensions<'tu>,
+    pub(crate) types:                   Types<'tu>,
+    pub(crate) bindings:                &'tu [Binding],
+    pub(crate) definitions:             &'tu [Definition],
+    /// The file-scope declarations, in source order, that make an inline
+    /// function body seen before them an external definition (C99
+    /// §6.7.4p6, pp. 112-113; PDF pp. 124-125). Clang creates the function
+    /// and emits its body once the unit is complete from there, not where
+    /// the body is.
+    pub(crate) external_redeclarations: &'tu [usize],
     /// Every function definition in traversal order, nested GNU definitions
     /// included, with its binding, body and parameter bindings.
-    pub(crate) functions:           &'tu [FunctionRecord<'tu>],
-    pub(crate) scopes:              &'tu [Scope],
-    pub(crate) type_names:          &'tu [super::TypeNameFacts<'tu>],
-    pub(super) type_name_indices:   ArenaMap<'tu, usize, super::TypeNameId>,
-    pub(super) declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    pub(super) size_query_sites:    ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
+    pub(crate) functions:               &'tu [FunctionRecord<'tu>],
+    pub(crate) scopes:                  &'tu [Scope],
+    pub(crate) type_names:              &'tu [super::TypeNameFacts<'tu>],
+    pub(super) type_name_indices:       ArenaMap<'tu, usize, super::TypeNameId>,
+    pub(super) declaration_sites:       ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) size_query_sites:        ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
-    pub(crate) expressions:         &'tu [ExpressionInfo<'tu>],
+    pub(crate) expressions:             &'tu [ExpressionInfo<'tu>],
     /// Syntax identity (the node's address) to its ordinal in
     /// `expressions`; see [`Self::expression_index`].
-    pub(super) expression_indices:  ArenaMap<'tu, usize, usize>,
+    pub(super) expression_indices:      ArenaMap<'tu, usize, usize>,
     /// A static object's binding to the flexible array member its
     /// initializer initializes, which extends the object past its structure
     /// (GNU extension; C99 §6.7.2.1p16, p. 103; PDF p. 115). See
     /// [`Self::flexible_array`].
-    pub(super) flexible_arrays:     ArenaMap<'tu, usize, FlexibleArray>,
+    pub(super) flexible_arrays:         ArenaMap<'tu, usize, FlexibleArray>,
     /// Accepted initializers' placement plans, which lowering stores by.
     /// C99: §6.7.8 paragraphs 17-22, pp. 126-127; PDF pp. 138-139.
-    pub(crate) initializers:        super::InitializerFacts<'tu>,
+    pub(crate) initializers:            super::InitializerFacts<'tu>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
-    pub(crate) conversions:         &'tu [Conversion<'tu>],
+    pub(crate) conversions:             &'tu [Conversion<'tu>],
     /// `conversions[conversion_starts[i]..conversion_starts[i + 1]]` is the
     /// run of expression `i`. Records for an operand without a retained
     /// result follow the last run.
-    pub(super) conversion_starts:   &'tu [usize],
-    pub(crate) tag_declarations:    &'tu [(usize, usize)],
+    pub(super) conversion_starts:       &'tu [usize],
+    pub(crate) tag_declarations:        &'tu [(usize, usize)],
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
-    pub(crate) errors:              usize,
+    pub(crate) errors:                  usize,
 }
 
 /// A resolved use needed by module emission. Owners and targets are binding

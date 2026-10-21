@@ -183,6 +183,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 });
         // The label resumes the code around the switch either way.
         self.functions.dead = self.functions.switch_dead;
+        self.functions.unvisited &= self.functions.switch_dead;
         if range_after {
             // The label walk records every label but those in a statement
             // expression of a type name, where a case label is an error.
@@ -308,6 +309,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             fold.phase = Phase::Ended;
             fold.after = dead;
+            // Clang does not visit what follows the selected statements.
+            self.functions.unvisited = true;
         }
     }
 

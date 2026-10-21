@@ -6,6 +6,7 @@ use super::{
     ArenaMap,
     ArenaSet,
     ArenaVec,
+    BindingKind,
     Definition,
     DefinitionKind,
     Linkage,
@@ -49,15 +50,43 @@ impl<'a> Unit<'a, '_, '_> {
     /// ones) where they appear and every other definition (inline, internal,
     /// discardable) at the end of the unit, once referenced: depth first,
     /// each body before the bodies it newly references
-    /// (`CodeGenModule::EmitDeferred`). LLVM's always-inliner visits
-    /// functions in this module order, so it decides which recursive inline
-    /// calls stay calls; lowering declares `always_inline` bodies in it.
-    /// Live references are visited in source order, which is the order
-    /// Clang emits the expressions that name them; a dead reference
+    /// (`CodeGenModule::EmitDeferred`). An inline body that a later
+    /// declaration makes external is created at that declaration and
+    /// emitted with the deferred ones (`EmitGlobal`,
+    /// `doesDeclarationForceExternallyVisibleDefinition`). LLVM's
+    /// always-inliner visits functions in this module order, so it decides
+    /// which recursive inline calls stay calls; lowering declares
+    /// `always_inline` bodies in it. Live references are visited in source
+    /// order, which is the order Clang emits the expressions that name
+    /// them; those of a block-scope static object's initializer belong to
+    /// its function, which emits it where it reaches the declaration
+    /// (`EmitStaticVarDecl`). A dead reference
     /// ([`EntityReference::dead`](crate::translation_phases::semantic_analysis::EntityReference))
     /// creates nothing, as Clang emits no code for it. Indexed by binding.
     pub(super) fn clang_creation_order(&self) -> ArenaVec<'a, Option<usize>> {
         let canonical = self.canonical_bindings();
+        let mut function_scopes = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        for record in self.sema.functions {
+            if let Some(binding) = record.binding {
+                _ = function_scopes.insert(record.scope, binding);
+            }
+        }
+        let owner_of = |owner: usize| {
+            let binding = self.sema.bindings[owner];
+            if binding.kind == BindingKind::Object
+                && binding.linkage == Linkage::None
+                && binding.duration.is_static_or_thread()
+            {
+                let mut scope = Some(binding.scope);
+                while let Some(index) = scope {
+                    if let Some(&function) = function_scopes.get(&index) {
+                        return canonical[function];
+                    }
+                    scope = self.sema.scopes[index].parent;
+                }
+            }
+            canonical[owner]
+        };
         // References grouped by owner, in source order.
         let mut starts = ArenaVec::new_in(self.tables);
         starts.resize(canonical.len() + 1, 0usize);
@@ -69,7 +98,7 @@ impl<'a> Unit<'a, '_, '_> {
                 .filter(|reference| !reference.dead)
         };
         for reference in live() {
-            starts[canonical[reference.owner] + 1] += 1;
+            starts[owner_of(reference.owner) + 1] += 1;
         }
         for index in 1..starts.len() {
             starts[index] += starts[index - 1];
@@ -78,13 +107,21 @@ impl<'a> Unit<'a, '_, '_> {
         let mut targets = ArenaVec::new_in(self.tables);
         targets.resize(starts[canonical.len()], 0usize);
         for reference in live() {
-            let owner = canonical[reference.owner];
+            let owner = owner_of(reference.owner);
             targets[next[owner]] = canonical[reference.binding];
             next[owner] += 1;
         }
+        // The entities a later declaration makes external, from where.
+        let mut forced = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        for &binding in self.sema.external_redeclarations {
+            _ = forced.insert(canonical[binding]);
+        }
+        let eager = |definition: &Definition| {
+            self.eagerly_emitted(definition) && !forced.contains(&canonical[definition.binding])
+        };
         let mut deferred = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
         for definition in self.sema.definitions {
-            if !self.eagerly_emitted(definition) {
+            if !eager(definition) {
                 _ = deferred.insert(canonical[definition.binding]);
             }
         }
@@ -95,9 +132,17 @@ impl<'a> Unit<'a, '_, '_> {
             queue:   ArenaVec::new_in(self.tables),
         };
         let mut emitted = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        let mut redeclarations = self.sema.external_redeclarations.iter().peekable();
         for definition in self.sema.definitions {
+            // A declaration before this definition that makes an earlier
+            // body external creates it and makes it pending.
+            while let Some(&binding) =
+                redeclarations.next_if(|&&binding| binding < definition.binding)
+            {
+                order.touch(canonical[binding], &deferred);
+            }
             let entity = canonical[definition.binding];
-            if self.eagerly_emitted(definition) {
+            if eager(definition) {
                 order.touch(entity, &deferred);
                 if emitted.insert(entity) {
                     for &target in &targets[starts[entity]..starts[entity + 1]] {
@@ -110,6 +155,9 @@ impl<'a> Unit<'a, '_, '_> {
             {
                 order.queue.push(entity);
             }
+        }
+        for &binding in redeclarations {
+            order.touch(canonical[binding], &deferred);
         }
         // `EmitDeferred`: each pending body, then at once (depth first) the
         // bodies it made pending.

@@ -32,7 +32,9 @@ impl<'a> Coff<'a> {
             },
             gnu,
             sections: ArenaVec::new_in(arena),
+            named: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             unwind: ArenaVec::new_in(arena),
+            unwound: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
         }
     }
 
@@ -43,12 +45,7 @@ impl<'a> Coff<'a> {
         group: Option<usize>,
         selection: u8,
     ) -> Result<usize> {
-        if let Some(id) = self
-            .object
-            .sections
-            .iter()
-            .position(|s| s.name == name && s.group == group)
-        {
+        if let Some(&id) = self.named.get(&(name, group)) {
             if self.sections[id].characteristics != characteristics
                 || self.sections[id].selection != selection
             {
@@ -68,6 +65,7 @@ impl<'a> Coff<'a> {
         associative: Option<usize>,
     ) -> usize {
         let id = self.object.sections.len();
+        _ = self.named.entry((name, group)).or_insert(id);
         self.object.sections.push(Section {
             name,
             kind: if characteristics & 0x80 != 0 { 8 } else { 1 },

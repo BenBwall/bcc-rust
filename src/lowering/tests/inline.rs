@@ -1714,11 +1714,11 @@ fn always_inline_order_does_not_remember_depth_cut_folds() {
     let terms = |count: usize| " + __builtin_popcount(1)".repeat(count);
     for deep in [false, true] {
         let first = if deep {
-            format!("if (k{}) other(); ", terms(100))
+            format!("if (k{}) other(); ", terms(30))
         } else {
             String::new()
         };
-        let probe = format!("const int k = 0{}; {first}if (!k) h(0);", terms(200));
+        let probe = format!("const int k = 0{}; {first}if (!k) h(0);", terms(40));
         assert!(!h_first(&probe, c99), "{probe}");
     }
 }
@@ -1754,5 +1754,115 @@ fn weak_inline_definitions_are_weak_definitions_when_referenced() {
             );
             assert!(!text.contains("@f.always_inline"), "{text}");
         }
+    }
+}
+
+/// The order of the `always_inline` bodies' definitions in `source`'s
+/// module, by name.
+fn always_inline_order(source: &str, config: CompilerConfiguration) -> String {
+    let text = lower_with(source, config).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    text.lines()
+        .filter(|line| line.contains("alwaysinline") && line.ends_with('{'))
+        .filter_map(|line| line.strip_prefix("function @"))
+        .filter_map(|line| line.split(['(', '.']).next())
+        .filter(|name| ["f", "g", "h", "s"].contains(name))
+        .collect()
+}
+
+/// Clang creates an inline body that a later file-scope declaration makes
+/// external at that declaration and emits it with the deferred bodies,
+/// after the unit (`EmitGlobal`); a body it never creates, referenced only
+/// from code it skips, comes after the bodies it creates, so its copy
+/// expands nothing into them first (PR #117's third review, checked by
+/// linking and running against Clang 23 at -O0 and -O2).
+#[test]
+fn always_inline_order_follows_external_redeclarations_and_uncreated_bodies() {
+    const CYCLE: &str = "inline __attribute__((always_inline)) int f(int x); inline \
+                         __attribute__((always_inline)) int g(int x); inline \
+                         __attribute__((always_inline)) int h(int x); inline \
+                         __attribute__((always_inline)) int f(int x) { return x > 0 ? g(x - 1) + \
+                         1 : 0; } inline __attribute__((always_inline)) int g(int x) { return x > \
+                         0 ? h(x - 1) + 1 : 0; } inline __attribute__((always_inline)) int h(int \
+                         x) { return x > 0 ? f(x - 1) + 1 : 0; } ";
+    const MAIN: &str = "int main(int argc, char **argv) { (void)argv; return f(argc + 2); }";
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    for (between, after, order) in [
+        // g is created at its redeclaration, f by main, h by g's body.
+        ("extern int g(int);", "", "gfh"),
+        ("", "extern int g(int);", "fgh"),
+        ("int u(void) { return h(1); } extern int g(int);", "", "hgf"),
+    ] {
+        let source = format!("{CYCLE}{between} {MAIN} {after}");
+        assert_eq!(always_inline_order(&source, c99), order, "{source}");
+    }
+    let uncreated =
+        "void exit(int); __attribute__((noreturn)) void die(void); inline \
+         __attribute__((always_inline)) int f(int x); inline __attribute__((always_inline)) int \
+         g(int x); inline __attribute__((always_inline)) int s(int x) { return f(x) + 5; } inline \
+         __attribute__((always_inline)) int f(int x) { return g(x) + 1; } inline \
+         __attribute__((always_inline)) int g(int x) { if (x == 1000) { switch (1) { case 0: \
+         return s(x); default: break; } } return x + 2; } void die(void) { exit(9); } int \
+         main(int argc, char **argv) { (void)argv; return f(argc) & 0x7f; }";
+    assert_eq!(always_inline_order(uncreated, c99), "fgs");
+}
+
+/// The forms PR #117's third review found counted differently from Clang,
+/// each checked against Clang 23's `-O0 -Xclang -disable-llvm-passes`
+/// module: a `sizeof` operand counts only by its type; a literal is not
+/// distinct from an object of unknown size or past an object's end;
+/// `__builtin_constant_p` of a `void` operand or of a literal's later
+/// element does not fold; a block-scope static after a call that does not
+/// return is still emitted, with what its initializer names, while one in
+/// a folded-away arm is not; a typedef that a block-scope typedef may make
+/// variably modified counts wherever its name is used.
+#[test]
+fn always_inline_order_follows_the_third_pr_review_forms() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (extra, probe, emitted) in [
+        (
+            "extern int w __attribute__((weak));",
+            "if (sizeof(w) == 4) ; else h(0);",
+            false,
+        ),
+        (
+            "",
+            "if (sizeof(__builtin_constant_p(c)) == 4) ; else h(0);",
+            false,
+        ),
+        ("extern char ua[];", "if (ua == \"a\") h(0);", true),
+        ("char oc[4];", "if (\"abc\" + 4 == oc) h(0);", true),
+        ("char oc[4];", "if (\"abc\" == oc) h(0);", false),
+        ("", "if (!__builtin_constant_p((void)0)) h(0);", true),
+        (
+            "",
+            "if (!__builtin_constant_p((int *)(\"ab\" + 1))) h(0);",
+            true,
+        ),
+        ("", "if (!__builtin_constant_p((int *)\"ab\")) h(0);", false),
+        ("", "die(); static int (*sp)(int) = h; c = !!sp;", true),
+        (
+            "",
+            "exit(0); { static int (*sp)(int) = h; c = !!sp; }",
+            true,
+        ),
+        ("", "if (0) { static int (*sp)(int) = h; c = !!sp; }", false),
+        (
+            "",
+            "die(); if (c) { static int (*sp)(int) = h; c = !!sp; }",
+            false,
+        ),
+        (
+            "typedef int T;",
+            "die(); typedef int T[c]; die(); { T v; (void)v; h(0); }",
+            true,
+        ),
+        (
+            "typedef int T;",
+            "die(); { typedef int T[c]; die(); T v; (void)v; h(0); }",
+            true,
+        ),
+    ] {
+        assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
     }
 }

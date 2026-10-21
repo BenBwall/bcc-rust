@@ -83,6 +83,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .push(Work::FunctionWork(FunctionWork::RestoreElided(
                             self.functions.elided,
                         )));
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                            self.functions.unvisited,
+                        )));
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                         self.functions.dead,
                     )));
@@ -98,6 +102,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreElided(
                         self.functions.elided,
+                        )));
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
                     )));
                 self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                     self.functions.dead,
@@ -110,7 +118,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             owner: e,
                             arm,
                             live,
-                            outer_dead: self.functions.dead,
+                            outer: self.skipped_state(),
                             outer_elided: self.functions.elided,
                         }));
                     }
@@ -296,6 +304,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )));
             self.functions.elided = true;
         }
+        // Code generation skips such a statement whole, unlike a block or a
+        // declaration, whose static objects it still emits. An expression
+        // statement decides this once a statement expression's value
+        // statement has been resumed ([`Self::begin_expression_statement`]).
+        if self.functions.dead
+            && !self.functions.unvisited
+            && matches!(
+                s.kind,
+                S::If { .. }
+                    | S::Switch { .. }
+                    | S::While { .. }
+                    | S::DoWhile { .. }
+                    | S::For(_)
+                    | S::Return(_)
+                    | S::ComputedGoto(_)
+                    | S::Asm(_)
+                    | S::MsAsm(_)
+                    | S::Seh(_)
+            )
+        {
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(false)));
+            self.functions.unvisited = true;
+        }
         let outside = self.control.current;
         if let Some(id) = self.control.statement(s) {
             self.control.statements[id.0].elided = self.functions.elided;
@@ -366,6 +398,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 // Code after the statement is skipped when both arms end
                 // skipped, a missing `else` being an empty arm.
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
+                    )));
                 self.work.push(Work::FunctionWork(FunctionWork::JoinArms(
                     self.functions.elided,
                 )));
@@ -405,6 +441,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreSwitchDead(
                         self.functions.switch_dead,
+                    )));
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
                     )));
                 self.work.push(Work::FunctionWork(FunctionWork::SwitchEnd(
                     self.functions.dead,
@@ -564,7 +604,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 owner,
                 condition,
                 live,
-                outer_dead: self.functions.dead,
+                outer: self.skipped_state(),
                 outer_elided: self.functions.elided,
                 statement,
             }));
