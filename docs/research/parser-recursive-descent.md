@@ -1,310 +1,444 @@
 # Recursive descent parser study
 
-Status: investigation in progress, 2026-10-21. Baseline source: `145898d4`.
-All study code is opt-in; the default parser remains the explicit frame machine.
+2026-10-21. Original baseline: `145898d4`. Study branch:
+`codex/parser-recursive-descent-study`. Native binaries were built at `e8f95dd6`
+(the parser prototype is `2ed14574`; final Linux harness code is `fee12e29`).
+Later commits add analysis, inputs and collection scripts. Binary hashes and
+sample observations are archived in [the data directory](parser-recursive-descent-data/).
 
-## Question and constraints
+## Recommendation
 
-Compare phase 7 alone with a recursive expression/statement prototype using the
-same immutable syntax nodes, translation-unit arena, provenance, and declaration
-machinery. The current parser guarantees arbitrary nesting without native stack
-growth, structured recovery, and resource diagnostics. A speed comparison cannot
-silently trade these away. C99 translation floors are minimum capabilities, not
-a justification for rejecting everything deeper.
+**Pursue a bounded hybrid if changing the parser architecture; retain the frame
+machine as the shipping default until recovery parity is complete.** There is a
+real speed opportunity: on clean Lua, recursive parsing reduces release parser
+time by **36.1%** and hybrid depth 16 by **30.2%** against the feature-disabled
+production baseline. Debug reductions are **32.8%** and **24.6%**. The hybrid
+preserves an iterative path for arbitrary nesting and stays within the tested
+1 MiB stack. This prototype is not ready to replace the default: ten malformed
+corpus cases produce different recovered trees/provenance.
 
-## Method (planned and being recorded)
+There is **no material real-input process-memory win**: all clean-Lua variants
+peak around 33.6 MiB in release. Recursion moves working state to native stacks;
+`stacker` makes extreme nesting safe in these tests but can greatly increase
+debug memory. A large worker stack and a generic depth limit do not preserve
+the current nesting guarantee. Independently, the one-line alignment-cache reuse
+experiment saves 242,544 bytes of Lua scratch with identical inspected output.
+Promote that optimization separately after normal review.
 
-Run every Cargo operation from this worktree using:
+## Prototype and comparison boundary
 
-```sh
-python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py cargo <arguments>
-```
+The opt-in `parser-recursive-descent-study` feature implements precedence-climbing
+expressions, prefix/postfix operators, every C99 precedence/associativity level,
+casts, compound literals, both `sizeof` forms, alignment operators, and recursive
+statements/blocks. GNU and later-language atom/statement productions fall back to
+the existing extension frames. Declarations, declarators, type names and
+initializers retain their existing frames. This is a meaningful mixed parser,
+not a fully recursive declaration/declarator implementation.
 
-Retain study binaries inside the same wrapper invocation that builds them;
-shared target directories may be cleaned by sibling jobs. Long jobs are detached,
-and results are saved before waiting. Use at least seven interleaved repetitions,
-report minimum and variation, and separate parser time from preprocessing,
-inspection, setup, destruction, and process peak RSS. Report global allocation
-counts separately from arena allocation/high-water metrics: the compiler's
-ordinary path intentionally makes zero global allocations.
+It uses the same node constructors, TU arena, ordered provenance, typedef scopes,
+label/switch state and pooled call/block collections. Operator definitions are
+shared. The default pipeline always selects the original machine. No feature
+in this study is enabled by default.
 
-Inputs will include checked-in C benchmarks, a larger pinned real-world source
-if available, and generated nesting/chain/initializer stress cases. The harness
-will preprocess each source once before the measured parser interval. Differential
-checks will compare iterative syntax inspection including locations, plus
-structured diagnostic output where exposed; matching root counts alone is not
-an AST identity check.
+- [Prototype entry and policies](../../src/translation_phases/parsing/recursive_descent.rs)
+- [Expressions](../../src/translation_phases/parsing/recursive_descent/expressions.rs)
+  and [statements](../../src/translation_phases/parsing/recursive_descent/statements.rs)
+- [Measurement seam](../../src/benchmarking/parser_study.rs) and
+  [standalone executable](../../examples/parser_study.rs)
+- [Source-cost audit](parser-frame-audit.md) and
+  [grammar corpus](parser-study-coverage.md)
 
-## Evidence saved so far
+The feature-enabled machine has an extra driver seam and study frame fields.
+Its timings are shown alongside a feature-disabled baseline; speed claims above
+use the latter. On Lua, enabling the study increased the release machine median
+from 35.608 to 36.813 ms. Treat smaller cross-mode differences cautiously.
 
-- `parser-roadmap.md`, parser entry docs, `machine.rs`, `frame_pool.rs`,
-  `limits.rs`, benchmark preparation/memory APIs and allocation tests read.
-- Linux wrapper uses six build workers, two serialized build slots, dev/test
-  debug symbols disabled, and release fat LTO with full debug symbols.
-- `/proc/sys/kernel/perf_event_paranoid` is `2`; `perf` and `valgrind` were not
-  initially on PATH. Counter availability is not established yet.
-- Frame pools already recycle vectors/boxes by high-water concurrency; replacing
-  them with heap allocation would not be a fair memory comparison.
+## Method and reproduction
 
-## Initial native baseline (smoke, not final comparison)
+Host: AMD Ryzen 9 5900X, 24 logical cores, 15.7 GiB physical RAM, Linux 7.0.14,
+GCC 15.2.0, Rust 1.99.0 / LLVM 23.1.1. Release uses the repository's fat LTO,
+`target-cpu=native`, one codegen unit and static CRT. Debug is opt-level 0 with
+debug symbols disabled by the shared wrapper. Sibling builds/reviews remained
+active. No CPU isolation or frequency control was imposed.
 
-The first release harness build completed. On Lua v5.4.8 `onelua.c`, GCC 15.2
-preprocessing produces 693,358 bytes. One phase-7 smoke sample took 42.65 ms,
-used 616,192 bytes of parse arena and 15,990,600 bytes of additional TU arena,
-and made zero global allocations. Eight diagnostics require classification
-before this is admitted as a clean corpus. A 16,384-parenthesis function parsed
-in 6.96 ms with 8,130,712 bytes of parse-arena high water and zero diagnostics.
-These single samples are checkpoint evidence, not the final estimates.
+Wall time covers parser construction and phase 7 only. Source loading,
+preprocessing/token collection, optional inspection, output, worker creation,
+joining and arena destruction are outside it. Each subprocess creates fresh
+arenas and preprocessing state. Global allocation hooks use the same phase
+boundary. This extends the repository's `benchmarking-internals` preparation
+and VM-accounting infrastructure instead of timing the normal CLI, whose
+benchmarking entry point measures preprocessing.
 
-The official SQLite/Lua download domains required interactive network approval;
-we did not wait for it. Lua's tagged public GitHub source is available. The
-input generator pins archive SHA-256
-`d85b70a65f43c5d2254944d58d625e822c8e2e10d9c6a3bd9b5b657e46376a19`.
+Seven subprocess samples per input/mode rotate their order each round. Reported
+central values are medians; minima and population CVs are retained in
+[timing.tsv](parser-recursive-descent-data/timing.tsv), with every raw sample in
+JSON. This is a custom isolated harness, not a Criterion confidence estimate.
+Instruction/cache/branch counts come from one Callgrind simulation per case;
+the production Lua control is repeated twice. Hardware cycles are unavailable.
 
-`linux-perf` 7.0.0-38 reports **No supported events found. The instructions:u
-event is not supported.** This VM does not expose the hardware PMU. Hardware
-cycles, instructions, branch misses, and cache misses are unavailable; software
-`task-clock`, faults, and context switches work. We will use explicitly labelled
-Callgrind instruction/cache/branch simulation rather than invent hardware counts.
-
-Valgrind 3.26 rejects each production 100 GiB arena reservation (`mmap` fails
-with `EINVAL`), before parsing starts. The separate feature
-`parser-study-small-regions` reserves 1 GiB per region **only for profiling**.
-It keeps allocation and commit algorithms intact. Native time, RSS, and capacity
-runs use the ordinary 100 GiB reservations.
-
-Measurements, prototype coverage, checks, and recommendation will follow here.
-
-## Saved baseline repetitions
-
-Initial feature-disabled harness, seven consecutive samples per input (not yet
-the interleaved candidate comparison):
-
-| Input | Minimum ms | Median ms | CV % | Parse arena bytes | TU growth bytes | Global allocations / bytes |
-|---|---:|---:|---:|---:|---:|---:|
-| lua.i | 36.514 | 42.772 | 9.9 | 616,192 | 15,990,600 | 0 / 0 |
-| bytecode.i | 0.126 | 0.141 | 12.4 | 17,736 | 18,352 | 0 / 0 |
-| mandel.i | 0.102 | 0.105 | 30.9 | 10,696 | 10,832 | 0 / 0 |
-| parentheses-256.c | 0.149 | 0.157 | 7.9 | 131,224 | 12,792 | 0 / 0 |
-| parentheses-16384.c | 6.295 | 7.696 | 7.4 | 8,130,712 | 786,936 | 0 / 0 |
-| unary-256.c | 0.119 | 0.120 | 10.2 | 131,224 | 12,792 | 0 / 0 |
-| assignment-256.c | 0.088 | 0.095 | 4.8 | 37,208 | 25,104 | 0 / 0 |
-| conditional-256.c | 0.253 | 0.281 | 5.2 | 255,704 | 43,536 | 0 / 0 |
-| statements-256.c | 0.193 | 0.197 | 6.9 | 190,296 | 25,216 | 0 / 0 |
-| blocks-256.c | 0.222 | 0.225 | 3.2 | 419,224 | 19,096 | 0 / 0 |
-| declarator-256.c | 0.145 | 0.151 | 6.7 | 128,008 | 14,480 | 0 / 0 |
-| initializer-256.c | 0.189 | 0.194 | 8.2 | 292,824 | 24,800 | 0 / 0 |
-| chain-10000.c | 1.275 | 1.306 | 5.0 | 4,824 | 960,432 | 0 / 0 |
-| initializer-list-10000.c | 3.788 | 3.818 | 2.0 | 1,575,792 | 1,120,224 | 0 / 0 |
-
-A software `cpu-clock:u` sample profile (499 Hz, 100 Lua preparations/parses)
-completed with zero lost samples. It is a full-process sample, not a phase-7-only
-count: attribution to the named phase-7 boundary or parser symbols is useful,
-but shared context helpers and inlining prevent treating its percentages as an
-exact parser-cost partition. Callgrind will supply the isolated call graph.
-
-The next build/check jobs are queued behind shared wrapper locks. The prototype
-now covers precedence-climbing expressions and recursive statements/blocks,
-with retained frame fallbacks for types, declarations, initializers and extension
-productions. It has not yet passed compilation or differential validation.
-
-## Reproduction checkpoints
+Run all commands from:
 
 ```sh
-# Run from the assigned worktree. Every Cargo command goes through the wrapper.
+cd /home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study
 python3 scripts/parser_study_inputs.py --lua
 python3 scripts/parser_study_cases.py
+
+# Every Cargo operation is inside the shared wrapper. Each batch copies its
+# executable before another checkout can clean the shared target directory.
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts/parser_study_build.sh baseline
 python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh -c '
-  cargo clippy --all-targets --features parser-recursive-descent-study -- -D warnings &&
-  cargo build --release --features parser-recursive-descent-study --example parser_study &&
-  cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/examples/parser_study" .scratch/parser-study/study-release &&
-  cargo build --features parser-recursive-descent-study --example parser_study &&
-  cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/debug/examples/parser_study" .scratch/parser-study/study-debug'
-python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-release --output .scratch/parser-study/diff.json
-python3 scripts/parser_study.py bench --binary .scratch/parser-study/study-release --output .scratch/parser-study/release.json
-python3 scripts/parser_study.py bench --binary .scratch/parser-study/study-debug --output .scratch/parser-study/debug.json
-# Run crash probes in separate processes on an explicitly sized native stack.
-python3 scripts/parser_study.py stack --binary .scratch/parser-study/study-debug --stack 1048576 --output .scratch/parser-study/debug-stack-1m.json
+  sh scripts/parser_study_build.sh native &&
+  sh scripts/parser_study_build.sh profile &&
+  sh scripts/parser_study_build.sh alignment &&
+  sh scripts/parser_study_build.sh checks'
+
+sh scripts/parser_study_collect.sh native
+sh scripts/parser_study_collect.sh alignment
+sh scripts/parser_study_collect.sh profile
+python3 scripts/parser_study_archive.py
+cargo +nightly fmt --check
+git diff --check
 ```
 
-The runner saves JSON after every sample and rotates mode order across timing
-repetitions. Phase-7 hooks surround only parser construction and parsing; global
-allocator counters exclude source loading, preparation, thread creation, output,
-inspection and destruction. A separate worker's launch latency is printed when
-`--stack BYTES` is used. Repeating a sample makes a fresh context and preprocesses
-once outside that sample's timer; it does not replay a consumed context or retain
-an earlier AST. The preprocessed `.i` inputs have already expanded system headers
-and real macros once with GCC; the harness still tokenizes/collects these before
-the phase-7 boundary. Macro/include provenance is tested separately on original C.
+Detach long commands on the shared machine, for example:
 
-Candidate comparison uses `machine` and recursive modes from the same feature
-binary; the extra study dispatch branch may affect the feature-enabled machine.
-Feature-disabled baseline results are retained to expose that overhead. Do not
-treat the experimental mode as the production pipeline.
+```sh
+setsid nohup sh -c 'sh scripts/parser_study_collect.sh native > .scratch/parser-study/collect-native.log 2>&1; echo EXIT $? >> .scratch/parser-study/collect-native.log' >/dev/null 2>&1 &
+```
 
-The inspection check includes syntax shape/order/labels, node source segments,
-expression operator/delimiter source segments, recovery markers, and rendered
-diagnostics. Addresses and arena handles are excluded. This is an observable
-structural differential check, not a proof of equality for every unrendered
-private field. The dedicated corpus has 150 cases (87 valid, 21 extension, 42
-malformed), documented in [parser-study-coverage.md](parser-study-coverage.md).
+The scripts contain the exact feature sets, files and options for every main
+batch. Supplemental final checks were:
 
-See [parser-frame-audit.md](parser-frame-audit.md) for source-cost hypotheses,
-existing pooling/layout constraints, recovery costs, and normative C99 floors.
+```sh
+python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-debug --inputs .scratch/parser-study/grammar --manifest .scratch/parser-study/grammar/manifest.json --modes machine recursive growing hybrid:16 --output .scratch/parser-study/final-grammar-debug.json
+python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-release --modes machine recursive growing hybrid:16 --files c99-floors.c --output .scratch/parser-study/final-floors-diff.json
+# Here the runner's label "baseline" denotes the 1 GiB profiling binary.
+python3 scripts/parser_study.py diff --binary .scratch/parser-study/study-release --baseline-binary .scratch/parser-study/study-profile --modes machine baseline --files lua-supported.i extensions.c malformed.c parentheses-256.c blocks-256.c --output .scratch/parser-study/final-profile-region-diff.json
+```
 
-Checkpoint: the first broad debug differential completed all 192 comparisons
-without crashes or inspection differences. The separate 150-case grammar corpus
-is exposing malformed-condition recovery differences; these remain under review.
-Linux RSS collection is being changed from inherited `getrusage` high-water marks
-to `/proc/self/status` `VmHWM`, outside the measured interval.
+### Inputs
 
-A first explicit 1 MiB debug worker probe already reproduces the stack concern:
-recursive parsing aborts on 127 nested blocks, and `limited:256` aborts before
-its check can protect that case. The explicit machine, `growing`, and `hybrid:16`
-survive all generated depths through 16,384 in this preliminary binary. Final
-stack tables will be rerun on the final build. The timing runner now supports
-`--baseline-binary` and `--alignment-binary`, allowing these binaries to rotate
-in the same interleaved run instead of comparing different load windows.
+All 17 checked-in `benches/c/*.c` are preprocessed using
+`gcc -std=gnu99 -E -P`. Lua v5.4.8 `onelua.c` comes from
+`https://codeload.github.com/lua/lua/tar.gz/refs/tags/v5.4.8`, pinned to SHA-256
+`d85b70a65f43c5d2254944d58d625e822c8e2e10d9c6a3bd9b5b657e46376a19`.
+The untouched preprocessed Lua has eight baseline diagnostics for unsupported
+glibc `_Float128` spellings. The clean comparison explicitly adds
+`-D_Float128=__float128` during GCC preprocessing, using the supported GNU type
+spelling; the untouched input remains in the differential corpus. Clean Lua has
+241,784 parser tokens and 2,403 roots. Input bytes, hashes, GCC version and exact
+preprocessing commands are in [inputs.json](parser-recursive-descent-data/inputs.json).
+SQLite was not available from the attempted official-domain download; no SQLite
+result is claimed.
 
-The generated block depth excludes the function's outer compound. Added depth
-126 to test exactly 127 total blocks, and depth 63 for C99's parenthesized
-expression/declarator floors. A generic recursion-entry limit is not a C grammar
-nesting limit: each nested compound adds statement and compound calls.
+Synthetic inputs cover parenthesis/unary/assignment/conditional nesting,
+statements, blocks, declarators and initializers through depth 16,384; operator
+chains and initializer lists through 100,000 elements; 4,000-function expression
+and statement mixes; 4,000 aggregate/typedef/initializer declaration groups;
+and alignment-cache workloads. Depths 16,000/16,500 bracket capacity cliffs.
+The grammar corpus has 150 cases: 87 valid, 21 extension and 42 malformed,
+including 16 seeded grammar-generated cases. Benchmark configuration is C99,
+GNU off, extensions Allow. Source generation is deterministic.
 
-Final source checkpoint: `2ed14574` fixes punctuation diagnostics and one recovered
-assignment marker, and saves nine focused recovery regressions. The native,
-profile, alignment, and canonical-check bundle is running via one shared-wrapper
-slot. `scripts/parser_study_profile.py` saves the exact Callgrind command, binary
-hash, simulated event totals, and self/inclusive callgraph annotations. Empty
-phase-7 collection is treated as an error.
+## Native throughput
 
-### Preliminary debug comparison (superseded by final tables below)
+Median phase-7 milliseconds, seven samples each. All selected large inputs
+parse without diagnostics. Complete minima, CVs and all other stress cases are
+in the archived timing table.
 
-Seven rotating repetitions, feature-enabled binary from before the final
-recovery-text and stack-sampling fixes; opt-level 0, no debug symbols. These
-are complete measurements, retained as a checkpoint, not the final release
-comparison. Times are medians in milliseconds; CV is population standard
-deviation divided by mean. No stack sampling or inspection during timing.
+### Release
 
-| Input | Machine ms (CV %) | Recursive ms (CV %) | Growing ms (CV %) | Hybrid 16 ms (CV %) |
-|---|---:|---:|---:|---:|
-| Clean Lua | 306.196 (5.26) | 210.218 (3.89) | 212.756 (1.66) | 233.601 (2.24) |
-| Expression mix | 327.688 (6.19) | 225.991 (7.10) | 232.275 (4.67) | 218.880 (8.37) |
-| Statement mix | 412.823 (6.36) | 261.855 (1.65) | 266.188 (2.23) | 259.604 (1.99) |
-| Declaration mix | 256.690 (2.06) | 238.480 (1.94) | 231.191 (6.10) | 235.422 (8.85) |
+| Input | Production | Study machine | Recursive | Growing | Hybrid 16 |
+|---|---|---|---|---|---|
+| lua-supported.i | 35.608 | 36.813 | 22.765 | 22.888 | 24.841 |
+| expression-mix.c | 30.264 | 31.179 | 20.785 | 21.110 | 20.357 |
+| statement-mix.c | 40.066 | 40.683 | 22.557 | 23.012 | 22.586 |
+| declaration-mix.c | 24.498 | 25.001 | 22.777 | 22.562 | 22.503 |
 
-The exact 127-total-block C99 probe (`blocks-126.c`) also aborts in recursive
-mode on a 1 MiB debug stack. This is Linux evidence with an explicitly sized
-worker, not a Windows measurement. Portability, unwind behavior and stacker
-support on Windows still need a native-platform validation before deployment.
+### Debug
 
-The grammar run can now use `--manifest .scratch/parser-study/grammar/manifest.json`
-with `--inputs .scratch/parser-study/grammar`. The runner reports mismatches
-explicitly and retains their inspections. A completed study data-collection
-command may contain mismatches; its exit status alone is not a correctness gate.
+| Input | Production | Study machine | Recursive | Growing | Hybrid 16 |
+|---|---|---|---|---|---|
+| lua-supported.i | 174.633 | 171.425 | 117.420 | 122.763 | 131.710 |
+| expression-mix.c | 177.672 | 174.721 | 128.628 | 132.433 | 133.112 |
+| statement-mix.c | 223.485 | 232.641 | 148.065 | 151.017 | 147.355 |
+| declaration-mix.c | 133.900 | 139.422 | 128.779 | 130.418 | 131.351 |
 
-## Interpretation guardrails
+Lua minima and timing variability:
 
-- The prototype is a slice of a real parser, not an alternate lexer or a toy
-  arithmetic evaluator. It shares construction, provenance, scopes, lists and
-  the operator table. Types, declarations, declarators, initializers and GNU/
-  later-language atom productions retain their existing frames. Measured wins
-  apply to that architecture, not to an unimplemented fully recursive compiler.
-- A recursive grammar entry is not a C nesting level. Each compound introduces
-  statement and compound entries; precedence climbing also has temporary RHS
-  calls. A depth-limit policy must preserve every C99 minimum *in combination*,
-  not just accept one isolated 63-parenthesis input.
-- Arena bytes exclude native stack. Global allocator hooks exclude OS stack
-  mappings and arena `mmap`; zero global calls does not mean zero memory work.
-  `VmHWM` includes startup, preprocessing and live token/provenance buffers. Its
-  before/after difference is not a parser-only RSS peak. Arena growth/commit and
-  separately sampled native stack explain the phase-specific storage.
-- `--sample-stack` measures address spans at grammar entries. Slopes are lower
-  bounds on peak stack use, omit transient helper calls, and are collected
-  separately from throughput. Stack-growth segments are compared only within
-  the same segment; their spans cannot be summed into a contiguous stack size.
-- The 64 MiB worker encloses preparation and parsing because arenas/context are
-  created inside that worker. Reported parse time excludes launch, preparation,
-  join and destruction; separate launch latency is recorded. This is not proof
-  that the existing borrowed arena/AST API can move between arbitrary threads.
-- Hybrid fallback suspends recursion for the whole selected subtree, using
-  precedence-bounded expression frames to preserve operator ownership. It keeps
-  two grammar implementations and therefore adds maintenance and differential
-  testing obligations. Stack growth adds `stacker`/`psm` platform support and
-  native-stack switching to those obligations.
-- The terminal prototype limit reuses the existing frame-resource diagnostic,
-  but counts recursive entries. It does not establish identical semantics for
-  all production frame/node/provenance limits or error recovery. The default
-  parser's representation bounds and cleanup remain authoritative.
+| Mode | Release minimum ms | Release CV % | Debug minimum ms | Debug CV % |
+|---|---|---|---|---|
+| baseline | 34.845 | 1.89 | 164.248 | 5.17 |
+| machine | 35.422 | 2.73 | 164.280 | 4.69 |
+| recursive | 22.231 | 5.26 | 115.862 | 1.61 |
+| growing | 22.383 | 1.41 | 117.839 | 1.92 |
+| hybrid:16 | 24.519 | 1.41 | 126.250 | 2.18 |
 
-`c99-floors.c` combines exactly 127 blocks with 63 parenthesized expressions;
-final floor probes also compare limits 64, 256 and 512. This distinguishes a
-limit that merely passes isolated floors from one that permits their combination.
-Even a larger entry limit cannot protect a smaller native stack by itself.
+The largest outlier is the debug declaration/hybrid group (CV 35.45%); its
+median is 131.351 ms and minimum 125.376 ms. Do not infer a small speed ordering
+between those declaration modes. Release Lua CVs are 1.4-5.3%; the architecture
+speed difference is much larger. These are parser-only improvements, not an
+end-to-end compiler speedup.
 
-RSS validation passed: with a Python parent holding a live 128 MiB buffer, the
-old `getrusage` binary reported 146,518,016 bytes for a tiny parse; the final
-`VmHWM` baseline reported 2,879,488 bytes before parsing and 3,076,096 after.
-The final native RSS tables will use only the corrected binaries.
+## Instructions, branches, caches and profile findings
 
-Final release batch (seven interleaved samples) is complete: clean Lua medians
-are 35.608 ms production baseline, 36.813 ms study machine, 22.765 ms recursive,
-22.888 ms growing, and 24.841 ms hybrid 16. This is a 36.1% recursive and 30.2%
-hybrid time reduction against production. CVs are 1.89%, 2.73%, 5.26%, 1.41%
-and 1.41%, respectively. Peak RSS is approximately 33.6 MiB in every mode;
-there is no meaningful process-memory reduction on this real input.
+`perf stat -e instructions,cycles,branches,branch-misses,cache-misses true`
+reports `No supported events found. The instructions:u event is not supported.`
+The VM exposes software counters but no hardware PMU. No hardware cycle,
+instruction, branch-miss or cache-miss numbers were measured.
 
-On the release 1 MiB worker, raw recursion overflows by 4,096 parentheses or
-1,024 nested blocks. Machine, growing and hybrid survive all 48 generated
-kind/depth combinations through 16,384. A limit of 256 rejects the combined
-C99-floor probe; limit 512 accepts it in release. Debug validation and isolated
-counter collection remain in progress.
+Valgrind 3.26 rejects the production 100 GiB arena reservation with `EINVAL`.
+Only the profiling binaries enable `parser-study-small-regions` (1 GiB per
+region); native timing/RSS/capacity uses 100 GiB. A cross-binary inspection check
+matches native and small-region output on Lua, extensions, malformed input and
+deep expression/block cases. The profiling model uses 32 KiB/8-way/64-byte
+L1 instruction and data caches and a 64 MiB direct-mapped last-level cache.
+These model events must not be presented as physical processor misses.
 
-Final debug medians for clean Lua are 174.633 ms production, 117.420 ms
-recursive, 122.763 ms growing and 131.710 ms hybrid 16. All 672 ordinary debug
-samples completed. One declaration/hybrid sample had large scheduling noise
-(CV 35.45%); retain its minimum, median and raw observations instead of claiming
-a small ordering difference there. The 64 MiB worker still overflows at 16,384
-blocks in debug. Growing and hybrid pass the exact and combined C99 floor probes
-on 1 MiB; raw recursion and limits 256/512 abort on those block cases.
+The exact phase boundary is a non-inlined function:
 
-Final release differential checks: 196 broad comparisons and 16 large mixture
-comparisons are identical. All 108 valid/extension grammar cases match in all
-three candidate modes. Ten of 42 malformed grammar cases retain recovery
-structure/provenance differences (30 candidate comparisons); none crashes.
-The nine diagnostic/marker fixes reduced the original 19 differing cases to 10.
-Raw observations and input hashes are archived under
-`docs/research/parser-recursive-descent-data/`.
+```sh
+valgrind --tool=callgrind --collect-atstart=no   --toggle-collect='*parser_study_phase7*' --cache-sim=yes --branch-sim=yes   --callgrind-out-file=.scratch/parser-study/lua.callgrind   .scratch/parser-study/study-profile .scratch/parser-study/inputs/lua-supported.i 1 --mode machine
+callgrind_annotate --auto=no --inclusive=no .scratch/parser-study/lua.callgrind
+```
 
-Callgrind's phase boundary is verified nonempty. First clean-Lua model results:
-study machine 316,054,591 simulated instructions versus 175,680,097 recursive,
-with dispatch calls 624,990 versus 200,463. Both construct 106,427 expressions
-and call the out-of-line provenance merge helper 200,502 times. Simulated L1 data
-misses rise from 772,392 to 843,990 despite the lower instruction count.
+The profile runner rejects empty collection and saves self/inclusive annotations.
+Clean-Lua **simulated** event totals (M = million, K = thousand):
 
-A synthetic-memory caution is being checked: depth 16,384 lands near the frame
-vector's doubling boundary. The large hybrid scratch saving there may partly
-be a capacity cliff rather than a stable per-level saving. Neighboring depths
-16,000 and 16,500 are added before interpreting that result.
+| Build | Mode | Instructions M | Branches M | Branch misses M | L1 I misses K | L1 D misses K | LL misses K |
+|---|---|---|---|---|---|---|---|
+| release | machine | 316.055 | 35.153 | 2.997 | 1472.8 | 772.4 | 470.1 |
+| release | recursive | 175.680 | 20.885 | 1.564 | 1150.7 | 844.0 | 469.9 |
+| release | growing | 178.038 | 20.992 | 1.549 | 1183.4 | 857.2 | 470.0 |
+| release | hybrid:16 | 202.919 | 23.740 | 1.795 | 1361.7 | 840.2 | 470.3 |
+| debug | machine | 1420.112 | 105.478 | 4.725 | 18321.8 | 1431.3 | 444.2 |
+| debug | recursive | 960.619 | 71.238 | 2.858 | 11105.2 | 2232.8 | 444.9 |
+| debug | growing | 973.944 | 72.274 | 2.961 | 11380.7 | 2250.4 | 444.9 |
+| debug | hybrid:16 | 1049.538 | 77.988 | 3.218 | 12839.7 | 2207.3 | 445.2 |
 
-Neighbor sweeps confirm the capacity cliff: at 16,000 and 16,500 blocks, hybrid
-scratch differs from machine by only 192 bytes; at 16,384 it saves about 10 MB
-by avoiding a vector-growth boundary. Do not generalize that isolated memory
-saving. Growing debug parsing uses 139.4 MiB peak RSS at 16,384 blocks, versus
-30.4 MiB for machine and 25.8 MiB for hybrid. Separate unsampled timing runs
-on a 1 MiB worker are added for these growth-heavy cases.
+Additional inputs and exact events are in
+[events.tsv](parser-recursive-descent-data/events.tsv). The release recursive
+parser executes 44.4% fewer model instructions than the study machine, while
+L1 data misses increase 9.3%. Last-level misses are nearly unchanged: AST and
+provenance storage still have to be written. This is principally a control and
+bookkeeping reduction, not evidence of universally better cache behavior.
 
-Alignment-table reuse saves 242,544 bytes of clean-Lua scratch (616,016 to
-373,472), and 250,112 bytes on the 50K-declaration fixture. It removes the
-second bool table and allows the temporary delimiter stack's last allocation
-to be reclaimed by the bump allocator. Whole-process RSS changes are small.
-Timing CVs of roughly 10-40% in this concurrent batch do not establish a cheap
-speed win; simulated counters will be used to qualify it.
+On release Lua, out-of-line call counts are:
 
-Full provenance rendering of `alignment-nested-1024.c` was OS-killed (SIGKILL)
-in **both** unchanged-machine and alignment variants, after their successful
-parse-only measurements. This is an untimed inspection-memory limitation, not
-a successful deep AST identity check. Full checks through depth 128, the large
-flat alignment case and Lua pass. The repeat batch omits the resource-heavy
-1024 inspection; its timing/allocation case remains. The failed observations
-are retained in the raw data rather than silently removed.
+| Operation | Machine | Recursive |
+|---|---:|---:|
+| Frame dispatch (`step_once`) | 624,990 | 200,463 |
+| Retained-node counting | 1,277,764 | 400,398 |
+| Push frame | 122,838 | 44,796 |
+| Reclaim pooled frame | 122,838 | 44,796 |
+| Expression construction | 106,427 | 106,427 |
+| Provenance merge helper | 200,502 | 200,502 |
+| Out-of-line vector-pool helpers | 20,964 | 20,964 |
+
+The machine takes 2.585 frame-dispatch calls per token versus 0.829 recursive.
+Selected self-cost slices are 8.84% in the main driver source, 8.79% in expression
+stepping, 6.16% in `step_once`, 4.76% in retained-node counting and 1.34% in
+pooled reclamation. Bump allocation is 1.97% and the out-of-line expression
+constructor 1.18%. LLVM attributes inlined work to several source files, so
+these slices are not a complete additive cost partition. Driver-side moves,
+checks, cursor operations and pool lending also occur in inlined slices.
+
+The profile supports reducing grammar scheduling rather than replacing arenas
+or pools. Pooling already makes scratch bounded by concurrency/maximum list
+size, and both candidates perform the same expression/provenance work. Cursor
+lookahead and boundary classification remain costs; the source audit identifies
+redundant checks/type-prefix classification as further unmeasured candidates.
+
+## Memory and stack use
+
+Release clean-Lua memory, seven-sample median RSS. Arena numbers are deterministic:
+
+| Mode | Scratch bytes | TU growth bytes | Additional peak arena commit bytes | Peak RSS MiB | Global calls / bytes |
+|---|---|---|---|---|---|
+| baseline | 616,016 | 15,989,008 | 18,931,712 | 33.59 | 0 / 0 |
+| machine | 616,016 | 15,989,008 | 18,931,712 | 33.62 | 0 / 0 |
+| recursive | 593,552 | 15,989,008 | 18,915,328 | 33.64 | 0 / 0 |
+| growing | 593,552 | 15,989,008 | 18,915,328 | 33.68 | 0 / 0 |
+| hybrid:16 | 603,856 | 15,989,008 | 18,915,328 | 33.62 | 0 / 0 |
+
+All these variants make zero global allocator calls/bytes during parsing. Arena
+and stack mappings are OS allocations outside that counter. Recursive scratch
+saves only 22,464 bytes on Lua, about 0.14% of scratch plus TU growth, before
+including its native stack. AST/TU growth is identical.
+
+RSS uses `/proc/self/status` `VmHWM`, outside the timer and allocation interval.
+Linux `getrusage` can inherit the Python parent's peak across fork/exec. A parent
+holding 128 MiB caused the old harness to report 146.5 MB for a tiny parse; the
+corrected executable reports about 3.1 MB. RSS includes preparation and process
+startup; subtracting before/after high-water marks is not a parser-only RSS peak.
+Arena commit excludes native/stacker stacks. No peak Windows commit was measured.
+
+### Native stack slopes and exhaustion
+
+Address sampling is disabled for timing. The following are measured stack-marker
+slopes, lower bounds that exclude transient helper peaks. Expression/statement
+slopes use depths 32/127; block slopes use 256/1024 on a 64 MiB worker. Declarator
+and initializer nesting remains iterative in this prototype.
+
+| Nesting family | Release bytes / level | Debug bytes / level |
+|---|---|---|
+| parentheses | 704 | 1,952 |
+| unary | 704 | 1,952 |
+| assignment | 704 | 1,008 |
+| conditional | 704 | 1,008 |
+| statements | 496 | 3,776 |
+| blocks | 1,008 | 8,176 |
+
+On a 1 MiB worker, release raw recursion passes 1,024 parentheses but fails at
+4,096; it passes 256 blocks but fails at 1,024. Debug passes 256 parentheses
+but fails at 1,024, and fails at exactly 127 total blocks (`blocks-126.c`).
+The explicit machine, growing and hybrid complete every 48-case stress grid
+through depth 16,384 in both builds. These are tested depths, not a proof of
+unlimited allocation capacity.
+
+C99 5.2.4.1's 63 parenthesized expressions/declarators and 127 nested blocks
+are capability floors, not recommended rejection limits. A generic recursion
+counter differs from grammar depth: a block enters statement and compound calls.
+`c99-floors.c` combines 127 total blocks and 63 parentheses:
+
+| Mode, 1 MiB worker | Release combined C99 floors | Debug combined C99 floors |
+|---|---|---|
+| machine | accepted | accepted |
+| recursive | accepted | stack overflow |
+| growing | accepted | accepted |
+| hybrid:16 | accepted | accepted |
+| limited:64 | resource diagnostic | resource diagnostic |
+| limited:256 | resource diagnostic | stack overflow |
+| limited:512 | accepted | stack overflow |
+
+A limit of 64 even rejects the isolated 63-parenthesis case (66 grammar entries).
+A limit of 256 accepts the isolated release block floor but rejects their combined
+case; 512 permits it in release and still overflows in debug. These tests rule
+out using a small generic counter alone while honoring the stated C99 floors.
+The terminal prototype reuses the production resource diagnostic but does not
+prove equivalent semantics for every frame/node/provenance limit.
+
+### Stack-exhaustion options measured
+
+- **`stacker::maybe_grow`:** 64 KiB red zone, 1 MiB segments, at recursive grammar
+  entry. Lockfile resolves stacker 0.1.25 and psm 0.1.32. On release Lua, model
+  instructions increase 1.34% over raw recursion; native median increases 0.54%,
+  within timing variation. Debug native Lua increases 4.55%. It passes the 1 MiB
+  stress grids but retains large live stacks during extreme debug nesting.
+- **64 MiB worker:** seven Lua samples record median launch latency 112.3 us in
+  release and 139.9 us in debug; preparation/parsing run inside the worker, and
+  launch/join are excluded from parser time. Release passes all tested worker
+  depths. Debug still overflows at 16,384 blocks (4,096 passes). A fixed large
+  stack buys headroom, not the existing arbitrary-nesting guarantee. The borrowed
+  arena/AST API would also need a deliberate worker ownership boundary.
+- **Depth limits:** tables above show both successful terminal diagnostics and
+  failure to meet combined floors or to prevent debug overflow. A separately
+  budgeted grammar policy could be designed, but is not established by these
+  generic limits and would reduce the current accepted nesting range.
+- **Hybrid depth 16:** recurses shallowly then suspends recursion for the entire
+  selected subtree. Precedence-bounded expression frames retain operator
+  ownership. It passes both stress grids and C99 probes; sampled stack span in
+  the combined-floor debug case is 61,424 bytes, versus growing's per-segment
+  span near 956 KiB. Its Lua median costs 9.12% over raw recursion in release,
+  while retaining a 30.2% advantage over production. The model instruction cost
+  is 15.51% above raw recursion, reflecting 2,390 Lua fallback entries.
+
+Growth-heavy parsing on a 1 MiB worker, **without** stack sampling, seven rotating
+samples. Values are median parser ms / process peak RSS MiB:
+
+| Build | Input | Machine ms / RSS MiB | Growing ms / RSS MiB | Hybrid ms / RSS MiB |
+|---|---|---|---|---|
+| release | parentheses-16384.c | 8.738 / 10.62 | 11.374 / 16.47 | 7.598 / 10.13 |
+| release | blocks-16384.c | 18.372 / 25.14 | 17.485 / 21.52 | 13.773 / 20.17 |
+| debug | parentheses-16384.c | 27.372 / 15.79 | 36.798 / 40.31 | 25.026 / 15.18 |
+| debug | blocks-16384.c | 37.798 / 30.21 | 122.486 / 139.16 | 37.527 / 25.58 |
+
+The 16,384-point hybrid memory saving is partly a capacity cliff. At 16,000 blocks
+machine/hybrid scratch is 14,120,344/14,120,152 bytes; at 16,500 it is
+26,751,256/26,751,064. At 16,384 it is 26,740,120/16,778,456: removing shallow
+frames narrowly avoids a vector doubling. Parentheses show the same effect.
+Do not generalize the isolated 10 MB hybrid saving into a per-level advantage.
+
+## AST identity, recovery and diagnostics
+
+The structural check includes node order/labels, locations, ordered source
+segments, expression operator/delimiter provenance, recovered markers and rendered
+diagnostics. It excludes addresses/arena handles and is not a proof about every
+unrendered private field. Successful output hashes are retained; differing full
+inspections remain in scratch. Collection commands can exit zero while recording
+mismatches, so inspect their JSON and printed summaries.
+
+- Broad release corpus: **196/196** runs identical (17 C benchmarks, both Lua
+  variants, provenance/extensions/precedence/recovery fixtures, stress through
+  depth 256 and width 1,000).
+- Large expression/statement/declaration mixtures and 10K initializers:
+  **16/16** identical; combined C99-floor corpus: **4/4** identical.
+- Grammar corpus in release and debug: all **108 valid/extension cases** match
+  in recursive/growing/hybrid modes. Of 42 malformed cases, **32 match and 10
+  differ** in each candidate mode. None crashes in these grammar comparisons.
+
+The ten remaining cases are `bad-stray-operand-group`, `bad-mismatched-close`,
+`bad-missing-call-comma`, `bad-if-empty-condition`, `bad-if-stray-operand`,
+`bad-if-missing-body`, `bad-while-header-brace`, `bad-do-missing-while`,
+`bad-for-extra-clause` and `bad-switch-condition` (all `.c`). Examples include
+representing an empty condition as an error expression instead of a missing slot,
+shortening the source range after a stray operand/missing comma, and different
+recovery marking/continuation after a broken control header. Recovery after a
+consumed recursive prefix cannot simply rewind into the frame parser.
+
+The default parser's recovery, arena/construction API and representation-bound
+limits remain the shipping contract. A production hybrid needs full parity for
+these cases, mixed recursive/iterative cleanup and resource limits, extension
+policies and typedef restoration; the current study is deliberately opt-in.
+Maintaining both grammar implementations adds ongoing differential-testing cost.
+No native Windows build was measured: platform stacker support, ABI frame sizes
+and Windows' 1 MiB main stack need direct validation before adoption.
+
+## Cheap frame-machine optimization
+
+`parser-study-leak-alignment` changes only retention of the completed bool table
+from `arena.alloc_slice_copy(&matches)` to `matches.leak()`. It removes a redundant
+N-byte copy and allows the temporary delimiter stack's last arena allocation to
+be reclaimed. Parse/commit allocation ordering explains savings beyond N bytes.
+The experiment stays off by default.
+
+| Input | Original scratch bytes | Reused-table scratch bytes | Saved bytes | Median ms original / reuse |
+|---|---|---|---|---|
+| alignment-cache.c | 504,160 | 254,048 | 250,112 | 64.896 / 63.650 |
+| alignment-nested-16.c | 81,480 | 78,120 | 3,360 | 0.148 / 0.148 |
+| alignment-nested-128.c | 656,040 | 629,272 | 26,768 | 0.830 / 0.799 |
+| alignment-nested-1024.c | 5,252,520 | 5,038,488 | 214,032 | 25.920 / 19.968 |
+| lua-supported.i | 616,016 | 373,472 | 242,544 | 46.205 / 44.706 |
+| declaration-mix.c | 5,680 | 5,680 | 0 | 32.958 / 37.351 |
+
+The ordinary declaration control has identical scratch. Whole-process memory
+savings are much smaller than scratch percentages: Lua RSS falls about 0.15 MiB.
+Timing CVs in this later shared-load batch are 10-40%, and the no-alignment
+control also shifts. The medians above are observations, not proof of a speedup.
+Use the model counter results below to distinguish copy reduction from noise.
+
+Full syntax/provenance checks pass on the 50K-declaration case, alignment depths
+16/128 and Lua. At depth 1,024, both unchanged-machine and reuse variants were
+OS-killed during untimed full provenance rendering after successful parse-only
+measurements. This is an inspection-memory limitation, not a successful deep
+identity check or a parser-phase crash. The failed rows remain archived. The
+reproduction batch retains timing/allocation at 1,024 but omits that expensive
+inspection. Do not re-run it on a memory-constrained shared host.
+
+Other audit candidates—cursor checks, duplicate type-prefix classification,
+lazy designation-state borrowing and frame/action layout—remain unmeasured.
+Do not assign them predicted speedups or remove recovery/resource checks to
+make the machine faster.
+
+## Validation and remaining owner decisions
+
+Final validation/counter status will be filled from the completed build bundle.
+
+The architectural choice is whether a roughly 30% real-input parser speed gain
+justifies maintaining recursive and iterative grammar paths and closing the
+recovery gaps. If yes, depth-16 hybrid is the best follow-up; retain the machine
+for fallback and Windows stack insurance. If that maintenance cost is unwanted,
+keep the machine and pursue isolated optimizations from the audit. The small
+alignment-table change is independently reviewable. Choose a native Windows CI
+probe and a recovery/resource-limit acceptance corpus before making a default
+parser change. No push, PR or pipeline switch was performed in this study.
