@@ -114,7 +114,7 @@ impl StudyPrepared<'_, '_, '_> {
                 .to_owned();
             text.push_str("\n=== diagnostics ===\n");
             let mut renderer = Renderer::new(ColorChoice::Plain);
-            for error in &self.context.pending_errors {
+            for error in self.context.pending_errors.iter() {
                 let diagnostic = error.diagnostic_in(self.context, error.source_vectors(), &arena);
                 text.push_str(renderer.render_text(&diagnostic, self.context));
             }
