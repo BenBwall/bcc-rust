@@ -18,6 +18,7 @@ use super::{
     Result,
 };
 use crate::util::bump::{
+    ArenaMap,
     ArenaVec,
     Bump,
 };
@@ -42,7 +43,13 @@ struct Coff<'a> {
     object:   Object<'a>,
     gnu:      bool,
     sections: ArenaVec<'a, Attributes>,
+    /// The first section with each name and COMDAT group, so that a listing
+    /// with many COMDAT sections, which share their names, finds them in
+    /// constant time.
+    named:    ArenaMap<'a, (&'a str, Option<usize>), usize>,
     unwind:   ArenaVec<'a, UnwindSections>,
+    /// The `unwind` entry of each text section that has one.
+    unwound:  ArenaMap<'a, usize, usize>,
 }
 
 #[derive(Clone, Copy)]

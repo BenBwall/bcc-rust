@@ -1,5 +1,6 @@
-//! The native x86-64 back end: post-ABI bcc IR to AT&T assembly, or opt-in
-//! direct ELF objects. Bundled clang assembles the text path and links both
+//! The native x86-64 back end: post-ABI bcc IR to AT&T assembly, or to ELF
+//! and COFF objects encoded in process (the default for Windows targets,
+//! opt-in for Linux). Bundled clang assembles the text path and links both
 //! paths. See `docs/design/native-backend.md` for the System V and Win64
 //! conventions and the staged implementation.
 //!
@@ -25,8 +26,9 @@
 //! - Machine IR: `mir.rs`.
 //! - Passes: `isel.rs` with `isel/`, `regalloc.rs` with `regalloc/`,
 //!   `frame.rs`.
-//! - Output: `emit.rs` (shared listing), `object.rs` with `object/` (ELF
-//!   encoding, relaxation and unwind), `driver.rs` (output and linking).
+//! - Output: `emit.rs` (shared listing), `object.rs` with `object/` (ELF and
+//!   COFF encoding, relaxation and unwind), `driver.rs` (the object writer
+//!   choice, output and linking).
 //! - `tests.rs` and `tests/`: selection, allocation and end-to-end tests.
 //!
 //! The back end is not a C translation phase; it implements the target ABIs
@@ -52,8 +54,12 @@ mod object;
 use std::fmt;
 
 pub(crate) use driver::{
+    ObjectWriter,
+    RequestedWriter,
     assemble,
+    build,
     build_object,
+    object_writer,
 };
 pub(crate) use support::Unsupported;
 
@@ -300,7 +306,8 @@ pub(crate) enum NativeError<'m> {
     )]
     SharedLibraryCode,
     /// `--native-object` encodes only the emitter's own listing; file-scope
-    /// assembly is arbitrary assembler input.
+    /// assembly is arbitrary assembler input. Without the flag such a module
+    /// is assembled, on every target.
     #[error(
         "--native-object cannot encode file-scope assembly yet; omit it to assemble the native \
          listing with clang"

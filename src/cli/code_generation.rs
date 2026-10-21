@@ -329,9 +329,16 @@ pub(super) struct CodeGeneration {
     /// support yet.
     #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
     pub(super) backend:              BackEnd,
-    /// Emit ELF or COFF objects in process with the native back end.
-    #[arg(long, requires = "back_end")]
+    /// Encode the native back end's ELF or COFF objects in process, the
+    /// default for Windows targets, where a listing the encoder refuses is
+    /// assembled unless this flag is given; a module with file-scope assembly
+    /// is refused.
+    #[arg(long, requires = "back_end", overrides_with = "no_native_object")]
     pub(super) native_object:        bool,
+    /// Assemble the native back end's listing with the bundled clang, the
+    /// default for Linux targets and for a module with file-scope assembly.
+    #[arg(long, requires = "back_end", overrides_with = "native_object")]
+    pub(super) no_native_object:     bool,
 }
 
 /// What `--emit` prints.
@@ -415,10 +422,13 @@ impl CodeGeneration {
                 return Some("--emit=llvm prints LLVM IR, which --backend=native does not use"),
             | _ => {},
         }
-        if self.native_object && !native {
-            return Some("--native-object requires --backend=native");
-        }
         if !native {
+            if self.native_object {
+                return Some("--native-object requires --backend=native");
+            }
+            if self.no_native_object {
+                return Some("--no-native-object requires --backend=native");
+            }
             return None;
         }
         if self.emit.is_none() && self.output_path.is_none() {
@@ -474,6 +484,18 @@ impl CodeGeneration {
             || self.opt_bisect_limit.is_some()
             || self.print_after_all
             || self.time_passes
+    }
+
+    /// The native object writer `--native-object` or `--no-native-object`
+    /// requests, whichever came last, or `None` for the target's default.
+    fn requested_object_writer(&self) -> Option<native::RequestedWriter> {
+        if self.native_object {
+            Some(native::RequestedWriter::Direct)
+        } else if self.no_native_object {
+            Some(native::RequestedWriter::Assembler)
+        } else {
+            None
+        }
     }
 
     /// What `-o` builds.
@@ -621,14 +643,13 @@ fn build_native(
         ));
         return FAILURE_STATUS;
     }
-    // Direct ELF and COFF encoding reads only the emitter's vocabulary.
-    if options.native_object && !module.module_asm().is_empty() {
-        report_stderr(format_args!(
-            "error: {}",
-            native::NativeError::ObjectModuleAsm
-        ));
-        return FAILURE_STATUS;
-    }
+    let writer = match native::object_writer(module, target, options.requested_object_writer()) {
+        | Ok(writer) => writer,
+        | Err(error) => {
+            report_stderr(format_args!("error: {error}"));
+            return FAILURE_STATUS;
+        },
+    };
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
     if let Err(error) = native::emit_assembly_with(module, target, code, &mut text) {
@@ -645,13 +666,8 @@ fn build_native(
     } else {
         Ok(())
     };
-    let result = writable.and_then(|()| {
-        if options.native_object {
-            native::build_object(&text, output, target, options.output_kind())
-        } else {
-            native::assemble(&text, output, target, options.output_kind())
-        }
-    });
+    let result =
+        writable.and_then(|()| native::build(&text, output, target, options.output_kind(), writer));
     match result {
         | Ok(()) => 0,
         | Err(error) => {
