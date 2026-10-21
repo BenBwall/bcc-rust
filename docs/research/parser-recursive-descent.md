@@ -202,3 +202,37 @@ The grammar run can now use `--manifest .scratch/parser-study/grammar/manifest.j
 with `--inputs .scratch/parser-study/grammar`. The runner reports mismatches
 explicitly and retains their inspections. A completed study data-collection
 command may contain mismatches; its exit status alone is not a correctness gate.
+
+## Interpretation guardrails
+
+- The prototype is a slice of a real parser, not an alternate lexer or a toy
+  arithmetic evaluator. It shares construction, provenance, scopes, lists and
+  the operator table. Types, declarations, declarators, initializers and GNU/
+  later-language atom productions retain their existing frames. Measured wins
+  apply to that architecture, not to an unimplemented fully recursive compiler.
+- A recursive grammar entry is not a C nesting level. Each compound introduces
+  statement and compound entries; precedence climbing also has temporary RHS
+  calls. A depth-limit policy must preserve every C99 minimum *in combination*,
+  not just accept one isolated 63-parenthesis input.
+- Arena bytes exclude native stack. Global allocator hooks exclude OS stack
+  mappings and arena `mmap`; zero global calls does not mean zero memory work.
+  `VmHWM` includes startup, preprocessing and live token/provenance buffers. Its
+  before/after difference is not a parser-only RSS peak. Arena growth/commit and
+  separately sampled native stack explain the phase-specific storage.
+- `--sample-stack` measures address spans at grammar entries. Slopes are lower
+  bounds on peak stack use, omit transient helper calls, and are collected
+  separately from throughput. Stack-growth segments are compared only within
+  the same segment; their spans cannot be summed into a contiguous stack size.
+- The 64 MiB worker encloses preparation and parsing because arenas/context are
+  created inside that worker. Reported parse time excludes launch, preparation,
+  join and destruction; separate launch latency is recorded. This is not proof
+  that the existing borrowed arena/AST API can move between arbitrary threads.
+- Hybrid fallback suspends recursion for the whole selected subtree, using
+  precedence-bounded expression frames to preserve operator ownership. It keeps
+  two grammar implementations and therefore adds maintenance and differential
+  testing obligations. Stack growth adds `stacker`/`psm` platform support and
+  native-stack switching to those obligations.
+- The terminal prototype limit reuses the existing frame-resource diagnostic,
+  but counts recursive entries. It does not establish identical semantics for
+  all production frame/node/provenance limits or error recovery. The default
+  parser's representation bounds and cleanup remain authoritative.
