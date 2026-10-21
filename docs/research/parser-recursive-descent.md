@@ -170,3 +170,10 @@ The generated block depth excludes the function's outer compound. Added depth
 126 to test exactly 127 total blocks, and depth 63 for C99's parenthesized
 expression/declarator floors. A generic recursion-entry limit is not a C grammar
 nesting limit: each nested compound adds statement and compound calls.
+
+Final source checkpoint: `2ed14574` fixes punctuation diagnostics and one recovered
+assignment marker, and saves nine focused recovery regressions. The native,
+profile, alignment, and canonical-check bundle is running via one shared-wrapper
+slot. `scripts/parser_study_profile.py` saves the exact Callgrind command, binary
+hash, simulated event totals, and self/inclusive callgraph annotations. Empty
+phase-7 collection is treated as an error.
