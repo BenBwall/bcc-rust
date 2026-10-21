@@ -448,17 +448,524 @@ optimization dependency and a C sequence point are different facts.
 
 ## 3. Recommendation and migration
 
-Working hypothesis: add an executable, object-aware C IR above the existing
-scalar CFG, keeping the current low-level optimizer and ABI layer initially.
-Make C undefined operations, indeterminate representations, source sequencing
-and object lifetimes explicit before erasing them. Translate the resulting
-contracts to LLVM poison/attributes only at the LLVM boundary.
+**Recommend candidate A: a small executable C/object IR above a scalar CFG.**
+Borrow CompCert's staged erasure and Cerberus's separation of evaluation and
+memory policy, while retaining bcc's CFG, arena IDs, ABI implementation and
+native MIR. Introduce it additively; retire the LLVM-derived shared value
+algebra in a later, separately measurable phase. An additive C layer by itself
+helps the website but does **not** finish semantic decoupling: that requires
+the scalar contract/emitter work below.
 
-This would give the abstract-machine website a source-level execution surface
-that the current byte/scalar IR cannot reconstruct. A recommendation requires
-an explicit policy for pointer/integer casts, subobjects, unspecified evaluation
-order and the distinction between a diagnostic execution mode and release
-optimization.
+Candidate B is a smaller fallback if the owner prioritizes backend independence
+and cannot fund a C execution layer. It replaces shared poison semantics in the
+current scalar CFG but supplies much less value to the website. Neither design
+requires adopting a large external compiler framework.
+
+### Candidate A: C operations, logical objects, then scalarization
+
+The following names and syntax are proposals, not existing APIs:
+
+```text
+typed syntax + retained semantic facts
+    -> CModule                         C objects/evaluations/logical calls
+         -> C evaluator + event sink    website / diagnostic execution
+         -> select order, lower places and representations
+              -> ScalarModule          typed CFG; explicit bcc contracts
+                   -> target ABI plan   logical values -> registers/memory
+                        -> LLVM emitter
+                        -> native selector -> existing x86 MIR
+                        -> scalar interpreter (optimizer/ABI oracle)
+```
+
+During migration the ScalarModule position is occupied by today's IR, through
+an explicitly named legacy adapter. It remains available as an oracle while
+the replacement is validated. The final C evaluator does not execute target
+ABI coercions for ordinary internal calls.
+
+#### Types and storage
+
+Use immutable, module-owned dense IDs and arena tables, not borrowed pointers
+to sema internals whose arena may be released. Intern a reachable snapshot of
+semantic types, layouts and source origins; avoid copying the entire syntax
+tree. Keep arena allocation, nonrecursive work stacks and compact instruction
+records, but do not force every new semantic record into 16 bytes before
+measurement.
+
+```text
+CType = Void | Bool | Integer{rank, signedness, target_width}
+      | Real{format} | Complex{component}
+      | Pointer{pointee} | Array{element, extent}
+      | Record{kind: struct|union, members, layout}
+      | Function{params, result, variadic, language_call_kind}
+QualifiedType = {CTypeId, const, volatile, restrict, atomic}
+ObjectDecl = {type, duration, lexical_region, layout, origin}
+Place = Local(ObjectDeclId) | Global(SymbolId) | Deref(value)
+      | Member(place, member_id) | Index(place_or_pointer, index)
+      | BitField(place, member_id)
+Value = typed scalar | aggregate snapshot | logical function/label value
+```
+
+C integer rank and nominal record identity matter even when widths match.
+Pointer pointee types describe C accesses; pointer runtime provenance is a
+separate property. Arrays are places, with decay explicit; an array is not
+copied as a general C value. Aggregate snapshots have value semantics at calls,
+assignment and return, but can initially be implemented as immutable hidden
+storage plus a descriptor. Avoid eager scalar tuples that invent meaningful
+padding values or accidentally alias the source after a copy.
+
+Reuse target layout facts from sema for `sizeof`, bit-field layout, padding,
+endianness and float formats. This is a C IR parameterized by an implementation,
+not an unrealistic target-free C machine. `_Atomic`, volatile and bit-fields
+remain visible until their access semantics are lowered. Extern calling
+convention extensions and symbol policies are typed module descriptors,
+separate from logical function argument/result types. Keep link-time policies
+in a shared symbol layer; LLVM emits attributes, native emits ELF/COFF policy.
+
+#### Objects, lifetime and provenance
+
+The C evaluator's memory contains objects with distinct identities and
+generations, extent/alignment, storage duration, declared/effective-type state,
+subobject layouts, representation bits and pointer fragments. An object's
+storage address is an implementation detail; object identity is not its current
+stack offset. Fixed locals can later be promoted or share physical storage while
+their C identities remain distinct in the unoptimized execution model.
+
+An operational pointer contains `{object, generation, byte_offset,
+arithmetic_domain}` plus a null or unresolved-address case. The arithmetic
+domain identifies the C array/subobject range, including its one-past position;
+it is not just the whole allocation. Member selection, decay, `&`, and casts
+construct or transform places/domains according to C rules. Typed access checks
+lifetime, access bounds, alignment and permitted effective type. Pointer
+subtraction remains `ptr_diff(p, q, element_type)` until it can preserve the
+same-array and representable-`ptrdiff_t` preconditions. Comparisons use their
+own C equality/relational rules; never reduce pointer equality to token equality
+alone. Layout, adjacent objects and one-past equality need separate cases.
+
+Represent lifetime transitions explicitly, and get their timing right:
+
+- A fixed automatic object's lifetime begins on entry to its associated block,
+  including paths jumping past its declaration; its initializer executes when
+  the declaration is reached. A declaration reached again can make its value
+  indeterminate without necessarily beginning a new lifetime.
+- VLA lifetime begins at its declaration and ends when execution leaves its
+  scope. Leaving a block through return/goto/break/continue applies its region
+  transitions. Recursion and repeated block entry create new instances.
+- Heap allocation, free and realloc have separate identity/representation
+  effects. Static and thread objects have their own initialization rules.
+
+These distinctions come from C99 §6.2.4p5-6, not from where an LLVM alloca
+happens to be placed. Consume sema's region/jump facts rather than rediscovering
+scope exit from final CFG shape. Mark objects dead and retain enough generation
+history to explain stale references; do not eagerly scan every pointer in
+memory at `object.end`. A later use can classify the reference using the dead
+generation, while reporting that pointer indeterminacy began earlier.
+
+For effective types, retain both declared types and typed access operations.
+For allocated objects without a declared type, distinguish a non-character
+typed store, representation copying from another object and other accesses as
+C99 §6.5p6 specifies. Character accesses are an explicit exception; qualifiers,
+signed/unsigned compatible access and aggregate/union cases need their own
+rules. Do not import a C++ rule that every read of an inactive union member is
+automatically invalid. Begin conservatively: disable type-based optimization
+until these rules and the relevant union/copy tests are agreed.
+
+**Pointer/integer policy is a named implementation decision, not a solved
+consequence of C99.** Propose explicit `expose_address(ptr)` and
+`recover_pointer(integer, access_type)` operations. The first can record an
+exposure effect; the latter consults the implementation's recovery policy.
+Prototype an exposure-based object model, allowing round trips and ordinary
+address arithmetic for exposed objects, with choices recorded where recovery
+is ambiguous. Keep today's permissive address lookup as a separately named
+compatibility mode. Foreign/MMIO addresses require explicit environment policy.
+Do not exploit a strict-provenance assumption in the release optimizer while
+the interpreter is still using permissive recovery. Test pointer-copy-through-
+bytes, integer round trips, tagged addresses, one-past boundaries, reuse after
+free and external pointers before enabling provenance optimizations. Cerberus's
+[provenance research](https://www.cl.cam.ac.uk/~km569/exploring_provenance.pdf)
+is a reference for selecting and documenting a policy, not permission to label
+one experimental policy as the uniquely mandated C99 model.
+
+#### Undefined behavior and indeterminate representations
+
+Do not add `Poison` to the C Value enum. A C operation returns a value/effects,
+a choice over permitted values, a structured undefined-execution result, or an
+unsupported-feature result. The latter two must remain distinct.
+
+```text
+Undefined = {rule_id, source_operations, object_instances, explanation_data}
+Choice = {choice_id, domain, reason, source_origin}
+Representation = {known_bits, indeterminate_bits, pointer_fragments,
+                  padding_map, origins}
+```
+
+Signed addition is a partial C operation with an overflow precondition;
+unsigned addition wraps. Invalid shifts, bad pointer arithmetic, division by
+zero, out-of-range conversions and lifetime/type failures retain their own
+reasons. This detects the undefined C operation when evaluated, even if its
+result would later be discarded. It does not turn UB into a C-defined runtime
+exception. The diagnostic evaluator stops and explains; compiled release code
+has no obligations on that undefined execution.
+
+Indeterminate storage is an object-representation state, not either zero or
+automatic UB on every byte copy. C99 defines an indeterminate value as an
+unspecified value or trap representation (§3.17.2p1). Track meaningful value
+bits separately from padding; copying representations preserves what needs to
+be preserved without performing a typed value read of every member. A bit-field
+store changes its bits without reading neighboring bits as an integer value.
+Aggregate return packing must not let unspecified padding invalidate a defined
+field. A permitted unspecified-value observation creates a ChoiceId; uses of
+that resulting value agree, but this need not force all later reads of the
+same indeterminate object to make the same choice.
+
+The exact treatment of non-trapping indeterminate reads needs an explicit
+language/policy table. Include the C99/C11 difference noted above and the
+current Clang-compatible argument assumption as a compatibility policy. Do not
+claim a fully settled standard model or silently diagnose every such case as
+mandatory ISO UB. Where the first implementation lacks a settled rule, report
+unsupported/policy-dependent execution. Only permit optimization assumptions
+that the selected release policy justifies. In particular, derive argument
+definedness from the operation/policy; do not define C validity by whether
+Clang happened to emit `noundef` at O0.
+
+#### Control, sequencing and choices
+
+Keep the function CFG with block parameters for statement-level control and
+loops. It already handles gotos, switch and irreducible flow. Attach small
+evaluation regions to source full expressions: ordered evaluation, unsequenced
+operand evaluation, short-circuit/conditional alternatives and explicit source
+sequence boundaries. Each operation has an OriginId and a language evaluation
+identity. This is a bounded semantic structure over a CFG, not a wholesale
+RVSDG or sea-of-nodes scheduler.
+
+Initially choose one documented legal schedule for executable code and
+deterministic stepping. Keep the required sequencing relation separately from
+that schedule. The checker compares dynamic object/subobject access footprints
+and source sequencing identities; linear execution order alone cannot legalize
+`i++ + i++`. Do not implement the checker as “two writes in a full expression
+always fail”: short circuit, nested sequence points, calls and C11's
+indeterminately sequenced function executions matter. C99's sequence-point
+rules and C11's relations need separate rule handling. Alternative schedules
+and bounded exploration can be added after a correct single-schedule evaluator;
+a single schedule must disclose that it does not explore all behavior.
+
+Sequence points constrain completion of side effects; they do not require all
+stores to be buffered until the next boundary. Trace events distinguish value
+computation, side effects and required completion so the site can display
+pending work without teaching that false rule. Compiler-only instruction
+ordering must not appear as a C sequencing guarantee.
+
+Preserve logical calls, return, varargs and exceptional control:
+
+- Internal calls pass C scalar values and aggregate snapshots; an internal
+  vararg pack retains promoted C types. `va_arg` checks logical compatibility
+  in the evaluator. Only external/native ABI adapters see register-save areas.
+- Represent setjmp-like resumptions with an explicit call-effect summary and
+  saved activation/continuation. On longjmp, apply lifetime exits and mark the
+  affected nonvolatile locals indeterminate according to the chosen rules.
+  Unsupported nonlocal extension cases remain explicit refusals during the
+  experiment; a `returns_twice` bit alone is not a complete CFG model.
+- GNU labels are function-scoped label values with stable identity; computed
+  branches retain their possible targets and region-exit restrictions. Convert
+  to code addresses only when lowering that extension. Do not invent general
+  ISO object provenance for them.
+- Carry C11 atomic operation/order and signal/thread fence distinctions in a
+  typed extension family. Start with the current single-thread evaluator and
+  label it as such; a concurrency explorer/happens-before engine is separate
+  work. Native continues to refuse atomics until its backend implements them.
+
+#### The scalar contract and LLVM boundary
+
+The endpoint ScalarModule can retain signless machine types, block parameters,
+explicit byte operations and target layouts. It owns its numeric, memory and
+call contracts in bcc terminology. There are no shared LLVM poison values,
+freeze operation, `noundef` bit or raw LLVM layout string. Keep target layout in
+a typed descriptor, generated into an LLVM string inside L. The ABI planner
+returns target calling locations/copy/extension decisions; each backend maps
+them to its representation. It remains shared target knowledge, not LLVM
+semantics. Alignment limits belong to target/emitter validation, not a maximum
+chosen solely for one foreign API.
+
+For potentially undefined scalar arithmetic, use either explicitly partial
+operations or total operations with separate preconditions. Prefer the latter
+for the first experiment:
+
+```text
+entry(a: bits32, b: bits32):
+    (sum, overflow) = signed_add_checked a, b  // total; sum is wrapped bits
+    require !overflow, SignedOverflow, origin
+    return sum
+```
+
+`require` means failing this source precondition makes this execution undefined;
+it is not a generic language-level trap. In checked execution it diagnoses and
+is ordered with other source checks. Release optimizations may remove it or
+refine an undefined path; valid executions and their observable behavior must
+remain valid. Separate the pure `checked` computation from the non-speculatable
+check: pure bits can be moved, but a check must not be hoisted to an execution
+where the source operation was not evaluated. Division/conversion primitives
+must similarly define their total result/status without executing a host UB or
+hardware exception before the check. This is a specification cost, not solved
+by renaming `sdiv`.
+
+Mapping example: L can emit ordinary LLVM `add` without flags and preserve all
+defined C results. It may emit `add nsw` when the C/Scalar contract establishes
+that its violating cases were already undefined. The native selector emits a
+normal add; the scalar interpreter checks preconditions. Range analysis can
+remove redundant checks. These backends need not implement LLVM poison to
+share the C contract. Check deletion is valid release refinement, but not a
+trace-preserving diagnostic transformation; execute the unoptimized CModule
+for source stepping.
+
+At L's boundary specifically:
+
+- Map object/byte offsets to GEP; add `inbounds` only with a compatible object,
+  range and integer-width argument. Use unflagged GEP for opaque/recovered
+  pointers when the stronger LLVM promise is not justified.
+- Map C/target definedness guarantees to parameter attributes only when they
+  apply to the actual lowered scalar/register bits. Never make padding bytes
+  `noundef` just because a logical aggregate value is valid.
+- Materialize unspecified representation bits in a way preserving defined
+  neighbors. Byte/lane freeze can remain a private LLVM implementation detail,
+  with a short local explanation of why it refines the source choice domain.
+- Map bit-count/overflow/stack operations to intrinsics; the C/shared contracts
+  describe results and effects, including zero and overflow cases. LLVM's
+  zero-poison parameter is not the source builtin specification.
+- Lower C11 orders, signal scope, linkage, COMDAT and DLL requests here. N uses
+  the same logical requests to emit its own machine/object-file features.
+- Restrict speculative annotations and provenance assumptions on recovered
+  addresses until their mapping has been validated against pinned LLVM.
+
+N continues to use its existing x86 MIR register classes, parallel-copy lowering,
+frame layout, instruction selection and register allocator. It consumes scalar
+operations/ABI plans rather than C objects. A checked native mode could lower
+requires to checks/traps later; release N need not simulate the educational
+object store. The scalar interpreter remains useful to test O and the ABI
+adapter, while the C evaluator becomes the source-semantic oracle. Share small
+bit/float utilities where correct, but keep the semantic transitions independent
+enough that both evaluators do not merely repeat the same lowering bug.
+
+#### A concrete C-level example
+
+For `int f(int n) { int s = 0; while (n > 0) { s += n; --n; } return s; }`,
+the first CModule can keep logical local reads/writes; promotion is optional:
+
+```text
+function f(n: C.int) -> C.int {
+entry:
+    region.enter function_body       // starts fixed automatic instances
+    local.initialize s, 0
+    jump loop
+loop:
+    eval condition: read n; compare_gt 0; sequence.end
+    branch condition, body, done
+body:
+    eval sum: read s; read n; signed_add; write s; sequence.end
+    eval decrement: read n; signed_sub 1; write n; sequence.end
+    jump loop
+done:
+    result = eval read s
+    sequence.end
+    region.exit function_body
+    return result
+}
+```
+
+Parameter-object setup and origins are omitted for readability. `signed_add`
+reports its own C overflow, not a poison result waiting to be used. Region
+boundaries preserve source instances even if later scalarization promotes s/n
+to loop block parameters. `sequence.end` marks a C boundary, not a CPU fence.
+The record of operand relations must still accompany general expressions;
+this simple loop alone would not validate the full semantics.
+
+### Candidate B: replace the shared scalar semantics in place
+
+Keep today's Type set and CFG, memory-backed aggregates and ABI pass. Replace
+poison/flags/freeze with total arithmetic plus explicit preconditions and
+choice operations, as above. Introduce stack lifetime instructions where sema
+already provides transitions, and move LLVM layout/attribute names into L.
+Separate logical ABI descriptors from LLVM parameter attributes. Retain the
+current allocation-bound memory model with a named pointer-recovery policy;
+do not claim effective-type or subobject enforcement has appeared just because
+the poison enum disappeared.
+
+Indeterminate bytes remain distinct from a failing arithmetic precondition.
+`choose_bits(mask, origin)` makes allowed unspecified representations concrete
+once per value, preserving known bits; it cannot repair a trap representation
+or an invalid C read. L may privately use freeze; N picks permissible bits;
+I keeps masks/reasons. `noundef` becomes an emitter-derived fact rather than
+an IR-level definition of argument validity. This change reaches O's folding,
+SCCP, GVN, promotion, selects and LICM, not just `ir/instructions.rs`.
+
+**Trade-off:** fewer new data structures and lower frontend disruption, but
+we still erase effective types and source sequencing too early. Reconstructing
+them with a large side table plus a separate AST evaluator would effectively
+build candidate A indirectly. Choose B only if an independent low-level IR is
+the immediate product and the site intentionally owns another evaluator. Both
+candidates ultimately need the same careful arithmetic/refinement tests.
+
+### Migration in reviewable stages
+
+1. **Freeze the contracts, not the implementation.** Write a small semantics
+   table for each new operation: inputs, outputs, preconditions, observable
+   effects, allowed choices, C revision and implementation policy. Add an
+   explicit compatibility note for today's poison and noundef behavior. Keep
+   the current textual format/tests working during the experiment.
+2. **Build an isolated CModule slice.** Add a module behind a study/test-only
+   entry point, using existing sema conversions, bindings, type layouts,
+   effects and control facts. Support integer functions, fixed locals, loops,
+   calls and origins; refuse everything outside the subset. Add text dump,
+   structural verifier and a bounded evaluator. No default pipeline changes.
+3. **Add CModule → legacy pre-ABI IR.** Reuse the existing builder, O, A, L
+   and N. For this stage LLVM-like contracts remain in the adapter and legacy
+   IR. Compare defined executions across direct C evaluation, legacy I and
+   emitted native/LLVM output. Add one object feature at a time: arrays/member
+   places, explicit lifetimes, aggregate snapshots, then representation copies.
+4. **Introduce the scalar contract alongside legacy IR.** Port one family at
+   a time: arithmetic/checks, choices/representation masks, pointer operations,
+   memory, calls. Adapt O through explicit compatibility shims until its
+   poison-specific transformations are replaced. Do not reinterpret old text
+   under new semantics without a version/stage marker. Compare before/after
+   optimization with the new scalar interpreter and emitted code.
+5. **Move ABI and LLVM promises to their owners.** Keep ABI classification
+   algorithms but return typed target plans; put `noundef`, LLVM flags,
+   inbounds/GEP, data-layout serialization, freeze and intrinsic spellings in
+   L. N consumes target plans/scalar ops; direct C I skips ABI. Preserve a
+   post-ABI interpreter route for conformance/differential tests.
+6. **Broaden only after gates pass.** Add varargs, union/bit-field edge cases,
+   setjmp/labels, atomic and platform extensions with explicit capability
+   checks. Retire the old path only after the supported corpus and performance
+   gates pass. Do not make a partly implemented CModule the only route for
+   language features the compiler already supports.
+
+Use distinct Rust stage types (`CModule`, `ScalarModule`, `AbiModule` or checked
+wrappers) so consumers cannot accidentally accept an unfinished mixed level.
+Each stage has a verifier; semantic preconditions additionally need runtime or
+proof evidence, which a structural verifier alone cannot supply. Preserve
+OriginId through transformations using a side table of origin sets; optimized
+instructions can correspond to several source operations. The site's primary
+trace comes from CModule before these transformations.
+
+### Cost, risks and the validating experiment
+
+These are planning ranges for one maintainer familiar with the code, not
+measured effort or a delivery promise:
+
+| Scope | Approximate effort | What it would establish |
+| --- | --- | --- |
+| Contracts and isolated integer/object slice | 1–2 weeks | Feasible sema integration and useful source trace |
+| Slice through legacy scalar IR to all currently supported consumers | Another 2–4 weeks | Viable staged architecture without replacing codegen |
+| Pointer/subobject, lifetime, representation and aggregate coverage | Another 4–8 weeks, with semantic decisions as the main uncertainty | Whether object semantics pay for their complexity |
+| Full scalar/optimizer/ABI boundary migration and extension parity | Several months, likely overlapping the prior work | Actual semantic independence from LLVM |
+| Candidate B alone | Several weeks for a scalar spike; longer for complete O/ABI compatibility | Narrower low-level independence; no complete source machine |
+
+Principal risks are two semantic definitions drifting, a new object model
+rejecting supported systems idioms, hidden storage/snapshot overhead,
+inaccurate source sequencing, changed optimizer freedom, and regressions in
+ABI padding/varargs/longjmp cases. Avoid simultaneously changing the graph
+structure, optimization framework and memory semantics. Keep a capability
+matrix and refuse unsupported execution instead of falling back to a misleading
+model. The object evaluator is a semantic tool, not a guarantee of real-world
+concurrency, signal or foreign-library behavior.
+
+The first experiment must exercise the reasons for redesign, not just show
+that a new enum can run factorial:
+
+| Case family | Evidence required |
+| --- | --- |
+| Defined integer loops/calls/locals | C evaluator = legacy I = L/N observable output/status, before/after O; logical locals survive in the trace even after scalar promotion |
+| Unsigned wrap, signed overflow, invalid shift/division | Valid boundary cases agree; C evaluator names the invalid source operation even when its result is unused. No demand that all backends agree on UB outputs. |
+| Short circuit, comma, `i++ + i++`, aliased unsequenced reads/writes, calls in operands | Correct required sequencing and conflict detection; chosen schedule disclosed; call sequencing handled by the selected C revision |
+| Fixed block lifetime, declaration re-entry, recursion, VLA exit | Correct instance/generation timing, initialization timing and stale references; no “all locals live for the frame” shortcut |
+| Array/subobject one-past and pointer difference | Distinguish valid one-past construction from dereference; different-array subtraction diagnosed at the C operation; no implicit same-allocation substitute |
+| Partial bit-field initialization, struct padding, union views, memcpy | Defined neighboring bits/fields preserved; representation copying separate from typed reads; permitted unspecified choices recorded |
+| Pointer/integer round trip, bytewise pointer copies, tagged address | Explicit results under the selected provenance/implementation policy; disagreements with legacy I classified rather than hidden |
+| Aggregates and varargs over System V/Win64 | Logical calls agree with ABI adapters on meaningful values; independent external ABI oracle for emitted code |
+
+Start with the portable integer sources already embedded in
+`src/lowering/tests/programs.rs` and loop/call examples in
+`src/lowering/tests/golden.rs`, plus focused object/sequence litmus programs.
+Inspect `test-programs/` rather than assuming it is an execution suite: most
+files are preprocessing fragments, `func.c` is a token-paste example, and
+`donut.c` is an unbounded extended floating/terminal demo. Any later prototype
+comparison using this directory must disclose that subset and bound execution;
+it cannot honestly count these as several representative integer programs.
+
+Use the prebuilt compiler only as an explicitly identified comparison arm:
+`bcc-main` predates the latest merge, so record its `.rev` and do not present
+it as a build of `145898d4`. Use pinned Clang 23.1.1 for an independent ABI/code
+oracle, not as the authority on unsettled C semantics. Match data model,
+language mode, optimizer settings and runtime environment. No equality claim
+for arbitrary unspecified values: compare permitted domains or recorded choice
+witnesses, and compare observable behavior of defined executions.
+
+Suggested acceptance gates: zero defined-program mismatches on the supported
+subset; every supported semantic litmus either yields the specified event/result
+or an explicitly classified policy outcome; text round-trip and structural
+verification; bounded memory/steps; the legacy path still supports its prior
+features. Measure lowering time, arena bytes and source/low-level instruction
+counts separately from backend time. A provisional budget of at most 15%
+extra frontend-plus-lowering time and 25% extra retained IR bytes on the slice
+would force useful design discipline, but the owner should set final budgets
+after measurements. Investigate/stop the expansion if the object layer adds
+large compile overhead without reducing duplicated I/L/N semantic machinery.
+
+Long builds must use the shared cargo wrapper, run detached with logs, and
+follow a saved/committed checkpoint first. Run narrow checks on each slice,
+then the repository's canonical checks before changing the default pipeline.
+Nothing in this study authorizes weakening a failing baseline or silently
+skipping an unsupported construct.
+
+### Relationship to the abstract-machine website
+
+The sibling's provisional `docs/research/abstract-machine-website.md` on
+`codex/abstract-machine-site` was read without modification. It proposes source,
+object/lifetime and sequencing views, deterministic reversible stepping and
+an eventual object-aware IR. That moving document is separate from this
+study's pinned source baseline.
+
+Candidate A gives both projects the same executable C operations, declaration
+and activation identities, type/layout tables, lifetime transitions, ChoiceIds
+and structured failure reasons. It avoids making the site infer C behavior
+from optimizer temporaries or reconstruct a struct out of ABI registers. A
+small versioned event sink can carry:
+
+```text
+SourceEnter(origin), ObjectBegin(instance, type, duration), Read/Write(place),
+Choice(id, reason, witness), SequenceBoundary(evaluation),
+Call/Return(activation), ObjectEnd(instance), Undefined(rule, related_origins)
+```
+
+Keep snapshot/undo/UI serialization outside compiler instructions; the engine
+emits deltas and the site can replay from checkpoints. IDs must be stable within
+a compiled session, scoped by activation/generation where appropriate, and
+independent of optimizer value numbers. Origins should connect to retained
+macro expansion/source provenance, not only a physical line number. Inspection
+of compilation phases and optimized/native IR remains a separate useful view,
+with mappings and gaps disclosed.
+
+The costs to the site are a larger semantic core, explicit unsupported/policy
+states, and an eventual migration from its bounded AST/sema evaluator to CModule.
+Do not block its prototype on completing the compiler redesign: agree first on
+object/event vocabulary and semantic litmus cases, then replace its execution
+adapter when available. Do not put browser concerns into CModule, or force it
+through mandatory LLVM/native FFI merely to obtain a trace; a later portable
+evaluator package should sit above those dependencies. Candidate B makes the
+site's IR view cleaner but still requires its own C evaluator, increasing the
+risk of two competing C models.
+
+### Decisions for the owner
+
+1. Is source-semantic execution a shared compiler product, or should the site
+   intentionally own a separate bounded model? This determines A versus B.
+2. Which indeterminate-value and integer-pointer policies should bcc promise
+   for C99/C11 and systems extensions? Preserve today's behavior as named
+   compatibility while choosing, rather than treating Clang output as the spec.
+3. What compilation-time/memory budget and supported subset gate the first
+   experiment? The proposed slice deliberately leaves existing backends and
+   their default routing intact.
+4. Is the first milestone a useful C trace plus legacy lowering, or complete
+   elimination of shared poison? They are different deliverables; the former
+   is a smaller reversible test of whether the architecture is worthwhile.
 
 ## 4. Prototype and validation status
 
