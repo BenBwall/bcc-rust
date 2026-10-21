@@ -59,7 +59,6 @@ use crate::{
             TokenType,
         },
     },
-    util::bump::ArenaVec,
 };
 
 impl<'tu, 'p> Parser<'_, 'tu, 'p> {
@@ -445,9 +444,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 unreachable!("postfix starters are punctuators")
             };
             let kind;
-            let mut source = self
-                .context
-                .merge_vectors(base.source_vectors, token.source_vectors);
+            let mut source = if operator == OperatorTokenType::OpeningParenthesis {
+                SourceVectors::default()
+            } else {
+                self.context
+                    .merge_vectors(base.source_vectors, token.source_vectors)
+            };
             let mut operators = token.source_vectors;
             match operator {
                 | OperatorTokenType::OpeningSquareBracket => {
@@ -469,23 +471,25 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 },
                 | OperatorTokenType::OpeningParenthesis => {
                     self.rd_consume();
-                    let mut arguments = ArenaVec::new_in(self.arena);
+                    let mut call = self.pools.take_call();
+                    call.source_vectors
+                        .extend([base.source_vectors, token.source_vectors]);
+                    call.operator_sources.push(token.source_vectors);
                     if !is_operator(self.cursor.current(), OperatorTokenType::ClosingParenthesis) {
                         loop {
                             let argument = self.rd_expression(
                                 ExpressionMode::AssignmentExpression,
                                 ExpressionBoundary::Argument,
                             )?;
-                            source = self.context.merge_vectors(source, argument.source_vectors);
-                            arguments.push(argument);
+                            call.source_vectors.push(argument.source_vectors);
+                            call.arguments.push(argument);
                             if let Some(comma) = self
                                 .cursor
                                 .current()
                                 .filter(|token| is_operator(Some(*token), OperatorTokenType::Comma))
                             {
-                                source = self.context.merge_vectors(source, comma.source_vectors);
-                                operators =
-                                    self.context.merge_vectors(operators, comma.source_vectors);
+                                call.source_vectors.push(comma.source_vectors);
+                                call.operator_sources.push(comma.source_vectors);
                                 self.rd_consume();
                             } else {
                                 break;
@@ -494,12 +498,17 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     }
                     let close =
                         self.rd_expect(OperatorTokenType::ClosingParenthesis, "function call");
-                    source = self.context.merge_vectors(source, close);
-                    operators = self.context.merge_vectors(operators, close);
+                    call.source_vectors.push(close);
+                    call.operator_sources.push(close);
+                    source = self.context.merge_vector_list(&call.source_vectors);
+                    operators = self.context.merge_vector_list(&call.operator_sources);
                     kind = ExpressionType::Call {
                         function_expression: base,
-                        arguments:           self.alloc_syntax_list(&mut arguments),
+                        arguments:           self.alloc_syntax_list(&mut call.arguments),
                     };
+                    call.source_vectors.clear();
+                    call.operator_sources.clear();
+                    self.pools.calls.reclaim(call);
                 },
                 | OperatorTokenType::Period | OperatorTokenType::Arrow => {
                     self.rd_consume();
