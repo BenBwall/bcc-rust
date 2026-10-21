@@ -286,3 +286,10 @@ A synthetic-memory caution is being checked: depth 16,384 lands near the frame
 vector's doubling boundary. The large hybrid scratch saving there may partly
 be a capacity cliff rather than a stable per-level saving. Neighboring depths
 16,000 and 16,500 are added before interpreting that result.
+
+Neighbor sweeps confirm the capacity cliff: at 16,000 and 16,500 blocks, hybrid
+scratch differs from machine by only 192 bytes; at 16,384 it saves about 10 MB
+by avoiding a vector-growth boundary. Do not generalize that isolated memory
+saving. Growing debug parsing uses 139.4 MiB peak RSS at 16,384 blocks, versus
+30.4 MiB for machine and 25.8 MiB for hybrid. Separate unsampled timing runs
+on a 1 MiB worker are added for these growth-heavy cases.
