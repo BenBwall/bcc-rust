@@ -1492,6 +1492,237 @@ fn always_inline_order_follows_the_first_pr_review_forms() {
     }
 }
 
+/// The forms PR #117's second review found counted differently from Clang,
+/// each checked against Clang 23's `-O0 -Xclang -disable-llvm-passes`
+/// module. `#pragma weak`, `_Pragma` and `weak_import` make an entity weak
+/// for the evaluator too. An address of an automatic, thread-local or
+/// parameter object is no constant result, so a `?:` choosing between such
+/// addresses joins, while static ones are selected; floating arithmetic
+/// with a NaN result does not fold, a NaN from `__builtin_nan` does. A join
+/// in an operand code generation may emit counts: a variably modified
+/// `sizeof` or `typeof` operand, an operand of `__builtin_constant_p` or
+/// `__builtin_object_size` without side effects, the selected operand of
+/// `__builtin_choose_expr`; not one of `__builtin_classify_type`. The left
+/// operand of a scalar assignment is emitted after the right, that of a
+/// structure assignment before. `va_arg` of a structure with only an
+/// unnamed bit-field reads no register, one with a zero-length `long
+/// double` array does. A call through an address converted to an integer
+/// or loaded from memory names no function. An operand a folded `&&`, `||`
+/// or `?:` does not take is emitted when it holds a label (forwarded from
+/// PR #118's review).
+#[test]
+fn always_inline_order_follows_the_second_pr_review_forms() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (extra, probe, config, emitted) in [
+        (
+            "\n#pragma weak wk\nconst int wk = 0;",
+            "if (wk) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void wf(void);\n#pragma weak wf\n",
+            "if (!wf) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "\n#pragma weak wf\nvoid wf(void);",
+            "if (!wf) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "_Pragma(\"weak wf\") void wf(void);",
+            "if (!wf) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void wi(void) __attribute__((weak_import));",
+            "if (!wi) h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "__thread int t1;",
+            "int *const tp = &t1; if (!tp) h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "__thread int t1, t2; void sinkp(int *);",
+            "die(), sinkp(c ? &t1 : &t2); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "void sinkp(int *);",
+            "int l1, l2; die(), sinkp(c ? &l1 : &l2); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void sinkp(int *);",
+            "static int l1, l2; die(), sinkp(c ? &l1 : &l2); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "void sinkp(int *); int pr(int p1, int p2) { die(), sinkp(c ? &p1 : &p2); return \
+             h(0); }",
+            "",
+            c99,
+            true,
+        ),
+        (
+            "void sinkp(int *);",
+            "int a[2]; die(), sinkp(c ? a : a + 1); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "switch (0.0 / 0.0 != 0.0) { case 1: break; default: h(0); }",
+            c99,
+            true,
+        ),
+        ("", "if (0.0 / 0.0 == 0.0) h(0);", c99, true),
+        (
+            "double sinkd(double);",
+            "die(), sinkd(c ? 0.0 / 0.0 : 1.0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "switch (__builtin_nan(\"\") != 0.0) { case 1: break; default: h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "extern int n, m;",
+            "die(), (void)sizeof(int[c ? n : m]); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "extern int n, m;",
+            "die(), (void)(__typeof__(int[c ? n : m]) *)0; h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "char *p, *q;",
+            "die(), (void)__builtin_object_size(c ? p : q, 0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "die(), (void)__builtin_constant_p(c ? 1 : c); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "int a1(void), a2(void);",
+            "die(), __builtin_choose_expr(1, c ? a1() : a2(), 0); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "",
+            "die(), (void)__builtin_classify_type(c ? 1 : c); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "int arr[2];",
+            "arr[c && other()] = (die(), 0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "int arr[2];",
+            "arr[c && other()] += (die(), 0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "struct S { int a; } sa[2]; struct S dies(void) __attribute__((noreturn));",
+            "sa[c && other()] = dies(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "struct T { int i; long double ld[0]; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct T); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "struct U { int : 8; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct U); h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "struct V { int i : 8; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct V); h(0);",
+            gnu,
+            true,
+        ),
+        ("", "((void (*)(void))(int)(long)die)(); h(0);", c99, true),
+        ("", "(*(void (**)(void))&die)(); h(0);", c99, true),
+        ("", "((void (*)(void))(void *)die)(); h(0);", c99, false),
+        ("", "(**die)(); h(0);", c99, false),
+        (
+            "const int kz = 0;",
+            "c = kz && ({ int y = h(0); l: y; });",
+            gnu,
+            true,
+        ),
+        (
+            "const int ko = 1;",
+            "c = ko ? 0 : ({ int y = h(0); l: y; });",
+            gnu,
+            true,
+        ),
+        (
+            "const int kz = 0;",
+            "c = kz && ({ int y = h(0); y; });",
+            gnu,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            h_first_after(extra, probe, config),
+            emitted,
+            "{extra} {probe}"
+        );
+    }
+}
+
+/// A fold that the evaluator's depth limit cuts short in one condition is
+/// not remembered for a shallower one: `!k` folds after a deeper condition
+/// read `k` as it does alone (PR #117's second review, checked against
+/// Clang 23).
+#[test]
+fn always_inline_order_does_not_remember_depth_cut_folds() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let terms = |count: usize| " + __builtin_popcount(1)".repeat(count);
+    for deep in [false, true] {
+        let first = if deep {
+            format!("if (k{}) other(); ", terms(100))
+        } else {
+            String::new()
+        };
+        let probe = format!("const int k = 0{}; {first}if (!k) h(0);", terms(200));
+        assert!(!h_first(&probe, c99), "{probe}");
+    }
+}
+
 /// A weak inline definition is a weak definition, emitted where it is
 /// referenced, as Clang emits it; a strong definition elsewhere wins. A
 /// GNU89 plain inline definition is an external definition anyway.
