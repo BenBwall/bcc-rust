@@ -2191,6 +2191,80 @@ int main(void) { printf("main\n"); return zero; }
         }
     }
 
+    /// The default direct COFF writer assembles a listing its encoder
+    /// refuses, as every Windows default object was assembled before direct
+    /// objects became the default; only `--native-object` keeps the refusal.
+    #[test]
+    fn default_windows_native_objects_assemble_what_the_encoder_refuses() {
+        if !bundled_clang().is_file() {
+            eprintln!("skipping: no bundled clang to assemble the listing");
+            return;
+        }
+        let cases = [
+            (
+                "__attribute__((section(\"my data\"))) int x = 1;\n",
+                "unsupported COFF section name",
+            ),
+            (
+                "__attribute__((section(\".pdata\"))) const int x = 1;\n",
+                "user section conflicts with generated COFF unwind section",
+            ),
+            (
+                "__attribute__((dllexport)) int caf\\u00e9(void) { return 3; }\n",
+                "unsupported COFF string character",
+            ),
+        ];
+        for target in [
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            for (source, refusal) in cases {
+                let compile = |flags: &[&str]| {
+                    let object = temporary("native-refused.o");
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                    _ = command
+                        .args([target, "--backend=native", "-c", "-o"])
+                        .arg(&object)
+                        .args(flags)
+                        .args(["--input", source])
+                        .env("NO_COLOR", "1");
+                    if target.ends_with("windows-gnu") {
+                        // Clang's assembler driver asks for a MinGW root even
+                        // for an object, on every host; this header-free
+                        // source needs none.
+                        _ = command.env("MINGW_ROOT", env::temp_dir());
+                    }
+                    let output = command.output().unwrap();
+                    let bytes = std::fs::read(&object).ok();
+                    if bytes.is_some() {
+                        std::fs::remove_file(object).unwrap();
+                    }
+                    (output, bytes)
+                };
+                let (refused, object) = compile(&["--native-object"]);
+                assert_eq!(refused.status.code(), Some(1), "{target} {source}");
+                assert!(
+                    text(&refused.stderr).contains(refusal),
+                    "{target} {source}: {}",
+                    text(&refused.stderr)
+                );
+                assert!(object.is_none(), "{target} {source}");
+                let (built, default) = compile(&[]);
+                assert!(
+                    built.status.success(),
+                    "{target} {source}: {}",
+                    text(&built.stderr)
+                );
+                let (built, assembled) = compile(&["--no-native-object"]);
+                assert!(built.status.success(), "{}", text(&built.stderr));
+                assert!(
+                    default.is_some() && default == assembled,
+                    "{target} {source}: the default is not the assembler's object"
+                );
+            }
+        }
+    }
+
     /// The bundled clang, which assembles the native listing.
     fn bundled_clang() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {

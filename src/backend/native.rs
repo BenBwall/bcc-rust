@@ -56,6 +56,7 @@ use std::fmt;
 pub(crate) use driver::{
     ObjectWriter,
     assemble,
+    build,
     build_object,
     object_writer,
 };

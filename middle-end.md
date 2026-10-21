@@ -1149,7 +1149,7 @@ conversions) before writing any output.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
 bundled clang assemble its listing on Linux; `--native-object` and
 `--no-native-object` choose either path on any target, and the last of the
-two wins.
+two wins. By default a listing the encoder refuses is assembled.
 
 ## Source layout
 

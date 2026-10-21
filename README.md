@@ -89,11 +89,12 @@ or Win64, which `--emit=asm` prints. For `-o` it encodes COFF objects itself on
 the Windows targets, while on Linux the bundled clang assembles that assembly;
 `--native-object` asks for direct objects on any target (ELF on Linux) and
 `--no-native-object` for the assembler, and the last of the two wins. A module
-with file-scope `asm` is assembled by default, and `--native-object` refuses
-it. The bundled clang links executables. It compiles integer, pointer,
-`__int128`, `float` and `double` code, variadic definitions and variable
-length arrays; a module that uses anything else (x87 `long double`,
-`__float128`, `__int128` conversions to floats) is refused with
+with file-scope `asm`, or a listing the encoder cannot represent (such as a
+section name outside `[A-Za-z0-9_.$-]`), is assembled by default, and
+`--native-object` refuses it. The bundled clang links executables. It
+compiles integer, pointer, `__int128`, `float` and `double` code, variadic
+definitions and variable length arrays; a module that uses anything else (x87
+`long double`, `__float128`, `__int128` conversions to floats) is refused with
 `error: not yet supported by the native back end: ...` and status 1 before any
 output is written.
 

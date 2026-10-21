@@ -1,8 +1,9 @@
 //! Turns the native listing into an object or executable: [`object_writer`]
 //! chooses between encoding the object in process ([`build_object`]) and
 //! assembling the listing with the bundled clang ([`assemble`]), whose
-//! integrated assembler is LLVM's. Executables of both paths link with LLD
-//! through the bundled clang, as the LLVM back end's executables are linked.
+//! integrated assembler is LLVM's, and [`build`] runs that choice. Executables
+//! of both paths link with LLD through the bundled clang, as the LLVM back
+//! end's executables are linked.
 
 use std::{
     io::{
@@ -39,6 +40,7 @@ pub(crate) enum ObjectWriter {
 /// stay opt-in. The encoder reads only the emitter's own vocabulary, so a
 /// module with file-scope assembly, which is arbitrary assembler input, takes
 /// the assembler by default and is refused when direct objects are requested.
+/// [`build`] also assembles any other listing a default direct writer refuses.
 pub(crate) fn object_writer(
     module: &Module<'_>,
     target: Target,
@@ -51,6 +53,32 @@ pub(crate) fn object_writer(
         | None if encodable && matches!(target, Target::WindowsGnu | Target::WindowsMsvc) =>
             Ok(ObjectWriter::Direct),
         | None => Ok(ObjectWriter::Assembler),
+    }
+}
+
+/// Builds `out_path` from the native listing `text` with `writer`, which
+/// [`object_writer`] chose for `requested`. Only a requested direct writer
+/// (`--native-object`) makes an encoder refusal final; by default a listing
+/// the encoder refuses is assembled, as every Windows listing was before
+/// direct COFF objects became the default. The assembler accepts forms the
+/// encoder lacks, such as a user section name outside `[A-Za-z0-9_.$-]`, a
+/// user `.pdata` section, a non-ASCII export name or more sections than a
+/// regular COFF object holds. Encoding finishes before any output is opened,
+/// so a refusal leaves nothing to undo.
+pub(crate) fn build(
+    text: &str,
+    out_path: &Path,
+    target: Target,
+    kind: OutputKind,
+    writer: ObjectWriter,
+    requested: Option<ObjectWriter>,
+) -> io::Result<()> {
+    match (writer, requested) {
+        | (ObjectWriter::Assembler, _) => assemble(text, out_path, target, kind),
+        | (ObjectWriter::Direct, Some(_)) => build_object(text, out_path, target, kind),
+        | (ObjectWriter::Direct, None) => encode_object(text, out_path, target, kind, |_| {
+            assemble(text, out_path, target, kind)
+        }),
     }
 }
 
@@ -94,16 +122,33 @@ pub(crate) fn build_object(
     target: Target,
     kind: OutputKind,
 ) -> io::Result<()> {
+    encode_object(text, out_path, target, kind, |error| {
+        Err(io::Error::other(error))
+    })
+}
+
+/// [`build_object`], with `refused` deciding what an encoder refusal, which
+/// opened no output, returns.
+fn encode_object(
+    text: &str,
+    out_path: &Path,
+    target: Target,
+    kind: OutputKind,
+    refused: impl FnOnce(super::object::Error) -> io::Result<()>,
+) -> io::Result<()> {
     if kind == OutputKind::SharedLibrary {
         return Err(io::Error::other(NativeError::SharedLibraryCode));
     }
     let arena = Bump::new();
-    let bytes = match target {
+    let encoded = match target {
         | Target::LinuxGnu | Target::LinuxMusl => super::object::encode(text, &arena),
         | Target::WindowsGnu | Target::WindowsMsvc =>
             super::object::encode_coff(text, target, &arena),
-    }
-    .map_err(io::Error::other)?;
+    };
+    let bytes = match encoded {
+        | Ok(bytes) => bytes,
+        | Err(error) => return refused(error),
+    };
     if kind == OutputKind::Object {
         return std::fs::write(out_path, &bytes);
     }

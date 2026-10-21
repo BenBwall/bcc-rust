@@ -330,8 +330,9 @@ pub(super) struct CodeGeneration {
     #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
     pub(super) backend:              BackEnd,
     /// Encode the native back end's ELF or COFF objects in process, the
-    /// default for Windows targets; a module with file-scope assembly is
-    /// refused.
+    /// default for Windows targets, where a listing the encoder refuses is
+    /// assembled unless this flag is given; a module with file-scope assembly
+    /// is refused.
     #[arg(long, requires = "back_end", overrides_with = "no_native_object")]
     pub(super) native_object:        bool,
     /// Assemble the native back end's listing with the bundled clang, the
@@ -665,11 +666,15 @@ fn build_native(
     } else {
         Ok(())
     };
-    let result = writable.and_then(|()| match writer {
-        | native::ObjectWriter::Direct =>
-            native::build_object(&text, output, target, options.output_kind()),
-        | native::ObjectWriter::Assembler =>
-            native::assemble(&text, output, target, options.output_kind()),
+    let result = writable.and_then(|()| {
+        native::build(
+            &text,
+            output,
+            target,
+            options.output_kind(),
+            writer,
+            options.object_writer(),
+        )
     });
     match result {
         | Ok(()) => 0,
