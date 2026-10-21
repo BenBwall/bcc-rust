@@ -126,6 +126,13 @@ pub(super) struct State<'tu, 's> {
     /// The initializers of `const` non-volatile arrays and structures, by
     /// binding, whose retained plans Clang's evaluator may read.
     constant_aggregates:     ArenaMap<'s, usize, &'tu Initializer<'tu>>,
+    /// The byte ranges of each read aggregate and the operation that stores
+    /// each, by binding, with the depth of a query `folding::DEPTH` cut
+    /// short (`folding.rs`).
+    plan_covers:             ArenaMap<'s, usize, (Option<&'s [(u64, u64, u32)]>, Option<u32>)>,
+    /// The elements of each string literal the evaluator reads, by literal
+    /// and encoding.
+    literal_units:           ArenaMap<'s, (u32, u8), &'s [u32]>,
     /// The block items on the work stack that a variably modified lookahead
     /// has seen: each one's position and address, and whether it or an
     /// item below it may declare something of a variably modified type.
@@ -159,6 +166,8 @@ impl<'s> State<'_, 's> {
             weak_names:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            plan_covers:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            literal_units:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified:     ArenaVec::new_in(scratch),
             unevaluated_calls:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }

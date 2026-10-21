@@ -81,7 +81,10 @@ use crate::{
             StringTokenType,
         },
     },
-    util::string_cache::StringCacheId,
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
+    },
 };
 
 /// How deep the evaluator follows operands that semantic analysis did not
@@ -89,7 +92,7 @@ use crate::{
 /// traversal tolerates; Clang would rarely fold them either.
 const DEPTH: u32 = 256;
 
-impl<'tu> Analyzer<'_, 'tu, '_> {
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Clang's `ConstantFoldsToSimpleInteger` for `condition`: its integer
     /// value, when it has an integer or enumerated type, evaluates without
     /// side effects and holds no label. `EvaluateAsInt` refuses any other
@@ -376,7 +379,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// A binary operator applied to evaluated operands: integer arithmetic
     /// and comparison, and the comparison of addresses within one object
     /// or with null.
-    fn binary_value(&self, operator: BinaryOperator, left: Value, right: Value) -> Option<Value> {
+    fn binary_value(
+        &mut self,
+        operator: BinaryOperator,
+        left: Value,
+        right: Value,
+    ) -> Option<Value> {
         use BinaryOperator as B;
         match (left, right) {
             // Within the literal and one past its end, as Clang's evaluator
@@ -562,17 +570,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The number of elements of string literal `literal` before its null
     /// terminator.
-    fn string_length(&self, literal: StringTokenType) -> u64 {
-        let count = match literal {
-            | StringTokenType::String(id) => self
-                .context
-                .encoded_literal_units(id, LiteralEncoding::Utf8)
-                .count(),
-            | StringTokenType::WideString(id) => self.context.wide_literal_units(id).count(),
-            | StringTokenType::EncodedString(id, encoding) =>
-                self.context.encoded_literal_units(id, encoding).count(),
+    fn string_length(&mut self, literal: StringTokenType) -> u64 {
+        self.literal_units(literal).len() as u64
+    }
+
+    /// The elements of string literal `literal` before its null terminator,
+    /// decoded once for the unit.
+    fn literal_units(&mut self, literal: StringTokenType) -> &'s [u32] {
+        let key = match literal {
+            | StringTokenType::String(id) => (id.0, 0),
+            | StringTokenType::WideString(id) => (id.0, 1),
+            | StringTokenType::EncodedString(id, LiteralEncoding::Utf8) => (id.0, 2),
+            | StringTokenType::EncodedString(id, LiteralEncoding::Utf16) => (id.0, 3),
+            | StringTokenType::EncodedString(id, LiteralEncoding::Utf32) => (id.0, 4),
         };
-        count as u64
+        if let Some(&units) = self.functions.emission.literal_units.get(&key) {
+            return units;
+        }
+        let mut units = ArenaVec::new_in(self.scratch);
+        match literal {
+            | StringTokenType::String(id) => units.extend(
+                self.context
+                    .encoded_literal_units(id, LiteralEncoding::Utf8),
+            ),
+            | StringTokenType::WideString(id) => units.extend(self.context.wide_literal_units(id)),
+            | StringTokenType::EncodedString(id, encoding) =>
+                units.extend(self.context.encoded_literal_units(id, encoding)),
+        }
+        let units: &'s [u32] = units.leak();
+        _ = self.functions.emission.literal_units.insert(key, units);
+        units
     }
 
     /// Whether `pointer` points to the element type of string literal
@@ -592,25 +619,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Element `index` of string literal `literal`, its terminator
     /// included, as Clang's evaluator reads it; none outside the array.
     /// C99: §6.4.5 paragraph 5, pp. 62-63; PDF pp. 74-75.
-    fn string_element(&self, literal: StringTokenType, index: i128) -> Option<Value> {
-        let index = u64::try_from(index).ok()?;
-        let length = self.string_length(literal);
-        let unit = match index.cmp(&length) {
-            | std::cmp::Ordering::Less => {
-                let index = usize::try_from(index).ok()?;
-                match literal {
-                    | StringTokenType::String(id) => self
-                        .context
-                        .encoded_literal_units(id, LiteralEncoding::Utf8)
-                        .nth(index)?,
-                    | StringTokenType::WideString(id) =>
-                        self.context.wide_literal_units(id).nth(index)?,
-                    | StringTokenType::EncodedString(id, encoding) => self
-                        .context
-                        .encoded_literal_units(id, encoding)
-                        .nth(index)?,
-                }
-            },
+    fn string_element(&mut self, literal: StringTokenType, index: i128) -> Option<Value> {
+        let index = usize::try_from(index).ok()?;
+        let units = self.literal_units(literal);
+        let unit = match index.cmp(&units.len()) {
+            | std::cmp::Ordering::Less => units[index],
             | std::cmp::Ordering::Equal => 0,
             | std::cmp::Ordering::Greater => return None,
         };
@@ -630,7 +643,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The value of the scalar of type `ty` at byte `offset` of `const`
-    /// object `binding`: see [`Self::object_value`].
+    /// object `binding`: see [`Self::object_value`]. The last operation of
+    /// the plan that covers `offset` stores it ([`Self::plan_cover`]).
     fn place_value(
         &mut self,
         binding: usize,
@@ -646,61 +660,45 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return None;
         }
-        let initializer = self
-            .functions
-            .emission
-            .constant_aggregates
-            .get(&binding)
-            .copied()?;
+        let cover = self.plan_cover(binding, depth)?;
+        let index = cover.partition_point(|&(_, end, _)| end <= offset);
+        let &(_, _, operation) = cover.get(index).filter(|&&(start, ..)| start <= offset)?;
+        let initializer = *self.functions.emission.constant_aggregates.get(&binding)?;
         let plan = *self.initializers.plan(initializer)?;
-        for value in plan.values {
-            _ = self.initializer_value(value.expression, depth)?;
-        }
-        let mut read = None;
-        for operation in plan.operations {
-            let (destination, size) = match *operation {
-                | InitOperation::Zero { destination, .. }
-                | InitOperation::Select { destination, .. }
-                | InitOperation::Store { destination, .. }
-                | InitOperation::Copy { destination, .. }
-                | InitOperation::String { destination, .. }
-                | InitOperation::EmptyScalar { destination, .. }
-                | InitOperation::Unmodeled { destination, .. } =>
-                    (destination, self.types.layout(destination.ty)?.size),
-                | InitOperation::Repeat { .. } => return None,
-            };
-            let covers = destination.offset <= offset && offset < destination.offset + size;
-            if !covers {
-                continue;
-            }
-            let exact = destination.offset == offset
-                && self.types.non_atomic(destination.ty).unqualified() == ty.unqualified();
-            read = Some(match *operation {
-                | InitOperation::Zero { .. } => Read::Zero,
-                | InitOperation::EmptyScalar { .. } if exact => Read::Zero,
-                | InitOperation::Store {
-                    value,
-                    bit_field: None,
-                    ..
-                } if exact => Read::Value(plan.values.get(value.0 as usize)?.expression),
-                | InitOperation::String { literal, .. } => {
-                    let ExpressionType::StringLiteral(literal) = unparenthesized(literal).kind
-                    else {
-                        return None;
-                    };
-                    let element = self.types.layout(ty)?.size;
-                    let index = (offset - destination.offset) / element;
-                    // Elements past the literal's are zero.
-                    if index > self.string_length(literal) {
-                        Read::Zero
-                    } else {
-                        Read::String(literal, i128::from(index))
-                    }
-                },
-                | _ => return None,
-            });
-        }
-        let value = match read? {
+        let operation = *plan.operations.get(operation as usize)?;
+        let destination = match operation {
+            | InitOperation::Zero { destination, .. }
+            | InitOperation::Store { destination, .. }
+            | InitOperation::String { destination, .. }
+            | InitOperation::EmptyScalar { destination, .. } => destination,
+            | _ => return None,
+        };
+        let exact = destination.offset == offset
+            && self.types.non_atomic(destination.ty).unqualified() == ty.unqualified();
+        let read = match operation {
+            | InitOperation::Zero { .. } => Read::Zero,
+            | InitOperation::EmptyScalar { .. } if exact => Read::Zero,
+            | InitOperation::Store {
+                value,
+                bit_field: None,
+                ..
+            } if exact => Read::Value(plan.values.get(value.0 as usize)?.expression),
+            | InitOperation::String { literal, .. } => {
+                let ExpressionType::StringLiteral(literal) = unparenthesized(literal).kind else {
+                    return None;
+                };
+                let element = self.types.layout(ty)?.size;
+                let index = (offset - destination.offset) / element;
+                // Elements past the literal's are zero.
+                if index > self.string_length(literal) {
+                    Read::Zero
+                } else {
+                    Read::String(literal, i128::from(index))
+                }
+            },
+            | _ => return None,
+        };
+        let value = match read {
             | Read::Zero => match self.types.nodes[ty.index] {
                 | TypeKind::Scalar(
                     Scalar::Float
@@ -723,6 +721,72 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.cast_to(value, ty)
     }
 
+    /// The byte ranges of `const` aggregate `binding` and the plan operation
+    /// that stores each last, sorted and disjoint, when Clang's evaluator
+    /// reads the aggregate: every value its plan stores evaluates, and it
+    /// selects no union member, copies no structure, repeats nothing (a GNU
+    /// range) and leaves nothing unmodeled. Computed once per object, so a
+    /// read costs a search rather than a pass over the plan; kept as
+    /// [`Self::evaluate_value`] keeps a value that [`DEPTH`] cut short.
+    fn plan_cover(&mut self, binding: usize, depth: u32) -> Option<&'s [(u64, u64, u32)]> {
+        if let Some(&(cover, cut)) = self.functions.emission.plan_covers.get(&binding)
+            && cut.is_none_or(|cut| depth >= cut)
+        {
+            self.functions.emission.depth_cut |= cut.is_some();
+            return cover;
+        }
+        let initializer = *self.functions.emission.constant_aggregates.get(&binding)?;
+        let plan = *self.initializers.plan(initializer)?;
+        let outer = std::mem::take(&mut self.functions.emission.depth_cut);
+        let mut readable = true;
+        for value in plan.values {
+            if self.initializer_value(value.expression, depth).is_none() {
+                readable = false;
+                break;
+            }
+        }
+        let cut = self.functions.emission.depth_cut;
+        self.functions.emission.depth_cut = outer || cut;
+        let mut cover = ArenaVec::new_in(self.scratch);
+        for (index, operation) in plan.operations.iter().enumerate() {
+            if !readable {
+                break;
+            }
+            let destination = match *operation {
+                | InitOperation::Zero { destination, .. }
+                | InitOperation::Store { destination, .. }
+                | InitOperation::String { destination, .. }
+                | InitOperation::EmptyScalar { destination, .. } => destination,
+                | InitOperation::Select { .. }
+                | InitOperation::Copy { .. }
+                | InitOperation::Repeat { .. }
+                | InitOperation::Unmodeled { .. } => {
+                    readable = false;
+                    break;
+                },
+            };
+            let (Some(layout), Ok(index)) =
+                (self.types.layout(destination.ty), u32::try_from(index))
+            else {
+                readable = false;
+                break;
+            };
+            paint(
+                &mut cover,
+                destination.offset,
+                destination.offset.saturating_add(layout.size),
+                index,
+            );
+        }
+        let cover: Option<&'s [(u64, u64, u32)]> = readable.then(|| &*cover.leak());
+        _ = self
+            .functions
+            .emission
+            .plan_covers
+            .insert(binding, (cover, cut.then_some(depth)));
+        cover
+    }
+
     /// The `const` object, byte offset and type that `expression`
     /// designates through names, subscripts with constant indices within
     /// the array, `.` members and `*` of an array or of an array plus a
@@ -738,7 +802,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // The array expression and the element index of a subscript or an
         // indirection still to apply, innermost last.
         let mut expression = unparenthesized(expression);
-        let mut steps = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let mut steps = ArenaVec::new_in(self.scratch);
         let (binding, ty) = loop {
             match expression.kind {
                 | ExpressionType::Identifier(_) => {
@@ -875,7 +939,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// evaluator notes as undefined (`handleFloatFloatBinOp`), so that
     /// `ConstantFoldsToSimpleInteger` and `isEvaluatable` refuse it.
     fn refolds(&mut self, expression: &'tu Expression<'tu>) -> bool {
-        let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let mut work = ArenaVec::new_in(self.scratch);
         work.push((expression, false));
         while let Some((current, children_done)) = work.pop() {
             let key = std::ptr::from_ref(current).addr();
@@ -1130,19 +1194,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `literal`: the elements before the first null one.
     /// None outside the array, its terminator included. One pass over the
     /// literal's units.
-    fn string_strlen(&self, literal: StringTokenType, offset: i128) -> Option<Value> {
+    fn string_strlen(&mut self, literal: StringTokenType, offset: i128) -> Option<Value> {
         let start = usize::try_from(offset).ok()?;
-        let length = match literal {
-            | StringTokenType::String(id) => units_to_null(
-                self.context
-                    .encoded_literal_units(id, LiteralEncoding::Utf8),
-                start,
-            ),
-            | StringTokenType::WideString(id) =>
-                units_to_null(self.context.wide_literal_units(id), start),
-            | StringTokenType::EncodedString(id, encoding) =>
-                units_to_null(self.context.encoded_literal_units(id, encoding), start),
-        }?;
+        let length = units_to_null(self.literal_units(literal).iter().copied(), start)?;
         Some(Value::Integer(Integer::int(i128::try_from(length).ok()?)))
     }
 
@@ -1154,7 +1208,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58; §5.1.2.3 paragraph 2,
     /// p. 13; PDF p. 25.
     fn has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
-        let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let mut work = ArenaVec::new_in(self.scratch);
         // Each expression, with whether its value is read if it is an
         // lvalue.
         work.push((expression, true));
@@ -1436,6 +1490,32 @@ fn units_to_null(units: impl Iterator<Item = u32>, start: usize) -> Option<usize
         count = index + 1;
     }
     count.checked_sub(start)
+}
+
+/// Records in `cover`, sorted and disjoint byte ranges each with the
+/// operation that stores it last, that operation `operation` stores
+/// `start..end`, after those already recorded.
+fn paint(cover: &mut ArenaVec<'_, (u64, u64, u32)>, start: u64, end: u64, operation: u32) {
+    if start >= end {
+        return;
+    }
+    let first = cover.partition_point(|&(_, last, _)| last <= start);
+    let after = cover.partition_point(|&(begin, ..)| begin < end);
+    let mut pieces = [None; 3];
+    if let Some(&(begin, _, earlier)) = cover.get(first)
+        && first < after
+        && begin < start
+    {
+        pieces[0] = Some((begin, start, earlier));
+    }
+    pieces[1] = Some((start, end, operation));
+    if after > first
+        && let Some(&(_, last, earlier)) = cover.get(after - 1)
+        && last > end
+    {
+        pieces[2] = Some((end, last, earlier));
+    }
+    drop(cover.splice(first..after, pieces.into_iter().flatten()));
 }
 
 fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
