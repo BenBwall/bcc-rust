@@ -102,6 +102,8 @@ impl StudyPrepared<'_, '_, '_> {
         end();
         let rss_after = peak_rss();
         let peak = accounting::peak();
+        let parse_bytes = self.parse.high_water();
+        let tu_bytes = self.tu.high_water() - tu_before;
         let diagnostics = self.context.pending_error_count();
         let inspection = inspect.then(|| {
             let arena = Bump::new();
@@ -128,8 +130,8 @@ impl StudyPrepared<'_, '_, '_> {
             tokens,
             roots: unit.external_declarations().len(),
             diagnostics,
-            parse_bytes: self.parse.high_water(),
-            tu_bytes: self.tu.high_water() - tu_before,
+            parse_bytes,
+            tu_bytes,
             peak_commit_bytes: peak.committed - live_before.committed,
             peak_regions: peak.regions - live_before.regions,
             expression_entries: stats.expression_entries,

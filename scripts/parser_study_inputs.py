@@ -103,6 +103,12 @@ return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c
         command = [args.cc, "-std=gnu99", "-E", "-P", str(args.output / "lua-5.4.8/onelua.c")]
         result = subprocess.run(command, check=True, capture_output=True)
         save("lua.i", result.stdout, " ".join(command))
+        # glibc exposes _Float128 prototypes, while bcc accepts the equivalent
+        # reserved GNU spelling __float128. Preserve the untouched case above
+        # and prepare an explicit compatibility variant for clean comparisons.
+        command.insert(2, "-D_Float128=__float128")
+        result = subprocess.run(command, check=True, capture_output=True)
+        save("lua-supported.i", result.stdout, " ".join(command))
 
     if args.sqlite:
         url = "https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip"
