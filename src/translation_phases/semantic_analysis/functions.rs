@@ -218,10 +218,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.functions.dead,
         )));
         self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                self.functions.unvisited,
+            )));
+        self.work
             .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
                 self.functions.emission.orphan,
             )));
         self.functions.dead = false;
+        self.functions.unvisited = false;
         self.functions.emission.orphan = None;
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
             self.functions.current,
@@ -459,6 +464,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
+            | FunctionWork::RestoreUnvisited(unvisited) => self.functions.unvisited = unvisited,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
             | FunctionWork::RestoreUnjoinedOrphan(orphan) =>
                 self.functions.emission.orphan = self.functions.emission.orphan.and(orphan),
@@ -478,13 +484,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let skipped = self.folded_condition(condition) == Some(!live)
                     && statement
                         .is_none_or(|statement| !self.statement_contains_label(statement, false));
-                self.functions.dead = outer || skipped;
+                self.functions.dead = outer.dead || skipped;
+                self.functions.unvisited = outer.unvisited || skipped;
             },
             | FunctionWork::DeadArm(condition, live, outer, arm) => {
                 // Clang emits a folded-away operand that holds a label.
                 let skipped = self.folded_condition(condition) == Some(!live)
                     && !self.expression_contains_label(arm);
-                self.functions.dead = outer || skipped;
+                self.functions.dead = outer.dead || skipped;
+                self.functions.unvisited = outer.unvisited || skipped;
             },
             | FunctionWork::GenericMark(generic) => {
                 let at = self.functions.uses.len();
@@ -1590,6 +1598,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })
             .and_then(|f| f.binding)
             .filter(|&i| self.bindings[i].linkage == Linkage::External);
+        // Clang emits a block-scope static object's declaration wherever it
+        // visits the declaration, even after a jump (`EmitSimpleStmt`), so
+        // its initializer is skipped only where the code is not visited.
+        let static_local = self.functions.initializer.is_some_and(|binding| {
+            let data = self.bindings[binding];
+            data.linkage == Linkage::None && data.duration.is_static_or_thread()
+        });
         self.functions.uses.push(Use {
             reference_context: self.functions.reference_context,
             owner: self
@@ -1607,7 +1622,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             sizeof: self.functions.sizeof,
             inline_function,
             dll_import,
-            dead: self.functions.dead,
+            dead: self.functions.dead && (self.functions.unvisited || !static_local),
         });
     }
 
@@ -1680,9 +1695,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.work.push(Work::FunctionWork(FunctionWork::DeadArm(
             condition,
             live,
-            self.functions.dead,
+            self.skipped_state(),
             arm,
         )));
+    }
+
+    /// The skipped state of the code being analyzed, which an operand or
+    /// arm starts from.
+    pub(super) fn skipped_state(&self) -> Skipped {
+        Skipped {
+            dead:      self.functions.dead,
+            unvisited: self.functions.unvisited,
+        }
     }
 
     /// Loop code generation folds arithmetic truth, including floating
@@ -2007,6 +2031,9 @@ pub(super) enum FunctionWork<'tu> {
     RestoreReferenceContext(Option<usize>),
     /// Sets whether code generation skips the code that follows.
     RestoreDead(bool),
+    /// Sets whether code generation visits the code that follows
+    /// ([`State::unvisited`]).
+    RestoreUnvisited(bool),
     /// Restores whether the code being analyzed is emitted into a block
     /// without predecessors ([`super::emission::State::orphan`]).
     RestoreOrphan(Option<usize>),
@@ -2023,15 +2050,15 @@ pub(super) enum FunctionWork<'tu> {
     /// Skips the code after an `if` statement when both arms end skipped.
     JoinArms,
     /// Enters operand `arm` of a condition, taken when it is `live`, given
-    /// whether the code around the condition is skipped; an operand that
+    /// the skipped state of the code around the condition; an operand that
     /// holds a label is not skipped.
-    DeadArm(&'tu Expression<'tu>, bool, bool, &'tu Expression<'tu>),
+    DeadArm(&'tu Expression<'tu>, bool, Skipped, &'tu Expression<'tu>),
     /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
     /// the arm holds a label, which keeps Clang from skipping it.
     DeadStatementArm(
         &'tu Expression<'tu>,
         bool,
-        bool,
+        Skipped,
         Option<&'tu Statement<'tu>>,
     ),
     /// Clang omits an infinite loop's exit block unless a generated break
@@ -2114,6 +2141,14 @@ enum InlineEmission {
 enum FunctionBody {
     Replaceable(SourceVectors),
     Unique(SourceVectors),
+}
+
+/// Whether code generation skips the code being analyzed, and whether it
+/// does not even visit it ([`State::dead`], [`State::unvisited`]).
+#[derive(Clone, Copy)]
+pub(super) struct Skipped {
+    pub(super) dead:      bool,
+    pub(super) unvisited: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -2202,6 +2237,12 @@ pub(super) struct State<'tu, 's> {
     /// does not return, until a label (`CodeGenFunction::EmitStmt`;
     /// [`super::emission`]).
     pub(super) dead: bool,
+    /// Code generation does not even visit the code being analyzed: a
+    /// statement it skips whole after a jump, the arm or operand a folded
+    /// condition skips, and what follows a folded switch's selected
+    /// statements. Where it visits skipped code, it still emits the
+    /// declarations of block-scope static objects (`EmitSimpleStmt`).
+    pub(super) unvisited: bool,
     /// The skipped state around the innermost switch, which its case
     /// labels resume.
     pub(super) switch_dead: bool,
@@ -2242,6 +2283,7 @@ impl<'s> State<'_, 's> {
             sizeof_contexts:         ArenaVec::new_in(scratch),
             sizeof:                  None,
             dead:                    false,
+            unvisited:               false,
             switch_dead:             false,
             emission:                super::emission::State::new(scratch),
             arm_ends:                ArenaVec::new_in(scratch),

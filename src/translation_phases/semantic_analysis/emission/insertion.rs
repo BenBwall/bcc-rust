@@ -564,6 +564,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.emission.orphan = Some(serial);
             }
         }
+        // Code generation skips the statement whole, without visiting it.
+        if self.functions.dead && !self.functions.unvisited {
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(false)));
+            self.functions.unvisited = true;
+        }
         self.work
             .push(Work::FunctionWork(FunctionWork::ExpressionStatementEnd {
                 expression,

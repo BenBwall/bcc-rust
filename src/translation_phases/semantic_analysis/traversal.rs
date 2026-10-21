@@ -78,6 +78,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => None,
                 };
                 if live.is_some() {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                            self.functions.unvisited,
+                        )));
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                         self.functions.dead,
                     )));
@@ -89,6 +93,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Expression(left_expression));
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
+                    )));
                 self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                     self.functions.dead,
                 )));
@@ -216,6 +224,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.functions.dead = false;
         }
+        // Code generation skips such a statement whole, unlike a block or a
+        // declaration, whose static objects it still emits. An expression
+        // statement decides this once a statement expression's value
+        // statement has been resumed ([`Self::begin_expression_statement`]).
+        if self.functions.dead
+            && !self.functions.unvisited
+            && matches!(
+                s.kind,
+                S::If { .. }
+                    | S::Switch { .. }
+                    | S::While { .. }
+                    | S::DoWhile { .. }
+                    | S::For(_)
+                    | S::Return(_)
+                    | S::ComputedGoto(_)
+                    | S::Asm(_)
+                    | S::MsAsm(_)
+                    | S::Seh(_)
+            )
+        {
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(false)));
+            self.functions.unvisited = true;
+        }
         let outside = self.control.current;
         _ = self.control.statement(s);
         self.work.push(Work::StatementWork(W::RetainTail(s)));
@@ -284,6 +316,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 // Code after the statement is skipped when both arms end
                 // skipped, a missing `else` being an empty arm.
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
+                    )));
                 self.work.push(Work::FunctionWork(FunctionWork::JoinArms));
                 let condition = super::statements::slot_expression(condition_expression);
                 if let Some(child) = else_statement {
@@ -317,6 +353,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreSwitchDead(
                         self.functions.switch_dead,
+                    )));
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
                     )));
                 self.work.push(Work::FunctionWork(FunctionWork::SwitchEnd(
                     self.functions.dead,
@@ -473,7 +513,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .push(Work::FunctionWork(FunctionWork::DeadStatementArm(
                 condition,
                 live,
-                self.functions.dead,
+                self.skipped_state(),
                 statement,
             )));
     }
