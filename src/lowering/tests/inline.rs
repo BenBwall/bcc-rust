@@ -1,5 +1,7 @@
 //! External emission follows C99 §6.7.4p6-7 and GCC's GNU89 inline rules.
 
+use std::fmt::Write;
+
 use super::*;
 use crate::configuration::{
     CStandard,
@@ -1986,4 +1988,60 @@ fn always_inline_order_bounds_weak_names_at_eager_bodies() {
     let source = source.replace("inline __attribute__((used))", "inline __attribute__((used,always_inline))");
     assert_eq!(always_inline_order(&source, gnu), "fgh");
 
+}
+
+#[test]
+fn always_inline_order_keeps_used_bodies_eager_when_forced_external() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let source =
+        "inline __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) \
+         int g(int); inline __attribute__((always_inline)) int h(int); inline \
+         __attribute__((always_inline,used)) int f(int x) { return x > 0 ? g(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int g(int x) { return x > 0 ? h(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int h(int x) { return x > 0 ? f(x-1)+1 : 0; } int \
+         main(void) { return h(4); } extern int f(int); extern int h(int);";
+    assert_eq!(always_inline_order(source, c99), "fgh");
+}
+
+#[test]
+fn always_inline_order_ignores_overridden_static_initializer_values() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    const CYCLE: &str =
+        "inline __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) \
+         int g(int); inline __attribute__((always_inline)) int h(int); inline \
+         __attribute__((always_inline)) int h(int x) { return x > 0 ? f(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int g(int x) { return x > 0 ? h(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int f(int x) { return x > 0 ? g(x-1)+1 : 0; }";
+    for declaration in [
+        "static int (*p[1])(int) = { [0]=g, [0]=h };",
+        "static struct { int (*p)(int); } s = { .p=g, .p=h };",
+        "static union { int (*p)(int); int (*q)(int); } u = { .p=g, .q=h };",
+        "static struct { int (*p)(int); int x; } s[1] = { [0].p=g, [0]={h,0} };",
+        "static int (*p[1])(int) = { [0]=(int (*)(int))(void*)g, [0]=h };",
+    ] {
+        let source = format!(
+            "{CYCLE} int probe(void) {{ {declaration} return 0; }} int main(void) {{ return f(4); \
+             }} extern int g(int); extern int h(int);"
+        );
+        assert_eq!(always_inline_order(&source, c99), "hfg", "{source}");
+    }
+}
+
+/// This must reach lowering's creation-order planner: semantic-only timing
+/// never queries the enclosing owner of a block static's initializer.
+#[test]
+fn nested_static_initializer_ownership_stays_linear() {
+    let depth = 16_000;
+    let mut source = String::from(
+        "static inline __attribute__((always_inline)) int f(void) { return 1; } static inline \
+         __attribute__((always_inline)) int h(void) { return f(); } int main(void) {",
+    );
+    for index in 0..depth {
+        write!(source, "{{ static int (*p{index})(void) = h;").unwrap();
+    }
+    source.push_str(&"}".repeat(depth));
+    source.push_str("return h(); }");
+    let start = std::time::Instant::now();
+    drop(lower_with(&source, CompilerConfiguration::default()).unwrap());
+    assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
 }

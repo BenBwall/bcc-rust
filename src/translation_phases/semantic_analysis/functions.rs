@@ -694,6 +694,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         owner,
                         binding: usage.binding,
                         dead: usage.dead,
+                        initializer_value: usage.initializer_value,
                     });
                 }
                 if let Some(import) = usage.dll_import {
@@ -1634,6 +1635,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .map(ReferenceOwner::Function)),
             binding,
             name,
+            initializer_value: self.functions.initializer_value,
             sizeof: self.functions.sizeof,
             inline_function,
             dll_import,
@@ -2195,6 +2197,7 @@ struct Use {
     owner:             Option<ReferenceOwner>,
     binding:           usize,
     name:              Identifier,
+    initializer_value: Option<usize>,
     sizeof:            Option<usize>,
     inline_function:   Option<usize>,
     /// Whether the reference named an imported declaration, for an entity
@@ -2254,6 +2257,8 @@ pub(super) struct State<'tu, 's> {
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
     pub(super) reference_function: Option<usize>,
     pub(super) initializer: Option<usize>,
+    /// Root expression of the initializer value currently being analyzed.
+    pub(super) initializer_value: Option<usize>,
     pub(super) current: Option<FunctionContext<'tu>>,
     next_function: usize,
     old_names: ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
@@ -2309,6 +2314,7 @@ impl<'s> State<'_, 's> {
             reference_contexts:      ArenaVec::new_in(scratch),
             reference_function:      None,
             initializer:             None,
+            initializer_value:       None,
             current:                 None,
             next_function:           0,
             old_names:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),

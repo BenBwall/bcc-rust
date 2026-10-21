@@ -105,12 +105,16 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 /// PDF pp. 137-142.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EntityReference {
-    pub(crate) owner:   usize,
-    pub(crate) binding: usize,
+    pub(crate) owner:             usize,
+    pub(crate) binding:           usize,
     /// The reference is in code that Clang's code generation skips (an
     /// unreachable statement or a constant-false operand): it still keeps
     /// what it names reachable, but creates no LLVM value there.
-    pub(crate) dead:    bool,
+    pub(crate) dead:              bool,
+    /// Syntax identity of the initializer value containing this reference,
+    /// so creation order can exclude values later stores fully replace.
+    /// Analysis and ordinary reachability still retain those references.
+    pub(crate) initializer_value: Option<usize>,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than

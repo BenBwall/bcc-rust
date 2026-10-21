@@ -546,6 +546,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.correspondence.initializer(declarator, initializer);
                 self.work
                     .push(Work::RestoreReferenceOwner(self.functions.initializer));
+                self.work.push(Work::RestoreInitializerValue(
+                    self.functions.initializer_value,
+                ));
+                self.functions.initializer_value = None;
                 if let Some(entry) = declarator
                     .identifier()
                     .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
@@ -561,6 +565,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.initialize_declaration(binding, initializer);
             },
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
+            | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
             | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
             | Work::Condition(slot, integer) => self.check_condition(slot, integer),
             | Work::RequireConstant(e, assertion, before) => {
@@ -600,8 +605,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Initializer(initializer) => {
                 self.taint(initializer.recovered);
                 match initializer.kind {
-                    | InitializerType::AssignmentExpression(e) =>
-                        self.work.push(Work::Expression(e)),
+                    | InitializerType::AssignmentExpression(e) => {
+                        self.work.push(Work::RestoreInitializerValue(
+                            self.functions.initializer_value,
+                        ));
+                        _ = self
+                            .functions
+                            .initializer_value
+                            .get_or_insert(std::ptr::from_ref(e).addr());
+                        self.work.push(Work::Expression(e));
+                    },
                     | InitializerType::InitializerList(list) => {
                         for element in list.elements.iter().rev() {
                             self.work.push(Work::Initializer(element.initializer));
@@ -1679,6 +1692,7 @@ struct DeclaredAlignment<'tu> {
 enum Work<'tu, 's> {
     RestoreReferenceFunction(Option<usize>),
     RestoreReferenceOwner(Option<usize>),
+    RestoreInitializerValue(Option<usize>),
     DeclaredAlignment(DeclaredAlignment<'tu>),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),
