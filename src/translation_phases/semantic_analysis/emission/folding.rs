@@ -90,6 +90,7 @@ use crate::{
             ArenaMap,
             ArenaVec,
         },
+        interval_cover::last_writes,
         string_cache::StringCacheId,
     },
 };
@@ -572,7 +573,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Scalar::ComplexLongDouble
                 | Scalar::ComplexFloat128,
             ) => match value {
-                | Value::Floating(floating) => self.round_floating(floating, ty).map(Value::Floating),
+                | Value::Floating(floating) =>
+                    self.round_floating(floating, ty).map(Value::Floating),
                 | Value::Integer(_) | Value::Other => Some(Value::Other),
                 | Value::Address(..) | Value::String(..) | Value::CastString(..) => None,
             },
@@ -743,7 +745,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let &(_, _, operation) = cover.get(index).filter(|&&(start, ..)| start <= offset)?;
         let initializer = *self.functions.emission.constant_aggregates.get(&binding)?;
         let plan = *self.initializers.plan(initializer)?;
-        let operation = *plan.operations.get(operation as usize)?;
+        let operation = *plan.operations.get(operation)?;
         let (InitOperation::Zero { destination, .. }
         | InitOperation::Store { destination, .. }
         | InitOperation::String { destination, .. }
@@ -823,8 +825,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             }
         }
         let memo = self.end_memo(outer, (), depth);
-        let mut cover = ArenaVec::new_in(self.scratch);
-        for (index, operation) in plan.operations.iter().enumerate() {
+        let mut ranges = ArenaVec::new_in(self.scratch);
+        for operation in plan.operations {
             if !readable {
                 break;
             }
@@ -841,20 +843,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     break;
                 },
             };
-            let (Some(layout), Ok(index)) =
-                (self.types.layout(destination.ty), u32::try_from(index))
-            else {
+            let Some(layout) = self.types.layout(destination.ty) else {
                 readable = false;
                 break;
             };
-            paint(
-                &mut cover,
+            ranges.push((
                 destination.offset,
                 destination.offset.saturating_add(layout.size),
-                index,
-            );
+            ));
         }
-        let cover: Option<Cover<'s>> = readable.then(|| &*cover.leak());
+        let cover: Option<Cover<'s>> =
+            readable.then(|| &*last_writes(&ranges, self.scratch).leak());
         _ = self.functions.emission.plan_covers.insert(
             binding,
             Memo {
@@ -1302,23 +1301,45 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             && let TypeKind::Array(element, ArrayBound::Constant(count)) =
                 self.types.nodes[ty.index]
         {
-            let size = self.types.layout(element)?.size;
-            for index in 0..count {
-                let Value::Integer(unit) =
-                    self.place_value(binding, offset + index * size, element, depth)?
-                else {
-                    return None;
-                };
-                if unit.value == 0 {
-                    return Some(Value::Integer(Integer::int(i128::from(index))));
-                }
+            let key = (binding, offset, ty);
+            if let Some(&memo) = self.functions.emission.array_lengths.get(&key)
+                && self.memo_holds(&memo, depth)
+            {
+                return memo.value;
             }
-            return None;
+            let outer = self.begin_memo();
+            let value = self.scan_array_length(binding, offset, element, count, depth);
+            let memo = self.end_memo(outer, value, depth);
+            _ = self.functions.emission.array_lengths.insert(key, memo);
+            return value;
         }
         match self.evaluate_value(argument, depth)? {
             | Value::String(literal, offset) => self.string_strlen(literal, offset),
             | _ => None,
         }
+    }
+
+    /// Scan a constant array once per place and memo dependency context.
+    fn scan_array_length(
+        &mut self,
+        binding: usize,
+        offset: u64,
+        element: TypeId,
+        count: u64,
+        depth: u32,
+    ) -> Option<Value> {
+        let size = self.types.layout(element)?.size;
+        for index in 0..count {
+            let Value::Integer(unit) =
+                self.place_value(binding, offset + index * size, element, depth)?
+            else {
+                return None;
+            };
+            if unit.value == 0 {
+                return Some(Value::Integer(Integer::int(i128::from(index))));
+            }
+        }
+        None
     }
 
     /// The length `strlen` gives for element `offset` of string literal
@@ -1588,7 +1609,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// The byte ranges of a `const` aggregate, sorted and disjoint, each with the
 /// index of the plan operation that stores it last
 /// ([`Analyzer::plan_cover`]).
-pub(super) type Cover<'s> = &'s [(u64, u64, u32)];
+pub(super) type Cover<'s> = &'s [(u64, u64, usize)];
 
 /// A memoized evaluator result and what it depended on: the depth of a
 /// query that [`DEPTH`] cut short, and the weak horizon of one that read a
@@ -1704,32 +1725,6 @@ fn units_to_null(units: impl Iterator<Item = u32>, start: usize) -> Option<usize
         count = index + 1;
     }
     count.checked_sub(start)
-}
-
-/// Records in `cover`, sorted and disjoint byte ranges each with the
-/// operation that stores it last, that operation `operation` stores
-/// `start..end`, after those already recorded.
-fn paint(cover: &mut ArenaVec<'_, (u64, u64, u32)>, start: u64, end: u64, operation: u32) {
-    if start >= end {
-        return;
-    }
-    let first = cover.partition_point(|&(_, last, _)| last <= start);
-    let after = cover.partition_point(|&(begin, ..)| begin < end);
-    let mut pieces = [None; 3];
-    if let Some(&(begin, _, earlier)) = cover.get(first)
-        && first < after
-        && begin < start
-    {
-        pieces[0] = Some((begin, start, earlier));
-    }
-    pieces[1] = Some((start, end, operation));
-    if after > first
-        && let Some(&(_, last, earlier)) = cover.get(after - 1)
-        && last > end
-    {
-        pieces[2] = Some((end, last, earlier));
-    }
-    drop(cover.splice(first..after, pieces.into_iter().flatten()));
 }
 
 fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {

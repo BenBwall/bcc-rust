@@ -863,6 +863,16 @@ fn emission_model_queries_stay_linear() {
         write!(table, "if (t[{index}]) r++; ").unwrap();
     }
     table.push_str("return r; }");
+    let mut reverse = format!("static const int t[{size}] = {{");
+    for index in (0..size).rev() {
+        write!(reverse, "[{index}]={},", index % 7).unwrap();
+    }
+    reverse.push_str("}; int f(void) { if (t[1]) return 1; return 0; }");
+    let repeated_strlen = format!(
+        "static const char s[] = \"{}\"; int f(void) {{ int r=0; {} return r; }}",
+        "a".repeat(length),
+        "if (__builtin_strlen(s)) r++;".repeat(400)
+    );
     let mut blocks = String::from("__attribute__((noreturn)) void die(void); void f(void) { ");
     for index in 0..depth {
         write!(blocks, "l{index}: {{ die(); ").unwrap();
@@ -895,6 +905,8 @@ fn emission_model_queries_stay_linear() {
             None,
         ),
         (table, None),
+        (reverse, None),
+        (repeated_strlen, None),
         (blocks, None),
         (assignment, None),
         (compound, None),

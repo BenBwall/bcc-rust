@@ -154,6 +154,9 @@ pub(super) struct State<'tu, 's> {
     /// each, by binding, with the depth of a query `folding::DEPTH` cut
     /// short (`folding.rs`).
     plan_covers:             ArenaMap<'s, usize, folding::Memo<Option<folding::Cover<'s>>>>,
+    /// Cached constant-array strlen queries, including failed scans, with
+    /// the same depth and weak-horizon dependencies as other folds.
+    array_lengths: ArenaMap<'s, (usize, u64, super::TypeId), folding::Memo<Option<folding::Value>>>,
     /// The elements of each string literal the evaluator reads, by literal
     /// and encoding.
     literal_units:           ArenaMap<'s, (u32, u8), &'s [u32]>,
@@ -216,6 +219,7 @@ impl<'s> State<'_, 's> {
             constant_initializers:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             plan_covers:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            array_lengths:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             literal_units:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified:       ArenaVec::new_in(scratch),
             work_low:                0,

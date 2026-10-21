@@ -23,6 +23,7 @@ pub(crate) mod dedup_arena;
 pub(crate) mod string_cache;
 
 // Range representation
+pub(crate) mod interval_cover;
 pub(crate) mod vector_slice;
 
 // Test storage
