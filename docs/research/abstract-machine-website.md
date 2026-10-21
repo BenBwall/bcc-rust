@@ -453,5 +453,21 @@ commands provide a reproducible manual check. No screenshot is claimed.
 
 ### Verification results
 
-Final engine, wasm, native and web checks are still in progress. Their commands
-and outcomes will be recorded here before handoff.
+Commands below run from this worktree root. Every Cargo invocation used
+`python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py`.
+
+- `cargo test --lib pipeline::tests`: **166 passed**, no failures. These
+  exercise the original default pipeline, including interpreted C and native
+  and LLVM comparison arms. Log: `target/abstract-machine/native-pipeline-tests.log`.
+- Native `cargo check --all-targets` and
+  `cargo clippy --all-targets -- -D warnings`: passed during build isolation.
+  A later final feature-enabled lint pass is still planned.
+- Static page checks: HTML IDs are unique, all literal renderer/control
+  element references exist, and local assets/module imports resolve.
+- Worker-proxy missing-artifact check: the actual Worker/proxy modules pass
+  an explicit missing-wasm setup error to the caller, without execution.
+  This uses a Node messaging/fetch shim, not a browser rendering test.
+
+Engine, final wasm, and integrated web execution checks are still in progress.
+An initial wasm Clippy pass found bridge style lints; those must be fixed and
+the check rerun before a passing result is recorded.
