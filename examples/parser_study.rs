@@ -6,7 +6,6 @@
 )]
 #![expect(
     clippy::disallowed_types,
-    clippy::disallowed_macros,
     clippy::disallowed_methods,
     reason = "The study harness owns command arguments, input text, and reporting buffers outside \
               compilation."
@@ -160,21 +159,21 @@ unsafe impl GlobalAlloc for Counting {
         pointer
     }
 
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         // SAFETY: the caller supplies this allocator's live block and its
         // layout.
-        let result = unsafe { System.realloc(pointer, layout, size) };
+        let result = unsafe { System.realloc(ptr, layout, new_size) };
         if !result.is_null() {
-            record(size);
+            record(new_size);
         }
         result
     }
 
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: the caller supplies this allocator's live block and its
         // layout.
         unsafe {
-            System.dealloc(pointer, layout);
+            System.dealloc(ptr, layout);
         }
     }
 }
