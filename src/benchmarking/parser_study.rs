@@ -102,6 +102,7 @@ impl StudyPrepared<'_, '_, '_> {
         end();
         let rss_after = peak_rss();
         let peak = accounting::peak();
+        let diagnostics = self.context.pending_error_count();
         let inspection = inspect.then(|| {
             let arena = Bump::new();
             let mut text = unit
@@ -115,7 +116,7 @@ impl StudyPrepared<'_, '_, '_> {
                 .to_owned();
             text.push_str("\n=== diagnostics ===\n");
             let mut renderer = Renderer::new(ColorChoice::Plain);
-            for error in self.context.pending_errors.iter() {
+            while let Some(error) = self.context.pop_pending_error() {
                 let diagnostic = error.diagnostic_in(self.context, error.source_vectors(), &arena);
                 text.push_str(renderer.render_text(&diagnostic, self.context));
             }
@@ -125,7 +126,7 @@ impl StudyPrepared<'_, '_, '_> {
             nanoseconds: elapsed.as_nanos(),
             tokens,
             roots: unit.external_declarations().len(),
-            diagnostics: self.context.pending_error_count(),
+            diagnostics,
             parse_bytes: self.parse.high_water(),
             tu_bytes: self.tu.high_water() - tu_before,
             peak_commit_bytes: peak.committed - live_before.committed,
