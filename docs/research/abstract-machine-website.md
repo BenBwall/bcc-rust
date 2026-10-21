@@ -142,13 +142,21 @@ initialization and control semantics.
 
 The sibling study at
 `../ir-design-study/docs/research/ir-redesign.md` is read-only input. Its
-initial recommendation is an executable, object-aware C IR above the current
+recommendation is an executable, object-aware C IR above the current
 scalar CFG, preserving C undefined operations, indeterminate representations,
 sequencing and lifetimes before erasure. That aligns with this boundary:
 the site would execute the C layer in diagnostic mode; native and LLVM
 pipelines would lower it to the current scalar/ABI layers. Merely changing
 opcode names or removing poison from the low IR would not restore lost C
 information. The proposed C layer is not a dependency of the overnight demo.
+
+The latest sibling study makes this shared event vocabulary concrete:
+`SourceEnter`, `ObjectBegin`, `Read/Write`, `Choice`, `SequenceBoundary`,
+`Call/Return`, `ObjectEnd`, and `Undefined`, with declaration/activation/generation
+identities and retained origins. Agree on those events and semantic litmus
+cases first. Keep browser snapshots and undo outside CModule instructions;
+replace this prototype's syntax adapter when the shared C layer is ready.
+The sibling study includes no runtime prototype or performance validation yet.
 
 The native default pipeline should remain unchanged until that research has
 its own reviewed migration. Add trace sinks as optional observers, rather
@@ -464,9 +472,15 @@ Commands below run from this worktree root. Every Cargo invocation used
   A later final feature-enabled lint pass is still planned.
 - Static page checks: HTML IDs are unique, all literal renderer/control
   element references exist, and local assets/module imports resolve.
-- Worker-proxy missing-artifact check: the actual Worker/proxy modules pass
-  an explicit missing-wasm setup error to the caller, without execution.
-  This uses a Node messaging/fetch shim, not a browser rendering test.
+- `node --experimental-default-type=module web/worker-check.mjs`: passed
+  against real wasm. The actual Worker/proxy modules compile and execute the
+  tour to `15`, report rejected source, reload a program returning `42`, and
+  reject pending/future requests after cancellation. `--missing` also passes
+  the explicit missing-artifact setup-error path. This uses a Node
+  messaging/fetch shim, not a browser rendering test.
+- Local HTTP checks: page, JS modules, CSS and wasm returned 200; the wasm
+  content type was `application/wasm` and its binary header was valid.
+- `cargo +nightly fmt --check`: passed.
 
 Engine, final wasm, and integrated web execution checks are still in progress.
 An initial wasm Clippy pass found bridge style lints; those must be fixed and
