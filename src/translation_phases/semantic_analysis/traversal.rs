@@ -79,6 +79,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => None,
                 };
                 if live.is_some() {
+                    if !branch {
+                        self.work.push(Work::FunctionWork(FunctionWork::ScalarLogicalEnd(e)));
+                    }
+                    // The scalar logical visitor emits its nonconstant left
+                    // operand through EmitBranchOnBoolExpr too. Its nested
+                    // logical operands therefore share the branch policy.
+                    self.branch_condition(left_expression);
                     self.work
                         .push(Work::FunctionWork(FunctionWork::RestoreElided(
                             self.functions.elided,

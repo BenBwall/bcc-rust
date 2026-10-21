@@ -55,6 +55,87 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// A side-effect-free condition built solely from constants, addresses
+    /// and const-object reads may need a fold the emission evaluator does
+    /// not implement. This is a retention capability test, never a value or
+    /// branch-selection rule. Required and used locals remain observable.
+    /// C99: §6.6p10, p. 96; PDF p. 108; optional retention follows Clang.
+    pub(in crate::translation_phases::semantic_analysis) fn potential_constant_condition(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) -> bool {
+        if !self.effects_pure(expression, super::super::EffectContext::Value) {
+            return false;
+        }
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push((expression, false));
+        while let Some((e, done)) = work.pop() {
+            let key = std::ptr::from_ref(e).addr();
+            if self
+                .functions
+                .emission
+                .potential_constants
+                .contains_key(&key)
+            {
+                continue;
+            }
+            let leaf = match e.kind {
+                ExpressionType::Constant(_) | ExpressionType::StringLiteral(_)
+                | ExpressionType::SizeofExpr(_) | ExpressionType::SizeofType(_)
+                | ExpressionType::AlignofExpr(_) | ExpressionType::AlignofType(_) => Some(true),
+                ExpressionType::Identifier(_) => Some(self.expression_info(e).binding.is_some_and(|b| {
+                    matches!(self.bindings[b].kind, super::super::BindingKind::Function | super::super::BindingKind::Enumerator)
+                        || (self.bindings[b].kind == super::super::BindingKind::Object && { let q = self.types.object_qualifiers(self.bindings[b].ty);
+                        q.contains(crate::translation_phases::parsing::declaration_syntax::TypeQualifiers::CONST)
+                        && !q.contains(crate::translation_phases::parsing::declaration_syntax::TypeQualifiers::VOLATILE) })
+                })),
+                ExpressionType::Unary { operator: UnaryOperator::AddressOf, operand_expression } =>
+                    Some(self.expression_info(operand_expression).static_address),
+                ExpressionType::StatementExpression(_) => Some(false),
+                ExpressionType::Call { function_expression, .. } => {
+                    let query = self.expression_info(function_expression).binding.is_some_and(|b|
+                        self.bindings[b].origin == super::super::BindingOrigin::Intrinsic(crate::builtins::BuiltinId::ConstantP));
+                    (!query).then_some(false)
+                }
+                _ => None,
+            };
+            if let Some(value) = leaf {
+                _ = self
+                    .functions
+                    .emission
+                    .potential_constants
+                    .insert(key, value);
+            } else if done {
+                let mut value = true;
+                super::labels::expression_children(self.scratch, e, |child| {
+                    value &= self
+                        .functions
+                        .emission
+                        .potential_constants
+                        .get(&std::ptr::from_ref(child).addr())
+                        .copied()
+                        .unwrap_or(false);
+                });
+                _ = self
+                    .functions
+                    .emission
+                    .potential_constants
+                    .insert(key, value);
+            } else {
+                work.push((e, true));
+                super::labels::expression_children(self.scratch, e, |child| {
+                    work.push((child, false))
+                });
+            }
+        }
+        self.functions
+            .emission
+            .potential_constants
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Clang's scalar visitor alone folds a conditional's unselected arm.
     /// C99: §6.5.15p3-6, pp. 90-91; PDF pp. 102-103.
     pub(in crate::translation_phases::semantic_analysis) fn scalar_conditional_emission(
@@ -180,7 +261,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    fn elide_branch_operand(&mut self, e: &'tu Expression<'tu>) {
+    pub(in crate::translation_phases::semantic_analysis) fn elide_branch_operand(
+        &mut self,
+        e: &'tu Expression<'tu>,
+    ) {
         let Some(Some((start, end))) = self
             .functions
             .emission

@@ -48,6 +48,7 @@ use crate::{
 /// shared diagnostic interface; a case ABI lowering does not handle names
 /// its function.
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+#[cfg(test)]
 pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
@@ -57,15 +58,17 @@ pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     profile: Profile,
     copies: InlineCopies,
 ) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
-    lower_translation_unit_with_locals(
-        context,
-        syntax,
-        sema,
-        arena,
-        optimizer,
-        profile,
-        (copies, true),
-    )
+    with_optional_retention(true, |retain_locals| {
+        lower_translation_unit_with_locals(
+            context,
+            syntax,
+            sema,
+            arena,
+            optimizer,
+            profile,
+            (copies, retain_locals),
+        )
+    })
 }
 
 /// Retry the diagnosed pipeline without optional O0 local retention when a
@@ -88,27 +91,15 @@ pub(crate) fn lower_translation_unit_with_locals<'tu, 'ir>(
         mut module,
         function_sources,
         call_diagnostics,
-    } = if retain_locals {
-        crate::lowering::lower_with_sources(
-            context,
-            syntax,
-            sema,
-            target,
-            arena,
-            &mut scratch,
-            copies == InlineCopies::Keep,
-        )
-    } else {
-        crate::lowering::lower_with_emission(
-            context,
-            syntax,
-            sema,
-            target,
-            arena,
-            &mut scratch,
-            (copies == InlineCopies::Keep, false),
-        )
-    }
+    } = crate::lowering::lower_with_emission(
+        context,
+        syntax,
+        sema,
+        target,
+        arena,
+        &mut scratch,
+        (copies == InlineCopies::Keep, retain_locals),
+    )
     .map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {
         scratch.reset();
@@ -136,6 +127,21 @@ pub(crate) fn lower_translation_unit_with_locals<'tu, 'ir>(
         call_diagnostics,
         retained_diagnostics,
     })
+}
+
+/// Optional retention is speculative across the complete caller-owned
+/// capability pipeline. A refusal retries once with only required roots.
+/// The caller must finish preparation before committing output or running
+/// user code. Required and `used` roots remain in the second attempt.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23; best-effort retention follows Clang.
+pub(crate) fn with_optional_retention<T, E>(
+    retain_locals: bool,
+    mut attempt: impl FnMut(bool) -> Result<T, E>,
+) -> Result<T, E> {
+    match attempt(retain_locals) {
+        | Err(_) if retain_locals => attempt(false),
+        | result => result,
+    }
 }
 
 /// Internal module-only adapter. Callers that report diagnostics use the

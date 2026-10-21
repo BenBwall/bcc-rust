@@ -27,6 +27,159 @@ mod tests {
     use crate::native::run_native;
 
     #[test]
+    fn optional_retention_covers_all_preparation_refusals() {
+        for source in [
+            "struct S{unsigned:32;unsigned:32;int x;};static int h(struct S s){return s.x;} int \
+             main(void){static int(*p)(struct S)=h;return 0;}",
+            "struct S{char a[4294967296ULL];};static int h(struct S s){return 0;} int \
+             main(void){static int(*p)(struct S)=h;return 0;}",
+            "static int h(void){char a[4294967296ULL];return 0;} int main(void){static \
+             int(*p)(void)=h;return 0;}",
+            "static int h(void){char a[1073741825ULL];return 0;} int main(void){static \
+             int(*p)(void)=h;return 0;}",
+            "int main(void){static int x __attribute__((section(\"a b\"),aligned(32)))=0;return \
+             0;}",
+            "int main(void){static char huge[536870912];return 0;}",
+        ] {
+            assert_runs_like_clang(source);
+        }
+        for attribute in ["__attribute__((used))", ""] {
+            let source = format!(
+                "struct S{{unsigned:32;unsigned:32;int x;}};static int h(struct S s){{return \
+                 s.x;}} int main(void){{static int(*p)(struct S) {attribute}=h;return {};}}",
+                if attribute.is_empty() {
+                    "p((struct S){0})"
+                } else {
+                    "0"
+                },
+            );
+            for flags in [
+                &["--emit=ir-abi"][..],
+                &["--backend=native", "--emit=asm"][..],
+                &["--interpret"][..],
+            ] {
+                let output = bcc(&source, flags);
+                assert!(!output.status.success(), "{flags:?}: {source}");
+                assert!(
+                    text(&output.stderr).contains("first eightbyte"),
+                    "{}",
+                    text(&output.stderr)
+                );
+            }
+        }
+        let output = bcc(
+            "int main(void){static char huge[536870912] __attribute__((used));return 0;}",
+            &["--interpret"],
+        );
+        assert_eq!(output.status.code(), Some(70));
+        assert!(text(&output.stderr).contains("global is larger"));
+    }
+
+    #[test]
+    fn unmodeled_constant_folds_keep_optional_storage_best_effort() {
+        for condition in [
+            "&x==&y",
+            "!__builtin_constant_p((char*)8)",
+            "!__builtin_constant_p((long)\"a\"+1-1)",
+        ] {
+            assert_runs_like_clang(&format!(
+                "int x,y;extern int missing;int main(void){{if({condition}){{static int b \
+                 __attribute__((section(\".bss.bad\")))=1;static int*p=&missing;}}return 0;}}"
+            ));
+            assert_runs_like_clang_with_linker_symbols(&format!(
+                "int printf(const char*,...);int x,y;extern int __start_tbl[],__stop_tbl[]; \
+                 static int anchor __attribute__((used,section(\"tbl\")))=1; int \
+                 main(void){{if({condition}){{static int entry \
+                 __attribute__((section(\"tbl\")))=2;}} \
+                 printf(\"%ld\\n\",(long)(__stop_tbl-__start_tbl));return 0;}}"
+            ));
+        }
+        // Required storage retains its diagnostic even under an unmodeled
+        // fold; the best-effort policy only removes optional roots.
+        let output = bcc(
+            "int x,y;int main(void){if(&x==&y){static int b \
+             __attribute__((used,section(\".bss.bad\")))=1;}return 0;}",
+            &["--emit=llvm"],
+        );
+        assert!(!output.status.success());
+        assert!(text(&output.stderr).contains("BSS section"));
+    }
+
+    #[test]
+    fn nested_constant_queries_keep_values_through_wrappers() {
+        for operand in [
+            "+__builtin_constant_p(g)",
+            "!__builtin_constant_p(g)",
+            "(long)__builtin_constant_p(g)",
+            "__builtin_constant_p(g)+1",
+            "__builtin_constant_p(g)*2",
+            "__builtin_constant_p(g)==0",
+            "__builtin_constant_p(g)?2:3",
+            "__builtin_choose_expr(1,__builtin_constant_p(g),g)",
+        ] {
+            assert_runs_like_clang(&format!(
+                "int g; enum {{ q=__builtin_constant_p({operand}) }}; \
+                 _Static_assert(q==1,\"nested query\"); int main(void){{return \
+                 __builtin_constant_p({operand})!=q;}}"
+            ));
+        }
+    }
+
+    #[test]
+    fn comma_constant_queries_distinguish_emitted_constants_and_loads() {
+        assert_runs_like_clang(
+            "int g;int main(void){return __builtin_constant_p((g,__builtin_strlen(\"a\")));}",
+        );
+        // Clang O0 emits a load; Clang O2 can optimize it to a constant.
+        // This compiler conservatively keeps the O0 answer on these arms.
+        for value in ["(int){1}", "(int[]){1}[0]", "(int){1}+0"] {
+            assert_run_arms(
+                &format!("int g;int main(void){{return __builtin_constant_p((g,{value}));}}"),
+                false,
+                Some(b""),
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_conditional_statement_expression_tails_stay_typed() {
+        for selection in [
+            "0?({(struct S){1};}):(struct S){2}",
+            "1?(struct S){2}:({(struct S){1};})",
+        ] {
+            assert_runs_like_clang(&format!(
+                "struct S{{int a;}};int main(void){{struct S s={selection};return s.a-2;}}"
+            ));
+        }
+    }
+
+    #[test]
+    fn scalar_logical_left_operands_use_branch_emission() {
+        for body in [
+            "return (v&&(0&&h()))&&v;",
+            "do {} while((v&&(0&&h()))&&v);return 0;",
+        ] {
+            let template = format!(
+                "static int h(void){{STATIC return a;}} int f(int v){{{body}}} int \
+                 main(void){{return f(1);}}"
+            );
+            assert_o0_static_emission(&template, true);
+            assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+        }
+    }
+
+    #[test]
+    fn folded_if_conditions_omit_their_local_definitions() {
+        for condition in ["0&&({STATIC 1;})", "1||({STATIC 0;})", "1?0:({STATIC 1;})"] {
+            let template = format!("int main(void){{if({condition})return 0;return 0;}}");
+            assert_o0_static_emission(&template, false);
+            assert_runs_like_clang(
+                &template.replace("STATIC", "extern int missing;static int *p=&missing;"),
+            );
+        }
+    }
+
+    #[test]
     fn aggregate_and_complex_conditionals_keep_both_operands_emitted() {
         for (definitions, selected, omitted) in [
             (

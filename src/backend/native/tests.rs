@@ -9,6 +9,25 @@ mod operands;
 mod programs;
 mod selection;
 
+#[test]
+fn global_reference_collection_has_linear_work() {
+    for count in [128, 1024, 8192] {
+        let mut ir = String::new();
+        for i in 0..count {
+            use std::fmt::Write as _;
+            writeln!(ir, "global @g{i} internal size 4, align 4 = zero").unwrap();
+        }
+        let arena = Bump::new();
+        let module = parse_module(&arena, &ir).unwrap();
+        let references = super::support::GlobalReferences::collect(&module, &arena);
+        assert_eq!(references.visits, count);
+        for (id, _) in module.globals() {
+            assert!(references.unused_internal_global(&module, id));
+        }
+        assert_eq!(references.visits, count);
+    }
+}
+
 use super::{
     conv::CallConv,
     emit,

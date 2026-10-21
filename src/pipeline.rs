@@ -35,10 +35,11 @@ use std::path::Path;
 #[cfg(test)]
 pub(crate) use middle_end::lower_translation_unit;
 pub(crate) use middle_end::{
+    DiagnosedModule,
     InlineCopies,
     MiddleEndError,
-    lower_translation_unit_diagnosed,
     lower_translation_unit_with_locals,
+    with_optional_retention,
 };
 pub(crate) use stages::{
     parse_with_arena,

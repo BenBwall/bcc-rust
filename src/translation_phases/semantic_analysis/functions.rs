@@ -525,6 +525,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ReferenceContextKind::ConstantQuery { emitted };
             },
             | FunctionWork::BranchOperandEnd(e, start) => self.end_branch_operand(e, start),
+            | FunctionWork::ScalarLogicalEnd(e) => {
+                if let ExpressionType::Binary {
+                    operator,
+                    left_expression,
+                    right_expression,
+                } = e.kind
+                {
+                    let live = operator == super::BinaryOperator::LogicalAnd;
+                    if self.folded_condition(left_expression) == Some(live)
+                        && !self.expression_contains_label(left_expression)
+                    {
+                        self.elide_branch_operand(left_expression);
+                        self.retain_branch_operand(e, right_expression);
+                    }
+                }
+            },
             | FunctionWork::ConditionReferences(condition, mark) => {
                 let end = self.reference_count();
                 if end > mark.start {
@@ -566,7 +582,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 outer_elided,
                 statement,
             } => {
-                let skipped = self.folded_condition(condition) == Some(!live)
+                let value = self.folded_condition(condition);
+                // Optional retention cannot rely on an unmodeled constant
+                // fold. Keep main's required closure in this scope instead
+                // of exposing its otherwise unused storage or relocations.
+                if value.is_none()
+                    && self.potential_constant_condition(condition)
+                    && !self.statement_contains_label(owner, false)
+                {
+                    _ = self.functions.optional_local_scopes.insert(self.scope, ());
+                }
+                let skipped = value == Some(!live)
                     && statement
                         .is_none_or(|statement| !self.statement_contains_label(statement, false));
                 self.functions.dead = outer.dead || skipped;
@@ -575,6 +601,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if skipped && let Some(id) = self.control.statement_id(owner) {
                     self.control.statements[id.0].generated = super::GeneratedControl::If(!live);
                     self.elide_condition_references(condition);
+                    self.elide_branch_operand(condition);
                 }
             },
             | FunctionWork::ConditionalArm {
@@ -600,10 +627,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.folded_condition(c.condition_expression)
                 };
                 let skipped = value == Some(!live) && !self.expression_contains_label(arm);
-                self.functions.dead = outer.dead || skipped;
-                self.functions.unvisited = outer.unvisited || skipped;
-                // The result type is not known until both operands are typed.
-                // Clang's aggregate and complex visitors emit both operands.
+                // Neither insertion-state omission nor whole-statement
+                // omission is known before both operands have been typed.
+                // In particular an aggregate statement-expression tail must
+                // be visited. The deferred context applies scalar omission
+                // to references and definitions once the result is known.
+                self.functions.dead = outer.dead;
+                self.functions.unvisited = outer.unvisited;
                 self.functions.elided = outer_elided;
                 if skipped {
                     self.enter_reference_context_kind(ReferenceContextKind::ConditionalArm {
@@ -1856,6 +1886,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let owner = uses.mark.owner;
         let mut index = self.next_condition_reference(owner, uses.mark.start);
         while index < uses.end {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
             let usage = &mut self.functions.uses[index];
             if usage.owner == owner {
                 usage.dead = true;
@@ -1875,10 +1909,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn next_condition_reference(&mut self, owner: Option<ReferenceOwner>, start: usize) -> usize {
         let mut end = start;
         while let Some(&next) = self.functions.condition_elisions.get(&(owner, end)) {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
             end = next;
         }
         let mut index = start;
         while let Some(&next) = self.functions.condition_elisions.get(&(owner, index)) {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
             _ = self
                 .functions
                 .condition_elisions
@@ -1899,6 +1941,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn elide_references(&mut self, range: std::ops::Range<usize>) {
         let function = self.functions.reference_function;
         for usage in &mut self.functions.uses[range] {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
             if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
             {
                 usage.dead = true;
@@ -2352,6 +2398,7 @@ pub(super) enum FunctionWork<'tu> {
         static_data: bool,
     },
     BranchOperandEnd(&'tu Expression<'tu>, super::emission::Position),
+    ScalarLogicalEnd(&'tu Expression<'tu>),
     ConditionReferences(&'tu Expression<'tu>, ConditionMark),
     RestoreSizeof(Option<usize>),
     RestoreReferenceContext(Option<usize>),
@@ -2664,42 +2711,48 @@ pub(super) struct State<'tu, 's> {
     /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
+    pub(super) optional_local_scopes: ArenaMap<'s, usize, ()>,
     condition_uses: ArenaMap<'s, usize, ConditionUses>,
     /// Owner-specific successor links for uses already condition-elided.
     condition_elisions: ArenaMap<'s, (Option<ReferenceOwner>, usize), usize>,
+    #[cfg(test)]
+    pub(super) condition_reference_steps: usize,
 }
 
 impl<'s> State<'_, 's> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            reference_context:       None,
-            reference_contexts:      ArenaVec::new_in(scratch),
-            reference_function:      None,
-            initializer:             None,
-            current:                 None,
-            next_function:           0,
-            old_names:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            old_types:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:                    ArenaVec::new_in(scratch),
+            reference_context: None,
+            reference_contexts: ArenaVec::new_in(scratch),
+            reference_function: None,
+            initializer: None,
+            current: None,
+            next_function: 0,
+            old_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses: ArenaVec::new_in(scratch),
             external_redeclarations: ArenaVec::new_in(scratch),
-            evaluated_imports:       &[],
-            sizeof_contexts:         ArenaVec::new_in(scratch),
-            sizeof:                  None,
-            dead:                    false,
-            elided:                  false,
-            unvisited:               false,
-            switch_dead:             false,
-            emission:                super::emission::State::new(scratch),
-            arm_ends:                ArenaVec::new_in(scratch),
-            generated_breaks:        ArenaVec::new_in(scratch),
-            inline_objects:          ArenaVec::new_in(scratch),
-            outside:                 [None; 2],
-            generic_marks:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            definition_contexts:     ArenaVec::new_in(scratch),
-            condition_uses:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            condition_elisions:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            evaluated_imports: &[],
+            sizeof_contexts: ArenaVec::new_in(scratch),
+            sizeof: None,
+            dead: false,
+            elided: false,
+            unvisited: false,
+            switch_dead: false,
+            emission: super::emission::State::new(scratch),
+            arm_ends: ArenaVec::new_in(scratch),
+            generated_breaks: ArenaVec::new_in(scratch),
+            inline_objects: ArenaVec::new_in(scratch),
+            outside: [None; 2],
+            generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            definition_contexts: ArenaVec::new_in(scratch),
+            optional_local_scopes: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            condition_uses: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            condition_elisions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            #[cfg(test)]
+            condition_reference_steps: 0,
         }
     }
 }

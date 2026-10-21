@@ -108,6 +108,13 @@ impl SemanticTranslationUnit<'_> {
         // Scope parents precede their children. Resolve each scope's nearest
         // function once, including nested blocks, without walking ancestors
         // for every local. C99 §6.2.1p4, pp. 29-30; PDF pp. 41-42.
+        let mut optional_scopes = ArenaVec::new_in(arena);
+        for (index, scope) in self.scopes.iter().enumerate() {
+            optional_scopes.push(
+                !self.optional_local_scopes.contains_key(&index)
+                    && scope.parent.is_none_or(|parent| optional_scopes[parent]),
+            );
+        }
         let mut owners = ArenaVec::new_in(arena);
         owners.resize(self.scopes.len(), None);
         for function in self.functions {
@@ -135,7 +142,9 @@ impl SemanticTranslationUnit<'_> {
                 definition.kind,
                 DefinitionKind::Object | DefinitionKind::Tentative
             ) || definition.elided
-                || ((!retain_locals || context.configuration.optimization().0)
+                || ((!retain_locals
+                    || context.configuration.optimization().0
+                    || !optional_scopes[self.bindings[definition.binding].scope])
                     && !used(definition.binding))
             {
                 continue;

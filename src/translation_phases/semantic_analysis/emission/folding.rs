@@ -224,25 +224,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             && !self.constant_query_value(operand, 0, QueryContext::Control)
     }
 
-    fn is_constant_query(&self, mut expression: &'tu Expression<'tu>) -> bool {
-        while let ExpressionType::Parenthesized { expression: child } = expression.kind {
-            expression = child;
-        }
-        let ExpressionType::Call {
-            function_expression,
-            ..
-        } = expression.kind
-        else {
-            return false;
-        };
-        self.expression_info(function_expression)
-            .binding
-            .is_some_and(|binding| {
-                self.bindings[binding].origin
-                    == super::super::BindingOrigin::Intrinsic(BuiltinId::ConstantP)
-            })
-    }
-
     /// The value of `expression` as Clang's evaluator computes it, if it
     /// does; memoized, since conditions nest (see [`Memo`]).
     fn evaluate_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
@@ -1427,7 +1408,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !scalar {
             return false;
         }
-        (context != QueryContext::Control && self.is_constant_query(operand))
+        // Nested queries are integer constant expressions, including under
+        // arithmetic, casts and selected wrappers. Their semantic value is
+        // available here even when control evaluation deliberately stays
+        // unknown. Do not use this shortcut in the control evaluator.
+        (context != QueryContext::Control
+            && self.expression_info(operand).ice
+            && self.expression_info(operand).integer.is_some())
             || self.constant_query_string_address(operand)
             || (context == QueryContext::Runtime && self.discarded_comma_constant(operand, depth))
             || (match self.evaluate_value(operand, depth) {
@@ -1460,20 +1447,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         };
         self.real(self.expression_info(operand).ty)
             && !self.has_side_effects(left_expression)
-            && (self.discarded_comma_constant(right_expression, depth + 1)
-                || matches!(
-                    self.evaluate_value(right_expression, depth + 1),
-                    Some(Value::Integer(_) | Value::Floating(_))
-                ))
+            && (self.discarded_comma_constant(right_expression, depth + 1) || {
+                let info = self.expression_info(right_expression);
+                info.constant == ConstantClass::Arithmetic
+                    && (info.integer.is_some() || info.floating.is_some())
+            })
     }
 
     /// Whether evaluating `operand` reads through a non-`const` array
     /// compound literal, outside `sizeof` and `_Alignof`.
     /// C99: §6.5.2.5 paragraph 4, p. 75; PDF p. 87.
-    fn reads_array_literal(&mut self, operand: &'tu Expression<'tu>) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn reads_array_literal(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         work.push((operand, false));
         while let Some((expression, done)) = work.pop() {
+            #[cfg(test)]
+            {
+                self.functions.emission.array_scan_steps += 1;
+            }
             let key = std::ptr::from_ref(expression).addr();
             if self
                 .functions

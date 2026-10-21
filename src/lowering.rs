@@ -160,6 +160,7 @@ const ENTITY_FACTS: &str = "entity facts checked by Unit::new: every function an
 /// `plain_inline`, plain inline-only bodies are lowered as copies for LLVM's
 /// optimizing pipelines ([`Unit::lower_plain_inline_bodies`]).
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+#[cfg(test)]
 pub(crate) fn lower_with_sources<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
@@ -169,15 +170,17 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
     scratch: &mut Bump,
     plain_inline: bool,
 ) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
-    lower_with_emission(
-        context,
-        syntax,
-        sema,
-        target,
-        arena,
-        scratch,
-        (plain_inline, true),
-    )
+    crate::pipeline::with_optional_retention(true, |retain_locals| {
+        lower_with_emission(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            scratch,
+            (plain_inline, retain_locals),
+        )
+    })
 }
 
 /// The same lowering contract, with optional O0 local storage controlled by
@@ -213,7 +216,6 @@ pub(crate) fn lower_with_emission<'tu, 'ir>(
         (plain_inline, retain_locals),
     );
     // Optional inline bodies cannot refuse an otherwise supported unit.
-    let plain_inline = plain_inline && !copied;
     if result.is_err() && copied {
         result = lower_unit(
             context,
@@ -223,30 +225,6 @@ pub(crate) fn lower_with_emission<'tu, 'ir>(
             arena,
             scratch,
             (false, retain_locals),
-        )
-        .0;
-    }
-    // Retaining an unused local, or an implementation reached only through
-    // its initializer, must not expose a backend limitation main avoided.
-    // Semantic diagnostics (including nonzero BSS bytes) have already run.
-    if result.as_ref().is_err_and(|errors| {
-        errors.errors.iter().any(|error| {
-            matches!(
-                error.kind,
-                LoweringErrorKind::Unsupported(_)
-                    | LoweringErrorKind::UnmodeledType(_)
-                    | LoweringErrorKind::UnanalyzedType
-            )
-        })
-    }) {
-        result = lower_unit(
-            context,
-            syntax,
-            sema,
-            target,
-            arena,
-            scratch,
-            (plain_inline, false),
         )
         .0;
     }

@@ -56,6 +56,8 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) function_extensions:     super::FunctionExtensions<'tu>,
     pub(crate) types:                   Types<'tu>,
     pub(crate) bindings:                &'tu [Binding],
+    /// Unmodeled constant-control scopes keep only required/used locals.
+    pub(super) optional_local_scopes:   ArenaMap<'tu, usize, ()>,
     pub(crate) definitions:             &'tu [Definition],
     /// The file-scope declarations, in source order, that make an inline
     /// function body seen before them an external definition (C99

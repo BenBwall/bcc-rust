@@ -61,10 +61,7 @@ pub(crate) use driver::{
     build_object,
     object_writer,
 };
-pub(crate) use support::{
-    Unsupported,
-    check_module,
-};
+pub(crate) use support::Unsupported;
 
 use self::{
     conv::CallConv,
@@ -255,9 +252,10 @@ fn emit<'m>(
     {
         return Err(NativeError::SharedLibraryCode);
     }
-    check_module(module, target)?;
-    let conv = CallConv::of(target);
     let stubs = Bump::new();
+    let references = support::GlobalReferences::collect(module, &stubs);
+    support::check_module(module, target, &references)?;
+    let conv = CallConv::of(target);
     let mut emitter = Emitter::new(module, target, out, &stubs);
     emitter.header()?;
     let mut scratch = Bump::new();
@@ -283,7 +281,7 @@ fn emit<'m>(
         }
         scratch.reset();
     }
-    emitter.globals()?;
+    emitter.globals(&references)?;
     Ok(())
 }
 
