@@ -132,6 +132,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             syntax: super::SyntaxLog::default(),
             syntax_nodes: 0,
             emitted_roots: RegionVec::new(),
+            root_ends: RegionVec::new(),
             scopes,
             label_scopes: LabelScopes::new_in(arena),
             func_name: None,

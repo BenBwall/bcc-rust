@@ -181,9 +181,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
     pub(crate) fn parse_translation_unit(mut self) -> ParsedTranslationUnit<'tu> {
         while let Some(root) = self.drive() {
             self.emitted_roots.push(root);
+            self.root_ends.push(self.cursor.consumed);
         }
         ParsedTranslationUnit {
             roots: self.emitted_roots,
+            ends:  self.root_ends,
         }
     }
 
@@ -199,6 +201,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     pub(crate) fn next_item(&mut self) -> Option<ExternalDeclaration<'tu>> {
         let root = self.drive()?;
         self.emitted_roots.push(root);
+        self.root_ends.push(self.cursor.consumed);
         Some(root)
     }
 
@@ -442,6 +445,8 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     /// they grow in place in their own region instead of the parse arena.
     /// The finished vector becomes the parsed unit's, without a copy.
     emitted_roots: RegionVec<ExternalDeclaration<'tu>>,
+    /// The tokens consumed through each emitted root's last one.
+    root_ends: RegionVec<usize>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
     ///
     /// C99: scopes are §6.2.1, pp. 29-30; PDF pp. 41-42; typedef-name is

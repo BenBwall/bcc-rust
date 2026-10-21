@@ -23,9 +23,9 @@
 //! builtins, and `strlen` of a string. Any other call, an assignment, an
 //! increment, a volatile or other object read, a declaration in a statement
 //! expression and anything this model does not know do not fold. An entity
-//! is weak when `#pragma weak` or any file-scope declaration before its
-//! definition makes it so, wherever it is: Clang emits some bodies after
-//! the whole unit. A value
+//! is weak when `#pragma weak` or a declaration before its definition makes
+//! it so, before the end of the body for a function Clang emits where it is
+//! defined, and anywhere for one it emits after the whole unit. A value
 //! that is a whole result (`?:` operands, initializers) holds no address of
 //! an automatic, thread-local or `dllimport` object, which
 //! `CheckLValueConstantExpression` refuses.
@@ -170,28 +170,58 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// The value of `expression` as Clang's evaluator computes it, if it
-    /// does; memoized, since conditions nest. A value that [`DEPTH`] cut
-    /// short is kept only for queries at least as deep: a shallower one
-    /// computes it again, so a fold does not depend on which query came
-    /// first.
+    /// does; memoized, since conditions nest (see [`Memo`]).
     fn evaluate_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
         let key = std::ptr::from_ref(expression).addr();
-        if let Some(&(value, cut)) = self.functions.emission.folded.get(&key)
-            && cut.is_none_or(|cut| depth >= cut)
+        if let Some(&memo) = self.functions.emission.folded.get(&key)
+            && self.memo_holds(&memo, depth)
         {
-            self.functions.emission.depth_cut |= cut.is_some();
-            return value;
+            return memo.value;
         }
-        let outer = std::mem::take(&mut self.functions.emission.depth_cut);
+        let outer = self.begin_memo();
         let value = self.compute_value(expression, depth);
-        let cut = self.functions.emission.depth_cut;
-        _ = self
-            .functions
-            .emission
-            .folded
-            .insert(key, (value, cut.then_some(depth)));
-        self.functions.emission.depth_cut = outer || cut;
+        let memo = self.end_memo(outer, value, depth);
+        _ = self.functions.emission.folded.insert(key, memo);
         value
+    }
+
+    /// Whether `memo` holds for a query at `depth` here, which then depends
+    /// on what it did.
+    fn memo_holds<T>(&mut self, memo: &Memo<T>, depth: u32) -> bool {
+        let emission = &mut self.functions.emission;
+        let holds = memo.cut.is_none_or(|cut| depth >= cut)
+            && memo
+                .horizon
+                .is_none_or(|horizon| horizon == emission.weak_horizon);
+        if holds {
+            emission.depth_cut |= memo.cut.is_some();
+            emission.weak_read |= memo.horizon.is_some();
+        }
+        holds
+    }
+
+    /// Begins a computation to memoize: what the enclosing one depended on.
+    fn begin_memo(&mut self) -> (bool, bool) {
+        let emission = &mut self.functions.emission;
+        (
+            std::mem::take(&mut emission.depth_cut),
+            std::mem::take(&mut emission.weak_read),
+        )
+    }
+
+    /// Ends a computation of `value` at `depth` begun by
+    /// [`Self::begin_memo`], whose state was `outer`: its memo, which the
+    /// enclosing computation also depends on.
+    fn end_memo<T>(&mut self, outer: (bool, bool), value: T, depth: u32) -> Memo<T> {
+        let emission = &mut self.functions.emission;
+        let memo = Memo {
+            value,
+            cut: emission.depth_cut.then_some(depth),
+            horizon: emission.weak_read.then_some(emission.weak_horizon),
+        };
+        emission.depth_cut |= outer.0;
+        emission.weak_read |= outer.1;
+        memo
     }
 
     fn compute_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
@@ -733,17 +763,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// selects no union member, copies no structure, repeats nothing (a GNU
     /// range) and leaves nothing unmodeled. Computed once per object, so a
     /// read costs a search rather than a pass over the plan; kept as
-    /// [`Self::evaluate_value`] keeps a value that [`DEPTH`] cut short.
+    /// [`Self::evaluate_value`] keeps a value ([`Memo`]).
     fn plan_cover(&mut self, binding: usize, depth: u32) -> Option<Cover<'s>> {
-        if let Some(&(cover, cut)) = self.functions.emission.plan_covers.get(&binding)
-            && cut.is_none_or(|cut| depth >= cut)
+        if let Some(&memo) = self.functions.emission.plan_covers.get(&binding)
+            && self.memo_holds(&memo, depth)
         {
-            self.functions.emission.depth_cut |= cut.is_some();
-            return cover;
+            return memo.value;
         }
         let initializer = *self.functions.emission.constant_aggregates.get(&binding)?;
         let plan = *self.initializers.plan(initializer)?;
-        let outer = std::mem::take(&mut self.functions.emission.depth_cut);
+        let outer = self.begin_memo();
         let mut readable = true;
         for value in plan.values {
             if self.initializer_value(value.expression, depth).is_none() {
@@ -751,8 +780,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 break;
             }
         }
-        let cut = self.functions.emission.depth_cut;
-        self.functions.emission.depth_cut = outer || cut;
+        let memo = self.end_memo(outer, (), depth);
         let mut cover = ArenaVec::new_in(self.scratch);
         for (index, operation) in plan.operations.iter().enumerate() {
             if !readable {
@@ -785,11 +813,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             );
         }
         let cover: Option<Cover<'s>> = readable.then(|| &*cover.leak());
-        _ = self
-            .functions
-            .emission
-            .plan_covers
-            .insert(binding, (cover, cut.then_some(depth)));
+        _ = self.functions.emission.plan_covers.insert(
+            binding,
+            Memo {
+                value:   cover,
+                cut:     memo.cut,
+                horizon: memo.horizon,
+            },
+        );
         cover
     }
 
@@ -943,16 +974,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// while GNU modes fold a weak `const` object's value; or it holds
     /// floating `+`, `-`, `*` or `/` with a NaN result, which Clang's
     /// evaluator notes as undefined (`handleFloatFloatBinOp`), so that
-    /// `ConstantFoldsToSimpleInteger` and `isEvaluatable` refuse it.
+    /// `ConstantFoldsToSimpleInteger` and `isEvaluatable` refuse it. The
+    /// operand of `sizeof`, `alignof` or `_Countof` does not count: the
+    /// evaluator reads only its type.
+    /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92.
     fn refolds(&mut self, expression: &'tu Expression<'tu>) -> bool {
+        let outer = std::mem::take(&mut self.functions.emission.weak_read);
         let mut work = ArenaVec::new_in(self.scratch);
         work.push((expression, false));
         while let Some((current, children_done)) = work.pop() {
             let key = std::ptr::from_ref(current).addr();
-            if self.functions.emission.refolds.contains_key(&key) {
+            if self.refolds_known(key) {
                 continue;
             }
             if children_done {
+                self.functions.emission.weak_read = false;
                 let mut refolds = match current.kind {
                     | ExpressionType::Call {
                         function_expression,
@@ -987,29 +1023,61 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         .is_some_and(|value| not_a_number(value.real) || not_a_number(value.imag)),
                     | _ => false,
                 };
-                super::labels::expression_children(self.scratch, current, |child| {
-                    refolds |= self
-                        .functions
-                        .emission
-                        .refolds
-                        .get(&std::ptr::from_ref(child).addr())
-                        .copied()
-                        .unwrap_or(false);
-                });
-                _ = self.functions.emission.refolds.insert(key, refolds);
+                if !matches!(
+                    current.kind,
+                    ExpressionType::SizeofExpr(_)
+                        | ExpressionType::AlignofExpr(_)
+                        | ExpressionType::Countof(_)
+                ) {
+                    super::labels::expression_children(self.scratch, current, |child| {
+                        let (child, horizon) = self
+                            .functions
+                            .emission
+                            .refolds
+                            .get(&std::ptr::from_ref(child).addr())
+                            .copied()
+                            .unwrap_or((false, None));
+                        refolds |= child;
+                        self.functions.emission.weak_read |= horizon.is_some();
+                    });
+                }
+                let emission = &mut self.functions.emission;
+                let horizon = emission.weak_read.then_some(emission.weak_horizon);
+                _ = emission.refolds.insert(key, (refolds, horizon));
             } else {
                 work.push((current, true));
-                super::labels::expression_children(self.scratch, current, |child| {
-                    work.push((child, false));
-                });
+                // The size or alignment of an operand comes from its type,
+                // which Clang's evaluator reads whatever the operand holds.
+                if !matches!(
+                    current.kind,
+                    ExpressionType::SizeofExpr(_)
+                        | ExpressionType::AlignofExpr(_)
+                        | ExpressionType::Countof(_)
+                ) {
+                    super::labels::expression_children(self.scratch, current, |child| {
+                        work.push((child, false));
+                    });
+                }
             }
         }
-        self.functions
+        let (refolds, horizon) = self
+            .functions
             .emission
             .refolds
             .get(&std::ptr::from_ref(expression).addr())
             .copied()
-            .unwrap_or(false)
+            .unwrap_or((false, None));
+        self.functions.emission.weak_read = outer || horizon.is_some();
+        refolds
+    }
+
+    /// Whether the memoized [`Self::refolds`] answer for the expression at
+    /// address `key` holds at the current weak horizon.
+    fn refolds_known(&self, key: usize) -> bool {
+        let emission = &self.functions.emission;
+        emission.refolds.get(&key).is_some_and(|&(_, horizon)| {
+            horizon.is_none_or(|horizon| horizon == emission.weak_horizon)
+        })
     }
 
     /// The address of `operand`, when it designates an object or function
@@ -1035,23 +1103,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         Some(Value::Address(Some((self.entity_of(binding).0, 0))))
     }
 
-    /// Whether the entity of `binding` is weak for Clang's evaluator, or
-    /// may become so before Clang emits the code being analyzed: a
-    /// declaration so far makes it weak, or one anywhere in the unit
-    /// declares its name `weak` or `weak_import` at file scope, or
-    /// `#pragma weak` names it. Clang emits a deferred body, such as a
-    /// static or inline function's, only after the whole unit.
+    /// Whether the entity of `binding` is weak for Clang's evaluator when
+    /// Clang emits the code being analyzed: a declaration so far makes it
+    /// weak, or a declaration or `#pragma weak` before the weak horizon
+    /// names it ([`super::State::weak_horizon`]). Clang emits an external
+    /// function that is not inline right after its body, and a deferred
+    /// body, such as a static or inline function's, after the whole unit.
     /// GNU extension: GCC manual, "Common Function Attributes", `weak`, and
     /// "Weak Pragmas".
     fn may_be_weak(&mut self, binding: usize) -> bool {
         let data = self.bindings[binding];
-        data.linkage != Linkage::None
-            && (self
-                .functions
-                .emission
-                .weak_names
-                .contains_key(&data.name.name)
-                || self.declared_weak(binding))
+        if data.linkage == Linkage::None {
+            return false;
+        }
+        let emission = &mut self.functions.emission;
+        if let Some(&from) = emission.weak_names.get(&data.name.name) {
+            emission.weak_read = true;
+            if from < emission.weak_horizon {
+                return true;
+            }
+        }
+        self.declared_weak(binding)
     }
 
     /// The builtins Clang's evaluator folds that a condition may call:
@@ -1311,21 +1383,30 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Records the names [`Self::may_be_weak`] reads before the unit is
-    /// analyzed: those of `#pragma weak`, and those of the file-scope
-    /// declarations in `roots` that write `weak` or `weak_import` before
-    /// any definition of the name. Clang drops such an attribute after a
-    /// definition (`checkNewAttributesAfterDef`), while the pragma also
-    /// applies to an entity already defined.
+    /// analyzed, each with the output-token ordinal from which it is weak:
+    /// those of `#pragma weak`, where it appears, and those that a
+    /// declaration in `roots`, at file or block scope, declares `weak` or
+    /// `weak_import` before any definition of the name, from the last token
+    /// of its root (`ends` holds the ordinal past each root). Clang drops
+    /// such an attribute after a definition (`checkNewAttributesAfterDef`),
+    /// while the pragma also applies to an entity already defined. Block
+    /// scopes are read only when the unit spells such an attribute.
     pub(in crate::translation_phases::semantic_analysis) fn record_weak_names(
         &mut self,
         roots: &[ExternalDeclaration<'tu>],
+        ends: &[usize],
     ) {
         for index in 0..self.context.weak_pragmas.len() {
-            let name = self.context.weak_pragmas[index];
-            _ = self.functions.emission.weak_names.insert(name, ());
+            let (position, name) = self.context.weak_pragmas[index];
+            self.weak_from(name, position);
         }
+        let blocks = ["weak", "__weak__", "weak_import", "__weak_import__"]
+            .iter()
+            .any(|name| self.context.string_cache.get_id_from_string(name).is_some());
         let mut defined = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
-        for &root in roots {
+        let mut declarations = ArenaVec::new_in(self.scratch);
+        for (&root, &end) in roots.iter().zip(ends) {
+            let position = end.saturating_sub(1);
             let (spec, declarators) = match root {
                 | ExternalDeclaration::Declaration(declaration)
                 | ExternalDeclaration::RecoveredDeclaration(declaration) => (
@@ -1338,16 +1419,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         definition.declaration_specifiers,
                         definition.declarator,
                         &defined,
+                        position,
                     );
                     if let Some(name) = definition.declarator.identifier() {
                         _ = defined.insert(name.name, ());
+                    }
+                    if blocks {
+                        super::labels::block_declarations(
+                            self.scratch,
+                            definition.body,
+                            |declaration| declarations.push(declaration),
+                        );
+                        for declaration in declarations.drain(..) {
+                            for init in declaration.init_declarators.as_slice() {
+                                self.record_weak_name(
+                                    declaration.declaration_specifiers,
+                                    init.declarator,
+                                    &defined,
+                                    position,
+                                );
+                            }
+                        }
                     }
                     continue;
                 },
                 | ExternalDeclaration::Error(_) | ExternalDeclaration::Asm(_) => continue,
             };
             for init in declarators {
-                self.record_weak_name(spec, init.declarator, &defined);
+                self.record_weak_name(spec, init.declarator, &defined, position);
                 if init.initializer.is_some()
                     && let Some(name) = init.declarator.identifier()
                 {
@@ -1357,13 +1456,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Records the name `declarator` declares when its declaration writes
-    /// `weak` or `weak_import` and no declaration in `defined` defined it.
+    /// Records that `name` is weak from output-token ordinal `position`,
+    /// unless it already is from an earlier one.
+    fn weak_from(&mut self, name: StringCacheId, position: usize) {
+        let from = self
+            .functions
+            .emission
+            .weak_names
+            .entry(name)
+            .or_insert(position);
+        *from = (*from).min(position);
+    }
+
+    /// Records the name `declarator` declares, from `position`, when its
+    /// declaration writes `weak` or `weak_import` and no declaration in
+    /// `defined` defined it.
     fn record_weak_name(
         &mut self,
         spec: DeclarationSpecifiers<'tu>,
         declarator: Declarator<'tu>,
         defined: &ArenaMap<'_, StringCacheId, ()>,
+        position: usize,
     ) {
         if !super::super::attributes::written_on(spec.extensions, declarator) {
             return;
@@ -1379,7 +1492,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .iter()
             .any(|list| super::super::attributes::weak_spelling(list, self.context));
         if weak {
-            _ = self.functions.emission.weak_names.insert(name.name, ());
+            self.weak_from(name.name, position);
         }
     }
 
@@ -1424,6 +1537,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// ([`Analyzer::plan_cover`]).
 pub(super) type Cover<'s> = &'s [(u64, u64, u32)];
 
+/// A memoized evaluator result and what it depended on: the depth of a
+/// query that [`DEPTH`] cut short, and the weak horizon of one that read a
+/// weak name ([`Analyzer::may_be_weak`]). It holds for a query at least as
+/// deep at the same horizon; another query computes it again, so a fold
+/// does not depend on which query came first.
+#[derive(Clone, Copy)]
+pub(in crate::translation_phases::semantic_analysis) struct Memo<T> {
+    value:   T,
+    cut:     Option<u32>,
+    horizon: Option<usize>,
+}
 /// A value Clang's evaluator computed.
 #[derive(Clone, Copy)]
 pub(in crate::translation_phases::semantic_analysis) enum Value {

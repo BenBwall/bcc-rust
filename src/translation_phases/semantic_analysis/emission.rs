@@ -66,6 +66,10 @@ use crate::{
 
 /// The emission model's state for the translation unit, kept beside the
 /// walk's `dead` flag.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact of the emission model's state."
+)]
 pub(super) struct State<'tu, 's> {
     /// Code generation emits the code being analyzed into a block without
     /// predecessors, which a call that does not return created during the
@@ -114,19 +118,32 @@ pub(super) struct State<'tu, 's> {
     /// The functions walked so far, by address.
     walked:                  ArenaMap<'s, usize, ()>,
     /// The values the evaluator found, by expression address, with the
-    /// depth of a query that `folding::DEPTH` cut short.
-    folded:                  ArenaMap<'s, usize, (Option<folding::Value>, Option<u32>)>,
+    /// depth of a query that `folding::DEPTH` cut short and the weak
+    /// horizon of one that read a weak name.
+    folded:                  ArenaMap<'s, usize, folding::Memo<Option<folding::Value>>>,
     /// The evaluation in progress was cut short by `folding::DEPTH`.
     depth_cut:               bool,
     /// Whether an expression holds a label, by address.
     labeled_expressions:     ArenaMap<'s, usize, bool>,
     /// Whether Clang's evaluator may fold an expression differently from
-    /// semantic analysis, by address.
-    refolds:                 ArenaMap<'s, usize, bool>,
-    /// The names that a file-scope declaration anywhere in the unit
-    /// declares `weak` or `weak_import`, or that `#pragma weak` names: a
-    /// function's body may be emitted after them.
-    weak_names:              ArenaMap<'s, StringCacheId, ()>,
+    /// semantic analysis, by address, with the weak horizon of an answer
+    /// that read a weak name.
+    refolds:                 ArenaMap<'s, usize, (bool, Option<usize>)>,
+    /// The names that a declaration anywhere in the unit declares `weak`
+    /// or `weak_import`, or that `#pragma weak` names, each with the
+    /// output-token ordinal from which it is weak (`folding.rs`).
+    weak_names:              ArenaMap<'s, StringCacheId, usize>,
+    /// The output-token ordinal past the root being analyzed.
+    pub(super) root_end:     usize,
+    /// The weak names that apply to the code being analyzed: those before
+    /// this ordinal. Clang emits an external function that no declaration
+    /// makes inline where it is defined, and every other body after the
+    /// whole unit, so this is the root's end in such a function and
+    /// unbounded elsewhere.
+    pub(super) weak_horizon: usize,
+    /// The evaluation in progress read whether a name in `weak_names`
+    /// applies, so that its result holds only at the same horizon.
+    weak_read:               bool,
     /// The initializers of `const` non-volatile objects, which Clang's
     /// evaluator may read.
     constant_initializers:   ArenaMap<'s, usize, &'tu Expression<'tu>>,
@@ -136,7 +153,7 @@ pub(super) struct State<'tu, 's> {
     /// The byte ranges of each read aggregate and the operation that stores
     /// each, by binding, with the depth of a query `folding::DEPTH` cut
     /// short (`folding.rs`).
-    plan_covers:             ArenaMap<'s, usize, (Option<folding::Cover<'s>>, Option<u32>)>,
+    plan_covers:             ArenaMap<'s, usize, folding::Memo<Option<folding::Cover<'s>>>>,
     /// The elements of each string literal the evaluator reads, by literal
     /// and encoding.
     literal_units:           ArenaMap<'s, (u32, u8), &'s [u32]>,
@@ -185,6 +202,9 @@ impl<'s> State<'_, 's> {
             refolds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             labeled_expressions:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             weak_names:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            root_end:                usize::MAX,
+            weak_horizon:            usize::MAX,
+            weak_read:               false,
             constant_initializers:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             plan_covers:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),

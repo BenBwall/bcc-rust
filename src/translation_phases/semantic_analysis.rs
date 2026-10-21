@@ -222,9 +222,11 @@ pub(crate) fn analyze<'tu>(
 ) -> SemanticTranslationUnit<'tu> {
     let scratch = Bump::new();
     let mut analyzer = Analyzer::new(context, &scratch);
-    analyzer.record_weak_names(unit.external_declarations());
-    for &root in unit.external_declarations() {
+    analyzer.record_weak_names(unit.external_declarations(), unit.root_ends());
+    for (index, &root) in unit.external_declarations().iter().enumerate() {
         analyzer.assert_balanced();
+        analyzer.functions.emission.root_end =
+            unit.root_ends().get(index).copied().unwrap_or(usize::MAX);
         analyzer.work.push(Work::Root(root));
         while let Some(work) = analyzer.work.pop() {
             analyzer.step(work);

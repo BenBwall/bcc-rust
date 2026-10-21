@@ -225,9 +225,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
                 self.functions.emission.orphan,
             )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreWeakHorizon(
+                self.functions.emission.weak_horizon,
+            )));
         self.functions.dead = false;
         self.functions.unvisited = false;
         self.functions.emission.orphan = None;
+        // Clang emits this body where it is defined, or after the unit.
+        self.functions.emission.weak_horizon =
+            if binding.is_some_and(|index| self.emitted_where_defined(index, f)) {
+                self.functions.emission.root_end
+            } else {
+                usize::MAX
+            };
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
             self.functions.current,
             self.statements.loops,
@@ -466,6 +477,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
             | FunctionWork::RestoreUnvisited(unvisited) => self.functions.unvisited = unvisited,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
+            | FunctionWork::RestoreWeakHorizon(horizon) =>
+                self.functions.emission.weak_horizon = horizon,
             | FunctionWork::RestoreUnjoinedOrphan(orphan) =>
                 self.functions.emission.orphan = self.functions.emission.orphan.and(orphan),
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
@@ -1948,6 +1961,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether every file-scope declaration selects a C99 inline-only
     /// body, independently of the target's external-inline ABI rule.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    /// Whether Clang's code generation emits definition `f` of `binding`
+    /// where it appears rather than after the unit: an external function
+    /// that neither it nor an earlier declaration declares `inline`
+    /// (`CodeGenModule::EmitGlobal`, `MustBeEmitted`).
+    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125.
+    fn emitted_where_defined(&self, binding: usize, f: &FunctionDefinition<'tu>) -> bool {
+        self.bindings[binding].linkage == Linkage::External
+            && !f.declaration_specifiers.function_specifiers.is_inline
+            && self
+                .functions
+                .entities
+                .get(&self.function_identity(binding))
+                .is_none_or(|entity| !entity.msvc_inline.inline_declared)
+    }
+
     fn inline_only_declarations(&self, binding: usize) -> bool {
         self.functions
             .entities
@@ -2037,6 +2065,9 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whether the code being analyzed is emitted into a block
     /// without predecessors ([`super::emission::State::orphan`]).
     RestoreOrphan(Option<usize>),
+    /// Restores which weak names apply to the code being analyzed
+    /// ([`super::emission::State::weak_horizon`]).
+    RestoreWeakHorizon(usize),
     /// Restores that state after operands code generation may not emit,
     /// unless they joined paths, which leaves a block with predecessors.
     RestoreUnjoinedOrphan(Option<usize>),

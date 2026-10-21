@@ -153,8 +153,7 @@ impl<'tu> StringCache<'tu> {
         }
     }
 
-    /// The id of `s` if it has been interned, for tests that look names up.
-    #[cfg(test)]
+    /// The id of `s` if it has been interned, without interning it.
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
         fn inner(interner: &StringCache<'_>, s: &str) -> Option<StringCacheId> {
             let hash = FxBuildHasher.hash_one(s);
