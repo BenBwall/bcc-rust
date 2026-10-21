@@ -664,6 +664,25 @@ mod tests {
     }
 
     #[test]
+    fn constant_queries_take_clang_constant_context_values() {
+        // Clang's constant evaluator cannot discard a non-constant comma
+        // operand or read through an array compound literal, so integer
+        // constant expressions and static data see zero there.
+        assert_runs_like_clang(
+            "int printf(const char*,...); int g=3; enum{E1=__builtin_constant_p((g,1)), \
+             E2=__builtin_constant_p(((int[]){1,2})[1]), E3=__builtin_constant_p(((const \
+             int[]){1,2})[1]),E4=__builtin_constant_p((1,2)), \
+             E5=__builtin_constant_p(((struct{int a[2];}){{1,2}}).a[1])}; static int \
+             s1=__builtin_constant_p((g,1)); _Static_assert(!__builtin_constant_p((g,1)), \
+             \"comma\"); int main(void){int x=g;switch(x-2){case \
+             1+__builtin_constant_p((x,1)):printf(\"one\\n\");break;default:printf(\"other\\n\");\
+             } printf(\"%d %d %d %d %d %d %d %d\\n\",E1,E2,E3,E4,E5,s1, \
+             (int)sizeof(int[__builtin_constant_p((g,1))?1:2]),__builtin_constant_p((x,\"abc\")) \
+             );return 0;}",
+        );
+    }
+
+    #[test]
     fn lowered_control_uses_the_same_fold_as_elision() {
         assert_runs_like_clang(
             "int printf(const char*,...); int f(void){if(__builtin_constant_p(\"abc\"))return \
@@ -719,8 +738,8 @@ int f(int x){
         __builtin_constant_p((0,1)),__builtin_constant_p((void*)0),
         __builtin_constant_p(3.5),__builtin_constant_p(x),
         __builtin_constant_p(__builtin_constant_p(x)));
-    printf("%d %d %d %d %d\n",
-        __builtin_constant_p((x,1)),__builtin_constant_p((long)"abc"),
+    printf("%d %d %d %d\n",
+        __builtin_constant_p((long)"abc"),
         __builtin_constant_p(&*"abc"),__builtin_constant_p("abc"+0),
         __builtin_constant_p((char*)"abc"+1));
     return __builtin_constant_p(__builtin_constant_p(x))?1:2;
@@ -866,10 +885,9 @@ int main(void){printf("%d %d\n",f(2),q);return 0;}
     #[test]
     fn constant_queries_read_fresh_compound_literal_values() {
         assert_runs_like_clang(
-            "int printf(const char*,...); struct S{int a;}; int main(void){ printf(\"%d %d %d \
+            "int printf(const char*,...); struct S{int a;}; int main(void){ printf(\"%d %d \
              %d\\n\",__builtin_constant_p((struct S){1}.a), \
-             __builtin_constant_p((int){1}),__builtin_constant_p((struct S){1}), \
-             __builtin_constant_p((int[]){1,2}[1]));return 0;}",
+             __builtin_constant_p((int){1}),__builtin_constant_p((struct S){1}));return 0;}",
         );
         assert_o0_static_emission(
             "int f(void){if(__builtin_constant_p((struct S{int a;}){1}.a)){}else{STATIC}return \

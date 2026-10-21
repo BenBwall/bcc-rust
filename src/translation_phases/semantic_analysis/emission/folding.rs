@@ -119,9 +119,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         )
     }
 
-    /// Clang's emitted constant-query value, shared with semantic integer
-    /// facts and static initializer data. An unknown query emits zero, even
-    /// when `EvaluateAsInt` cannot fold it as a control condition.
+    /// Clang's constant-context query value, shared with semantic integer
+    /// facts, static initializer data and the emitted value, so that case
+    /// labels, enumerators and static assertions see Clang's value. An
+    /// unknown query emits zero, even when `EvaluateAsInt` cannot fold it as
+    /// a control condition.
     /// GNU extension: GCC manual, "Other Builtins", `__builtin_constant_p`.
     pub(in crate::translation_phases::semantic_analysis) fn constant_query_integer(
         &mut self,
@@ -1015,10 +1017,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether a query operand has a constant value in Clang's evaluator.
-    /// The start of a string literal counts, while an interior pointer or
-    /// another non-null object's address does not. GNU extension:
-    /// `__builtin_constant_p`.
+    /// Whether a query operand has a constant value in Clang's evaluator in
+    /// a constant context, which every use of the query shares: integer
+    /// constant expressions, static initializer data, control folding and
+    /// the emitted value. The start of a string literal counts, while an
+    /// interior pointer or another non-null object's address does not; so
+    /// does a comma whose left operand is not constant, and an element read
+    /// through a non-`const` array compound literal, which Clang's
+    /// evaluator refuses there. GNU extension: `__builtin_constant_p`.
     /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59 (pointer-to-integer casts).
     fn constant_query_value(&mut self, operand: &'tu Expression<'tu>, depth: u32) -> bool {
         if depth >= DEPTH {
@@ -1026,31 +1032,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.is_constant_query(operand)
             || self.constant_query_string_address(operand)
-            || self.discarded_comma_constant(operand, depth)
-            || match self.evaluate_value(operand, depth) {
-                | Some(Value::Address(Some(_))) | None => false,
-                | Some(Value::String(_, offset)) => offset == 0,
-                | Some(_) => true,
-            }
+            || (!self.reads_array_literal(operand)
+                && match self.evaluate_value(operand, depth) {
+                    | Some(Value::Address(Some(_))) | None => false,
+                    | Some(Value::String(_, offset)) => offset == 0,
+                    | Some(_) => true,
+                })
     }
 
-    /// A constant query may discard an ordinary nonvolatile read in the
-    /// left side of a comma, as Clang's evaluator does in this context.
-    /// GNU extension: `__builtin_constant_p`; C99 §6.5.17p2, p. 94; PDF p. 106.
-    fn discarded_comma_constant(&mut self, mut operand: &'tu Expression<'tu>, depth: u32) -> bool {
-        while let ExpressionType::Parenthesized { expression } = operand.kind {
-            operand = expression;
+    /// Whether evaluating `operand` reads through a non-`const` array
+    /// compound literal, outside `sizeof` and `_Alignof`.
+    /// C99: §6.5.2.5 paragraph 4, p. 75; PDF p. 87.
+    fn reads_array_literal(&self, operand: &'tu Expression<'tu>) -> bool {
+        let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
+        work.push(operand);
+        while let Some(expression) = work.pop() {
+            match expression.kind {
+                | ExpressionType::SizeofExpr(_)
+                | ExpressionType::SizeofType(_)
+                | ExpressionType::AlignofExpr(_)
+                | ExpressionType::AlignofType(_) => {},
+                | ExpressionType::CompoundLiteral { .. }
+                    if self.array_typed(expression)
+                        && !self.constant_object(self.expression_info(expression).ty) =>
+                    return true,
+                | _ => super::labels::expression_children(self.scratch, expression, |child| {
+                    work.push(child);
+                }),
+            }
         }
-        let ExpressionType::Binary {
-            operator: BinaryOperator::Comma,
-            left_expression,
-            right_expression,
-        } = operand.kind
-        else {
-            return false;
-        };
-        !self.has_side_effects(left_expression)
-            && self.constant_query_value(right_expression, depth + 1)
+        false
     }
 
     /// Clang's `Expr::HasSideEffects`, syntactically: an assignment, an
