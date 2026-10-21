@@ -1,0 +1,11 @@
+error: used internal identifier has no definition: `cl`
+ --> sema3-internal-cleanup.c:2:45
+  |
+1 | static void cl(int *p);
+  |             -- previous declaration is here
+2 | void g(void) { int x __attribute__((cleanup(cl))) = 0; (void)x; }
+  |                                             ^^ used here but never defined
+  |
+  = note: C99 §6.9p3: an internal-linkage identifier used outside a constant sizeof operand has exactly one definition in the translation unit
+
+1 error generated.
