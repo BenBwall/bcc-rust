@@ -165,3 +165,8 @@ survive all generated depths through 16,384 in this preliminary binary. Final
 stack tables will be rerun on the final build. The timing runner now supports
 `--baseline-binary` and `--alignment-binary`, allowing these binaries to rotate
 in the same interleaved run instead of comparing different load windows.
+
+The generated block depth excludes the function's outer compound. Added depth
+126 to test exactly 127 total blocks, and depth 63 for C99's parenthesized
+expression/declarator floors. A generic recursion-entry limit is not a C grammar
+nesting limit: each nested compound adds statement and compound calls.
