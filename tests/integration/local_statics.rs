@@ -113,6 +113,16 @@ mod tests {
             int main(void) { return f() != 42; }
         "#,
         );
+        assert_runs_like_clang(
+            "int g; static void helper(void){g=__builtin_ia32_rdtsc();} void f(void){static void \
+             (*p)(void)=helper;}int main(void){f();return 0;}",
+        );
+        let used_helper = bcc(
+            "int g; static void helper(void){g=__builtin_ia32_rdtsc();} void f(void){static void \
+             (*p)(void) __attribute__((used))=helper;} int main(void){f();return 0;}",
+            &["--emit=llvm"],
+        );
+        assert!(!used_helper.status.success());
         let used = bcc(
             "int main(void){static __float128 q __attribute__((used))=1;return 0;}",
             &["--emit=llvm"],

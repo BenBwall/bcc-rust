@@ -200,7 +200,9 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
         errors.errors.iter().any(|error| {
             matches!(
                 error.kind,
-                LoweringErrorKind::Unsupported(_) | LoweringErrorKind::UnmodeledType(_)
+                LoweringErrorKind::Unsupported(_)
+                    | LoweringErrorKind::UnmodeledType(_)
+                    | LoweringErrorKind::UnanalyzedType
             )
         })
     }) {
