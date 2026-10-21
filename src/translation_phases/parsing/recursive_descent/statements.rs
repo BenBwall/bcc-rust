@@ -642,6 +642,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         block_item: bool,
     ) -> Option<&'tu Statement<'tu>> {
         let token = self.cursor.current();
+        let is_label = token.is_some_and(|token| matches!(token.kind, TokenType::Identifier))
+            && is_operator(self.cursor.following(), OperatorTokenType::Colon);
         let child = if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
             if !block_item {
                 self.report(
@@ -665,9 +667,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 source_vectors: *source,
                 recovered:      false,
             }));
-        } else if !token.is_some_and(|token| matches!(token.kind, TokenType::Identifier))
+        } else if !is_label
             && token.is_some_and(|token| self.declaration_starter(token))
             && self.extension_precedes_declaration()
+            && (!self.attribute_starter(token) || self.attributes_precede_declaration())
         {
             if !block_item {
                 self.report(
