@@ -12,8 +12,9 @@ study adopts one. Do not describe the existing LLVM-shaped IR interpreter as
 the C abstract machine. Preserve it as a separate, valuable IR execution view.
 
 The overnight prototype explores the C evaluator route with a deliberately
-bounded language subset. The final implementation inventory and verification
-results will be recorded below as work completes.
+bounded language subset and an independent parser. It is real source-driven
+Rust execution, but does not yet reuse bcc's full parser or semantic analysis.
+The implementation inventory and verification results are recorded below.
 
 ## Product vision
 
@@ -365,7 +366,79 @@ These citations were verified against the searchable N1256 edition through
 
 ## Prototype and verification record
 
-Implementation and browser validation are in progress. Use `web/README.md`
-for the eventual exact local build and serve commands. Generated wasm should
-be reproducible from source; a missing engine must never trigger an unlabeled
-JavaScript simulation.
+### Implementation boundaries
+
+- `src/abstract_machine.rs` and its child modules own the independent subset
+  parser, source-located operations, C object runtime, snapshots and JSON.
+- `src/abstract_machine_wasm.rs` exposes the versioned single-session raw
+  wasm ABI. It passes through engine JSON and retains the compiled program
+  for reset. No binding generator or host imports are required.
+- Cargo's default `native` feature preserves the original compiler modules,
+  dependency graph and build-script behavior. `abstract-machine` can also be
+  enabled alongside native; browser builds disable default features.
+- Native dependencies, build dependencies and build-support module loading
+  are gated. The wasm build does not compile the native frontend, VM arenas,
+  LLVM, FFI, CLI, filesystem or embedded headers. None is needed by this
+  headerless demo. These are isolated rather than secretly ported.
+- `web/` contains the static page, renderer, controls and wasm adapter. Every
+  value is supplied by Rust. Missing wasm disables execution and displays
+  instructions; there is no scripted execution or JavaScript C evaluator.
+
+The implemented subset uses signed 32-bit int, int pointers with
+element-based offsets, fixed-size int arrays, automatic locals, named
+int-returning functions and int/int-pointer parameters, lexical blocks,
+conditionals, loops, return, assignment, arithmetic and comparison. Source
+ranges refer to the next operation; the event text describes the previous
+completed operation. Objects are revealed indeterminate before initialization
+stores. Calls use explicit activation frames; ended objects remain observable
+as tombstones. Back/forward replays complete recorded engine states.
+
+### Simplifications to keep visible
+
+This is not the full B implementation proposed above. The separate subset
+parser is disposable prototype code: do not keep extending it instead of
+porting the real frontend. There is no preprocessing, globals/static/allocated
+storage, full C declarator or conversion system, floating point, structure or
+union representation, effective-type model, function pointers or C library.
+No native/LLVM output or other compiler inspection views are implemented.
+
+The evaluator uses a documented deterministic operand order and rejects
+nested side effects and calls in compound expressions rather than claiming
+complete unsequenced-access detection. The pending-effects panel previews
+upcoming stores, not a full implementation of deferred effects or all C99
+sequence points. Runtime checks cover a bounded subset; successful execution
+does not establish C conformance or absence of UB. Pointer/lifetime and
+indeterminate-value policies must be read with the engine limitations, not
+inferred from the appearance of the diagram. In particular C99 does not
+uniquely specify a complete modern pointer-provenance model.
+
+### Environment and browser evidence
+
+Rust 1.99.0 was already installed. Initially only the native target was
+installed, and no wasm-bindgen or wasm-pack executable was present.
+`rustup target add wasm32-unknown-unknown` succeeded; the raw ABI avoids
+needing either binding tool. Exact build/serve commands are in `web/README.md`.
+
+T3 `preview_status` reported no attached browser. Both `preview_open` and
+`html_preview` then failed with the host prerequisite error:
+
+```text
+This host is missing libraries T3's browser needs
+(libglib-2.0.so.0, libgobject-2.0.so.0, libgio-2.0.so.0,
+libatk-1.0.so.0, libatk-bridge-2.0.so.0, libdbus-1.so.3,
+libX11.so.6, libXcomposite.so.1, libXdamage.so.1, libXext.so.6,
+libXfixes.so.3, libXrandr.so.2, libgbm.so.1, libxcb.so.1,
+libxkbcommon.so.0, libasound.so.2, libatspi.so.0).
+Run `sudo env "PATH=$PATH" t3 browser setup` on the host to install them,
+then try again.
+```
+
+No alternative browser executable is installed in the execution environment.
+This blocks actual browser rendering and screenshots, not wasm build or
+Node-based WebAssembly execution checks. The documented local serve/open
+commands provide a reproducible manual check. No screenshot is claimed.
+
+### Verification results
+
+Final engine, wasm, native and web checks are still in progress. Their commands
+and outcomes will be recorded here before handoff.
