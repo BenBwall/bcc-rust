@@ -236,3 +236,8 @@ command may contain mismatches; its exit status alone is not a correctness gate.
   but counts recursive entries. It does not establish identical semantics for
   all production frame/node/provenance limits or error recovery. The default
   parser's representation bounds and cleanup remain authoritative.
+
+`c99-floors.c` combines exactly 127 blocks with 63 parenthesized expressions;
+final floor probes also compare limits 64, 256 and 512. This distinguishes a
+limit that merely passes isolated floors from one that permits their combination.
+Even a larger entry limit cannot protect a smaller native stack by itself.
