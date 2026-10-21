@@ -68,7 +68,9 @@ return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c
     save("alignment-cache.c", "int aligned __attribute__((aligned(8)));\n" + "".join(f"int a{index} = {index};\n" for index in range(50000)), "generated full-token alignment index plus 50000 scalar declarations")
     for depth in [16, 128, 1024]:
         save(f"alignment-nested-{depth}.c", "int x __attribute__((aligned(" + "sizeof(struct {int y __attribute__((aligned(" * depth + "8" + ")));})" * depth + ")));\n", f"generated nested alignment operands depth={depth}")
-    for depth in [32, 127, 256, 1024, 4096, 16384]:
+    # 63 expressions/declarators and 127 total blocks are C99 minimums;
+    # blocks-126 includes the function's outer compound statement.
+    for depth in [32, 63, 126, 127, 256, 1024, 4096, 16384]:
         fixtures = {
             "parentheses": "int f(void){return " + "(" * depth + "1" + ")" * depth + ";}\n",
             "unary": "int f(void){return " + "! " * depth + "1;}\n",
