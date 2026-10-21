@@ -34,6 +34,9 @@ case "${1:-native}" in
             python3 scripts/parser_study.py bench --binary "$binary" \
                 --files parentheses-16000.c parentheses-16500.c blocks-16000.c blocks-16500.c \
                 --modes machine growing hybrid:16 --output "$study_dir/final-$profile-neighbors.json"
+            python3 scripts/parser_study.py bench --binary "$binary" --stack 1048576 \
+                --files parentheses-4096.c parentheses-16384.c blocks-4096.c blocks-16384.c \
+                --modes machine growing hybrid:16 --output "$study_dir/final-$profile-deep-1m.json"
         done
         python3 scripts/parser_study.py diff --binary "$study_dir/study-release" \
             --modes machine recursive growing hybrid:16 --output "$study_dir/final-diff.json"
