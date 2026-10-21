@@ -46,4 +46,31 @@ an AST identity check.
 - Frame pools already recycle vectors/boxes by high-water concurrency; replacing
   them with heap allocation would not be a fair memory comparison.
 
+## Initial native baseline (smoke, not final comparison)
+
+The first release harness build completed. On Lua v5.4.8 `onelua.c`, GCC 15.2
+preprocessing produces 693,358 bytes. One phase-7 smoke sample took 42.65 ms,
+used 616,192 bytes of parse arena and 15,990,600 bytes of additional TU arena,
+and made zero global allocations. Eight diagnostics require classification
+before this is admitted as a clean corpus. A 16,384-parenthesis function parsed
+in 6.96 ms with 8,130,712 bytes of parse-arena high water and zero diagnostics.
+These single samples are checkpoint evidence, not the final estimates.
+
+The official SQLite/Lua download domains required interactive network approval;
+we did not wait for it. Lua's tagged public GitHub source is available. The
+input generator pins archive SHA-256
+`d85b70a65f43c5d2254944d58d625e822c8e2e10d9c6a3bd9b5b657e46376a19`.
+
+`linux-perf` 7.0.0-38 reports **No supported events found. The instructions:u
+event is not supported.** This VM does not expose the hardware PMU. Hardware
+cycles, instructions, branch misses, and cache misses are unavailable; software
+`task-clock`, faults, and context switches work. We will use explicitly labelled
+Callgrind instruction/cache/branch simulation rather than invent hardware counts.
+
+Valgrind 3.26 rejects each production 100 GiB arena reservation (`mmap` fails
+with `EINVAL`), before parsing starts. The separate feature
+`parser-study-small-regions` reserves 1 GiB per region **only for profiling**.
+It keeps allocation and commit algorithms intact. Native time, RSS, and capacity
+runs use the ordinary 100 GiB reservations.
+
 Measurements, prototype coverage, checks, and recommendation will follow here.
