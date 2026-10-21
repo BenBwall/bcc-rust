@@ -12,6 +12,8 @@ toolchain and install its Wasm standard library once if needed:
 rustup target add wasm32-unknown-unknown
 sh web/build.sh
 node --experimental-default-type=module web/check.mjs
+node --experimental-default-type=module web/worker-check.mjs
+node --experimental-default-type=module web/worker-check.mjs --missing
 python3 -m http.server 8080 --bind 127.0.0.1 --directory web
 ```
 
@@ -41,22 +43,9 @@ print('Detached build PID:', process.pid)
 PY
 ```
 
-If the Wasm owner has already built the validated handoff artifact, avoid a
-duplicate build and copy that file instead:
-
-```sh
-mkdir -p web/pkg
-cp target/abstract-machine/bcc_rust.wasm web/pkg/bcc_rust.wasm
-node --experimental-default-type=module web/check.mjs
-```
-
-The build contract may also record its original output at
-`target/abstract-machine/build/wasm32-unknown-unknown/release/bcc_rust.wasm`.
-Use the existing validated handoff; do not guess a shared-cache filename.
-
 Open `http://127.0.0.1:8080`. Serve over HTTP; ES modules and Wasm should not be
 opened with `file://`. No npm packages, network assets, CDNs, or service workers
-are used. Browser testing is coordinated by the parent task.
+are used.
 
 ## Interface
 
@@ -134,6 +123,9 @@ integration check. No C semantics or computed program values live in JavaScript.
 `check.mjs` executes the real Wasm artifact with the UI adapter and checks the
 demo's result, changed-source result, function calls, arrays/pointers, lifetimes,
 pending effects, UB citations, rejection, and Rust-native reverse replay/reset.
+`worker-check.mjs` also exercises the actual Worker/proxy modules through a
+Node messaging/fetch shim, including compile/step, reload, cancellation and
+missing-artifact errors. It does not simulate C values or render the page.
 Generated artifacts belong in ignored `web/pkg/`; binary output is not committed.
 
 ## Verification
@@ -147,7 +139,8 @@ The local generated artifact is `web/pkg/bcc_rust.wasm` (about 1.3 MiB with the
 repository's release debug information).
 
 JavaScript and shell syntax checks, HTML ID/ARIA/asset checks, local HTTP asset
-checks, and `git diff --check` also passed. Browser interaction, mobile layout,
-and assistive-technology testing belong to the coordinating root's browser pass;
-this task did not start a competing browser session. The Rust engine and bridge
-owners are responsible for Rust tests, Clippy restriction lints, and Rustfmt.
+checks, and `git diff --check` also passed. T3 browser preview and HTML preview both failed because the host lacks the
+required browser shared libraries. Browser rendering, mobile layout, screenshots
+and assistive-technology behavior remain unverified. See the research document
+for the exact prerequisite error. The launch commands above provide a local
+manual check. Rust test, Clippy and Rustfmt results are recorded there as well.
