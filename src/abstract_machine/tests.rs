@@ -15,7 +15,7 @@ fn run(source: &str) -> Session {
         if session.state().terminal() {
             return session;
         }
-        session.step();
+        let _state = session.step();
     }
     panic!("session did not terminate at its resource bound");
 }
@@ -94,11 +94,11 @@ fn replay_restores_complete_states_and_does_not_reexecute() {
     assert_eq!(session.state().step, 0, "rewound to initial state");
     let initial = session.back().clone();
     assert_eq!(initial, *session.state(), "back at start is stable");
-    states.pop();
+    let _initial = states.pop();
     for expected in states.iter().rev() {
         assert_eq!(session.step(), expected, "replay restores each observation");
     }
-    session.step();
+    let _state = session.step();
     assert_eq!(
         session.state_json(),
         finished,
@@ -157,6 +157,14 @@ fn shadowing_ends_inner_lifetimes_and_preserves_outer_object() {
 #[test]
 fn array_partial_initialization_and_scalar_pointer_arithmetic() {
     returned(
+        "int main(void) { int a[2]; int *end = &a[2]; int *p = end - 1; *p = 6; return a[1]; }",
+        6,
+    );
+    returned(
+        "int main(void) { int *p = 0; int *q = &*p; return q == 0; }",
+        1,
+    );
+    returned(
         "int main(void) { int a[3] = {4}; int *p = a; p = p + 2; *p = 8; return a[0] + a[1] + \
          a[2]; }",
         12,
@@ -183,6 +191,10 @@ fn verified_ub_rules_stop_at_the_operation_and_are_cited() {
             "6.5.6p8",
         ),
         ("int main(void) { return (-2147483647 - 1) / -1; }", "6.5p5"),
+        (
+            "int main(void) { int a[2]; int *p = a - (-2147483647 - 1); return 0; }",
+            "6.5.6p8",
+        ),
     ] {
         let mut session = run(source);
         assert_eq!(session.state().status, "undefined_behavior", "{source}");
@@ -198,7 +210,7 @@ fn verified_ub_rules_stop_at_the_operation_and_are_cited() {
             "diagnostic range belongs to source"
         );
         let stopped = session.state_json();
-        session.step();
+        let _state = session.step();
         assert_eq!(session.state_json(), stopped, "UB is terminal");
     }
 }
@@ -242,8 +254,10 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int main(void) { return 010; }",
         "int main(void) { return 0 && 1 / 0; }",
         "int main(void) { return sizeof(int); }",
+        "// comment ending in a splice\\\nint main(void) { return 0; }",
+        "// trigraph ??/\nint main(void) { return 0; }",
     ] {
-        assert!(compile(source).is_err(), "must reject {source}");
+        let _diagnostic = compile(source).expect_err("unsupported input must be rejected");
     }
 }
 

@@ -13,6 +13,30 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
             "source exceeds 32 KiB",
         ));
     }
+    // Phases 1-2 are deliberately outside this standalone parser. Reject
+    // transformations even in comments rather than silently change meaning.
+    if let Some(offset) = source
+        .as_bytes()
+        .windows(2)
+        .position(|pair| pair == b"\\\n" || pair == b"\\\r")
+    {
+        return Err(Diagnostic::new(
+            "unsupported",
+            range(source, offset, offset + 2),
+            "line splicing is outside this subset",
+        ));
+    }
+    if let Some(offset) = source
+        .as_bytes()
+        .windows(3)
+        .position(|triple| triple.starts_with(b"??") && b"=/(')!<>-".contains(&triple[2]))
+    {
+        return Err(Diagnostic::new(
+            "unsupported",
+            range(source, offset, offset + 3),
+            "trigraph processing is outside this subset",
+        ));
+    }
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
     let mut offset = 0;

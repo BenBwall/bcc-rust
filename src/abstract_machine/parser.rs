@@ -91,7 +91,12 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
     if !functions[entry].parameters.is_empty() {
         return Err(parser.error("main parameters are outside this subset"));
     }
-    for (name, arguments, range) in &parser.calls {
+    for CallSite {
+        name,
+        arguments,
+        range,
+    } in &parser.calls
+    {
         let Some(function) = functions.iter().find(|function| function.name == *name) else {
             return Err(Diagnostic::new(
                 "unsupported",
@@ -131,7 +136,7 @@ pub(super) struct Parser<'a> {
     pub symbols:     Vec<Symbol<'a>>,
     pub scope:       usize,
     pub nesting:     usize,
-    pub calls:       Vec<(String, Vec<(Type, bool)>, SourceRange)>,
+    pub calls:       Vec<CallSite>,
 }
 
 impl<'a> Parser<'a> {
@@ -181,10 +186,12 @@ impl<'a> Parser<'a> {
             | "if" => {
                 self.position += 1;
                 self.condition()?;
-                let branch = self.emit(Op::Branch(0), token.range)?;
+                let branch = self.code.len();
+                self.emit(Op::Branch(0), token.range)?;
                 self.control_body()?;
                 if self.take("else") {
-                    let jump = self.emit(Op::Jump(0), token.range)?;
+                    let jump = self.code.len();
+                    self.emit(Op::Jump(0), token.range)?;
                     self.patch(branch, self.code.len());
                     self.control_body()?;
                     self.patch(jump, self.code.len());
@@ -197,7 +204,8 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 let head = self.code.len();
                 self.condition()?;
-                let branch = self.emit(Op::Branch(0), token.range)?;
+                let branch = self.code.len();
+                self.emit(Op::Branch(0), token.range)?;
                 self.control_body()?;
                 self.emit(Op::Jump(head), token.range)?;
                 self.patch(branch, self.code.len());
@@ -252,7 +260,8 @@ impl<'a> Parser<'a> {
             self.emit_expression(condition, false)?;
         }
         self.expect(";")?;
-        let branch = self.emit(Op::Branch(0), token.range)?;
+        let branch = self.code.len();
+        self.emit(Op::Branch(0), token.range)?;
         let iteration_start = self.code.len();
         if !self.at(")") {
             self.expression_statement()?;
@@ -395,13 +404,12 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<usize, Diagnostic> {
+    pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<(), Diagnostic> {
         if self.code.len() >= MAX_CODE {
             return Err(Diagnostic::limit(range, "compiled operation limit reached"));
         }
-        let index = self.code.len();
         self.code.push(Instruction { op, range });
-        Ok(index)
+        Ok(())
     }
 
     fn patch(&mut self, index: usize, target: usize) {
@@ -573,4 +581,10 @@ fn format_message(prefix: &str, value: &str, suffix: &str) -> String {
     message.push_str(value);
     message.push_str(suffix);
     message
+}
+
+pub(super) struct CallSite {
+    pub name:      String,
+    pub arguments: Vec<(Type, bool)>,
+    pub range:     SourceRange,
 }
