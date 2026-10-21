@@ -8,16 +8,20 @@
 //! `functions.rs` models on its own (`EmitWhileStmt`).
 //!
 //! The evaluator starts from the constants semantic analysis already
-//! computed and extends them as Clang's evaluator does in C: a comma whose
-//! left operand evaluates, a conditional, `&&` and `||` that skip what they
-//! do not take, a statement expression of null and side-effect-free
-//! expression statements, a `const` non-volatile scalar object with a
-//! constant initializer, the address of an object or function that is not
-//! weak (non-null, and comparable within one object), `__builtin_expect`,
-//! `__builtin_constant_p` and `__builtin_choose_expr`. A call, an
-//! assignment, an increment, a volatile or other object read, a declaration
-//! in a statement expression and anything this model does not know do not
-//! fold.
+//! computed, except where Clang's evaluator differs (`__builtin_constant_p`
+//! and weak entities), and extends them as Clang's evaluator does in C: a
+//! comma whose left operand evaluates, a conditional, `&&` and `||` that
+//! skip what they do not take, a statement expression of null and
+//! side-effect-free expression statements, a `const` non-volatile object
+//! that is not weak with a constant initializer (a scalar converted to its
+//! type, or an element or member of an array or structure through its
+//! initializer plan), the elements of a string literal, the address of an
+//! object or function that is not weak (non-null, and comparable within one
+//! object in bytes), `__builtin_expect`, `__builtin_constant_p`,
+//! `__builtin_choose_expr`, `__builtin_abs`, the count-bit and byte-swap
+//! builtins, and `strlen` of a string. Any other call, an assignment, an
+//! increment, a volatile or other object read, a declaration in a statement
+//! expression and anything this model does not know do not fold.
 //! C99: §6.6 paragraphs 2-3, 6 and 10, pp. 95-96; PDF pp. 107-108;
 //! §6.5.13-§6.5.15, pp. 89-91; PDF pp. 101-103; §6.5.17 paragraph 2, p. 94;
 //! PDF p. 106.
@@ -28,10 +32,12 @@ use super::super::{
     ArrayBound,
     BindingKind,
     ConstantClass,
+    Duration,
     ExpressionType,
     Floating,
     InitOperation,
     Integer,
+    Linkage,
     TagKind,
     TypeId,
     TypeKind,
@@ -194,7 +200,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 right_expression,
             } => {
                 let left = self.evaluate_value(left_expression, depth)?;
-                let right = self.evaluate_value(right_expression, depth)?;
+                let mut right = self.evaluate_value(right_expression, depth)?;
+                // An address's offset counts bytes, and a step elements of
+                // the pointer operand's type.
+                if let (Value::Address(Some(_)), Value::Integer(step)) = (left, right)
+                    && matches!(
+                        operator,
+                        BinaryOperator::Addition | BinaryOperator::Subtraction
+                    )
+                {
+                    let size = self.element_size(left_expression)?;
+                    right = Value::Integer(Integer::int(
+                        step.to_i128()?.checked_mul(i128::from(size))?,
+                    ));
+                }
                 self.binary_value(operator, left, right)
             },
             | ExpressionType::Conditional(conditional) => {
@@ -435,8 +454,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The value of a named object Clang's evaluator may read: a `const`,
-    /// non-volatile integer object whose initializer evaluates. A function
-    /// or array names its address.
+    /// non-volatile scalar object that is not weak, whose initializer
+    /// evaluates to a constant (see [`Self::initializer_value`]), converted
+    /// to the object's type. A function or array names its address.
+    /// C99: §6.7.8 paragraph 11, p. 126; PDF p. 138.
     fn identifier_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
         let binding = self.expression_info(expression).binding?;
         let data = self.bindings[binding];
@@ -458,11 +479,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .constant_initializers
                     .get(&binding)
                     .copied()?;
-                match self.evaluate_value(initializer, depth)? {
-                    | Value::Floating(floating) => Some(Value::Floating(floating)),
-                    | value => self.cast_value(value, expression),
-                }
+                let value = self.initializer_value(initializer, depth)?;
+                self.cast_value(value, expression)
             },
+            | _ => None,
+        }
+    }
+
+    /// The value of `initializer`, the initializer of an object Clang's
+    /// evaluator reads (`VarDecl::evaluateValue`), when it is a constant
+    /// there: not the address of an object with automatic storage
+    /// duration, which is no address constant.
+    /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    fn initializer_value(
+        &mut self,
+        initializer: &'tu Expression<'tu>,
+        depth: u32,
+    ) -> Option<Value> {
+        let value = self.evaluate_value(initializer, depth)?;
+        let automatic = matches!(value, Value::Address(Some((base, _)))
+        if self.bindings.get(base).is_some_and(|data| {
+            data.linkage == Linkage::None && data.duration == Duration::Automatic
+        }));
+        (!automatic).then_some(value)
+    }
+
+    /// The size of the elements that pointer or array `expression` steps
+    /// over in pointer arithmetic, if known.
+    /// C99: §6.5.6 paragraph 8, pp. 82-83; PDF pp. 94-95.
+    fn element_size(&self, expression: &'tu Expression<'tu>) -> Option<u64> {
+        let ty = self.types.non_atomic(self.expression_info(expression).ty);
+        match self.types.nodes[ty.index] {
+            | TypeKind::Pointer(element) | TypeKind::Array(element, _) =>
+                self.types.layout(element).map(|layout| layout.size),
             | _ => None,
         }
     }
@@ -561,7 +610,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .copied()?;
         let plan = *self.initializers.plan(initializer)?;
         for value in plan.values {
-            _ = self.evaluate_value(value.expression, depth)?;
+            _ = self.initializer_value(value.expression, depth)?;
         }
         let mut read = None;
         for operation in plan.operations {
@@ -858,8 +907,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The builtins Clang's evaluator folds that a condition may call:
-    /// `__builtin_expect` takes its first operand; `__builtin_constant_p` is
-    /// 1 for an operand that folds and 0 for one with side effects.
+    /// `__builtin_expect` takes its first operand, converted to `long`;
+    /// `__builtin_constant_p` is 1 for an operand that folds and 0 for one
+    /// with side effects; `__builtin_abs`, the count-bit and byte-swap
+    /// builtins compute their value; `strlen` and `__builtin_strlen` count
+    /// a string's elements.
     fn builtin_value(
         &mut self,
         callee: &'tu Expression<'tu>,
@@ -874,8 +926,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .flatten();
         };
         match id {
-            | BuiltinId::Expect | BuiltinId::ExpectWithProbability =>
-                self.evaluate_value(arguments.first()?, depth),
+            // The value converted to the `long` parameter.
+            | BuiltinId::Expect | BuiltinId::ExpectWithProbability => {
+                let value = self.evaluate_value(arguments.first()?, depth)?;
+                let long = self.types.scalar(Scalar::Long);
+                self.cast_to(value, long)
+            },
             | BuiltinId::ConstantP => {
                 let operand = *arguments.first()?;
                 let constant = match self.evaluate_value(operand, depth) {
@@ -956,7 +1012,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return false;
         };
         data.kind == BindingKind::Function
-            && data.linkage == super::super::Linkage::External
+            && data.linkage == Linkage::External
             && self.context.configuration.hosted()
             && self.context.string_cache.at(data.name.name) == "strlen"
             && self.types.nodes[result.index] == TypeKind::Scalar(self.types.target.size_t)
@@ -1151,9 +1207,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 #[derive(Clone, Copy)]
 pub(in crate::translation_phases::semantic_analysis) enum Value {
     Integer(Integer),
-    /// The address of an entity with an element offset, or a non-null
-    /// address the evaluator cannot read through (`None`): a string literal
-    /// cast to another pointer type.
+    /// The address of an entity with a byte offset, or a non-null address
+    /// the evaluator cannot read through (`None`): a string literal cast to
+    /// another pointer type.
     Address(Option<(usize, i128)>),
     /// A pointer to element `offset` of a string literal.
     String(StringTokenType, i128),
@@ -1200,7 +1256,7 @@ fn floating_integer(value: Floating, bits: u32, signed: bool) -> Option<Integer>
     } else if negative {
         0
     } else {
-        (1_u128 << bits) - 1
+        u128::MAX >> (128 - bits)
     };
     if magnitude > limit {
         return None;
