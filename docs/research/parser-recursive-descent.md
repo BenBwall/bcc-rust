@@ -275,3 +275,14 @@ structure/provenance differences (30 candidate comparisons); none crashes.
 The nine diagnostic/marker fixes reduced the original 19 differing cases to 10.
 Raw observations and input hashes are archived under
 `docs/research/parser-recursive-descent-data/`.
+
+Callgrind's phase boundary is verified nonempty. First clean-Lua model results:
+study machine 316,054,591 simulated instructions versus 175,680,097 recursive,
+with dispatch calls 624,990 versus 200,463. Both construct 106,427 expressions
+and call the out-of-line provenance merge helper 200,502 times. Simulated L1 data
+misses rise from 772,392 to 843,990 despite the lower instruction count.
+
+A synthetic-memory caution is being checked: depth 16,384 lands near the frame
+vector's doubling boundary. The large hybrid scratch saving there may partly
+be a capacity cliff rather than a stable per-level saving. Neighboring depths
+16,000 and 16,500 are added before interpreting that result.

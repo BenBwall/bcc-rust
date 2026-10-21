@@ -52,7 +52,7 @@ def main():
     for name, rows in [("timing.tsv", timing), ("events.tsv", events)]:
         if rows:
             with (args.output / name).open("w") as output:
-                writer = csv.DictWriter(output, fieldnames=list(rows[0]), delimiter="\t")
+                writer = csv.DictWriter(output, fieldnames=list(rows[0]), delimiter="\t", lineterminator="\n")
                 writer.writeheader()
                 writer.writerows(rows)
     print(f"Archived {len(timing)} timing groups and {len(events)} simulated counter samples")
