@@ -75,8 +75,7 @@ pub(crate) fn object_writer(
 /// encoder lacks, such as a user section name outside `[A-Za-z0-9_.$-]`, a
 /// user `.pdata` section, a non-ASCII export name or more sections than a
 /// regular COFF object holds. Encoding finishes before any output is opened,
-/// so a refusal leaves nothing to undo. If that assembly fails too, the error
-/// also gives the refusal, which names what left the direct path.
+/// so a refusal leaves nothing to undo.
 pub(crate) fn build(
     text: &str,
     out_path: &Path,
@@ -88,12 +87,43 @@ pub(crate) fn build(
         | ObjectWriter::Direct => build_object(text, out_path, target, kind),
         | ObjectWriter::DirectOrAssembler =>
             encode_object(text, out_path, target, kind, |refusal| {
-                assemble(text, out_path, target, kind).map_err(|assembler| {
-                    io::Error::new(assembler.kind(), FallbackError { refusal, assembler })
-                })
+                assemble_refused(text, out_path, target, kind, refusal)
             }),
         | ObjectWriter::Assembler => assemble(text, out_path, target, kind),
     }
+}
+
+/// Assembles a listing the encoder refused into `out_path`. An executable is
+/// assembled into a temporary object, which links as a direct object does.
+/// Only a failure of that assembly gives the `refusal`, which names why the
+/// listing left the direct path: the toolchain an object needs only here, or
+/// the assembler's own error. A missing output directory, the MinGW an
+/// executable links with, and link errors fail the direct path too, so they
+/// read as they do there. This calls the bundled clang itself, since the test
+/// build's [`assemble`] would encode the listing again.
+fn assemble_refused(
+    text: &str,
+    out_path: &Path,
+    target: Target,
+    kind: OutputKind,
+    refusal: super::object::Error,
+) -> io::Result<()> {
+    let arena = Bump::new();
+    let (assembly, mut file) = TemporaryObject::create(out_path, "s", &arena)?;
+    file.write_all(text.as_bytes())?;
+    drop(file);
+    if kind == OutputKind::Object {
+        return Toolchain::bundled(target)
+            .and_then(|toolchain| toolchain.assemble(assembly.path(), out_path, target, kind))
+            .map_err(|assembler| FallbackError::io(refusal, assembler));
+    }
+    let toolchain = Toolchain::bundled(target)?;
+    let (object, file) = TemporaryObject::create(out_path, "o", &arena)?;
+    drop(file);
+    toolchain
+        .assemble(assembly.path(), object.path(), target, OutputKind::Object)
+        .map_err(|assembler| FallbackError::io(refusal, assembler))?;
+    toolchain.assemble(object.path(), out_path, target, kind)
 }
 
 /// Writes `text` to a temporary `.s` file beside `out_path` and assembles
@@ -173,11 +203,18 @@ fn encode_object(
 }
 
 /// A listing the encoder refused that the assembler then failed to build. A
-/// missing MinGW installation, for example, fails only the assembler, so the
-/// refusal is the part that says why the object needed it.
+/// missing MinGW installation, for example, fails an object only on the
+/// assembler's path, so the refusal is the part that says why it took it.
 #[derive(Debug, thiserror::Error)]
 #[error("{refusal}; assembling the listing instead failed: {assembler}")]
 struct FallbackError {
     refusal:   super::object::Error,
     assembler: io::Error,
+}
+
+impl FallbackError {
+    /// The assembler's failure, of its kind, with the refusal before it.
+    fn io(refusal: super::object::Error, assembler: io::Error) -> io::Error {
+        io::Error::new(assembler.kind(), Self { refusal, assembler })
+    }
 }

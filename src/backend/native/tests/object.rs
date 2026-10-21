@@ -696,6 +696,40 @@ fn object_writer_defaults_to_direct_coff_and_assembles_file_scope_asm() {
     }
 }
 
+/// The default Windows writer has the bundled clang assemble a listing its
+/// encoder refuses, in test builds too, where `assemble` would encode the
+/// listing again and panic on the refusal.
+#[test]
+fn default_coff_writer_assembles_a_refused_listing_with_clang() {
+    let text = ".section \"my data\",\"dw\"\n.globl x\nx:\n.long 1\n";
+    let directory = TempDir::new("native-coff-fallback");
+    let assembly = directory.join("reference.s");
+    let reference = directory.join("reference.obj");
+    let fallback = directory.join("fallback.obj");
+    std::fs::write(&assembly, text).unwrap();
+    Toolchain::bundled(Target::WindowsMsvc)
+        .unwrap()
+        .assemble(
+            &assembly,
+            &reference,
+            Target::WindowsMsvc,
+            OutputKind::Object,
+        )
+        .unwrap();
+    super::super::build(
+        text,
+        &fallback,
+        Target::WindowsMsvc,
+        OutputKind::Object,
+        ObjectWriter::DirectOrAssembler,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fallback).unwrap(),
+        std::fs::read(reference).unwrap()
+    );
+}
+
 #[test]
 fn quoted_names_label_differences_and_instruction_end_biases() {
     equivalent(

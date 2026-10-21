@@ -1494,6 +1494,16 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert!(built.status.success(), "{}", text(&built.stderr));
         let run = run_native(&mut Command::new(&pair)).unwrap();
         assert_eq!(run.status.code(), Some(42));
+        // On Windows the default assembles a listing the encoder refuses, here
+        // for its section name, and links that object as it links its own.
+        let refused = temporary("native-refused.exe");
+        let built = bcc(
+            "__attribute__((section(\"my data\"))) int x = 42;\nint main(void) { return x; }\n",
+            &[&target, "--backend=native", "-o", &path(&refused)],
+        );
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&refused)).unwrap();
+        assert_eq!(run.status.code(), Some(42));
         for flags in [
             &[][..],
             &["--native-object"][..],
@@ -1543,7 +1553,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             std::fs::remove_file(object).unwrap();
             std::fs::remove_file(linked).unwrap();
         }
-        for file in [executable, pair] {
+        for file in [executable, pair, refused] {
             drop(std::fs::remove_file(file));
         }
 
@@ -2300,6 +2310,72 @@ int main(void) { printf("main\n"); return zero; }
             assert!(stderr.contains("cannot find MinGW"), "{stderr}");
         }
         assert!(!object.exists(), "{} was written", object.display());
+    }
+
+    /// The default writer gives the encoder's refusal only when assembling
+    /// the refused listing fails. A missing output directory, the MinGW an
+    /// executable links with, and a link error fail an encodable listing as
+    /// well, so a refused one reports them in the same words, without the
+    /// refusal.
+    #[test]
+    fn default_windows_native_fallback_reports_shared_failures_plainly() {
+        const PROGRAM: &str =
+            "extern int missing(void);\nint main(void) { return x + missing(); }\n";
+        if !bundled_clang().is_file() {
+            eprintln!("skipping: no bundled clang to assemble or link");
+            return;
+        }
+        let refused = format!("__attribute__((section(\"my data\"))) int x = 1;\n{PROGRAM}");
+        let encodable = format!("int x = 1;\n{PROGRAM}");
+        let unwritable = temporary("native-refused-missing-directory").join("x.o");
+        let executable = temporary("native-refused-shared-failure.exe");
+        let cases: [(&str, &[&str], &Path, &str); 3] = [
+            ("--target=x86_64-pc-windows-msvc", &["-c"], &unwritable, ""),
+            (
+                "--target=x86_64-w64-windows-gnu",
+                &[],
+                &executable,
+                "cannot find MinGW",
+            ),
+            (
+                "--target=x86_64-pc-windows-msvc",
+                &[],
+                &executable,
+                "lld-link: error:",
+            ),
+        ];
+        for (target, flags, output, cause) in cases {
+            let build = |source: &str| {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                _ = command
+                    .args([target, "--backend=native"])
+                    .args(flags)
+                    .arg("-o")
+                    .arg(output)
+                    .args(["--input", source])
+                    .env_remove("MINGW_ROOT")
+                    .env("NO_COLOR", "1");
+                if target.ends_with("windows-gnu") {
+                    // No MinGW on `PATH` either; clang never starts, since
+                    // the toolchain lookup fails first.
+                    _ = command.env("PATH", "");
+                }
+                let built = command.output().unwrap();
+                assert_eq!(built.status.code(), Some(1), "{target} {flags:?}");
+                assert!(!output.exists(), "{} was written", output.display());
+                text(&built.stderr)
+            };
+            let (refused, encodable) = (build(&refused), build(&encodable));
+            assert!(
+                !refused.contains("native object emission") && refused.contains(cause),
+                "{target} {flags:?}: {refused}"
+            );
+            assert_eq!(
+                refused.lines().next(),
+                encodable.lines().next(),
+                "{target} {flags:?}"
+            );
+        }
     }
 
     /// The bundled clang, which assembles the native listing.
