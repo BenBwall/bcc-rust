@@ -135,6 +135,65 @@ fn loops_branches_recursion_and_argument_values_are_executed() {
 }
 
 #[test]
+fn dereference_increment_precedence_is_preserved_or_explicitly_rejected() {
+    for operation in ["*p++", "*p--", "*(p)++", "*(p)--"] {
+        let mut source = String::from("int main(void) { int a[2] = {3, 7}; int *p = a; ");
+        source.push_str(operation);
+        source.push_str("; return a[0]; }");
+        let diagnostic =
+            compile(&source).expect_err("unparenthesized postfix dereference must be rejected");
+        assert!(
+            diagnostic.message.contains("nested side effects"),
+            "precise subset limitation"
+        );
+    }
+    returned(
+        "int main(void) { int a[2] = {3, 7}; int *p = a; (*p)++; return a[0]; }",
+        4,
+    );
+    returned(
+        "int main(void) { int a[2] = {3, 7}; int *p = a; ++*p; return a[0]; }",
+        4,
+    );
+    returned(
+        "int main(void) { int a[2] = {3, 7}; int *p = a; (*p)--; return a[0]; }",
+        2,
+    );
+    returned(
+        "int main(void) { int a[2] = {3, 7}; int *p = a; --*p; return a[0]; }",
+        2,
+    );
+    returned(
+        "int main(void) { int a[2] = {3, 7}; int *p = a; p++; return a[0]; }",
+        3,
+    );
+}
+
+#[test]
+fn calls_require_a_prior_definition_or_the_current_function() {
+    for source in [
+        "int main(void) { return later(); } int later(void) { return 7; }",
+        "int main(void) { if (0) return later(); return 0; } int later(void) { return 7; }",
+    ] {
+        let diagnostic =
+            compile(source).expect_err("C99 requires a visible declaration before a call");
+        assert!(
+            diagnostic.message.contains("before its call"),
+            "forward-call diagnostic explains the boundary"
+        );
+    }
+    returned(
+        "int earlier(void) { return 7; } int main(void) { return earlier(); }",
+        7,
+    );
+    returned(
+        "int self(int n) { if (n == 0) return 0; int result = self(n - 1); return result + 1; } \
+         int main(void) { return self(3); }",
+        3,
+    );
+}
+
+#[test]
 fn shadowing_ends_inner_lifetimes_and_preserves_outer_object() {
     let session = run("int main(void) { int x = 7; { int x = 9; x++; } return x; }");
     assert_eq!(

@@ -81,3 +81,7 @@ IMPLEMENTATION NOTES:
 - Pending effects describe the imminent store/increment; there is no deferred
   side-effect queue, exhaustive order exploration, or whole-C UB certification.
 - No engine ABI exports; the wasm integration owner wraps this safe API.
+- Calls require the current function or an earlier definition (self-recursion
+  works); forward calls require unsupported prototypes and are rejected.
+- Standalone (*p)++/(*p)-- and ++*p/--*p update the pointed-to int. Bare *p++
+  and *p-- are rejected as nested effects, preserving C postfix precedence.
