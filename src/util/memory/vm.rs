@@ -301,8 +301,14 @@ fn committed_view(base: NonNull<u8>, committed: usize) -> NonNull<u8> {
 /// arena (20 bytes times `u32::MAX`, just under 80 GiB), while a few dozen
 /// regions still fit easily in a 64-bit address space. Miri models a
 /// reservation as one real allocation, so it gets a small one.
-#[cfg(not(miri))]
+#[cfg(all(not(miri), not(feature = "parser-study-small-regions")))]
 pub(crate) const REGION_BYTES: usize = 100 * 1024 * 1024 * 1024;
+
+// Valgrind rejects individual 100 GiB mappings with EINVAL. The isolated study
+// profile uses a smaller reservation, keeping commit policy and allocation
+// algorithms unchanged. Native timing and memory runs use production capacity.
+#[cfg(all(not(miri), feature = "parser-study-small-regions"))]
+pub(crate) const REGION_BYTES: usize = 1024 * 1024 * 1024;
 
 #[cfg(miri)]
 pub(crate) const REGION_BYTES: usize = 16 * 1024 * 1024;

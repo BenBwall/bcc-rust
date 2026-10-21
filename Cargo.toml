@@ -14,6 +14,9 @@ rust-version = "1.99.0"
 benchmarking-internals = ["dep:coz"]
 # Experimental parser study; never selected by the normal compilation pipeline.
 parser-recursive-descent-study = ["benchmarking-internals", "dep:stacker"]
+# Callgrind rejects the production 100 GiB reservation. Profile only; never use
+# this feature for native timing/RSS or to claim production resource capacity.
+parser-study-small-regions = ["benchmarking-internals"]
 # Vectorized lexer scans through the unstable `std::simd`; requires nightly.
 portable-simd = []
 
