@@ -5,6 +5,7 @@
 
 #[cfg(feature = "benchmarking-internals")]
 use std::io::Write;
+#[cfg(feature = "native")]
 use std::{
     env::var,
     sync::LazyLock,
@@ -15,6 +16,7 @@ use std::{
     clippy::disallowed_methods,
     reason = "The build script's output directory, read once on the host at build time."
 )]
+#[cfg(feature = "native")]
 static OUT_DIR: LazyLock<String> = LazyLock::new(|| var("OUT_DIR").unwrap());
 
 #[expect(
@@ -23,6 +25,7 @@ static OUT_DIR: LazyLock<String> = LazyLock::new(|| var("OUT_DIR").unwrap());
     clippy::disallowed_methods,
     reason = "Build-time host tooling that builds LLVM; never part of the compiler."
 )]
+#[cfg(feature = "native")]
 #[path = "build_support/llvm.rs"]
 mod llvm;
 #[expect(
@@ -32,9 +35,15 @@ mod llvm;
     reason = "Build-time host tooling that runs LLVM tools and bindgen; never part of the \
               compiler."
 )]
+#[cfg(feature = "native")]
 #[path = "build_support/native.rs"]
 mod native;
 
+// The browser feature has no host tooling, generated bindings, or link flags.
+#[cfg(not(feature = "native"))]
+fn main() {}
+
+#[cfg(feature = "native")]
 fn main() {
     println!("Running build script...");
     println!("cargo:rerun-if-changed=build.rs");

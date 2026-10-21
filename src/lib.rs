@@ -9,7 +9,7 @@
 //! Start with `translation_phases` (`translation_phases.rs`) for the phase map,
 //! then `pipeline::parse_translation_unit` for the batch driver,
 //! `pipeline::analyze_translation_unit` for semantic analysis and
-//! `pipeline::lower_translation_unit` for the middle end. Read [`run`] to
+//! `pipeline::lower_translation_unit` for the middle end. Read `run` to
 //! follow a command-line compilation.
 //!
 //! Files by role, each with any directory of the same name:
@@ -28,11 +28,20 @@
 
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
+// Browser execution engine and raw WebAssembly bridge
+#[cfg(feature = "abstract-machine")]
+pub mod abstract_machine;
+#[cfg(all(feature = "abstract-machine", target_arch = "wasm32"))]
+mod abstract_machine_wasm;
+
 // Compiler phases and driver
+#[cfg(feature = "native")]
 mod pipeline;
+#[cfg(feature = "native")]
 pub(crate) mod translation_phases;
 
 // Middle end
+#[cfg(feature = "native")]
 mod abi;
 #[cfg_attr(
     not(test),
@@ -43,6 +52,7 @@ mod abi;
                   the re-exports for hosts, traps and tools serve their tests."
     )
 )]
+#[cfg(feature = "native")]
 mod backend;
 #[cfg_attr(
     not(test),
@@ -53,7 +63,9 @@ mod backend;
                   prints and optimizes modules."
     )
 )]
+#[cfg(feature = "native")]
 pub(crate) mod ir;
+#[cfg(feature = "native")]
 mod lowering;
 #[cfg_attr(
     not(test),
@@ -64,23 +76,34 @@ mod lowering;
                   serve the optimizer's tests."
     )
 )]
+#[cfg(feature = "native")]
 mod optimizer;
 
 // Invocation and language choices
+#[cfg(feature = "native")]
 mod builtins;
+#[cfg(feature = "native")]
 mod cli;
+#[cfg(feature = "native")]
 pub(crate) mod configuration;
+#[cfg(feature = "native")]
 mod headers;
+#[cfg(feature = "native")]
 mod target;
 
 // Values, storage, and reporting
+#[cfg(feature = "native")]
 mod binary128;
+#[cfg(feature = "native")]
 pub(crate) mod diagnostics;
+#[cfg(feature = "native")]
 pub(crate) mod float_parsing;
+#[cfg(feature = "native")]
 pub(crate) mod util;
 
 // Measurements and test support
 #[cfg(feature = "benchmarking-internals")]
+#[cfg(feature = "native")]
 mod benchmarking;
 #[cfg(test)]
 #[expect(
@@ -90,6 +113,7 @@ mod benchmarking;
     reason = "Test fixtures name files with std paths and strings; the arena rule covers the \
  \n                  compiler, not its tests."
 )]
+#[cfg(feature = "native")]
 mod test_support;
 
 #[cfg(feature = "benchmarking-internals")]
@@ -111,6 +135,7 @@ pub use benchmarking::{
     sema_source,
     with_prepared_parse,
 };
+#[cfg(feature = "native")]
 pub use cli::{
     CompileStep,
     MainError,
