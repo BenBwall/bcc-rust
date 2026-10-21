@@ -75,7 +75,8 @@ pub(crate) fn object_writer(
 /// encoder lacks, such as a user section name outside `[A-Za-z0-9_.$-]`, a
 /// user `.pdata` section, a non-ASCII export name or more sections than a
 /// regular COFF object holds. Encoding finishes before any output is opened,
-/// so a refusal leaves nothing to undo.
+/// so a refusal leaves nothing to undo. If that assembly fails too, the error
+/// also gives the refusal, which names what left the direct path.
 pub(crate) fn build(
     text: &str,
     out_path: &Path,
@@ -85,9 +86,12 @@ pub(crate) fn build(
 ) -> io::Result<()> {
     match writer {
         | ObjectWriter::Direct => build_object(text, out_path, target, kind),
-        | ObjectWriter::DirectOrAssembler => encode_object(text, out_path, target, kind, |_| {
-            assemble(text, out_path, target, kind)
-        }),
+        | ObjectWriter::DirectOrAssembler =>
+            encode_object(text, out_path, target, kind, |refusal| {
+                assemble(text, out_path, target, kind).map_err(|assembler| {
+                    io::Error::new(assembler.kind(), FallbackError { refusal, assembler })
+                })
+            }),
         | ObjectWriter::Assembler => assemble(text, out_path, target, kind),
     }
 }
@@ -166,4 +170,14 @@ fn encode_object(
     file.write_all(&bytes)?;
     drop(file);
     Toolchain::bundled(target)?.assemble(object.path(), out_path, target, kind)
+}
+
+/// A listing the encoder refused that the assembler then failed to build. A
+/// missing MinGW installation, for example, fails only the assembler, so the
+/// refusal is the part that says why the object needed it.
+#[derive(Debug, thiserror::Error)]
+#[error("{refusal}; assembling the listing instead failed: {assembler}")]
+struct FallbackError {
+    refusal:   super::object::Error,
+    assembler: io::Error,
 }

@@ -2265,6 +2265,43 @@ int main(void) { printf("main\n"); return zero; }
         }
     }
 
+    /// When the default writer cannot assemble a listing its encoder refused,
+    /// here because only the assembler needs MinGW, the error gives the
+    /// refusal as well as the assembler's failure: an encodable listing would
+    /// have built without MinGW.
+    #[test]
+    fn default_windows_native_objects_report_the_refusal_when_assembly_fails() {
+        let object = temporary("native-refused-no-mingw.o");
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--target=x86_64-w64-windows-gnu", "--backend=native", "-c"])
+            .args([
+                "--input",
+                "__attribute__((section(\"my data\"))) int x = 1;\n",
+            ])
+            .arg("-o")
+            .arg(&object)
+            .env_remove("MINGW_ROOT")
+            .env("PATH", "")
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        let stderr = text(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        // Without the bundled clang the assembler fails before it looks for
+        // MinGW, and the refusal must still be given.
+        assert!(
+            stderr.contains(
+                "native object emission: unsupported COFF section name; assembling the listing \
+                 instead failed: cannot find "
+            ),
+            "{stderr}"
+        );
+        if bundled_clang().is_file() {
+            assert!(stderr.contains("cannot find MinGW"), "{stderr}");
+        }
+        assert!(!object.exists(), "{} was written", object.display());
+    }
+
     /// The bundled clang, which assembles the native listing.
     fn bundled_clang() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
