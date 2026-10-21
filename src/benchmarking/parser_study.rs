@@ -205,9 +205,12 @@ pub struct StudyMeasurement {
     pub peak_rss_after:     usize,
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "Untimed benchmark RSS snapshots read procfs outside the allocation interval."
+#[cfg_attr(
+    target_os = "linux",
+    expect(
+        clippy::disallowed_methods,
+        reason = "Untimed benchmark RSS snapshots read procfs outside the allocation interval."
+    )
 )]
 fn peak_rss() -> usize {
     // Linux getrusage retains a parent's high-water mark across fork/exec.
