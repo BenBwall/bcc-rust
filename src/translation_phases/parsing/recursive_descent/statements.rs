@@ -62,7 +62,7 @@ use crate::{
     util::bump::ArenaVec,
 };
 
-impl<'tu, 'p> Parser<'_, 'tu, 'p> {
+impl<'tu> Parser<'_, 'tu, '_> {
     /// C99: statements §6.8 paragraph 1, p. 131; PDF p. 143. Each recursive
     /// substatement restores precisely the scope depth it observed on entry.
     #[inline(never)]
@@ -324,7 +324,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 );
                 let body = self.rd_statement(Some(ScopeKind::ImplicitIteration), false)?;
                 source = self.context.merge_vectors(source, body.source_vectors);
-                StatementType::For(self.alloc_syntax(ForStatement {
+                StatementType::For(self.alloc_syntax_part(ForStatement {
                     initializer,
                     condition_expression: condition,
                     iteration_expression: iteration,

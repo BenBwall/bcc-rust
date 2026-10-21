@@ -61,7 +61,7 @@ use crate::{
     },
 };
 
-impl<'tu, 'p> Parser<'_, 'tu, 'p> {
+impl<'tu> Parser<'_, 'tu, '_> {
     pub(super) fn rd_expression(
         &mut self,
         mode: ExpressionMode,
