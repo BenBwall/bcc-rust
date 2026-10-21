@@ -12,7 +12,12 @@ use std::{
     cell::RefCell,
 };
 
-use crate::abstract_machine::Session;
+use crate::abstract_machine::{
+    self,
+    Program,
+    Session,
+    State,
+};
 
 /// Compile caller-owned UTF-8 source and retain a fresh session.
 ///
@@ -42,9 +47,30 @@ pub unsafe extern "C" fn bcc_compile(ptr: *const u8, len: usize) -> u32 {
         return fail("source must be UTF-8");
     };
     BRIDGE.with_borrow_mut(|bridge| {
-        let session = Session::compile(source);
-        bridge.response = session.state_json();
-        bridge.session = Some(session);
+        bridge.session = None;
+        bridge.program = None;
+        match abstract_machine::compile(source) {
+            | Ok(program) => {
+                let session = program.session();
+                bridge.response = session.state_json();
+                bridge.session = Some(session);
+                bridge.program = Some(program);
+            },
+            | Err(diagnostic) => {
+                bridge.response = State {
+                    step:            0,
+                    status:          "error",
+                    source_range:    diagnostic.source_range,
+                    event:           Default::default(),
+                    frames:          Default::default(),
+                    objects:         Default::default(),
+                    pending_effects: Default::default(),
+                    diagnostics:     [diagnostic].into(),
+                    return_value:    None,
+                }
+                .to_json();
+            },
+        }
     });
     0
 }
@@ -74,11 +100,21 @@ pub extern "C" fn bcc_back() -> u32 {
 }
 
 /// Restore the compiled session's initial state.
+#[expect(
+    clippy::disallowed_types,
+    reason = "The ABI owns an error response when no program has been compiled."
+)]
 #[unsafe(no_mangle)]
 pub extern "C" fn bcc_reset() -> u32 {
-    respond(|session| {
-        session.reset();
-        session.state_json()
+    BRIDGE.with_borrow_mut(|bridge| {
+        let Some(program) = &bridge.program else {
+            bridge.response = String::from(NO_SESSION);
+            return 1;
+        };
+        let session = program.session();
+        bridge.response = session.state_json();
+        bridge.session = Some(session);
+        0
     })
 }
 
@@ -176,6 +212,7 @@ thread_local! {
         reason = "The browser ABI owns its persistent JSON response buffer."
     )]
     static BRIDGE: RefCell<Bridge> = const { RefCell::new(Bridge {
+        program: None,
         session: None,
         response: String::new(),
     }) };

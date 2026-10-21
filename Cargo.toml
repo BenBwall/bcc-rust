@@ -10,9 +10,6 @@ categories = ["command-line-utilities", "development-tools", "compilers"]
 repository = "https://www.github.com/bwallker/bcc-rust"
 rust-version = "1.99.0"
 
-[lib]
-crate-type = ["rlib", "cdylib"]
-
 [[bin]]
 name = "bcc-rust"
 path = "src/main.rs"
