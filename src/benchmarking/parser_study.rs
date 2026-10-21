@@ -8,9 +8,15 @@ use std::{
 
 use super::input::benchmark_context;
 use crate::{
+    diagnostics::{
+        ColorChoice,
+        Renderer,
+        ToDiagnostic,
+    },
     pipeline::with_preprocessor,
     translation_phases::{
         Context,
+        GetSourceVectors,
         parsing::{
             InspectionOptions,
             ParsedTranslationUnit,
@@ -97,14 +103,22 @@ impl StudyPrepared<'_, '_, '_> {
         let peak = accounting::peak();
         let inspection = inspect.then(|| {
             let arena = Bump::new();
-            unit.inspect(
-                &arena,
-                self.context,
-                InspectionOptions {
-                    show_locations: true,
-                },
-            )
-            .to_owned()
+            let mut text = unit
+                .inspect(
+                    &arena,
+                    self.context,
+                    InspectionOptions {
+                        show_locations: true,
+                    },
+                )
+                .to_owned();
+            text.push_str("\n=== diagnostics ===\n");
+            let mut renderer = Renderer::new(ColorChoice::Plain);
+            for error in &self.context.pending_errors {
+                let diagnostic = error.diagnostic_in(self.context, error.source_vectors(), &arena);
+                text.push_str(renderer.render_text(&diagnostic, self.context));
+            }
+            text
         });
         StudyMeasurement {
             nanoseconds: elapsed.as_nanos(),
