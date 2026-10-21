@@ -102,9 +102,9 @@ their tree assertions with small differential inputs; it is not an exhaustive
 language-mode, extension-policy, semantic, or translation-limit suite. Large
 depth/width workloads remain in `scripts/parser_study_inputs.py`.
 
-## Parent harness handoff
+## Running differential checks
 
-The generator neither builds nor invokes the compiler. Once the parent builds
+The generator neither builds nor invokes the compiler. After building
 `.scratch/parser-study/study-release`, a focused comparison can run as follows:
 
 ```sh
@@ -144,4 +144,4 @@ The inspection comparison covers canonical ASTs, source locations, and rendered
 diagnostics. Malformed recovery differences are evidence to triage against the
 machine parser, not a reason to silently relabel or drop the case. Corpus-local
 verification checks generation, manifest integrity, and determinism only;
-compiler comparisons and prototype fixes belong to the parent study.
+compiler comparisons and prototype fixes belong to the measurement study.

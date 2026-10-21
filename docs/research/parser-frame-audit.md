@@ -2,8 +2,8 @@
 
 Date: 2026-10-21. Baseline source: `9c11aca8167245020f4308697d0883152b49e3ca`.
 Source references below describe that baseline unless explicitly marked as
-parent-owned study work. The checkout changed concurrently during this audit;
-the study harness and experimental parser are outside this document's changes.
+subsequent study work. The study harness and experimental parser are described
+in the main measurement report.
 
 ## Findings and evidence boundary
 
@@ -15,12 +15,9 @@ experiments are removing a redundant alignment-table copy, simplifying cursor
 lookahead, eliminating duplicate type-name classification, and making
 designation state lazy. None requires changing the grammar architecture.
 
-The initial audit was read-only apart from this document. A subsequently
-authorized, feature-gated follow-up is recorded at the end. No Cargo commands,
-compiler workloads, profiler runs, timing runs, downloads, or dependency changes
-were performed by the research agent. Costs and predicted improvements below
-are hypotheses, except for directly visible operations and recorded size-test
-expectations. No speedup, current test pass, or actual frame layout is claimed.
+This source audit records cost hypotheses rather than measured speedups.
+The feature-gated alignment-table experiment is described at the end.
+Measurements and validation are in [the study report](parser-recursive-descent.md).
 
 Read guidance: [.agents/AGENTS.md](../../.agents/AGENTS.md),
 [parser-roadmap.md](../../parser-roadmap.md), [GLOSSARY.md](../../GLOSSARY.md),
@@ -104,7 +101,7 @@ State contributing to that footprint:
 
 Boxing every remaining family might shrink the enum, but adds pointer chasing,
 pool traffic and cold allocations. First identify the largest remaining inline
-variant with a parent-owned layout probe; test boxing that variant alone and
+variant with a layout probe; test boxing that variant alone and
 verify that the enum actually shrinks. Embedding small inline vectors may save
 allocations while enlarging every control slot, an opposing tradeoff.
 
@@ -324,7 +321,7 @@ constructs actions/frames and performs most of the existing work; it does not
 measure a fully specialized recursive grammar implementation. Match semantics
 and metric coverage before interpreting either result.
 
-## Available tooling, corpora and parent-reported evidence
+## Available tooling, corpora and preliminary measurement evidence
 
 Local read-only observations: Linux x86-64, `rustc 1.99.0
 (b940084d7 2026-09-28)`, GCC `15.2.0`, GNU binutils `2.46`, GNU `/usr/bin/time`
@@ -339,22 +336,21 @@ Valgrind was absent from the initial PATH scan and available later as
 **3.26.0**, including Callgrind, Cachegrind, Massif, DHAT and Memcheck engines.
 `callgrind_annotate --version` printed 3.26.0 but returned status 255;
 `valgrind --version` and `callgrind_control --version` returned 0. Availability
-does not establish that these engines can profile this program. No profiler
-workload was run by this agent. Heaptrack, samply, flamegraph, hyperfine, coz,
+does not establish that these engines can profile this program. Heaptrack, samply, flamegraph, hyperfine, coz,
 rr, pahole, GDB and LLVM disassembly/DWARF tools were not found on PATH in the
 initial scan. `readelf`/`objdump` are available for later binary inspection.
 No target directory was initially present in this worktree or the checkout's
 main root, and `CARGO_TARGET_DIR` was unset; build artifacts may appear as the
-parent proceeds.
+study proceeds.
 
-Parent update supplied during this audit, **not independently reproduced**:
+Preliminary measurement observations (superseded by the final study report):
 
 - Installed `linux-perf 7.0.0-38`; hardware instructions/cycles events are
   unavailable in this VM: `No supported events found. instructions:u not
   supported`. Software `task-clock` works. Do not report software task-clock as
   retired instructions or cycles.
 - Default Callgrind aborts when a 100 GiB arena `mmap` is rejected with `EINVAL`.
-  Parent added an opt-in `parser-study-small-regions` configuration with 1 GiB
+  The study uses an opt-in `parser-study-small-regions` configuration with 1 GiB
   reservations solely for profiling. Keep native timing/RSS runs on the default
   100 GiB regions. Callgrind results from the 1 GiB configuration require that
   label and a successful correctness cross-check; they are a different memory
@@ -363,7 +359,7 @@ Parent update supplied during this audit, **not independently reproduced**:
   preprocessing produced **693,358 bytes**. Preliminary baseline: about
   **42 ms** phase-7 time, **616,192 bytes** parse-arena use,
   **15,990,600 bytes** TU growth and **8 diagnostics**, still to inspect.
-  These are preliminary parent observations, not this audit's measurements or
+  These are preliminary observations, not this audit's measurements or
   a clean acceptance/performance conclusion. Record archive hash, preprocessing
   flags, input hash, features and repetitions in the measurement report.
 - SQLite's official domain is approval-blocked; no SQLite timing is available
@@ -394,7 +390,7 @@ and input hashes. Separate phase 7 from the full pipeline. Existing
 [PreparedParse::parse](../../src/benchmarking/prepared.rs#L44) includes parser
 construction and summarization, with owning-arena destruction outside that
 interval. Check local-result destruction boundaries when comparing the
-parent-owned study harness so the two intervals mean the same thing.
+study harness so the two intervals mean the same thing.
 
 For each candidate retain roots, structured diagnostics/recovery and full
 ordered provenance equivalence; inspection text is useful but should not be
@@ -414,7 +410,7 @@ peak because the peaks can occur at different times.
 
 The stock [memory harness](../../benches/memory.rs#L128) iterates
 `BenchmarkInput::ALL`, not `PARSER_STRESS`; a memory result for expression-heavy,
-declaration-heavy or Lua input therefore needs the parent's additional
+declaration-heavy or Lua input therefore needs the additional
 measurement seam. The `benchmarking-internals` executable/coz progress point
 measures preprocessing, as README warns. Callgrind collection should bracket
 only the intended phase-7 interval; whole-process data would include untimed
@@ -422,21 +418,19 @@ input preparation despite Criterion's clock boundaries. Default heap-only
 profilers can miss VM-backed arenas and native stacks; use arena counters and
 OS memory accounting, and label any page/stack profiling options explicitly.
 
-The parent owns measurements and validation gates. The initial audit introduced
-no source, harness or dependency changes; the authorized follow-up below owns
-only `token_cursor.rs` and these notes.
+Measurements and validation gates are recorded in the main study report.
+The isolated alignment experiment changes only `token_cursor.rs`.
 
-## Authorized follow-up: alignment table storage experiment
+## Alignment table storage experiment
 
-After committing the audit as `45df18c7`, the parent authorized candidate 1
-behind `parser-study-leak-alignment` and a benchmark-only token-count accessor.
-The parent owns the Cargo feature declaration and benchmark wrappers.
+Candidate 1 is implemented behind `parser-study-leak-alignment`, alongside a
+benchmark-only token-count accessor.
 
 Changes in `token_cursor.rs` only:
 
 - `Upstream::token_count()` is `pub(super)`, gated on
   `benchmarking-internals`, and returns `self.tokens.len()` without fields or
-  counters. The parent's `PreprocessedTranslationUnit::study_token_count()`
+  counters. The `PreprocessedTranslationUnit::study_token_count()`
   wrapper can normalize profiling observations by the same phase-6 token count.
 - In `alignment_argument_closes`, mutually exclusive `cfg` blocks assign
   `self.alignment_closures = Some(matches.leak())` when
@@ -444,15 +438,14 @@ Changes in `token_cursor.rs` only:
   `Some(arena.alloc_slice_copy(&matches))` otherwise. Table construction,
   delimiter matching, cache lifetime and the returned boolean are unchanged.
 
-No build or test was run by this agent, as requested; the parent will run the
-existing alignment suite. Compare the large alignment fixture with and without
+Compare the large alignment fixture with and without
 the feature using its exact token count, parse-arena high water (`parse_bytes`),
 TU growth, diagnostics and syntax/provenance output. The predicted eliminated
 allocation is one N-byte boolean table; the exact high-water difference may
 also reflect alignment and arena allocation ordering and must be measured.
 Use a no-alignment control to confirm the experiment only affects cache users.
 
-For Callgrind, both comparison arms must use the parent's same 1 GiB
+For Callgrind, both comparison arms must use the same 1 GiB
 `parser-study-small-regions` configuration and phase-7 collection boundary;
 change only `parser-study-leak-alignment`. Report simulated instructions and
 cache/branch events actually collected, normalized per token where useful.
