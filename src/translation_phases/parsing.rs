@@ -174,6 +174,13 @@ use crate::{
     },
 };
 
+// Keep the ordinary build's driver return ABI unchanged. The study driver
+// additionally returns typed child values to native recursive callers.
+#[cfg(feature = "parser-recursive-descent-study")]
+type DriverValue<'tu> = ParseValue<'tu>;
+#[cfg(not(feature = "parser-recursive-descent-study"))]
+type DriverValue<'tu> = ExternalDeclaration<'tu>;
+
 impl<'tu> Parser<'_, 'tu, '_> {
     /// Parses the complete phase-7 input into one source-ordered translation
     /// unit whose roots and syntax live in the translation-unit arena.
@@ -214,14 +221,33 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// C99: translation-unit is a nonempty sequence of external-declaration
     /// values under §6.9, p. 140; PDF p. 152.
     fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
-        match self.drive_until(None)? {
-            | ParseValue::ExternalDeclaration(root) => Some(root),
-            | _ => unreachable!("translation-unit driver returns an external declaration"),
+        #[cfg(feature = "parser-recursive-descent-study")]
+        {
+            match self.drive_until(None)? {
+                | ParseValue::ExternalDeclaration(root) => Some(root),
+                | _ => unreachable!("translation-unit driver returns an external declaration"),
+            }
+        }
+        #[cfg(not(feature = "parser-recursive-descent-study"))]
+        self.drive_until()
+    }
+
+    fn driver_external(root: ExternalDeclaration<'tu>) -> DriverValue<'tu> {
+        #[cfg(feature = "parser-recursive-descent-study")]
+        {
+            ParseValue::ExternalDeclaration(root)
+        }
+        #[cfg(not(feature = "parser-recursive-descent-study"))]
+        {
+            root
         }
     }
 
     /// Shared action loop; a study fallback may stop when its child reduces.
-    fn drive_until(&mut self, _child_depth: Option<usize>) -> Option<ParseValue<'tu>> {
+    fn drive_until(
+        &mut self,
+        #[cfg(feature = "parser-recursive-descent-study")] child_depth: Option<usize>,
+    ) -> Option<DriverValue<'tu>> {
         // A resource failure is terminal: the remaining input is neither
         // fetched nor parsed, so it cannot grow the exhausted storage.
         if self.resource_limit_reported {
@@ -234,11 +260,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     self.limits.source_segments,
                     Some(token),
                 )
-                .map(ParseValue::ExternalDeclaration);
+                .map(Self::driver_external);
         }
         loop {
             #[cfg(feature = "parser-recursive-descent-study")]
-            if _child_depth == Some(self.frames.len()) && self.returned.is_some() {
+            if child_depth == Some(self.frames.len()) && self.returned.is_some() {
                 return self.returned.take();
             }
             #[cfg(test)]
@@ -260,7 +286,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.context.discard_completed_macro_locations(
                     self.cursor.previous.map(|token| token.source_vectors),
                 );
-                return Some(ParseValue::ExternalDeclaration(external));
+                return Some(Self::driver_external(external));
             }
             debug_assert!(
                 self.returned.is_none() || !self.frames.is_empty(),
@@ -299,7 +325,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                             ParserResource::ExternalDeclarations,
                             self.limits.external_declarations,
                         )
-                        .map(ParseValue::ExternalDeclaration);
+                        .map(Self::driver_external);
                 }
                 self.push_frame(ParseFrame::ExternalDeclaration(
                     ExternalDeclarationFrame::new(
@@ -312,7 +338,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             if self.frames.len() > self.limits.frame_depth {
                 return self
                     .resource_failure(ParserResource::FrameDepth, self.limits.frame_depth)
-                    .map(ParseValue::ExternalDeclaration);
+                    .map(Self::driver_external);
             }
             // The syntax-node limit was checked after the previous step. Since
             // then only a consumed token, a pushed frame (new frames retain no
@@ -346,7 +372,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             if self.context.source_segment_count() > self.limits.source_segments {
                 return self
                     .resource_failure(ParserResource::SourceSegments, self.limits.source_segments)
-                    .map(ParseValue::ExternalDeclaration);
+                    .map(Self::driver_external);
             }
 
             #[cfg(test)]
@@ -375,7 +401,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             {
                 return self
                     .resource_failure(ParserResource::SyntaxNodes, self.limits.syntax_nodes)
-                    .map(ParseValue::ExternalDeclaration);
+                    .map(Self::driver_external);
             }
 
             match action {
@@ -411,7 +437,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                                     ParserResource::SyntaxNodes,
                                     self.limits.syntax_nodes,
                                 )
-                                .map(ParseValue::ExternalDeclaration);
+                                .map(Self::driver_external);
                         }
                         if self.context.source_segment_count() > self.limits.source_segments {
                             return self
@@ -419,7 +445,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                                     ParserResource::SourceSegments,
                                     self.limits.source_segments,
                                 )
-                                .map(ParseValue::ExternalDeclaration);
+                                .map(Self::driver_external);
                         }
                         continue;
                     }
