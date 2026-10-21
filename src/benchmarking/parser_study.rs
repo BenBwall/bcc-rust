@@ -205,8 +205,24 @@ pub struct StudyMeasurement {
     pub peak_rss_after:     usize,
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Untimed benchmark RSS snapshots read procfs outside the allocation interval."
+)]
 fn peak_rss() -> usize {
-    #[cfg(unix)]
+    // Linux getrusage retains a parent's high-water mark across fork/exec.
+    // VmHWM belongs to this executable's address space instead.
+    #[cfg(target_os = "linux")]
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        return status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmHWM:"))
+            .and_then(|text| text.split_whitespace().next())
+            .and_then(|text| text.parse::<usize>().ok())
+            .unwrap_or(0)
+            * 1024;
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
     {
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
         // SAFETY: getrusage writes a complete rusage to a valid output pointer.
