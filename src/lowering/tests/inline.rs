@@ -1874,10 +1874,26 @@ fn always_inline_order_rounds_floating_values_before_folding() {
     let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
         .with_gnu_extensions(true);
     for (extra, probe, emitted) in [
-        ("const float k = 16777217.0;", "if ((int)k == 16777216) h(0);", true),
-        ("const float k = 16777219.0;", "if ((int)k == 16777219) h(0);", false),
-        ("const float k[1] = {16777217.0};", "if ((int)k[0] == 16777216) h(0);", true),
-        ("struct S { float f; }; const struct S k = {16777217.0};", "if ((int)k.f == 16777216) h(0);", true),
+        (
+            "const float k = 16777217.0;",
+            "if ((int)k == 16777216) h(0);",
+            true,
+        ),
+        (
+            "const float k = 16777219.0;",
+            "if ((int)k == 16777219) h(0);",
+            false,
+        ),
+        (
+            "const float k[1] = {16777217.0};",
+            "if ((int)k[0] == 16777216) h(0);",
+            true,
+        ),
+        (
+            "struct S { float f; }; const struct S k = {16777217.0};",
+            "if ((int)k.f == 16777216) h(0);",
+            true,
+        ),
         ("const float k = 1e-50;", "if (!(_Bool)k) h(0);", true),
         ("const float k[1] = {1e-50};", "if (!k[0]) h(0);", true),
         ("const double k = 1.0i;", "if (!(_Bool)k) h(0);", true),
@@ -1887,4 +1903,87 @@ fn always_inline_order_rounds_floating_values_before_folding() {
     ] {
         assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
     }
+}
+
+#[test]
+fn always_inline_order_preserves_complex_and_aggregate_conditional_arms() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for probe in [
+        "(void)(k ? (struct S){0} : (h(0), (struct S){0}));",
+        "(void)(k ? (h(0), (struct S){0}) : (struct S){0});",
+        "(void)(k ? 1.0i : (h(0), 2.0i));",
+        "(void)(k ? (h(0), 1.0i) : 2.0i);",
+        "(void)(k ? 1.0 : (h(0), 2.0i));",
+        "(void)(k ? (k ? (struct S){0} : (h(0), (struct S){0})) : (struct S){0});",
+    ] {
+        assert!(
+            h_first_after("const int k = 1; struct S { int x; };", probe, gnu),
+            "{probe}"
+        );
+    }
+    assert!(!h_first_after(
+        "const int k = 1;",
+        "(void)(k ? 1 : (h(0), 2));",
+        gnu
+    ));
+    assert!(!h_first_after(
+        "const int k = 1;",
+        "(void)(k ? (void)1 : (void)h(0));",
+        gnu
+    ));
+}
+
+#[test]
+fn always_inline_order_sees_labels_in_case_expressions() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for probe in [
+        "switch (1) { case 1: break; case sizeof(({ L:; 1; })): h(0); break; }",
+        "switch (1) { case 1: break; case (1 ? 0 : ({ L:; 1; })): h(0); break; }",
+        "switch (1) { case 1: break; case sizeof(({ L:; 1; })) ... 6: h(0); break; }",
+        "switch (1) { case 1: break; case 3 ... sizeof(({ L:; 1; })): h(0); break; }",
+    ] {
+        assert!(h_first(probe, gnu), "{probe}");
+    }
+    assert!(!h_first(
+        "switch (1) { case 1: break; case sizeof(int): h(0); break; }",
+        gnu
+    ));
+}
+
+#[test]
+fn always_inline_order_bounds_weak_names_at_eager_bodies() {
+    const CYCLE: &str =
+        "inline __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) \
+         int g(int); inline __attribute__((always_inline)) int h(int); inline \
+         __attribute__((always_inline)) int f(int x) { return x ? g(x-1) : 0; } inline \
+         __attribute__((always_inline)) int g(int x) { return x ? h(x-1) : 0; } inline \
+         __attribute__((always_inline)) int h(int x) { return x ? f(x-1) : 0; }";
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (specifier, eager) in [
+        ("static __attribute__((used))", true),
+        ("inline __attribute__((used))", true),
+        ("static __attribute__((constructor))", true),
+        ("static __attribute__((destructor))", true),
+        ("extern inline", true),
+        ("static", false),
+    ] {
+        let source = format!(
+            "const int k=0; {CYCLE} {specifier} int probe(void) {{ if (k) h(0); return 0; }} int \
+             main(void) {{ return probe() + f(4); }}\n#pragma weak k\n"
+        );
+        assert_eq!(
+            always_inline_order(&source, gnu),
+            if eager { "fgh" } else { "fhg" },
+            "{source}"
+        );
+    }
+    // `used` does not make a plain C99 inline-only body appear at O0.
+    let source = format!("const int k=0; {CYCLE} inline __attribute__((used)) int probe(void) {{ if(k) h(0); return 0; }}\n#pragma weak k\nint main(void) {{ return f(4); }}");
+    assert_eq!(always_inline_order(&source, gnu), "fgh");
+    let source = source.replace("inline __attribute__((used))", "inline __attribute__((used,always_inline))");
+    assert_eq!(always_inline_order(&source, gnu), "fgh");
+
 }

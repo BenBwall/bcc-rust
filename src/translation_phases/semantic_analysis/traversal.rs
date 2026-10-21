@@ -93,17 +93,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Expression(left_expression));
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
+                // The result type is known only after both arms. Clang's
+                // complex and aggregate emitters preserve both arms even
+                // for a folded condition; scalar emission skips one.
+                let outer = self.skipped_state();
                 self.work
-                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
-                        self.functions.unvisited,
+                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, 2, outer,
                     )));
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
-                    self.functions.dead,
-                )));
                 self.work.push(Work::Expression(c.else_expression));
-                self.dead_arm(c.condition_expression, false, c.else_expression);
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, 1, outer,
+                    )));
                 self.work.push(Work::Expression(c.then_expression));
-                self.dead_arm(c.condition_expression, true, c.then_expression);
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, 0, outer,
+                    )));
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {

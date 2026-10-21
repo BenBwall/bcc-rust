@@ -121,6 +121,9 @@ pub(super) struct State<'tu, 's> {
     /// depth of a query that `folding::DEPTH` cut short and the weak
     /// horizon of one that read a weak name.
     folded:                  ArenaMap<'s, usize, folding::Memo<Option<folding::Value>>>,
+    /// A conditional's arm boundaries and insertion states, resolved after
+    /// its result type distinguishes scalar from complex/aggregate emission.
+    conditional_marks:       ArenaMap<'s, usize, [(usize, Option<usize>, usize); 3]>,
     /// The evaluation in progress was cut short by `folding::DEPTH`.
     depth_cut:               bool,
     /// Whether an expression holds a label, by address.
@@ -209,6 +212,7 @@ impl<'s> State<'_, 's> {
             label_positions:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             walked:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             folded:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            conditional_marks:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             depth_cut:               false,
             refolds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             labeled_expressions:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),

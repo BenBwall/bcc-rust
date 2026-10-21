@@ -117,6 +117,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         e: &'tu Expression<'tu>,
     ) {
+        self.finish_conditional_arms(e);
         if self.functions.dead {
             return;
         }
@@ -175,6 +176,90 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if self.joins_paths(e) {
             self.functions.emission.orphan = None;
         }
+    }
+
+    /// Record an arm boundary and start its neighbor in the condition's
+    /// insertion state, so one arm's jumps do not affect the other.
+    pub(in crate::translation_phases::semantic_analysis) fn mark_conditional_arm(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        index: usize,
+        outer: super::super::functions::Skipped,
+    ) {
+        let mark = (
+            self.reference_count(),
+            self.functions.emission.orphan,
+            self.functions.emission.context_joins.len(),
+        );
+        let marks = self
+            .functions
+            .emission
+            .conditional_marks
+            .entry(std::ptr::from_ref(expression).addr())
+            .or_insert([(0, None, 0); 3]);
+        marks[index] = mark;
+        if index == 1 {
+            self.functions.emission.orphan = marks[0].1;
+        }
+        self.functions.dead = outer.dead;
+        self.functions.unvisited = outer.unvisited;
+    }
+
+    /// Scalar conditional emission skips an unlabeled unselected arm;
+    /// complex and aggregate emission generates both. Resolve this after
+    /// typing, preserving each arm's own skipped references and insertion
+    /// state rather than undoing skips made while analyzing its statements.
+    /// C99: §6.5.15 paragraphs 3-6, pp. 90-91; PDF pp. 102-103.
+    fn finish_conditional_arms(&mut self, expression: &'tu Expression<'tu>) {
+        let Some(marks) = self
+            .functions
+            .emission
+            .conditional_marks
+            .remove(&std::ptr::from_ref(expression).addr())
+        else {
+            return;
+        };
+        let (ExpressionType::Conditional(conditional)
+        | ExpressionType::OmittedConditional(conditional)) = expression.kind
+        else {
+            return;
+        };
+        if self.conditional_has_scalar_emitter(expression)
+            && let Some(taken) = self.folded_condition(conditional.condition_expression)
+        {
+            let skipped = if taken {
+                conditional.else_expression
+            } else {
+                conditional.then_expression
+            };
+            if !self.expression_contains_label(skipped) {
+                let index = usize::from(taken);
+                self.skip_references(marks[index].0..marks[index + 1].0);
+                drop(
+                    self.functions
+                        .emission
+                        .context_joins
+                        .drain(marks[index].2..marks[index + 1].2),
+                );
+            }
+            self.functions.emission.orphan = marks[if taken { 1 } else { 2 }].1;
+        }
+    }
+
+    /// Only scalar and void conditional emitters fold their condition.
+    fn conditional_has_scalar_emitter(&self, expression: &'tu Expression<'tu>) -> bool {
+        let ty = self.types.non_atomic(self.expression_info(expression).ty);
+        !matches!(self.types.nodes[ty.index],
+            TypeKind::Tag(tag) if self.types.tags[tag].kind != TagKind::Enum
+        ) && !matches!(
+            self.types.nodes[ty.index],
+            TypeKind::Scalar(
+                Scalar::ComplexFloat
+                    | Scalar::ComplexDouble
+                    | Scalar::ComplexLongDouble
+                    | Scalar::ComplexFloat128
+            )
+        )
     }
 
     /// Whether an operand of `e` that this analysis visits first, but code
@@ -344,18 +429,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         conditional: &'tu ConditionalExpression<'tu>,
         middle: bool,
     ) -> bool {
-        let ty = self.types.non_atomic(self.expression_info(e).ty);
-        let aggregate = matches!(
-            self.types.nodes[ty.index],
-            TypeKind::Tag(_)
-                | TypeKind::Scalar(
-                    Scalar::ComplexFloat
-                        | Scalar::ComplexDouble
-                        | Scalar::ComplexLongDouble
-                        | Scalar::ComplexFloat128
-                )
-        );
-        if aggregate {
+        if !self.conditional_has_scalar_emitter(e) {
             return true;
         }
         if self

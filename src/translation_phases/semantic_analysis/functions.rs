@@ -507,6 +507,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.dead = outer.dead || skipped;
                 self.functions.unvisited = outer.unvisited || skipped;
             },
+            | FunctionWork::ConditionalMark(expression, index, outer) =>
+                self.mark_conditional_arm(expression, index, outer),
             | FunctionWork::GenericMark(generic) => {
                 let at = self.functions.uses.len();
                 let scratch = self.scratch;
@@ -1958,24 +1960,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self.dll_storage(binding) != Some(super::DllStorage::Export)
     }
 
+    /// Whether Clang's code generation emits definition `f` of `binding`
+    /// where it appears rather than after the unit: a retained definition,
+    /// or a non-discardable external definition by the declarations seen
+    /// so far (`CodeGenModule::EmitGlobal`, `MustBeEmitted`).
+    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125.
+    fn emitted_where_defined(&mut self, binding: usize, _f: &FunctionDefinition<'tu>) -> bool {
+        let entity = self.entity_of(binding);
+        self.retained_by_used(entity)
+            || self.attributes.init_function(entity)
+            || (self.bindings[binding].linkage == Linkage::External
+                && self
+                    .functions
+                    .entities
+                    .get(&self.function_identity(binding))
+                    .is_some_and(|entity| self.body_external(entity)))
+    }
+
     /// Whether every file-scope declaration selects a C99 inline-only
     /// body, independently of the target's external-inline ABI rule.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
-    /// Whether Clang's code generation emits definition `f` of `binding`
-    /// where it appears rather than after the unit: an external function
-    /// that neither it nor an earlier declaration declares `inline`
-    /// (`CodeGenModule::EmitGlobal`, `MustBeEmitted`).
-    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125.
-    fn emitted_where_defined(&self, binding: usize, f: &FunctionDefinition<'tu>) -> bool {
-        self.bindings[binding].linkage == Linkage::External
-            && !f.declaration_specifiers.function_specifiers.is_inline
-            && self
-                .functions
-                .entities
-                .get(&self.function_identity(binding))
-                .is_none_or(|entity| !entity.msvc_inline.inline_declared)
-    }
-
     fn inline_only_declarations(&self, binding: usize) -> bool {
         self.functions
             .entities
@@ -2084,6 +2088,9 @@ pub(super) enum FunctionWork<'tu> {
     /// the skipped state of the code around the condition; an operand that
     /// holds a label is not skipped.
     DeadArm(&'tu Expression<'tu>, bool, Skipped, &'tu Expression<'tu>),
+    /// The reference boundaries and insertion states of a conditional's
+    /// arms, before its result type settles whether either is skipped.
+    ConditionalMark(&'tu Expression<'tu>, usize, Skipped),
     /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
     /// the arm holds a label, which keeps Clang from skipping it.
     DeadStatementArm(
