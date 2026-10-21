@@ -74,3 +74,36 @@ It keeps allocation and commit algorithms intact. Native time, RSS, and capacity
 runs use the ordinary 100 GiB reservations.
 
 Measurements, prototype coverage, checks, and recommendation will follow here.
+
+## Saved baseline repetitions
+
+Initial feature-disabled harness, seven consecutive samples per input (not yet
+the interleaved candidate comparison):
+
+| Input | Minimum ms | Median ms | CV % | Parse arena bytes | TU growth bytes | Global allocations / bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| lua.i | 36.514 | 42.772 | 9.9 | 616,192 | 15,990,600 | 0 / 0 |
+| bytecode.i | 0.126 | 0.141 | 12.4 | 17,736 | 18,352 | 0 / 0 |
+| mandel.i | 0.102 | 0.105 | 30.9 | 10,696 | 10,832 | 0 / 0 |
+| parentheses-256.c | 0.149 | 0.157 | 7.9 | 131,224 | 12,792 | 0 / 0 |
+| parentheses-16384.c | 6.295 | 7.696 | 7.4 | 8,130,712 | 786,936 | 0 / 0 |
+| unary-256.c | 0.119 | 0.120 | 10.2 | 131,224 | 12,792 | 0 / 0 |
+| assignment-256.c | 0.088 | 0.095 | 4.8 | 37,208 | 25,104 | 0 / 0 |
+| conditional-256.c | 0.253 | 0.281 | 5.2 | 255,704 | 43,536 | 0 / 0 |
+| statements-256.c | 0.193 | 0.197 | 6.9 | 190,296 | 25,216 | 0 / 0 |
+| blocks-256.c | 0.222 | 0.225 | 3.2 | 419,224 | 19,096 | 0 / 0 |
+| declarator-256.c | 0.145 | 0.151 | 6.7 | 128,008 | 14,480 | 0 / 0 |
+| initializer-256.c | 0.189 | 0.194 | 8.2 | 292,824 | 24,800 | 0 / 0 |
+| chain-10000.c | 1.275 | 1.306 | 5.0 | 4,824 | 960,432 | 0 / 0 |
+| initializer-list-10000.c | 3.788 | 3.818 | 2.0 | 1,575,792 | 1,120,224 | 0 / 0 |
+
+A software `cpu-clock:u` sample profile (499 Hz, 100 Lua preparations/parses)
+completed with zero lost samples. It is a full-process sample, not a phase-7-only
+count: attribution to the named phase-7 boundary or parser symbols is useful,
+but shared context helpers and inlining prevent treating its percentages as an
+exact parser-cost partition. Callgrind will supply the isolated call graph.
+
+The next build/check jobs are queued behind shared wrapper locks. The prototype
+now covers precedence-climbing expressions and recursive statements/blocks,
+with retained frame fallbacks for types, declarations, initializers and extension
+productions. It has not yet passed compilation or differential validation.
