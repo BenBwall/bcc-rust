@@ -119,10 +119,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     ) -> Option<Operand<'tu>> {
         let errors = self.hard_error_count;
         let mut left = self.rd_prefix(mode, boundary)?;
-        loop {
-            let Some(token) = self.cursor.current() else {
-                break;
-            };
+        while let Some(token) = self.cursor.current() {
             if limit >= 13 && is_operator(Some(token), OperatorTokenType::QuestionMark) {
                 self.rd_consume();
                 let omitted = is_operator(self.cursor.current(), OperatorTokenType::Colon);
@@ -182,7 +179,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
             if precedence > limit {
                 break;
             }
-            if is_assignment_operator(operator) && !left.unary {
+            let invalid_assignment = is_assignment_operator(operator) && !left.unary;
+            if invalid_assignment {
                 self.report(
                     ParserErrorType::ExpectedStatementExpression(
                         "unary-expression left operand of assignment",
@@ -200,6 +198,13 @@ impl<'tu> Parser<'_, 'tu, '_> {
             let right = self
                 .rd_precedence(right_limit, ExpressionMode::CastExpression, boundary)?
                 .expression;
+            // The frame reducer retains the error state across both operands
+            // of an invalid assignment production (§6.5.16 paragraph 1).
+            let right = if invalid_assignment {
+                self.mark_expression_recovered(right)
+            } else {
+                right
+            };
             let source = self
                 .context
                 .merge_vectors(left.expression.source_vectors, token.source_vectors);
@@ -606,10 +611,24 @@ impl<'tu> Parser<'_, 'tu, '_> {
             self.rd_consume();
             token.source_vectors
         } else {
-            self.report(
-                ParserErrorType::ExpectedIsoSyntax(owner, token.map(|x| x.kind)),
-                token,
-            );
+            let found = token.map(|token| token.kind);
+            let error = match operator {
+                | OperatorTokenType::OpeningParenthesis =>
+                    ParserErrorType::ExpectedOpeningParenthesisInStatement(owner, found),
+                | OperatorTokenType::ClosingParenthesis =>
+                    ParserErrorType::ExpectedClosingParenthesisInStatement(owner, found),
+                | OperatorTokenType::ClosingSquareBracket =>
+                    ParserErrorType::ExpectedClosingSquareBracketInSubscript(found),
+                | OperatorTokenType::Semicolon =>
+                    ParserErrorType::ExpectedSemicolonInStatement(owner, found),
+                | OperatorTokenType::Colon => ParserErrorType::ExpectedColonInLabel(owner, found),
+                | OperatorTokenType::OpeningCurlyBrace =>
+                    ParserErrorType::ExpectedOpeningCurlyBraceInCompoundStatement(found),
+                | OperatorTokenType::ClosingCurlyBrace =>
+                    ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(found),
+                | _ => ParserErrorType::ExpectedIsoSyntax(owner, found),
+            };
+            self.report(error, token);
             SourceVectors::default()
         }
     }
