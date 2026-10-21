@@ -1127,12 +1127,6 @@ impl ParsedTranslationUnit<'_> {
                     );
                 },
             }
-            #[cfg(feature = "parser-recursive-descent-study")]
-            let _ = write!(
-                output,
-                " provenance={:?}",
-                context.get_source_vectors(source)
-            );
         }
         output.into_str()
     }
@@ -1561,6 +1555,16 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     let _ = write!(output, " @{}:{}", position.line, position.column);
                 },
             }
+        }
+        #[cfg(feature = "parser-recursive-descent-study")]
+        if options.show_locations
+            && let Some(source) = source
+        {
+            let _ = write!(
+                output,
+                " provenance={:?}",
+                context.get_source_vectors(source)
+            );
         }
         output.push('\n');
     }
