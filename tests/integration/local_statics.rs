@@ -683,6 +683,41 @@ mod tests {
     }
 
     #[test]
+    fn dead_automatic_initializers_follow_emit_auto_var_init() {
+        for (template, emitted) in [
+            ("int f(void){return 0;int x=({STATIC 0;});return x;}", false),
+            (
+                "void exit(int);int f(void){exit(0);int x=({STATIC 0;});return x;}",
+                false,
+            ),
+            (
+                "int f(void){return 0;int x[2]={({STATIC 0;}),1};return x[0];}",
+                false,
+            ),
+            (
+                "int f(void){return 0;int y=0,x=({STATIC 0;});return x+y;}",
+                false,
+            ),
+            (
+                "static void h(void){STATIC} int f(void){return 0;int x=(h(),0);return x;}",
+                false,
+            ),
+            (
+                "int f(void){return 0;int x=({L:;STATIC 0;});return x;}",
+                true,
+            ),
+            // A label in the initializer gives code generation an insertion
+            // point, so the statements after the declaration are emitted.
+            (
+                "int f(int k){return 0;int y=({L2:;0;});if(k){STATIC}return y;}",
+                true,
+            ),
+        ] {
+            assert_o0_static_emission(&format!("{template} int main(void){{return 0;}}"), emitted);
+        }
+    }
+
+    #[test]
     fn lowered_control_uses_the_same_fold_as_elision() {
         assert_runs_like_clang(
             "int printf(const char*,...); int f(void){if(__builtin_constant_p(\"abc\"))return \

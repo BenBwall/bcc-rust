@@ -543,9 +543,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     .is_some_and(|entry| {
                         self.bindings[entry.binding].duration == Duration::Automatic
                     });
-                let omitted = automatic
+                let labeled = automatic
                     && self.functions.dead
-                    && !self.initializer_contains_label(initializer);
+                    && self.initializer_contains_label(initializer);
+                let omitted = automatic && self.functions.dead && !labeled;
+                if labeled {
+                    // Clang EmitAutoVarInit ensures an insertion point for a
+                    // label, so the code after the declaration is emitted too.
+                    self.functions.dead = false;
+                }
                 self.correspondence
                     .initializer(declarator, initializer, omitted);
                 self.work
