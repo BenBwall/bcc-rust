@@ -33,7 +33,7 @@ pub(crate) struct ParsedTranslationUnit<'tu> {
     /// For each root, the number of tokens consumed through its last one:
     /// the output-token ordinal of the token after it, comparable with the
     /// ordinals of pragmas.
-    pub(super) ends:  RegionVec<usize>,
+    pub(super) ends:  &'tu [usize],
 }
 
 /// [`ParsedTranslationUnit::raw_debug`]'s view.
@@ -51,8 +51,8 @@ impl<'tu> ParsedTranslationUnit<'tu> {
     }
 
     /// The output-token ordinal just past each root, by root.
-    pub(crate) fn root_ends(&self) -> &[usize] {
-        &self.ends
+    pub(crate) fn root_ends(&self) -> &'tu [usize] {
+        self.ends
     }
 
     /// The whole tree as Rust debug output, for storage debugging. Each root

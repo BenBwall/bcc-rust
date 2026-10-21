@@ -185,7 +185,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         }
         ParsedTranslationUnit {
             roots: self.emitted_roots,
-            ends:  self.root_ends,
+            ends:  self.root_ends.leak(),
         }
     }
 
@@ -445,8 +445,10 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     /// they grow in place in their own region instead of the parse arena.
     /// The finished vector becomes the parsed unit's, without a copy.
     emitted_roots: RegionVec<ExternalDeclaration<'tu>>,
-    /// The tokens consumed through each emitted root's last one.
-    root_ends: RegionVec<usize>,
+    /// The tokens consumed through each emitted root's last one, in the
+    /// translation-unit arena: a region of its own would exceed a small
+    /// compilation's region budget.
+    root_ends: ArenaVec<'tu, usize>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
     ///
     /// C99: scopes are §6.2.1, pp. 29-30; PDF pp. 41-42; typedef-name is
