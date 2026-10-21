@@ -50,7 +50,11 @@ def main():
         ("production-valgrind-failure.log", args.scratch / "final-profile-baseline/lua-supported.i.machine.0.log"),
     ]:
         if path.exists():
-            shutil.copyfile(path, args.output / name)
+            destination = args.output / name
+            if name == "validation-build.log":
+                shutil.copyfile(path, destination)
+            else:
+                destination.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()).rstrip() + "\n")
     timing = []
     events = []
     calls = []
@@ -68,7 +72,8 @@ def main():
                     if row["input"] == "lua-supported.i" and row["mode"] in ["machine", "recursive"] and row["repeat"] == 0:
                         annotation = Path(raw).with_suffix(".self.txt")
                         if annotation.exists():
-                            shutil.copyfile(annotation, args.output / (path.stem + "-" + annotation.name))
+                            destination = args.output / (path.stem + "-" + annotation.name)
+                            destination.write_text("\n".join(line.rstrip() for line in annotation.read_text().splitlines()).rstrip() + "\n")
         (args.output / path.name).write_text(json.dumps(data, separators=(",", ":")) + "\n")
         if data.get("metadata", {}).get("action") != "bench":
             continue
