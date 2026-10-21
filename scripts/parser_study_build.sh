@@ -17,6 +17,8 @@ case "${1:-native}" in
         cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/examples/parser_study" "$study_dir/study-profile"
         cargo build --features "$study_feature,parser-study-small-regions" --example parser_study
         cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/debug/examples/parser_study" "$study_dir/study-profile-debug"
+        cargo build --release --features benchmarking-internals,parser-study-small-regions --example parser_study
+        cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/examples/parser_study" "$study_dir/baseline-profile"
         ;;
     alignment)
         cargo build --release --features "$study_feature,parser-study-leak-alignment" --example parser_study
