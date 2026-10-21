@@ -1866,3 +1866,25 @@ fn always_inline_order_follows_the_third_pr_review_forms() {
         assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
     }
 }
+
+/// Assignment and explicit floating conversions precede the integer fold,
+/// including reads through an aggregate plan (PR #117's fourth review).
+#[test]
+fn always_inline_order_rounds_floating_values_before_folding() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (extra, probe, emitted) in [
+        ("const float k = 16777217.0;", "if ((int)k == 16777216) h(0);", true),
+        ("const float k = 16777219.0;", "if ((int)k == 16777219) h(0);", false),
+        ("const float k[1] = {16777217.0};", "if ((int)k[0] == 16777216) h(0);", true),
+        ("struct S { float f; }; const struct S k = {16777217.0};", "if ((int)k.f == 16777216) h(0);", true),
+        ("const float k = 1e-50;", "if (!(_Bool)k) h(0);", true),
+        ("const float k[1] = {1e-50};", "if (!k[0]) h(0);", true),
+        ("const double k = 1.0i;", "if (!(_Bool)k) h(0);", true),
+        ("const double k[1] = {1.0i};", "if (!k[0]) h(0);", true),
+        ("", "if ((int)(float)16777217.0 == 16777216) h(0);", true),
+        ("", "if (!(_Bool)(double)1.0i) h(0);", true),
+    ] {
+        assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
+    }
+}

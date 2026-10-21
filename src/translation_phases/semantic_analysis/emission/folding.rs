@@ -535,8 +535,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// A cast of an evaluated operand to `expression`'s type: integers,
     /// truth values and real floating values convert to integers, a null or
-    /// object address stays an address; a converted floating value is only
-    /// known to evaluate.
+    /// object address stays an address. Floating conversions use the same
+    /// target rounding as semantic constant evaluation.
     fn cast_value(&self, value: Value, expression: &'tu Expression<'tu>) -> Option<Value> {
         self.cast_to(value, self.expression_info(expression).ty)
     }
@@ -572,7 +572,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Scalar::ComplexLongDouble
                 | Scalar::ComplexFloat128,
             ) => match value {
-                | Value::Floating(floating) => Some(Value::Floating(floating)),
+                | Value::Floating(floating) => self.round_floating(floating, ty).map(Value::Floating),
                 | Value::Integer(_) | Value::Other => Some(Value::Other),
                 | Value::Address(..) | Value::String(..) | Value::CastString(..) => None,
             },
