@@ -97,6 +97,7 @@ pub use benchmarking::{
     ArenaUsage,
     BenchmarkInput,
     ParseBenchmarkSummary,
+    ParserStudyMode,
     PreparedParse,
     StudyMeasurement,
     StudyPrepared,

@@ -45,6 +45,7 @@ pub use measurements::{
     arena_usage,
 };
 pub use parser_study::{
+    ParserStudyMode,
     StudyMeasurement,
     StudyPrepared,
     with_study_source,

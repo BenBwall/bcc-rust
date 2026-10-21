@@ -21,23 +21,76 @@ use std::{
     cell::Cell,
     fs,
     hint::black_box,
+    time::Instant,
 };
+
+use bcc_rust::ParserStudyMode;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     assert!(
         args.len() >= 2,
-        "usage: parser_study SOURCE [REPEATS] [INSPECTION_DEST]"
+        "usage: parser_study SOURCE [REPEATS] [--mode \
+         machine|recursive|growing|hybrid:N|limited:N] [--inspect DEST] [--stack BYTES] \
+         [--sample-stack]"
     );
     let source = fs::read_to_string(&args[1]).expect("read study source");
     let repeats = args
         .get(2)
+        .filter(|text| !text.starts_with('-'))
         .map_or(1, |text| text.parse::<usize>().expect("integer repeats"));
+    let option = |flag: &str| {
+        args.iter()
+            .position(|arg| arg == flag)
+            .map(|index| args.get(index + 1).expect("option value").clone())
+    };
+    let mode = match option("--mode").as_deref().unwrap_or("machine") {
+        | "machine" => ParserStudyMode::Machine,
+        | "recursive" => ParserStudyMode::Recursive,
+        | "growing" => ParserStudyMode::Growing,
+        | mode if mode.starts_with("hybrid:") => ParserStudyMode::Hybrid {
+            depth: mode[7..].parse().expect("integer hybrid depth"),
+        },
+        | mode if mode.starts_with("limited:") => ParserStudyMode::Limited {
+            depth: mode[8..].parse().expect("integer limit depth"),
+        },
+        | mode => panic!("unknown parser mode {mode}"),
+    };
+    let inspection = option("--inspect");
+    let sample_stack = args.iter().any(|arg| arg == "--sample-stack");
+    if let Some(stack) = option("--stack") {
+        let stack = stack.parse::<usize>().expect("integer stack bytes");
+        let before = Instant::now();
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(move || {
+                println!(
+                    "thread_launch_ns={} stack_bytes={stack}",
+                    before.elapsed().as_nanos()
+                );
+                run(&source, repeats, mode, sample_stack, inspection.as_deref());
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("join parser thread");
+    } else {
+        run(&source, repeats, mode, sample_stack, inspection.as_deref());
+    }
+}
+
+fn run(
+    source: &str,
+    repeats: usize,
+    mode: ParserStudyMode,
+    sample_stack: bool,
+    inspection: Option<&str>,
+) {
     for index in 0..repeats {
-        let inspect = args.get(3).is_some();
-        let result = bcc_rust::with_study_source(&source, |prepared| {
-            prepared.measure(
-                inspect,
+        let result = bcc_rust::with_study_source(source, |prepared| {
+            prepared.measure_with_mode(
+                mode,
+                sample_stack,
+                inspection.is_some(),
                 || {
                     CALLS.set(0);
                     BYTES.set(0);
@@ -48,7 +101,9 @@ fn main() {
         });
         println!(
             "sample={index} ns={} roots={} diagnostics={} parse_bytes={} tu_bytes={} \
-             commit_bytes={} regions={} global_calls={} global_bytes={}",
+             commit_bytes={} regions={} global_calls={} global_bytes={} expressions={} \
+             statements={} compounds={} depth={} stack_span={} fallbacks={} limit_hits={} \
+             rss_before={} rss_after={}",
             result.nanoseconds,
             result.roots,
             result.diagnostics,
@@ -57,12 +112,21 @@ fn main() {
             result.peak_commit_bytes,
             result.peak_regions,
             CALLS.get(),
-            BYTES.get()
+            BYTES.get(),
+            result.expression_entries,
+            result.statement_entries,
+            result.compound_entries,
+            result.max_depth,
+            result.native_stack_span,
+            result.fallback_count,
+            result.depth_limit_hits,
+            result.peak_rss_before,
+            result.peak_rss_after
         );
         if let Some(text) = &result.inspection {
-            fs::write(&args[3], text).expect("write inspection");
+            fs::write(inspection.expect("inspection destination"), text).expect("write inspection");
         }
-        black_box(result);
+        _ = black_box(result);
     }
 }
 
