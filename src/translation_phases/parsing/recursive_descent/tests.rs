@@ -36,6 +36,7 @@ fn expression_precedence_and_statement_forms_match_machine() {
         "int f(void) { factory()(x, y + z)[i].field->member++; --x; ++*p; return sizeof x + \
          sizeof(int) + (long)(int)x; }",
         "typedef int T; int f(void) { T x = 1; { int T; T = (x); } return (T)x; }",
+        "typedef int T; int f(void) { label: T x = 1; last: }",
         "int f(void) { if (a) if (b) x(); else y(); else z(); while (a) { continue; } do { break; \
          } while (b); for (int i = 0; i < 3; ++i) x(i); for (;;) ; return 0; }",
         "int f(void) { label: switch (x) { case 1: x++; break; case 2: case 3: ; default: goto \
