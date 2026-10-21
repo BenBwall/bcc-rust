@@ -469,7 +469,7 @@ Commands below run from this worktree root. Every Cargo invocation used
   and LLVM comparison arms. Log: `target/abstract-machine/native-pipeline-tests.log`.
 - Native `cargo check --all-targets` and
   `cargo clippy --all-targets -- -D warnings`: passed during build isolation.
-  A later final feature-enabled lint pass is still planned.
+  The final feature-enabled lint pass is queued separately.
 - Static page checks: HTML IDs are unique, all literal renderer/control
   element references exist, and local assets/module imports resolve.
 - `node --experimental-default-type=module web/worker-check.mjs`: passed
@@ -482,6 +482,13 @@ Commands below run from this worktree root. Every Cargo invocation used
   content type was `application/wasm` and its binary header was valid.
 - `cargo +nightly fmt --check`: passed.
 
-Engine, final wasm, and integrated web execution checks are still in progress.
-An initial wasm Clippy pass found bridge style lints; those must be fixed and
-the check rerun before a passing result is recorded.
+- `cargo test --lib --no-default-features --features abstract-machine`:
+  **12 passed**, no failures, including complete reverse replay, calls/recursion,
+  pointer cancellation/one-past rules, postfix precedence, declaration visibility,
+  conservative indeterminate stops, UB citations and resource limits.
+- `cargo clippy --lib --no-default-features --features abstract-machine
+  --target wasm32-unknown-unknown --target-dir target/abstract-machine/build
+  -- -D warnings`: passed after correcting the bridge's initial style lints.
+
+The final combined lint, wasm rebuild and integrated web execution checks are
+still in progress.
