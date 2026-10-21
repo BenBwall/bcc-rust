@@ -17,6 +17,8 @@ parser-recursive-descent-study = ["benchmarking-internals", "dep:stacker"]
 # Callgrind rejects the production 100 GiB reservation. Profile only; never use
 # this feature for native timing/RSS or to claim production resource capacity.
 parser-study-small-regions = ["benchmarking-internals"]
+# Isolated frame-machine memory experiment; see the research report.
+parser-study-leak-alignment = ["benchmarking-internals"]
 # Vectorized lexer scans through the unstable `std::simd`; requires nightly.
 portable-simd = []
 

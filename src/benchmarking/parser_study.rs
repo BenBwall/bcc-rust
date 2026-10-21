@@ -85,6 +85,7 @@ impl StudyPrepared<'_, '_, '_> {
         end: impl FnOnce(),
     ) -> StudyMeasurement {
         let tu_before = self.tu.high_water();
+        let tokens = self.preprocessed.study_token_count();
         let live_before = accounting::live();
         accounting::reset_peak();
         let rss_before = peak_rss();
@@ -122,6 +123,7 @@ impl StudyPrepared<'_, '_, '_> {
         });
         StudyMeasurement {
             nanoseconds: elapsed.as_nanos(),
+            tokens,
             roots: unit.external_declarations().len(),
             diagnostics: self.context.pending_error_count(),
             parse_bytes: self.parse.high_water(),
@@ -159,6 +161,8 @@ pub struct StudyPrepared<'a, 'tu, 'p> {
     reason = "Benchmark output owns optional untimed inspection text."
 )]
 pub struct StudyMeasurement {
+    /// Number of preprocessed parser-input tokens.
+    pub tokens:             usize,
     /// Wall time of parser construction and phase 7.
     pub nanoseconds:        u128,
     /// Retained external declarations.

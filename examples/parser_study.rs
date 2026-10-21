@@ -100,11 +100,12 @@ fn run(
             )
         });
         println!(
-            "sample={index} ns={} roots={} diagnostics={} parse_bytes={} tu_bytes={} \
+            "sample={index} ns={} tokens={} roots={} diagnostics={} parse_bytes={} tu_bytes={} \
              commit_bytes={} regions={} global_calls={} global_bytes={} expressions={} \
              statements={} compounds={} depth={} stack_span={} fallbacks={} limit_hits={} \
              rss_before={} rss_after={}",
             result.nanoseconds,
+            result.tokens,
             result.roots,
             result.diagnostics,
             result.parse_bytes,
