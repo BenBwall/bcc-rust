@@ -139,10 +139,9 @@ pub(super) struct State<'tu, 's> {
     /// The output-token ordinal past the root being analyzed.
     pub(super) root_end:     usize,
     /// The weak names that apply to the code being analyzed: those before
-    /// this ordinal. Clang emits an external function that no declaration
-    /// makes inline where it is defined, and every other body after the
-    /// whole unit, so this is the root's end in such a function and
-    /// unbounded elsewhere.
+    /// this ordinal. A retained or currently nondiscardable external body
+    /// is emitted at its definition, so this is the root's end there and
+    /// unbounded for deferred bodies.
     pub(super) weak_horizon: usize,
     /// The evaluation in progress read whether a name in `weak_names`
     /// applies, so that its result holds only at the same horizon.
