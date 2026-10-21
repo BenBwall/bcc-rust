@@ -586,11 +586,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Optional retention cannot rely on an unmodeled constant
                 // fold. Keep main's required closure in this scope instead
                 // of exposing its otherwise unused storage or relocations.
-                if value.is_none()
-                    && self.potential_constant_condition(condition)
-                    && !self.statement_contains_label(owner, false)
-                {
-                    _ = self.functions.optional_local_scopes.insert(self.scope, ());
+                if statement.is_some() && !self.statement_contains_label(owner, false) {
+                    self.limit_optional_locals_for_next(condition, None);
                 }
                 let skipped = value == Some(!live)
                     && statement
@@ -641,6 +638,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     });
                 }
                 self.work.push(Work::Expression(arm));
+                if value.is_none() && !self.expression_contains_label(arm) {
+                    self.limit_optional_locals_for_next(c.condition_expression, Some(owner));
+                }
             },
             | FunctionWork::DeadArm {
                 condition,
@@ -671,6 +671,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.elided = outer_elided || skipped;
                 if skipped {
                     self.elide_condition_references(condition);
+                }
+                if let Some(arm) = arm
+                    && value.is_none()
+                    && !self.expression_contains_label(arm)
+                {
+                    self.limit_optional_locals_for_next(condition, None);
                 }
             },
             | FunctionWork::GenericMark(generic) => {
@@ -817,7 +823,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // A query operand is still used in an expression (C99 §6.9p3,
         // p. 140; PDF p. 152), even where Clang emits only its value.
         let mut ignored_uses = ArenaVec::new_in(self.scratch);
+        let mut required_locals = ArenaVec::new_in(self.scratch);
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
+            required_locals.push(
+                matches!(context.kind, ReferenceContextKind::RequiredLocalsOnly { scalar_owner }
+                    if scalar_owner.is_none_or(|owner| self.scalar_conditional_emission(owner)))
+                    || context.parent.is_some_and(|p| required_locals[p]),
+            );
             let (skip_definitions, skip_uses) = match context.kind {
                 | ReferenceContextKind::ConstantQuery { emitted } => (!emitted, false),
                 | ReferenceContextKind::ConditionalArm { .. } =>
@@ -839,6 +851,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Apply the same contexts to declarations as to references before
         // BSS validation or any backend observes the emission graph.
         for context in &self.functions.definition_contexts {
+            if context
+                .reference_context
+                .is_some_and(|index| required_locals[index])
+            {
+                _ = self
+                    .functions
+                    .optional_local_bindings
+                    .insert(self.definitions[context.definition].binding, ());
+            }
             if context.sizeof.is_some_and(|index| ignored[index])
                 || context
                     .reference_context
@@ -2104,6 +2125,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | ReferenceContextKind::ConstantQuery { emitted } => !emitted,
             | ReferenceContextKind::ConditionalArm { owner } =>
                 self.scalar_conditional_emission(owner),
+            | ReferenceContextKind::RequiredLocalsOnly { .. } => false,
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
                 .typeof_sites
@@ -2267,6 +2289,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ReferenceContextKind::Unevaluated,
             ReferenceContextKind::Typeof,
         ));
+    }
+
+    /// Wrap the already queued child in a retention-only context when a
+    /// pure constant condition needs an unmodeled fold. References, insertion
+    /// state and required/used roots remain unchanged. A conditional's result
+    /// type decides later whether its scalar visitor can omit an arm.
+    /// C99: §6.6p10, p. 96; PDF p. 108; best-effort retention follows Clang.
+    pub(super) fn limit_optional_locals_for_next(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+        scalar_owner: Option<&'tu Expression<'tu>>,
+    ) {
+        if self.folded_condition(condition).is_none()
+            && self.potential_constant_condition(condition)
+        {
+            let child = self
+                .work
+                .pop()
+                .expect("retention context has a queued child");
+            self.enter_reference_context_kind(ReferenceContextKind::RequiredLocalsOnly {
+                scalar_owner,
+            });
+            self.work.push(child);
+        }
     }
 
     fn enter_reference_context_kind(&mut self, kind: ReferenceContextKind<'tu>) {
@@ -2624,6 +2670,10 @@ enum ReferenceContextKind<'tu> {
     ConstantQuery {
         emitted: bool,
     },
+    /// An unmodeled constant fold cannot safely add optional local roots.
+    RequiredLocalsOnly {
+        scalar_owner: Option<&'tu Expression<'tu>>,
+    },
     /// A folded-away conditional operand is omitted only for scalar results.
     ConditionalArm {
         owner: &'tu Expression<'tu>,
@@ -2711,7 +2761,7 @@ pub(super) struct State<'tu, 's> {
     /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
-    pub(super) optional_local_scopes: ArenaMap<'s, usize, ()>,
+    pub(super) optional_local_bindings: ArenaMap<'s, usize, ()>,
     condition_uses: ArenaMap<'s, usize, ConditionUses>,
     /// Owner-specific successor links for uses already condition-elided.
     condition_elisions: ArenaMap<'s, (Option<ReferenceOwner>, usize), usize>,
@@ -2748,7 +2798,7 @@ impl<'s> State<'_, 's> {
             outside: [None; 2],
             generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             definition_contexts: ArenaVec::new_in(scratch),
-            optional_local_scopes: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            optional_local_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             condition_uses: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             condition_elisions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             #[cfg(test)]

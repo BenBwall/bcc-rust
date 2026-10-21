@@ -64,6 +64,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         let Some(value) = condition.and_then(|condition| self.folded_integer(condition)) else {
+            if let Some(condition) = condition
+                && self.switch_labels(switch).is_some()
+                && !self.statement_contains_label(body, true)
+            {
+                self.limit_optional_locals_for_next(condition, None);
+            }
             return;
         };
         if self.switch_labels(switch).is_none() {

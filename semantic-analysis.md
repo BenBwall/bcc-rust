@@ -1065,9 +1065,16 @@ that typedefs coming into scope later cannot change a kept answer. Bit-field, un
 ranges in `const` initializers remain unmodeled. Distinct-object address comparisons such as `&x1 == &x2` also remain
 unfolded. Constant queries still miss `(long)"a" + 1 - 1`, `(long)"a" - 0`,
 `(char *)8`, `!(long)"a"`, `(long)"a" == 0`, `(long)"a" != 0` and `__func__[0]`.
-These gaps can leave code and local statics emitted that Clang skips; at O0,
-a retained nonzero BSS initializer can therefore reject a program Clang and
-main accept. The VLA-after-jump gap above instead omits code Clang revives.
+These gaps can leave code emitted that Clang skips. For a pure condition
+built from constants, addresses and nonvolatile const-object reads whose
+value remains unknown, optional local-static retention falls back to the
+required/`used` closure in the affected if, scalar conditional, logical or
+foldable-switch region. Deferred definition contexts keep aggregate and
+complex conditional visitors and neighboring declarations independent.
+This is a retention capability boundary, not a new value or branch fold;
+required references and `used` storage remain checked. Parameters and
+ordinary runtime loads do not trigger it. The VLA-after-jump gap above
+instead omits code Clang revives.
 `functions.elided` omits lowering traversal and storage collection
 for whole skipped statements and operands; there is no separate `unemitted`
 state. A missing insertion point (`dead`) alone still permits simple
@@ -1086,16 +1093,22 @@ Declarations after a folded switch's selected break are elided just like its
 statements. A void statement-expression tail skipped after a jump retroactively
 elides its definitions, statements and references, and lowering supplies its
 void result without visiting the tail.
-O0-only local-static retention is best effort for unsupported constructs:
-lowering retries without unreferenced, non-`used` locals and the entities only
-their initializers reach. Semantic diagnostics, including BSS initializer
-checks, still run before this fallback. The native backend also omits unused
-internal TLS objects in named sections it cannot support, and allows an unread
-internal initializer to hold a returns-twice function's address. Required and
-`used` objects retain their support checks. A native support preflight can
-also retry the diagnosed pipeline without optional retention when an unread
-initializer is the only root of an unsupported helper tree. This fallback
-runs before any retained call diagnostics are reported.
+O0-only local-static retention is best effort for unsupported constructs.
+A single retry boundary spans the complete output preparation: lowering,
+optimization and inline resolution, ABI lowering, verification, backend
+support, native frame/encoding and object construction, linking, and
+interpreter global/relocation loading. Any refusal retries once without
+unreferenced, non-`used` locals and the entities only their initializers
+reach. Text and retained-call diagnostics are buffered until an attempt is
+accepted. Interpreter preparation loads storage without running constructors
+or user instructions; execution happens once, after the retry boundary.
+Semantic diagnostics, including emitted BSS initializer checks, still run
+before this capability fallback. Required and `used` entities retain their
+support checks and diagnostics. The native backend also omits unused internal
+TLS objects in named sections it cannot support, and allows an unread internal
+initializer to hold a returns-twice function's address. Incoming global
+references from instructions, data and aliases are collected once per module
+and shared by native support and storage emission.
 The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still

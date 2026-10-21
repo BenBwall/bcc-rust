@@ -271,9 +271,9 @@ pub(crate) fn analyze<'tu>(
             ));
     let unit_arena = analyzer.types.tu;
     let symbol_requests = analyzer.symbol_requests;
-    let mut optional_local_scopes = ArenaMap::with_hasher_in(FxBuildHasher, unit_arena);
-    for (&scope, &()) in &analyzer.functions.optional_local_scopes {
-        _ = optional_local_scopes.insert(scope, ());
+    let mut optional_local_bindings = ArenaMap::with_hasher_in(FxBuildHasher, unit_arena);
+    for (&scope, &()) in &analyzer.functions.optional_local_bindings {
+        _ = optional_local_bindings.insert(scope, ());
     }
     let mut result = SemanticTranslationUnit {
         entities: EntityFacts::empty(analyzer.types.tu),
@@ -296,7 +296,7 @@ pub(crate) fn analyze<'tu>(
         types: analyzer.types.finish(),
         bindings: analyzer.bindings.leak(),
         definitions: analyzer.definitions.leak(),
-        optional_local_scopes,
+        optional_local_bindings,
         external_redeclarations: unit_arena
             .alloc_slice_copy(&analyzer.functions.external_redeclarations),
         functions: analyzer.function_records.leak(),

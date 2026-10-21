@@ -94,6 +94,19 @@ mod tests {
                  printf(\"%ld\\n\",(long)(__stop_tbl-__start_tbl));return 0;}}"
             ));
         }
+        for body in [
+            "return (&x==&y)?({STATIC 0;}):0;",
+            "return (&x==&y)&&({STATIC 0;});",
+            "switch(&x==&y){case 1:{STATIC break;}default:break;}return 0;",
+        ] {
+            assert_runs_like_clang(&format!(
+                "int x,y;extern int missing;int main(void){{{}}}",
+                body.replace(
+                    "STATIC",
+                    "static int b __attribute__((section(\".bss.bad\")))=1;static int*p=&missing;"
+                )
+            ));
+        }
         // Required storage retains its diagnostic even under an unmodeled
         // fold; the best-effort policy only removes optional roots.
         let output = bcc(
