@@ -1462,11 +1462,15 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let target = format!("--target={target}");
         let path = |path: &Path| path.to_str().unwrap().to_owned();
         let executable = temporary("native-hello.exe");
+        // The default is direct objects on Windows and the assembler on
+        // Linux; each flag selects one path on every host.
         for flags in [
             &[][..],
             &["--opt=bcc"][..],
             &["--native-object"][..],
             &["--native-object", "--opt=bcc"][..],
+            &["--no-native-object"][..],
+            &["--no-native-object", "--opt=bcc"][..],
         ] {
             let built = bcc(
                 HELLO,
@@ -1490,7 +1494,21 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert!(built.status.success(), "{}", text(&built.stderr));
         let run = run_native(&mut Command::new(&pair)).unwrap();
         assert_eq!(run.status.code(), Some(42));
-        for flags in [&[][..], &["--native-object"][..]] {
+        // On Windows the default assembles a listing the encoder refuses, here
+        // for its section name, and links that object as it links its own.
+        let refused = temporary("native-refused.exe");
+        let built = bcc(
+            "__attribute__((section(\"my data\"))) int x = 42;\nint main(void) { return x; }\n",
+            &[&target, "--backend=native", "-o", &path(&refused)],
+        );
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&refused)).unwrap();
+        assert_eq!(run.status.code(), Some(42));
+        for flags in [
+            &[][..],
+            &["--native-object"][..],
+            &["--no-native-object"][..],
+        ] {
             let object = temporary("native-hello.o");
             let linked = temporary("native-object-hello.exe");
             assert!(!object.exists());
@@ -1508,6 +1526,13 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
                 assert!(bytes.starts_with(b"\x7fELF\x02\x01\x01"));
                 assert!(bytes.windows(6).any(|s| s == b".text\0"));
                 assert!(bytes.windows(5).any(|s| s == b"main\0"));
+            } else {
+                assert!(
+                    bytes.starts_with(&[0x64, 0x86]),
+                    "{flags:?}: not x86-64 COFF"
+                );
+                assert!(bytes.windows(5).any(|s| s == b".text"), "{flags:?}");
+                assert!(bytes.windows(4).any(|s| s == b"main"), "{flags:?}");
             }
             let clang = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
                 "target/llvm/bin/clang.exe"
@@ -1528,7 +1553,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             std::fs::remove_file(object).unwrap();
             std::fs::remove_file(linked).unwrap();
         }
-        for file in [executable, pair] {
+        for file in [executable, pair, refused] {
             drop(std::fs::remove_file(file));
         }
 
@@ -1623,6 +1648,14 @@ int main(void) { printf("main\n"); return zero; }
         for (flags, message) in [
             (
                 &["--native-object", "--emit=ir"][..],
+                "error: --native-object requires --backend=native",
+            ),
+            (
+                &["--no-native-object", "--emit=ir"][..],
+                "error: --no-native-object requires --backend=native",
+            ),
+            (
+                &["--no-native-object", "--native-object", "--emit=ir"][..],
                 "error: --native-object requires --backend=native",
             ),
             (
@@ -1867,6 +1900,7 @@ int main(void) { printf("main\n"); return zero; }
     fn driver_conflicts_preserve_stale_object_files() {
         for conflict in [
             &["--native-object"][..],
+            &["--no-native-object"][..],
             &["--backend=native", "--llvm-opt=O2"][..],
             &["--backend=native", "--llvm-codegen-only"][..],
         ] {
@@ -2045,21 +2079,312 @@ int main(void) { printf("main\n"); return zero; }
         }
     }
 
+    /// Neither LLVM's objects nor the native back end's direct COFF objects,
+    /// its Windows default, involve the MinGW installation.
     #[test]
     fn windows_gnu_object_output_needs_no_mingw() {
-        let object = temporary("no-mingw.o");
+        for flags in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
+            let object = temporary("no-mingw.o");
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(["--target=x86_64-pc-windows-gnu", "-c", "--input", SUM, "-o"])
+                .arg(&object)
+                .args(flags)
+                .env_remove("MINGW_ROOT")
+                .env("PATH", "")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{flags:?}: {}",
+                text(&output.stderr)
+            );
+            let bytes = std::fs::read(&object).unwrap();
+            assert!(bytes.len() > 20, "{flags:?}: object has no COFF header");
+            assert_eq!(
+                &bytes[..2],
+                &[0x64, 0x86],
+                "{flags:?}: object is x86-64 COFF"
+            );
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    /// GitHub issue #87: the native back end encodes COFF objects in process
+    /// by default on both Windows targets, and Linux keeps the assembler.
+    /// `--native-object` selects the encoder and `--no-native-object` the
+    /// bundled clang's assembly of the listing, the last of the two winning.
+    #[test]
+    fn native_objects_are_direct_by_default_on_windows_only() {
+        let clang = bundled_clang();
+        if !clang.is_file() {
+            eprintln!("skipping: no bundled clang at {}", clang.display());
+            return;
+        }
+        for target in [
+            "x86_64-w64-windows-gnu",
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+        ] {
+            for optimize in [&[][..], &["--opt=bcc"][..]] {
+                let target_flag = format!("--target={target}");
+                let common = [&[&target_flag[..], "--backend=native"][..], optimize].concat();
+                let object = |flags: &[&str]| {
+                    let path = temporary("native-default.o");
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                    _ = command
+                        .args(&common)
+                        .args(flags)
+                        .args(["-c", "--input", HELLO, "-o"])
+                        .arg(&path)
+                        .env("NO_COLOR", "1");
+                    if target.ends_with("windows-gnu") {
+                        // bcc's toolchain lookup asks for a MinGW root before
+                        // clang assembles even an object, on every host; this
+                        // header-free source needs none.
+                        _ = command.env("MINGW_ROOT", env::temp_dir());
+                    }
+                    let output = command.output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{target} {optimize:?} {flags:?}: {}",
+                        text(&output.stderr)
+                    );
+                    let bytes = std::fs::read(&path).unwrap();
+                    std::fs::remove_file(path).unwrap();
+                    bytes
+                };
+                // The assembler path is exactly clang's object for the listing.
+                let listing = bcc(HELLO, &[&common[..], &["--emit=asm"]].concat());
+                assert!(listing.status.success(), "{}", text(&listing.stderr));
+                let assembly = temporary("native-default.s");
+                let reference = temporary("native-default-reference.o");
+                std::fs::write(&assembly, &listing.stdout).unwrap();
+                let assembled = Command::new(&clang)
+                    .arg(&target_flag)
+                    .arg("-c")
+                    .arg(&assembly)
+                    .arg("-o")
+                    .arg(&reference)
+                    .output()
+                    .unwrap();
+                assert!(assembled.status.success(), "{}", text(&assembled.stderr));
+                let clang_object = std::fs::read(&reference).unwrap();
+                std::fs::remove_file(assembly).unwrap();
+                std::fs::remove_file(reference).unwrap();
+
+                let direct = object(&["--native-object"]);
+                let text_path = object(&["--no-native-object"]);
+                let context = format!("{target} {optimize:?}");
+                assert!(text_path == clang_object, "{context}: not clang's object");
+                assert!(
+                    object(&["--no-native-object", "--native-object"]) == direct,
+                    "{context}: the last flag must win"
+                );
+                assert!(
+                    object(&["--native-object", "--no-native-object"]) == text_path,
+                    "{context}: the last flag must win"
+                );
+                let (default, path) = if target.contains("windows") {
+                    (&direct, "direct")
+                } else {
+                    (&text_path, "assembler")
+                };
+                assert!(
+                    object(&[]) == *default,
+                    "{context}: the default is not the {path} path"
+                );
+            }
+        }
+    }
+
+    /// The default direct COFF writer assembles a listing its encoder
+    /// refuses, as every Windows default object was assembled before direct
+    /// objects became the default; only `--native-object` keeps the refusal.
+    #[test]
+    fn default_windows_native_objects_assemble_what_the_encoder_refuses() {
+        if !bundled_clang().is_file() {
+            eprintln!("skipping: no bundled clang to assemble the listing");
+            return;
+        }
+        let cases = [
+            (
+                "__attribute__((section(\"my data\"))) int x = 1;\n",
+                "unsupported COFF section name",
+            ),
+            (
+                "__attribute__((section(\".pdata\"))) const int x = 1;\n",
+                "user section conflicts with generated COFF unwind section",
+            ),
+            (
+                "__attribute__((dllexport)) int caf\\u00e9(void) { return 3; }\n",
+                "unsupported COFF string character",
+            ),
+        ];
+        for target in [
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            for (source, refusal) in cases {
+                let compile = |flags: &[&str]| {
+                    let object = temporary("native-refused.o");
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                    _ = command
+                        .args([target, "--backend=native", "-c", "-o"])
+                        .arg(&object)
+                        .args(flags)
+                        .args(["--input", source])
+                        .env("NO_COLOR", "1");
+                    if target.ends_with("windows-gnu") {
+                        // bcc's toolchain lookup asks for a MinGW root before
+                        // clang assembles even an object, on every host; this
+                        // header-free source needs none.
+                        _ = command.env("MINGW_ROOT", env::temp_dir());
+                    }
+                    let output = command.output().unwrap();
+                    let bytes = std::fs::read(&object).ok();
+                    if bytes.is_some() {
+                        std::fs::remove_file(object).unwrap();
+                    }
+                    (output, bytes)
+                };
+                let (refused, object) = compile(&["--native-object"]);
+                assert_eq!(refused.status.code(), Some(1), "{target} {source}");
+                assert!(
+                    text(&refused.stderr).contains(refusal),
+                    "{target} {source}: {}",
+                    text(&refused.stderr)
+                );
+                assert!(object.is_none(), "{target} {source}");
+                let (built, default) = compile(&[]);
+                assert!(
+                    built.status.success(),
+                    "{target} {source}: {}",
+                    text(&built.stderr)
+                );
+                let (built, assembled) = compile(&["--no-native-object"]);
+                assert!(built.status.success(), "{}", text(&built.stderr));
+                assert!(
+                    default.is_some() && default == assembled,
+                    "{target} {source}: the default is not the assembler's object"
+                );
+            }
+        }
+    }
+
+    /// When the default writer cannot assemble a listing its encoder refused,
+    /// here because only the assembler needs MinGW, the error gives the
+    /// refusal as well as the assembler's failure: an encodable listing would
+    /// have built without MinGW.
+    #[test]
+    fn default_windows_native_objects_report_the_refusal_when_assembly_fails() {
+        let object = temporary("native-refused-no-mingw.o");
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
-            .args(["--target=x86_64-pc-windows-gnu", "-c", "--input", SUM, "-o"])
+            .args(["--target=x86_64-w64-windows-gnu", "--backend=native", "-c"])
+            .args([
+                "--input",
+                "__attribute__((section(\"my data\"))) int x = 1;\n",
+            ])
+            .arg("-o")
             .arg(&object)
             .env_remove("MINGW_ROOT")
             .env("PATH", "")
+            .env("NO_COLOR", "1")
             .output()
             .unwrap();
-        assert!(output.status.success(), "{}", text(&output.stderr));
-        let bytes = std::fs::read(&object).unwrap();
-        assert!(bytes.len() > 20, "object has no COFF header");
-        assert_eq!(&bytes[..2], &[0x64, 0x86], "object is x86-64 COFF");
-        std::fs::remove_file(object).unwrap();
+        let stderr = text(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        // Without the bundled clang the assembler fails before it looks for
+        // MinGW, and the refusal must still be given.
+        assert!(
+            stderr.contains(
+                "native object emission: unsupported COFF section name; assembling the listing \
+                 instead failed: cannot find "
+            ),
+            "{stderr}"
+        );
+        if bundled_clang().is_file() {
+            assert!(stderr.contains("cannot find MinGW"), "{stderr}");
+        }
+        assert!(!object.exists(), "{} was written", object.display());
+    }
+
+    /// The default writer gives the encoder's refusal only when assembling
+    /// the refused listing fails. A missing output directory, the MinGW an
+    /// executable links with, and a link error fail an encodable listing as
+    /// well, so a refused one reports them in the same words, without the
+    /// refusal.
+    #[test]
+    fn default_windows_native_fallback_reports_shared_failures_plainly() {
+        const PROGRAM: &str =
+            "extern int missing(void);\nint main(void) { return x + missing(); }\n";
+        if !bundled_clang().is_file() {
+            eprintln!("skipping: no bundled clang to assemble or link");
+            return;
+        }
+        let refused = format!("__attribute__((section(\"my data\"))) int x = 1;\n{PROGRAM}");
+        let encodable = format!("int x = 1;\n{PROGRAM}");
+        let unwritable = temporary("native-refused-missing-directory").join("x.o");
+        let executable = temporary("native-refused-shared-failure.exe");
+        let cases: [(&str, &[&str], &Path, &str); 3] = [
+            ("--target=x86_64-pc-windows-msvc", &["-c"], &unwritable, ""),
+            (
+                "--target=x86_64-w64-windows-gnu",
+                &[],
+                &executable,
+                "cannot find MinGW",
+            ),
+            (
+                "--target=x86_64-pc-windows-msvc",
+                &[],
+                &executable,
+                "lld-link: error:",
+            ),
+        ];
+        for (target, flags, output, cause) in cases {
+            let build = |source: &str| {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                _ = command
+                    .args([target, "--backend=native"])
+                    .args(flags)
+                    .arg("-o")
+                    .arg(output)
+                    .args(["--input", source])
+                    .env_remove("MINGW_ROOT")
+                    .env("NO_COLOR", "1");
+                if target.ends_with("windows-gnu") {
+                    // No MinGW on `PATH` either; clang never starts, since
+                    // the toolchain lookup fails first.
+                    _ = command.env("PATH", "");
+                }
+                let built = command.output().unwrap();
+                assert_eq!(built.status.code(), Some(1), "{target} {flags:?}");
+                assert!(!output.exists(), "{} was written", output.display());
+                text(&built.stderr)
+            };
+            let (refused, encodable) = (build(&refused), build(&encodable));
+            assert!(
+                !refused.contains("native object emission") && refused.contains(cause),
+                "{target} {flags:?}: {refused}"
+            );
+            assert_eq!(
+                refused.lines().next(),
+                encodable.lines().next(),
+                "{target} {flags:?}"
+            );
+        }
+    }
+
+    /// The bundled clang, which assembles the native listing.
+    fn bundled_clang() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "target/llvm/bin/clang.exe"
+        } else {
+            "target/llvm/bin/clang"
+        })
     }
 
     /// The MinGW-w64 installation root and its C library include directory,

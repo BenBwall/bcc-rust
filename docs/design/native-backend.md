@@ -1,8 +1,9 @@
 # Native x86-64 back end
 
-Status: design, with stages 1 and 3, most of stages 2 and 4, and opt-in
-stage 5 ELF/COFF object emission implemented in `src/backend/native/`
-(2026-10-19); see "Implementation status" at the end.
+Status: design, with stages 1 and 3, most of stages 2 and 4, and stage 5
+ELF/COFF object emission (the default for Windows targets, opt-in for Linux)
+implemented in `src/backend/native/` (2026-10-20); see "Implementation
+status" at the end.
 
 This document designs bcc-rust's own code generator for x86-64: the path from
 the post-ABI bcc IR to assembly and, later, to object files, without LLVM. It
@@ -829,8 +830,8 @@ Following [CONTRIBUTING.md](../../CONTRIBUTING.md#source-layout):
 | `native/regalloc.rs` | the allocator's entry and `Allocation`, with `regalloc/edges.rs` (critical edges, jump threading, loop rotation), `regalloc/liveness.rs` (liveness, dead code, intervals, fixed ranges), `regalloc/intervals.rs`, `regalloc/coalesce.rs`, `regalloc/scan.rs` (the split-interval scan), `regalloc/resolve.rs` (pieces and moves), `regalloc/rewrite.rs` (physical rewrite and parallel moves), `regalloc/checker.rs` (the symbolic checker) and `regalloc/peephole.rs` (`lea` combining) |
 | `native/frame.rs` | frame layout, prologue and epilogue |
 | `native/emit.rs` | AT&T text: instructions, functions, globals, symbols |
-| `native/driver.rs` | assembly or direct object output, and bundled clang linking |
-| `native/object.rs`, `native/object/` | private listing parser, x86 encoder and relaxation, ELF64 writer, DWARF CFI records |
+| `native/driver.rs` | the choice of object writer, assembly or direct object output, and bundled clang linking |
+| `native/object.rs`, `native/object/` | private listing parser, x86 encoder and relaxation, ELF64 writer, DWARF CFI records; the COFF writer and its unwind tables in `object/coff.rs` and `object/coff/` |
 | `native/tests.rs`, `native/tests/` | selection, allocation and end-to-end tests |
 
 Arenas: the module's `'ir` arena outlives the back end; each function is
@@ -890,7 +891,7 @@ Sizes are estimated Rust lines including tests.
 | 2 | Variadic definitions (`va_start` save areas), `dyn_alloca`/`stack_save`/`stack_restore` with a frame pointer, inline `copy`/`fill` for small constant sizes; over-aligned slots and jump tables for dense switches | 2k | torture: every integer-only source A0 passes also passes B0 | done except jump tables (and stack arguments aligned above 16) |
 | 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done |
 | 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | done, with the red zone and loop alignment added after stage 5 (#85); B1/A1 1.05× on native Linux (from 1.42×), 1.03× with those two in a pinned run; checker clean on every test and on the whole torture corpus (1,890 sources, debug builds, no checker failure) |
-| 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | ELF/COFF opt-in (`--native-object`); Windows execution awaits CI |
+| 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | done: direct COFF objects are the Windows default and ran in native Windows CI; direct ELF objects stay opt-in (`--native-object`) |
 | 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | open |
 
 ## Implementation status
@@ -1300,15 +1301,29 @@ checker rejection, no compiler crash, and no source whose result differs
 between base and branch, which meets the "checker clean on the whole
 torture corpus" criterion.
 
-### Stage 5: opt-in ELF and COFF object emission
+### Stage 5: direct ELF and COFF object emission
 
-`--backend=native --native-object` emits ELF64 objects in process for Linux
-targets and AMD64 COFF objects for both Windows targets, and links those objects
-with bundled clang/LLD for executables. The default and `--emit=asm` retain the
-text path. A module with file-scope assembly is refused under
-`--native-object`, since the encoder reads only the emitter's vocabulary.
-Windows default emission will remain on that path until native
-Windows CI verifies execution; no Windows host is available for local checks.
+`--backend=native` with `-o` emits AMD64 COFF objects in process for both
+Windows targets by default, and ELF64 objects for Linux targets under
+`--native-object`; executables link those objects with bundled clang/LLD.
+`--no-native-object` selects the text path, which bundled clang assembles,
+on every target; it remains the Linux default, and the last of the two flags
+wins. `--emit=asm` prints the same listing either way. The encoder reads only
+the emitter's vocabulary, so a module with file-scope assembly takes the text
+path by default and is refused under `--native-object`.
+`driver::object_writer` makes this choice from the target, the flags and the
+module, in one place, including whether an encoder refusal is final, and
+`driver::build` runs it. When the default direct writer's encoder refuses a
+listing, `build` assembles it instead, so the Windows default still builds
+everything the text default did: a user section name outside
+`[A-Za-z0-9_.$-]`, a user `.pdata` or `.xdata` section, a non-ASCII export name,
+or more than 65,279 sections (big-object COFF). Only `--native-object` keeps
+such a refusal as an error. An executable's listing is assembled into a
+temporary object, which links as a direct object does. When the assembly
+itself fails, for example without the MinGW that only the assembler needs
+for an object, the error gives the refusal before the assembler's failure; a
+missing output directory or a link error reads as it does on the direct
+path.
 
 The encoder consumes the **private listing generated by `emit.rs`**, rather
 than independently expanding allocated MIR. This shares all frame, CFI,
@@ -1401,11 +1416,11 @@ file placement, string packing and symbol order while preserving key identity.
 Mutation tests pin metadata, unwind and COMDAT key checks;
 bundled lld-link and MinGW-mode ld.lld link direct objects and select duplicate
 selectany definitions. Native Windows test helpers compare listings and use
-direct objects, ready for the parent's Windows CI run. The portable
+direct objects, which native Windows CI builds and runs (below). The portable
 `scripts/compare_coff_objects.py` repeats the structural comparison over every
 benchmark/C fixture and additional random or external corpora at B0/B1 for both
-Windows targets. Neither oracle requires llvm-readobj. Local COFF validation
-results are recorded below; Windows execution remains unverified.
+Windows targets. Neither oracle requires llvm-readobj. COFF validation
+results are recorded below.
 
 Round 1 validation on 2026-10-19: the full all-target test gate passed
 **2,372 tests, 0 failed, 8 ignored** across 30 test binaries. The focused native
@@ -1466,8 +1481,22 @@ fixtures and 80 random stress programs** on both Windows targets at B0/B1:
 **1,456 attempts** were refused by both paths, including intentional diagnostic
 fixtures. Four fresh C-level freestanding links (both targets at B0/B1) passed
 with MinGW-mode `ld.lld` and `lld-link`; each linked image retained the first
-selectany definition, value 42. Windows execution remains for native CI, and
-Windows production defaults retain text assembly.
+selectany definition, value 42.
+
+Windows execution and the default switch (#87, 2026-10-20): native Windows CI run
+39405683497, at `ee3bd1bf` (which contains the COFF writer), passed
+`cargo test --all-targets` with 2,302 library tests. Among them,
+`native_programs_match_the_interpreter` and
+`programs_with_every_value_spilled_match_the_interpreter` build every native
+test program as a direct COFF object, link it and run it natively against the
+interpreter, after checking each listing's equivalence with Clang's object.
+With both acceptance conditions met, direct COFF objects became the Windows
+default for `-o`. CLI tests pin the choice: for both Windows targets at B0 and
+B1 a default `-c` object is byte-identical to the `--native-object` one, a
+`--no-native-object` object is byte-identical to bundled clang's assembly of
+the `--emit=asm` listing, and Linux defaults still match the latter. On a
+Windows host, the CLI's native executable tests now build and run direct
+objects by default and the text path under `--no-native-object`.
 
 ### Red zone and loop alignment (stage 4 leftovers)
 
