@@ -8,8 +8,9 @@
 //! `functions.rs` models on its own (`EmitWhileStmt`).
 //!
 //! The evaluator starts from the constants semantic analysis already
-//! computed, except where Clang's evaluator differs (`__builtin_constant_p`
-//! and weak entities), and extends them as Clang's evaluator does in C: a
+//! computed, except where Clang's evaluator differs (`__builtin_constant_p`,
+//! weak entities and floating arithmetic with a NaN result, which it
+//! refuses as undefined), and extends them as Clang's evaluator does in C: a
 //! comma whose left operand evaluates, a conditional, `&&` and `||` that
 //! skip what they do not take, a statement expression of null and
 //! side-effect-free expression statements, a `const` non-volatile object
@@ -21,17 +22,26 @@
 //! `__builtin_choose_expr`, `__builtin_abs`, the count-bit and byte-swap
 //! builtins, and `strlen` of a string. Any other call, an assignment, an
 //! increment, a volatile or other object read, a declaration in a statement
-//! expression and anything this model does not know do not fold.
+//! expression and anything this model does not know do not fold. An entity
+//! is weak when `#pragma weak` or any file-scope declaration before its
+//! definition makes it so, wherever it is: Clang emits some bodies after
+//! the whole unit. A value
+//! that is a whole result (`?:` operands, initializers) holds no address of
+//! an automatic, thread-local or `dllimport` object, which
+//! `CheckLValueConstantExpression` refuses.
 //! C99: §6.6 paragraphs 2-3, 6 and 10, pp. 95-96; PDF pp. 107-108;
 //! §6.5.13-§6.5.15, pp. 89-91; PDF pp. 101-103; §6.5.17 paragraph 2, p. 94;
 //! PDF p. 106.
 //! GNU extension: GCC manual, "Other Builtins" and "Statement Exprs".
+
+use rustc_hash::FxBuildHasher;
 
 use super::super::{
     Analyzer,
     ArrayBound,
     BindingKind,
     ConstantClass,
+    DllStorage,
     Duration,
     ExpressionType,
     Floating,
@@ -53,6 +63,8 @@ use crate::{
     translation_phases::{
         parsing::{
             declaration_syntax::{
+                DeclarationSpecifiers,
+                Declarator,
                 Initializer,
                 InitializerType,
                 TypeQualifiers,
@@ -62,6 +74,7 @@ use crate::{
                 BlockItem,
                 Expression,
                 ExpressionSlot,
+                ExternalDeclaration,
                 StatementType,
                 UnaryOperator,
             },
@@ -71,7 +84,13 @@ use crate::{
             StringTokenType,
         },
     },
-    util::string_cache::StringCacheId,
+    util::{
+        bump::{
+            ArenaMap,
+            ArenaVec,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 /// How deep the evaluator follows operands that semantic analysis did not
@@ -79,7 +98,7 @@ use crate::{
 /// traversal tolerates; Clang would rarely fold them either.
 const DEPTH: u32 = 256;
 
-impl<'tu> Analyzer<'_, 'tu, '_> {
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Clang's `ConstantFoldsToSimpleInteger` for `condition`: its integer
     /// value, when it has an integer or enumerated type, evaluates without
     /// side effects and holds no label. `EvaluateAsInt` refuses any other
@@ -109,11 +128,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Clang's `Expr::isEvaluatable`: whether `expression` evaluates to a
     /// constant of any type without side effects. A `void` expression has
-    /// no value, so it is not evaluatable.
+    /// no value, so it is not evaluatable, nor is an address that is no
+    /// constant result ([`Self::constant_result`]).
     pub(super) fn evaluatable(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let ty = self.expression_info(expression).ty;
         !matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void))
-            && self.evaluate_value(expression, 0).is_some()
+            && self
+                .evaluate_value(expression, 0)
+                .is_some_and(|value| self.constant_result(value))
+    }
+
+    /// Whether `value` may be the whole result of a constant evaluation, as
+    /// Clang's `CheckLValueConstantExpression` decides: an address must be
+    /// of a function or of an object with static storage duration that is
+    /// neither thread-local nor `dllimport`. Within a larger expression,
+    /// such as a comparison with null, any address still evaluates.
+    /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    fn constant_result(&mut self, value: Value) -> bool {
+        let Value::Address(Some((base, _))) = value else {
+            return true;
+        };
+        let Some(&data) = self.bindings.get(base) else {
+            return false;
+        };
+        match data.kind {
+            | BindingKind::Function => true,
+            | BindingKind::Object =>
+                data.duration == Duration::Static
+                    && self.dll_storage(base) != Some(DllStorage::Import),
+            | _ => false,
+        }
     }
 
     /// Whether `expression` evaluates to a number, which code generation
@@ -170,14 +214,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The value of `expression` as Clang's evaluator computes it, if it
-    /// does; memoized, since conditions nest.
+    /// does; memoized, since conditions nest. A value that [`DEPTH`] cut
+    /// short is kept only for queries at least as deep: a shallower one
+    /// computes it again, so a fold does not depend on which query came
+    /// first.
     fn evaluate_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
         let key = std::ptr::from_ref(expression).addr();
-        if let Some(&value) = self.functions.emission.folded.get(&key) {
+        if let Some(&(value, cut)) = self.functions.emission.folded.get(&key)
+            && cut.is_none_or(|cut| depth >= cut)
+        {
+            self.functions.emission.depth_cut |= cut.is_some();
             return value;
         }
+        let outer = std::mem::take(&mut self.functions.emission.depth_cut);
         let value = self.compute_value(expression, depth);
-        _ = self.functions.emission.folded.insert(key, value);
+        let cut = self.functions.emission.depth_cut;
+        _ = self
+            .functions
+            .emission
+            .folded
+            .insert(key, (value, cut.then_some(depth)));
+        self.functions.emission.depth_cut = outer || cut;
         value
     }
 
@@ -197,6 +254,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         if depth > DEPTH {
+            self.functions.emission.depth_cut = true;
             return None;
         }
         let depth = depth + 1;
@@ -372,7 +430,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// A binary operator applied to evaluated operands: integer arithmetic
     /// and comparison, and the comparison of addresses within one object
     /// or with null.
-    fn binary_value(&self, operator: BinaryOperator, left: Value, right: Value) -> Option<Value> {
+    fn binary_value(
+        &mut self,
+        operator: BinaryOperator,
+        left: Value,
+        right: Value,
+    ) -> Option<Value> {
         use BinaryOperator as B;
         match (left, right) {
             // Within the literal and one past its end, as Clang's evaluator
@@ -514,7 +577,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 if !data.ty.qualifiers.contains(TypeQualifiers::CONST)
                     || data.ty.qualifiers.contains(TypeQualifiers::VOLATILE)
-                    || self.declared_weak(binding)
+                    || self.may_be_weak(binding)
                 {
                     return None;
                 }
@@ -533,8 +596,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The value of `initializer`, the initializer of an object Clang's
     /// evaluator reads (`VarDecl::evaluateValue`), when it is a constant
-    /// there: not the address of an object with automatic storage
-    /// duration, which is no address constant.
+    /// result there ([`Self::constant_result`]).
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
     fn initializer_value(
         &mut self,
@@ -542,16 +604,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         depth: u32,
     ) -> Option<Value> {
         let value = self.evaluate_value(initializer, depth)?;
-        let automatic = matches!(value, Value::Address(Some((base, _)))
-        if self.bindings.get(base).is_some_and(|data| {
-            data.linkage == Linkage::None && data.duration == Duration::Automatic
-        }));
-        (!automatic).then_some(value)
+        self.constant_result(value).then_some(value)
     }
 
     /// The size of the elements that pointer or array `expression` steps
     /// over in pointer arithmetic, if known.
-    /// C99: §6.5.6 paragraph 8, pp. 82-83; PDF pp. 94-95.
+    /// C99: §6.5.6 paragraph 8, p. 83; PDF p. 95.
     fn element_size(&self, expression: &'tu Expression<'tu>) -> Option<u64> {
         let ty = self.types.non_atomic(self.expression_info(expression).ty);
         match self.types.nodes[ty.index] {
@@ -563,17 +621,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The number of elements of string literal `literal` before its null
     /// terminator.
-    fn string_length(&self, literal: StringTokenType) -> u64 {
-        let count = match literal {
-            | StringTokenType::String(id) => self
-                .context
-                .encoded_literal_units(id, LiteralEncoding::Utf8)
-                .count(),
-            | StringTokenType::WideString(id) => self.context.wide_literal_units(id).count(),
-            | StringTokenType::EncodedString(id, encoding) =>
-                self.context.encoded_literal_units(id, encoding).count(),
+    fn string_length(&mut self, literal: StringTokenType) -> u64 {
+        self.literal_units(literal).len() as u64
+    }
+
+    /// The elements of string literal `literal` before its null terminator,
+    /// decoded once for the unit.
+    fn literal_units(&mut self, literal: StringTokenType) -> &'s [u32] {
+        let key = match literal {
+            | StringTokenType::String(id) => (id.0, 0),
+            | StringTokenType::WideString(id) => (id.0, 1),
+            | StringTokenType::EncodedString(id, LiteralEncoding::Utf8) => (id.0, 2),
+            | StringTokenType::EncodedString(id, LiteralEncoding::Utf16) => (id.0, 3),
+            | StringTokenType::EncodedString(id, LiteralEncoding::Utf32) => (id.0, 4),
         };
-        count as u64
+        if let Some(&units) = self.functions.emission.literal_units.get(&key) {
+            return units;
+        }
+        let mut units = ArenaVec::new_in(self.scratch);
+        match literal {
+            | StringTokenType::String(id) => units.extend(
+                self.context
+                    .encoded_literal_units(id, LiteralEncoding::Utf8),
+            ),
+            | StringTokenType::WideString(id) => units.extend(self.context.wide_literal_units(id)),
+            | StringTokenType::EncodedString(id, encoding) =>
+                units.extend(self.context.encoded_literal_units(id, encoding)),
+        }
+        let units: &'s [u32] = units.leak();
+        _ = self.functions.emission.literal_units.insert(key, units);
+        units
     }
 
     /// Whether `pointer` points to the element type of string literal
@@ -593,25 +670,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Element `index` of string literal `literal`, its terminator
     /// included, as Clang's evaluator reads it; none outside the array.
     /// C99: §6.4.5 paragraph 5, pp. 62-63; PDF pp. 74-75.
-    fn string_element(&self, literal: StringTokenType, index: i128) -> Option<Value> {
-        let index = u64::try_from(index).ok()?;
-        let length = self.string_length(literal);
-        let unit = match index.cmp(&length) {
-            | std::cmp::Ordering::Less => {
-                let index = usize::try_from(index).ok()?;
-                match literal {
-                    | StringTokenType::String(id) => self
-                        .context
-                        .encoded_literal_units(id, LiteralEncoding::Utf8)
-                        .nth(index)?,
-                    | StringTokenType::WideString(id) =>
-                        self.context.wide_literal_units(id).nth(index)?,
-                    | StringTokenType::EncodedString(id, encoding) => self
-                        .context
-                        .encoded_literal_units(id, encoding)
-                        .nth(index)?,
-                }
-            },
+    fn string_element(&mut self, literal: StringTokenType, index: i128) -> Option<Value> {
+        let index = usize::try_from(index).ok()?;
+        let units = self.literal_units(literal);
+        let unit = match index.cmp(&units.len()) {
+            | std::cmp::Ordering::Less => units[index],
             | std::cmp::Ordering::Equal => 0,
             | std::cmp::Ordering::Greater => return None,
         };
@@ -633,7 +696,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The value of the scalar of type `ty` at byte `offset` supplied by
-    /// `initializer`: see [`Self::object_value`].
+    /// `initializer`: see [`Self::object_value`]. The last operation of the
+    /// plan that covers `offset` stores it ([`Self::plan_cover`]).
     fn place_value(
         &mut self,
         initializer: &'tu Initializer<'tu>,
@@ -649,55 +713,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return None;
         }
+        let cover = self.plan_cover(initializer, depth)?;
+        let index = cover.partition_point(|&(_, end, _)| end <= offset);
+        let &(_, _, operation) = cover.get(index).filter(|&&(start, ..)| start <= offset)?;
         let plan = *self.initializers.plan(initializer)?;
-        for value in plan.values {
-            _ = self.initializer_value(value.expression, depth)?;
-        }
-        let mut read = None;
-        for operation in plan.operations {
-            let (destination, size) = match *operation {
-                | InitOperation::Zero { destination, .. }
-                | InitOperation::Select { destination, .. }
-                | InitOperation::Store { destination, .. }
-                | InitOperation::Copy { destination, .. }
-                | InitOperation::String { destination, .. }
-                | InitOperation::EmptyScalar { destination, .. }
-                | InitOperation::Unmodeled { destination, .. } =>
-                    (destination, self.types.layout(destination.ty)?.size),
-                | InitOperation::Repeat { .. } => return None,
-            };
-            let covers = destination.offset <= offset && offset < destination.offset + size;
-            if !covers {
-                continue;
-            }
-            let exact = destination.offset == offset
-                && self.types.non_atomic(destination.ty).unqualified() == ty.unqualified();
-            read = Some(match *operation {
-                | InitOperation::Zero { .. } => Read::Zero,
-                | InitOperation::EmptyScalar { .. } if exact => Read::Zero,
-                | InitOperation::Store {
-                    value,
-                    bit_field: None,
-                    ..
-                } if exact => Read::Value(plan.values.get(value.0 as usize)?.expression),
-                | InitOperation::String { literal, .. } => {
-                    let ExpressionType::StringLiteral(literal) = unparenthesized(literal).kind
-                    else {
-                        return None;
-                    };
-                    let element = self.types.layout(ty)?.size;
-                    let index = (offset - destination.offset) / element;
-                    // Elements past the literal's are zero.
-                    if index > self.string_length(literal) {
-                        Read::Zero
-                    } else {
-                        Read::String(literal, i128::from(index))
-                    }
-                },
-                | _ => return None,
-            });
-        }
-        let value = match read? {
+        let operation = *plan.operations.get(operation as usize)?;
+        let (InitOperation::Zero { destination, .. }
+        | InitOperation::Store { destination, .. }
+        | InitOperation::String { destination, .. }
+        | InitOperation::EmptyScalar { destination, .. }) = operation
+        else {
+            return None;
+        };
+        let exact = destination.offset == offset
+            && self.types.non_atomic(destination.ty).unqualified() == ty.unqualified();
+        let read = match operation {
+            | InitOperation::Zero { .. } => Read::Zero,
+            | InitOperation::EmptyScalar { .. } if exact => Read::Zero,
+            | InitOperation::Store {
+                value,
+                bit_field: None,
+                ..
+            } if exact => Read::Value(plan.values.get(value.0 as usize)?.expression),
+            | InitOperation::String { literal, .. } => {
+                let ExpressionType::StringLiteral(literal) = unparenthesized(literal).kind else {
+                    return None;
+                };
+                let element = self.types.layout(ty)?.size;
+                let index = (offset - destination.offset) / element;
+                // Elements past the literal's are zero.
+                if index > self.string_length(literal) {
+                    Read::Zero
+                } else {
+                    Read::String(literal, i128::from(index))
+                }
+            },
+            | _ => return None,
+        };
+        let value = match read {
             | Read::Zero => match self.types.nodes[ty.index] {
                 | TypeKind::Scalar(
                     Scalar::Float
@@ -720,6 +773,73 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.cast_to(value, ty)
     }
 
+    /// The byte ranges of the `const` aggregate or compound literal that
+    /// `initializer` initializes and the plan operation that stores each
+    /// last, sorted and disjoint, when Clang's evaluator reads the
+    /// aggregate: every value its plan stores evaluates, and it selects no
+    /// union member, copies no structure, repeats nothing (a GNU range) and
+    /// leaves nothing unmodeled. Computed once per initializer, so a read
+    /// costs a search rather than a pass over the plan; kept as
+    /// [`Self::evaluate_value`] keeps a value that [`DEPTH`] cut short.
+    fn plan_cover(&mut self, initializer: &'tu Initializer<'tu>, depth: u32) -> Option<Cover<'s>> {
+        let key = std::ptr::from_ref(initializer).addr();
+        if let Some(&(cover, cut)) = self.functions.emission.plan_covers.get(&key)
+            && cut.is_none_or(|cut| depth >= cut)
+        {
+            self.functions.emission.depth_cut |= cut.is_some();
+            return cover;
+        }
+        let plan = *self.initializers.plan(initializer)?;
+        let outer = std::mem::take(&mut self.functions.emission.depth_cut);
+        let mut readable = true;
+        for value in plan.values {
+            if self.initializer_value(value.expression, depth).is_none() {
+                readable = false;
+                break;
+            }
+        }
+        let cut = self.functions.emission.depth_cut;
+        self.functions.emission.depth_cut = outer || cut;
+        let mut cover = ArenaVec::new_in(self.scratch);
+        for (index, operation) in plan.operations.iter().enumerate() {
+            if !readable {
+                break;
+            }
+            let destination = match *operation {
+                | InitOperation::Zero { destination, .. }
+                | InitOperation::Store { destination, .. }
+                | InitOperation::String { destination, .. }
+                | InitOperation::EmptyScalar { destination, .. } => destination,
+                | InitOperation::Select { .. }
+                | InitOperation::Copy { .. }
+                | InitOperation::Repeat { .. }
+                | InitOperation::Unmodeled { .. } => {
+                    readable = false;
+                    break;
+                },
+            };
+            let (Some(layout), Ok(index)) =
+                (self.types.layout(destination.ty), u32::try_from(index))
+            else {
+                readable = false;
+                break;
+            };
+            paint(
+                &mut cover,
+                destination.offset,
+                destination.offset.saturating_add(layout.size),
+                index,
+            );
+        }
+        let cover: Option<Cover<'s>> = readable.then(|| &*cover.leak());
+        _ = self
+            .functions
+            .emission
+            .plan_covers
+            .insert(key, (cover, cut.then_some(depth)));
+        cover
+    }
+
     /// The `const` object, byte offset and type that `expression`
     /// designates through names, subscripts with constant indices within
     /// the array, `.` members and `*` of an array or of an array plus a
@@ -736,7 +856,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // The array expression and the element index of a subscript or an
         // indirection still to apply, innermost last.
         let mut expression = unparenthesized(expression);
-        let mut steps = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let mut steps = ArenaVec::new_in(self.scratch);
         let (initializer, ty) = loop {
             match expression.kind {
                 | ExpressionType::Identifier(_) => {
@@ -744,7 +864,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let data = self.bindings[binding];
                     if data.kind != BindingKind::Object
                         || !self.constant_object(data.ty)
-                        || self.declared_weak(binding)
+                        || self.may_be_weak(binding)
                     {
                         return None;
                     }
@@ -874,11 +994,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether Clang's evaluator may fold `expression` differently from
     /// the constant semantic analysis computed, memoized: it calls
     /// `__builtin_constant_p`, which semantic analysis folds as GCC's front
-    /// end does, or it names a weak object or function, whose initializer
+    /// end does; it names a weak object or function, whose initializer
     /// (`evaluateVarDeclInit`) and address Clang's evaluator never trust,
-    /// while GNU modes fold a weak `const` object's value.
+    /// while GNU modes fold a weak `const` object's value; or it holds
+    /// floating `+`, `-`, `*` or `/` with a NaN result, which Clang's
+    /// evaluator notes as undefined (`handleFloatFloatBinOp`), so that
+    /// `ConstantFoldsToSimpleInteger` and `isEvaluatable` refuse it.
     fn refolds(&mut self, expression: &'tu Expression<'tu>) -> bool {
-        let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let mut work = ArenaVec::new_in(self.scratch);
         work.push((expression, false));
         while let Some((current, children_done)) = work.pop() {
             let key = std::ptr::from_ref(current).addr();
@@ -906,7 +1029,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 BindingKind::Object | BindingKind::Function
                             )
                         })
-                        .is_some_and(|binding| self.declared_weak(binding)),
+                        .is_some_and(|binding| self.may_be_weak(binding)),
+                    | ExpressionType::Binary {
+                        operator:
+                            BinaryOperator::Addition
+                            | BinaryOperator::Subtraction
+                            | BinaryOperator::Multiplication
+                            | BinaryOperator::Division,
+                        ..
+                    } => self
+                        .expression_info(current)
+                        .floating
+                        .is_some_and(|value| not_a_number(value.real) || not_a_number(value.imag)),
                     | _ => false,
                 };
                 super::labels::expression_children(self.scratch, current, |child| {
@@ -935,7 +1069,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The address of `operand`, when it designates an object or function
-    /// that is not weak: Clang's evaluator knows it is not null.
+    /// that is not weak ([`Self::may_be_weak`]): Clang's evaluator knows it
+    /// is not null.
     fn address_of_value(&mut self, operand: &'tu Expression<'tu>) -> Option<Value> {
         let mut operand = operand;
         while let ExpressionType::Parenthesized { expression } = operand.kind {
@@ -949,11 +1084,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !matches!(
             data.kind,
             BindingKind::Function | BindingKind::Object | BindingKind::Parameter
-        ) || self.declared_weak(binding)
+        ) || self.may_be_weak(binding)
         {
             return None;
         }
         Some(Value::Address(Some((self.entity_of(binding).0, 0))))
+    }
+
+    /// Whether the entity of `binding` is weak for Clang's evaluator, or
+    /// may become so before Clang emits the code being analyzed: a
+    /// declaration so far makes it weak, or one anywhere in the unit
+    /// declares its name `weak` or `weak_import` at file scope, or
+    /// `#pragma weak` names it. Clang emits a deferred body, such as a
+    /// static or inline function's, only after the whole unit.
+    /// GNU extension: GCC manual, "Common Function Attributes", `weak`, and
+    /// "Weak Pragmas".
+    fn may_be_weak(&mut self, binding: usize) -> bool {
+        let data = self.bindings[binding];
+        data.linkage != Linkage::None
+            && (self
+                .functions
+                .emission
+                .weak_names
+                .contains_key(&data.name.name)
+                || self.declared_weak(binding))
     }
 
     /// The builtins Clang's evaluator folds that a condition may call:
@@ -1098,19 +1252,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `literal`: the elements before the first null one.
     /// None outside the array, its terminator included. One pass over the
     /// literal's units.
-    fn string_strlen(&self, literal: StringTokenType, offset: i128) -> Option<Value> {
+    fn string_strlen(&mut self, literal: StringTokenType, offset: i128) -> Option<Value> {
         let start = usize::try_from(offset).ok()?;
-        let length = match literal {
-            | StringTokenType::String(id) => units_to_null(
-                self.context
-                    .encoded_literal_units(id, LiteralEncoding::Utf8),
-                start,
-            ),
-            | StringTokenType::WideString(id) =>
-                units_to_null(self.context.wide_literal_units(id), start),
-            | StringTokenType::EncodedString(id, encoding) =>
-                units_to_null(self.context.encoded_literal_units(id, encoding), start),
-        }?;
+        let length = units_to_null(self.literal_units(literal).iter().copied(), start)?;
         Some(Value::Integer(Integer::int(i128::try_from(length).ok()?)))
     }
 
@@ -1174,7 +1318,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// compound literal, outside `sizeof` and `_Alignof`.
     /// C99: §6.5.2.5 paragraph 4, p. 75; PDF p. 87.
     fn reads_array_literal(&self, operand: &'tu Expression<'tu>) -> bool {
-        let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let mut work = ArenaVec::new_in(self.scratch);
         work.push(operand);
         while let Some(expression) = work.pop() {
             match expression.kind {
@@ -1202,7 +1346,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58; §5.1.2.3 paragraph 2,
     /// p. 13; PDF p. 25.
     fn has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
-        let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let mut work = ArenaVec::new_in(self.scratch);
         // Each expression, with whether its value is read if it is an
         // lvalue.
         work.push((expression, true));
@@ -1298,6 +1442,79 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Records the names [`Self::may_be_weak`] reads before the unit is
+    /// analyzed: those of `#pragma weak`, and those of the file-scope
+    /// declarations in `roots` that write `weak` or `weak_import` before
+    /// any definition of the name. Clang drops such an attribute after a
+    /// definition (`checkNewAttributesAfterDef`), while the pragma also
+    /// applies to an entity already defined.
+    pub(in crate::translation_phases::semantic_analysis) fn record_weak_names(
+        &mut self,
+        roots: &[ExternalDeclaration<'tu>],
+    ) {
+        for index in 0..self.context.weak_pragmas.len() {
+            let name = self.context.weak_pragmas[index];
+            _ = self.functions.emission.weak_names.insert(name, ());
+        }
+        let mut defined = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for &root in roots {
+            let (spec, declarators) = match root {
+                | ExternalDeclaration::Declaration(declaration)
+                | ExternalDeclaration::RecoveredDeclaration(declaration) => (
+                    declaration.declaration_specifiers,
+                    declaration.init_declarators.as_slice(),
+                ),
+                | ExternalDeclaration::FunctionDefinition(definition)
+                | ExternalDeclaration::RecoveredFunctionDefinition(definition) => {
+                    self.record_weak_name(
+                        definition.declaration_specifiers,
+                        definition.declarator,
+                        &defined,
+                    );
+                    if let Some(name) = definition.declarator.identifier() {
+                        _ = defined.insert(name.name, ());
+                    }
+                    continue;
+                },
+                | ExternalDeclaration::Error(_) | ExternalDeclaration::Asm(_) => continue,
+            };
+            for init in declarators {
+                self.record_weak_name(spec, init.declarator, &defined);
+                if init.initializer.is_some()
+                    && let Some(name) = init.declarator.identifier()
+                {
+                    _ = defined.insert(name.name, ());
+                }
+            }
+        }
+    }
+
+    /// Records the name `declarator` declares when its declaration writes
+    /// `weak` or `weak_import` and no declaration in `defined` defined it.
+    fn record_weak_name(
+        &mut self,
+        spec: DeclarationSpecifiers<'tu>,
+        declarator: Declarator<'tu>,
+        defined: &ArenaMap<'_, StringCacheId, ()>,
+    ) {
+        if !super::super::attributes::written_on(spec.extensions, declarator) {
+            return;
+        }
+        let Some(name) = declarator.identifier() else {
+            return;
+        };
+        if defined.contains_key(&name.name) {
+            return;
+        }
+        let weak = self
+            .declaration_attribute_lists(spec.extensions, Some(declarator))
+            .iter()
+            .any(|list| super::super::attributes::weak_spelling(list, self.context));
+        if weak {
+            _ = self.functions.emission.weak_names.insert(name.name, ());
+        }
+    }
+
     /// Keeps the initializer of `binding` when it is a `const`,
     /// non-volatile object, whose value Clang's evaluator may read.
     /// C99: §6.7.3 paragraph 3, p. 108; PDF p. 120.
@@ -1334,6 +1551,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
+/// The byte ranges of a `const` aggregate or compound literal, sorted and
+/// disjoint, each with the index of the plan operation that stores it last
+/// ([`Analyzer::plan_cover`]).
+pub(super) type Cover<'s> = &'s [(u64, u64, u32)];
+
 /// A value Clang's evaluator computed.
 #[derive(Clone, Copy)]
 pub(in crate::translation_phases::semantic_analysis) enum Value {
@@ -1360,6 +1582,13 @@ impl Value {
             | Self::Other => None,
         }
     }
+}
+
+/// Whether `value` is a NaN.
+fn not_a_number(value: LongDouble) -> bool {
+    value
+        .x87_parts()
+        .is_some_and(|(_, exponent, mantissa)| exponent == 0x7FFF && mantissa & !(1 << 63) != 0)
 }
 
 /// The integer a real floating value converts to, truncated toward zero:
@@ -1428,6 +1657,32 @@ fn units_to_null(units: impl Iterator<Item = u32>, start: usize) -> Option<usize
         count = index + 1;
     }
     count.checked_sub(start)
+}
+
+/// Records in `cover`, sorted and disjoint byte ranges each with the
+/// operation that stores it last, that operation `operation` stores
+/// `start..end`, after those already recorded.
+fn paint(cover: &mut ArenaVec<'_, (u64, u64, u32)>, start: u64, end: u64, operation: u32) {
+    if start >= end {
+        return;
+    }
+    let first = cover.partition_point(|&(_, last, _)| last <= start);
+    let after = cover.partition_point(|&(begin, ..)| begin < end);
+    let mut pieces = [None; 3];
+    if let Some(&(begin, _, earlier)) = cover.get(first)
+        && first < after
+        && begin < start
+    {
+        pieces[0] = Some((begin, start, earlier));
+    }
+    pieces[1] = Some((start, end, operation));
+    if after > first
+        && let Some(&(_, last, earlier)) = cover.get(after - 1)
+        && last > end
+    {
+        pieces[2] = Some((end, last, earlier));
+    }
+    drop(cover.splice(first..after, pieces.into_iter().flatten()));
 }
 
 fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {

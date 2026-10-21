@@ -190,6 +190,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::Builtin(b)
                 if b.keyword == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr =>
             {
+                // The condition is analyzed first, so the operand Clang does
+                // not select is skipped as it is analyzed (`DeadArm`): only
+                // the selected one's calls and joins move the insertion
+                // state, and the restore below in the general arm is not
+                // needed.
                 if let [super::SyntaxOperand::Expression(condition), super::SyntaxOperand::Expression(yes), super::SyntaxOperand::Expression(no)] = &*b.operands {
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreElided(self.functions.elided)));
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(self.functions.dead)));
@@ -205,12 +210,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Code generation emits only the selected operand of
                 // `__builtin_choose_expr`, which is known once both are
                 // analyzed; a call in either that does not return leaves
-                // the code after it emitted, as without the model.
+                // the code after it emitted, as without the model, and a
+                // join in either is kept.
                 if b.keyword
                     == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr
                 {
                     self.work
-                        .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                        .push(Work::FunctionWork(FunctionWork::RestoreUnjoinedOrphan(
                             self.functions.emission.orphan,
                         )));
                 }

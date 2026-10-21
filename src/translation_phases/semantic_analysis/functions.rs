@@ -502,6 +502,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
             | FunctionWork::RestoreElided(elided) => self.functions.elided = elided,
+            | FunctionWork::RestoreUnjoinedOrphan(orphan) =>
+                self.functions.emission.orphan = self.functions.emission.orphan.and(orphan),
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
             | FunctionWork::JoinArms(elided) => {
@@ -538,13 +540,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 live,
                 outer_dead,
                 outer_elided,
-                label_operand,
+                arm,
             } => {
-                // A `__builtin_choose_expr` (no label operand) and static
-                // initializer data select by Clang's constant-context value,
-                // which differs from function code's for some queries.
+                // A `__builtin_choose_expr` (no `arm`) and static initializer
+                // data select by Clang's constant-context value, which
+                // differs from function code's for some queries.
                 let info = self.expression_info(condition);
-                let constant_context = label_operand.is_none()
+                let constant_context = arm.is_none()
                     || self.functions.initializer.is_some_and(|binding| {
                         self.bindings[binding].duration.is_static_or_thread()
                     });
@@ -553,11 +555,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     self.folded_condition(condition)
                 };
-                self.functions.dead = outer_dead || value == Some(!live);
-                let elided = value == Some(!live)
-                    && label_operand.is_none_or(|operand| !self.expression_contains_label(operand));
-                self.functions.elided = outer_elided || elided;
-                if elided {
+                // Clang emits a folded-away operand that holds a label, but
+                // never the operand `__builtin_choose_expr` does not select.
+                let skipped = value == Some(!live)
+                    && arm.is_none_or(|arm| !self.expression_contains_label(arm));
+                self.functions.dead = outer_dead || skipped;
+                self.functions.elided = outer_elided || skipped;
+                if skipped {
                     self.elide_condition_references(condition);
                 }
             },
@@ -1817,23 +1821,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Pushes the work that enters the arm of `condition` taken when it is
-    /// `live`: code generation skips it when the condition folds to the
-    /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
-    /// Without a `label_operand`, the arm belongs to a translation-time
-    /// selection (`__builtin_choose_expr`), which labels do not keep.
+    /// Pushes the work that enters operand `arm` of `condition`, taken when
+    /// it is `live`: code generation skips it when the condition folds to
+    /// the other value (`CodeGenFunction::ConstantFoldsToSimpleInteger`),
+    /// unless it holds a label (`CodeGenFunction::ContainsLabel`). Without
+    /// an `arm`, the operand belongs to a translation-time selection
+    /// (`__builtin_choose_expr`), which labels do not keep.
     pub(super) fn dead_arm(
         &mut self,
         condition: &'tu Expression<'tu>,
         live: bool,
-        label_operand: Option<&'tu Expression<'tu>>,
+        arm: Option<&'tu Expression<'tu>>,
     ) {
         self.work.push(Work::FunctionWork(FunctionWork::DeadArm {
             condition,
             live,
             outer_dead: self.functions.dead,
             outer_elided: self.functions.elided,
-            label_operand,
+            arm,
         }));
     }
 
@@ -1866,25 +1871,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn has_generated_break(&self, target: StatementId) -> bool {
         self.functions.generated_breaks.iter().any(|jump| {
-            if jump.target != target {
+            jump.target == target && self.context_evaluated(jump.sizeof, jump.reference_context)
+        })
+    }
+
+    /// Whether code in sizeof context `sizeof` and reference context
+    /// `context`, both analyzed, is evaluated: neither they nor any context
+    /// around them leaves its operand unevaluated. A `__builtin_constant_p`
+    /// operand, whose references reachability ignores, counts as evaluated
+    /// here: code generation emits one without side effects, so a join in
+    /// it is kept ([`Self::expression_emitted`]).
+    pub(super) fn context_evaluated(&self, sizeof: Option<usize>, context: Option<usize>) -> bool {
+        let mut sizeof = sizeof;
+        while let Some(index) = sizeof {
+            if self.sizeof_unevaluated(index) {
                 return false;
             }
-            let mut sizeof = jump.sizeof;
-            while let Some(index) = sizeof {
-                if self.sizeof_unevaluated(index) {
-                    return false;
-                }
-                sizeof = self.functions.sizeof_contexts[index].parent;
+            sizeof = self.functions.sizeof_contexts[index].parent;
+        }
+        let mut context = context;
+        while let Some(index) = context {
+            if !matches!(
+                self.functions.reference_contexts[index].kind,
+                ReferenceContextKind::ConstantQuery { .. }
+            ) && self.reference_context_unevaluated(index)
+            {
+                return false;
             }
-            let mut context = jump.reference_context;
-            while let Some(index) = context {
-                if self.reference_context_unevaluated(index) {
-                    return false;
-                }
-                context = self.functions.reference_contexts[index].parent;
-            }
-            true
-        })
+            context = self.functions.reference_contexts[index].parent;
+        }
+        true
     }
 
     /// Whether sizeof context `index` leaves its operand unevaluated: its
@@ -1967,11 +1983,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Microsoft discardable inline body that neither GNU `used` nor a
     /// reference from emitted code keeps, as Clang defers such definitions
     /// until their first use. An entity with no such reference, which
-    /// Clang never references, takes the last evaluated reference's
-    /// choice: lowering still emits some code Clang skips, after a call
-    /// that does not return and in a folded switch's unselected
-    /// statements, and a reference there must name the import it was
-    /// written with to link.
+    /// Clang never references, stays imported when any evaluated reference
+    /// in a body lowering emits named an import, dead or not: lowering
+    /// still emits some code Clang skips, after a call that does not return
+    /// and in a folded switch's unselected statements, and such a reference
+    /// must name the import it was written with to link. Lowering emits a
+    /// deferred body that any reference reaches.
     pub(super) fn finish_dll_references(&mut self, symbols: &super::facts::SymbolFacts<'tu>) {
         let evaluated = self.functions.evaluated_imports;
         let mut kinds = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
@@ -1981,6 +1998,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             _ = kinds.insert(entity, definition.kind);
         }
         let mut emitted = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut lowered = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for binding in symbols
             .aliases
             .iter()
@@ -1989,20 +2007,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             let entity = self.entity_of(binding);
             _ = emitted.insert(entity, ());
+            _ = lowered.insert(entity, ());
         }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &(owner, binding, _, dead) in evaluated {
-                if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {
-                    let entity = self.entity_of(binding);
-                    changed |= emitted.insert(entity, ()).is_none();
+        for (reached, live_only) in [(&mut emitted, true), (&mut lowered, false)] {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for &(owner, binding, _, dead) in evaluated {
+                    if !(dead && live_only) && self.owner_emitted(owner, &kinds, &*reached, symbols)
+                    {
+                        let entity = self.entity_of(binding);
+                        changed |= reached.insert(entity, ()).is_none();
+                    }
                 }
             }
         }
-        // Any reference decides when none in emitted code does.
-        for &(_, binding, import, _) in evaluated {
-            self.dll_referenced(binding, import);
+        // Any reference lowering emits decides when none in emitted code
+        // does, an import over a plain one.
+        for &(owner, binding, import, _) in evaluated {
+            if self.owner_emitted(owner, &kinds, &lowered, symbols) {
+                self.dll_lowered(binding, import);
+            }
         }
         for &(owner, binding, import, dead) in evaluated {
             if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {
@@ -2185,6 +2210,9 @@ pub(super) enum FunctionWork<'tu> {
     RestoreOrphan(Option<usize>),
     /// Restores whole-statement/operand omission, including declarations.
     RestoreElided(bool),
+    /// Restores that state after operands code generation may not emit,
+    /// unless they joined paths, which leaves a block with predecessors.
+    RestoreUnjoinedOrphan(Option<usize>),
     /// Restores the skipped state around the innermost switch.
     RestoreSwitchDead(bool),
     /// After a switch: code generation resumes with the code around it,
@@ -2194,16 +2222,19 @@ pub(super) enum FunctionWork<'tu> {
     ThenEnd,
     /// Skips the code after an `if` statement when both arms end skipped.
     JoinArms(bool),
-    /// Enters the arm of a condition taken when it is `live`, given whether
-    /// the code around the condition is skipped.
+    /// Enters operand `arm` of a condition, taken when it is `live`, given
+    /// whether the code around the condition is skipped and elided; an
+    /// operand that holds a label is not skipped. A translation-time
+    /// selection (`__builtin_choose_expr`) has no `arm`.
     DeadArm {
-        condition:     &'tu Expression<'tu>,
-        live:          bool,
-        outer_dead:    bool,
-        outer_elided:  bool,
-        label_operand: Option<&'tu Expression<'tu>>,
+        condition:    &'tu Expression<'tu>,
+        live:         bool,
+        outer_dead:   bool,
+        outer_elided: bool,
+        arm:          Option<&'tu Expression<'tu>>,
     },
-    /// Enters an `if` arm unless it holds a label.
+    /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
+    /// the arm holds a label, which keeps Clang from skipping it.
     DeadStatementArm {
         owner:        &'tu Statement<'tu>,
         condition:    &'tu Expression<'tu>,

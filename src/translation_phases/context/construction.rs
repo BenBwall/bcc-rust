@@ -50,6 +50,7 @@ impl<'tu> Context<'tu> {
             preprocessing_options: &[],
             preprocessed_tokens: 0,
             pack_pragmas: ArenaVec::new_in(tu),
+            weak_pragmas: ArenaVec::new_in(tu),
             source_vectors: SourceVectorStack(RegionVec::new()),
             parser_token_vectors: RegionVec::new(),
             retained_vectors: RegionVec::new(),

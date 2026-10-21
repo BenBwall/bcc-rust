@@ -74,6 +74,13 @@ pub(super) struct State<'tu, 's> {
     pub(super) orphan: Option<usize>,
     /// The number of expression statements begun so far.
     pub(super) serial: usize,
+    /// The number of expression statements begun and not yet ended.
+    open_statements: usize,
+    /// The joins in `sizeof`, `alignof` and `typeof` operands of the
+    /// expression statements being analyzed, each with the number of its
+    /// statement and its sizeof and reference contexts, which tell once the
+    /// operands are analyzed whether code generation emits them.
+    context_joins: ArenaVec<'s, (usize, Option<usize>, Option<usize>)>,
     /// The value statements of the statement expressions being analyzed,
     /// by address, which Clang emits even after a jump.
     pub(super) value_statements: ArenaMap<'s, usize, ()>,
@@ -107,52 +114,86 @@ pub(super) struct State<'tu, 's> {
     label_positions: ArenaMap<'s, usize, usize>,
     /// The functions walked so far, by address.
     walked: ArenaMap<'s, usize, ()>,
-    /// The values the evaluator found, by expression address.
-    folded: ArenaMap<'s, usize, Option<folding::Value>>,
+    /// The values the evaluator found, by expression address, with the
+    /// depth of a query that `folding::DEPTH` cut short.
+    folded: ArenaMap<'s, usize, (Option<folding::Value>, Option<u32>)>,
+    /// The evaluation in progress was cut short by `folding::DEPTH`.
+    depth_cut: bool,
     /// Whether an expression holds a label, by address.
     labeled_expressions: ArenaMap<'s, usize, bool>,
     /// Whether Clang's evaluator may fold an expression differently from
     /// semantic analysis, by address.
     refolds: ArenaMap<'s, usize, bool>,
+    /// The names that a file-scope declaration anywhere in the unit
+    /// declares `weak` or `weak_import`, or that `#pragma weak` names: a
+    /// function's body may be emitted after them.
+    weak_names: ArenaMap<'s, StringCacheId, ()>,
     /// The initializers of `const` non-volatile objects, which Clang's
     /// evaluator may read.
     constant_initializers: ArenaMap<'s, usize, &'tu Expression<'tu>>,
     /// The initializers of `const` non-volatile arrays and structures, by
     /// binding, whose retained plans Clang's evaluator may read.
     constant_aggregates: ArenaMap<'s, usize, &'tu Initializer<'tu>>,
+    /// The byte ranges of each read aggregate or compound literal and the
+    /// operation that stores each, by the address of its initializer, with
+    /// the depth of a query `folding::DEPTH` cut short (`folding.rs`).
+    plan_covers: ArenaMap<'s, usize, (Option<folding::Cover<'s>>, Option<u32>)>,
+    /// The elements of each string literal the evaluator reads, by literal
+    /// and encoding.
+    literal_units: ArenaMap<'s, (u32, u8), &'s [u32]>,
     /// The block items on the work stack that a variably modified lookahead
     /// has seen: each one's position and address, and whether it or an
     /// item below it may declare something of a variably modified type.
     variably_modified: ArenaVec<'s, (usize, usize, bool)>,
+    /// The lowest length the work stack has had since the last variably
+    /// modified lookahead, below which that lookahead's answers hold.
+    work_low: usize,
+    /// Whether each block item a variably modified lookahead examined, or
+    /// an item inside it, may declare something of a variably modified
+    /// type, by address.
+    variably_modified_items: ArenaMap<'s, usize, bool>,
     /// The state [`State::orphan`] had where a call of a builtin that
     /// leaves its operands unemitted began, by the address of its callee.
     unevaluated_calls: ArenaMap<'s, usize, Option<usize>>,
 }
 
 impl<'s> State<'_, 's> {
+    /// Notes that the work stack has `length` items after a pop.
+    pub(super) fn work_popped(&mut self, length: usize) {
+        self.work_low = self.work_low.min(length);
+    }
+
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            orphan:                None,
-            serial:                0,
-            value_statements:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn_results:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn_fields:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            jmp_buf:               false,
-            sigjmp_buf:            false,
-            folds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            switch_after:          None,
-            holds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            switches:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            label_positions:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            walked:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            folded:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            refolds:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            variably_modified:     ArenaVec::new_in(scratch),
-            unevaluated_calls:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            orphan:                  None,
+            serial:                  0,
+            open_statements:         0,
+            context_joins:           ArenaVec::new_in(scratch),
+            value_statements:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn_results:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn_fields:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            jmp_buf:                 false,
+            sigjmp_buf:              false,
+            folds:                   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            switch_after:            None,
+            holds:                   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            switches:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            label_positions:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            walked:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            folded:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            depth_cut:               false,
+            refolds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            labeled_expressions:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            weak_names:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_initializers:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_aggregates:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            plan_covers:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            literal_units:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            variably_modified:       ArenaVec::new_in(scratch),
+            work_low:                0,
+            variably_modified_items: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            unevaluated_calls:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

@@ -43,7 +43,9 @@ impl Expander<'_, '_, '_, '_> {
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
     /// `on-off-switch`; they are checked but have no effect yet. `#pragma
     /// once`, `#pragma pack`, `#pragma GCC system_header` and `#pragma GCC
-    /// warning`/`error` are bcc's implementation-defined pragmas. Other pragmas
+    /// warning`/`error` are bcc's implementation-defined pragmas. `#pragma
+    /// weak` keeps only the name it makes weak, for the emission model of
+    /// semantic analysis. Other pragmas
     /// are ignored (paragraph 1), and one that does not begin with an
     /// identifier draws a warning first. `from` is the physical
     /// invocation's byte offset, including when `_Pragma` supplies tokens
@@ -116,6 +118,30 @@ impl Expander<'_, '_, '_, '_> {
                                     break 'base;
                                 },
                             }
+                        },
+                        | "weak" => {
+                            // `#pragma weak name` and `#pragma weak name =
+                            // target` make `name` weak. bcc emits it as
+                            // before, but semantic analysis keeps the name:
+                            // Clang's evaluator never folds a weak entity.
+                            let Some(name) =
+                                Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+                            else {
+                                break 'base;
+                            };
+                            if name.kind == PreprocessorTokenType::Newline {
+                                consumed_newline = true;
+                                break 'base;
+                            }
+                            if name.kind.is_identifier() {
+                                let id = name.identifier_id(self.context);
+                                self.context.weak_pragmas.push(id);
+                            }
+                            let line_state = (self.last_was_newline, self.current_is_newline);
+                            self.skip_until_newline();
+                            (self.last_was_newline, self.current_is_newline) = line_state;
+                            consumed_newline = true;
+                            break 'base;
                         },
                         | "clang" => {
                             if !self.pragma_deprecated_macro() {

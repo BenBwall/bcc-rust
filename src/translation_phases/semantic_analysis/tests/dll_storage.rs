@@ -1246,3 +1246,122 @@ fn first_pr_review_forms_fix_generated_import_state() {
         }
     }
 }
+
+/// The forms PR #117's second review found, against Clang 23 on both
+/// Windows ABIs at -O0. The address of a `dllimport` object is no constant
+/// result, a weak entity by `#pragma weak`, `weak_import` or a later
+/// declaration does not fold in a body Clang emits after the unit, though a
+/// `weak` attribute after the entity's definition, which Clang drops, does
+/// not make it weak; the
+/// Microsoft ABI emits a call's arguments from the last, so a join in an
+/// earlier one follows a call that does not return in a later one: the
+/// reference is emitted and drops the import. Where Clang references
+/// nothing but lowering still emits code, any reference in a body lowering
+/// emits that names the import keeps it, however later references were
+/// written, and one in a body nothing emits decides nothing.
+#[test]
+fn second_pr_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    const SKIPPED: &str = "__declspec(dllimport) extern int x; __attribute__((noreturn)) void \
+                           die(void); int h(void) { die(); return x; } extern int x; ";
+    for (source, msvc, mingw) in [
+        (
+            "__declspec(dllimport) extern int di; int h(void) { int *const dp = &di; if (!dp) \
+             return x; return 0; }",
+            false,
+            false,
+        ),
+        (
+            "__declspec(dllimport) extern int d1, d2; void sinkp(int *); \
+             __attribute__((noreturn)) void die(void); int c; int h(void) { die(), sinkp(c ? &d1 \
+             : &d2); return x; }",
+            false,
+            false,
+        ),
+        (
+            "int sink2(int, int); int tick(void); int c; __attribute__((noreturn)) void \
+             die(void); int h(void) { sink2(c && tick(), (die(), 0)); return x; }",
+            false,
+            true,
+        ),
+        (
+            "int sink3(int, int, int); int tick(void); int c; __attribute__((noreturn)) void \
+             die(void); int h(void) { sink3(c && tick(), 0, (die(), 0)); return x; }",
+            false,
+            true,
+        ),
+        (
+            "void wl(void); static int helper(void) { if (!wl) return x; return 0; } void \
+             wl(void) __attribute__((weak)); int probe(void) { return helper(); }",
+            false,
+            false,
+        ),
+        (
+            "void wf(void);\n#pragma weak wf\nint h(void) { if (!wf) return x; return 0; }",
+            false,
+            false,
+        ),
+        (
+            "void wi(void) __attribute__((weak_import)); int h(void) { if (!wi) return x; return \
+             0; }",
+            false,
+            false,
+        ),
+        (
+            "const int k = 1; int h(void) { if (!k) return x; return 0; } extern const int k \
+             __attribute__((weak));",
+            true,
+            true,
+        ),
+        (
+            "void wd(void) {} int h(void) { if (!wd) return x; return 0; } void wd(void) \
+             __attribute__((weak));",
+            true,
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for (target, imported) in [(Target::WindowsMsvc, msvc), (Target::WindowsGnu, mingw)] {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+    for (prefix, rest, name, imported) in [
+        (
+            SKIPPED,
+            "int k(void) { if (0) return x; return 0; }",
+            "x",
+            true,
+        ),
+        (SKIPPED, "inline int k(void) { return x; }", "x", true),
+        (SKIPPED, "static int unused(void) { return x; }", "x", true),
+        (SKIPPED, "int k(void) { die(); return x; }", "x", true),
+        (
+            "__declspec(dllimport) extern int x; int h(void) { switch (2) { case 1: return x; \
+             case 2: break; } return 0; } extern int x; ",
+            "int k(void) { if (0) return x; return 0; }",
+            "x",
+            true,
+        ),
+        (
+            "void fn(void); __attribute__((noreturn)) void die(void); int h(void) { die(); fn(); \
+             return 0; } __declspec(dllimport) void fn(void); ",
+            "static void u(void) { fn(); }",
+            "fn",
+            false,
+        ),
+    ] {
+        let source = format!("{prefix}{rest}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, name).0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}

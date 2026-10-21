@@ -222,6 +222,7 @@ pub(crate) fn analyze<'tu>(
 ) -> SemanticTranslationUnit<'tu> {
     let scratch = Bump::new();
     let mut analyzer = Analyzer::new(context, &scratch);
+    analyzer.record_weak_names(unit.external_declarations());
     for &root in unit.external_declarations() {
         analyzer.assert_balanced();
         analyzer.work.push(Work::Root(root));
@@ -313,6 +314,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                   concern modules."
     )]
     fn step(&mut self, work: Work<'tu, 's>) {
+        self.functions.emission.work_popped(self.work.len());
         match work {
             | Work::Root(root) => match root {
                 | ExternalDeclaration::Declaration(d)
