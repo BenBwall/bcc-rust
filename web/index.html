@@ -41,7 +41,7 @@ python3 -m http.server 8080 --bind 127.0.0.1 --directory web</code></pre><p>Open
           <section class="source-panel" id="source-panel" tabindex="-1" aria-labelledby="source-title">
             <div class="panel-heading source-heading"><div><span class="panel-index">01</span><h2 id="source-title">Source</h2></div><span id="source-name" class="mono muted">demo.c</span></div>
             <div class="program-tools">
-              <label class="sr-only" for="demo-select">Choose a program</label><select id="demo-select"><option value="tour">Objects, loops &amp; calls</option><option value="indeterminate">UB · indeterminate read</option><option value="bounds">UB · array bounds</option><option value="custom" hidden>Custom program</option></select>
+              <label class="sr-only" for="demo-select">Choose a program</label><select id="demo-select"><option value="tour">Objects, loops &amp; calls</option><option value="indeterminate">Indeterminate read · policy stop</option><option value="bounds">UB · array bounds</option><option value="custom" hidden>Custom program</option></select>
               <label class="file-button" for="file-input">Open .c<input id="file-input" type="file" accept=".c,.h,text/plain,text/x-c"></label>
             </div>
             <div class="source-tabs" role="group" aria-label="Source view"><button id="view-source" type="button" aria-pressed="true">Execution</button><button id="edit-source" type="button" aria-pressed="false">Edit source</button><span id="source-location" class="mono muted">No current evaluation</span></div>

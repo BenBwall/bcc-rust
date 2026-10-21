@@ -28,11 +28,12 @@ assert.equal(states.at(-1).returnValue.text, "21", "Changing source must change 
 for (const key of ["indeterminate", "bounds"]) {
   states = execute(demos[key].source);
   finished = states.at(-1);
-  assert.equal(finished.status, "undefined_behavior", `${key}: ${JSON.stringify(finished)}`);
-  assert(finished.diagnostic?.citation?.includes("6."), "UB stop must cite the standard");
-  assert(finished.location?.start.line > 0, "UB must identify the faulting source range");
+  assert.equal(finished.status, key === "indeterminate" ? "error" : "undefined_behavior", `${key}: ${JSON.stringify(finished)}`);
+  assert.equal(finished.diagnostic.kind, key === "indeterminate" ? "indeterminate" : "undefined_behavior");
+  assert(finished.diagnostic?.citation?.includes("6."), "Diagnostic stop must cite the standard");
+  assert(finished.location?.start.line > 0, "Stop must identify the faulting source range");
   assert.deepEqual(session.step(), finished, "Stepping a terminal state must not execute further");
-  assert.notEqual(session.back().status, "undefined_behavior", "Back must leave the UB stop");
+  assert.equal(session.back().status, "running", "Back must leave the diagnostic stop");
 }
 
 const rejected = session.load("#include <stdio.h>\nint main(void) { return 0; }\n");

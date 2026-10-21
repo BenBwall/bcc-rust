@@ -30,14 +30,14 @@ async function initialize() {
   element("engine-label").textContent = "Connecting to Rust / Wasm";
   try {
     engine?.dispose?.();
+    engine = undefined;
     engine = await connectEngine();
     element("engine-notice").hidden = true;
     element("engine-label").textContent = "Rust / Wasm · bounded C subset";
-    await loadProgram(source, filename);
+    await loadProgram(edited ? element("source-editor").value : source, filename);
   } catch (error) {
-    engine?.dispose?.();
-    engine = undefined;
-    showUnavailable(error);
+    if (engine?.connected) showError(error);
+    else { engine?.dispose?.(); engine = undefined; showUnavailable(error); }
   } finally {
     busy = false;
     updateControls();

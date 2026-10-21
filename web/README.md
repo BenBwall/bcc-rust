@@ -30,7 +30,15 @@ native compiler/LLVM feature is disabled. No wasm-bindgen or npm tooling is
 required. For a long build, commit local source first and detach it:
 
 ```sh
-nohup sh web/build.sh > web/build.log 2>&1 < /dev/null &
+python3 - <<'PY'
+from pathlib import Path
+import subprocess
+with Path('web/build.log').open('w') as log:
+    process = subprocess.Popen(['sh', 'web/build.sh'], stdin=subprocess.DEVNULL,
+                               stdout=log, stderr=subprocess.STDOUT,
+                               start_new_session=True)
+print('Detached build PID:', process.pid)
+PY
 ```
 
 If the Wasm owner has already built the validated handoff artifact, avoid a
@@ -86,6 +94,10 @@ int/int-pointer parameters, block locals, `if`/`else`, `while`, `for`, `return`,
 assignments, arithmetic/comparisons, address/dereference/subscript, and standalone
 increments. Calls must be a whole initializer, assignment RHS, return expression,
 or expression statement. The demos obey this restriction.
+
+Indeterminate reads trigger a clearly labeled conservative **policy stop**;
+the prototype does not claim every indeterminate read is necessarily UB. The
+array-bounds demo demonstrates a separate detected UB stop with a C99 citation.
 
 No preprocessing, globals, library I/O, floating point, casts, structs, dynamic
 allocation, or function pointers are supported. Unsupported source is rejected
