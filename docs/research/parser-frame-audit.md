@@ -15,7 +15,8 @@ experiments are removing a redundant alignment-table copy, simplifying cursor
 lookahead, eliminating duplicate type-name classification, and making
 designation state lazy. None requires changing the grammar architecture.
 
-This is a read-only source audit apart from this document. No Cargo commands,
+The initial audit was read-only apart from this document. A subsequently
+authorized, feature-gated follow-up is recorded at the end. No Cargo commands,
 compiler workloads, profiler runs, timing runs, downloads, or dependency changes
 were performed by the research agent. Costs and predicted improvements below
 are hypotheses, except for directly visible operations and recorded size-test
@@ -421,6 +422,40 @@ input preparation despite Criterion's clock boundaries. Default heap-only
 profilers can miss VM-backed arenas and native stacks; use arena counters and
 OS memory accounting, and label any page/stack profiling options explicitly.
 
-No production counters, source edits, harness edits or dependency changes are
-part of this audit. The parent owns measurements, experiment implementation
-and their validation gates.
+The parent owns measurements and validation gates. The initial audit introduced
+no source, harness or dependency changes; the authorized follow-up below owns
+only `token_cursor.rs` and these notes.
+
+## Authorized follow-up: alignment table storage experiment
+
+After committing the audit as `45df18c7`, the parent authorized candidate 1
+behind `parser-study-leak-alignment` and a benchmark-only token-count accessor.
+The parent owns the Cargo feature declaration and benchmark wrappers.
+
+Changes in `token_cursor.rs` only:
+
+- `Upstream::token_count()` is `pub(super)`, gated on
+  `benchmarking-internals`, and returns `self.tokens.len()` without fields or
+  counters. The parent's `PreprocessedTranslationUnit::study_token_count()`
+  wrapper can normalize profiling observations by the same phase-6 token count.
+- In `alignment_argument_closes`, mutually exclusive `cfg` blocks assign
+  `self.alignment_closures = Some(matches.leak())` when
+  `parser-study-leak-alignment` is enabled and preserve
+  `Some(arena.alloc_slice_copy(&matches))` otherwise. Table construction,
+  delimiter matching, cache lifetime and the returned boolean are unchanged.
+
+No build or test was run by this agent, as requested; the parent will run the
+existing alignment suite. Compare the large alignment fixture with and without
+the feature using its exact token count, parse-arena high water (`parse_bytes`),
+TU growth, diagnostics and syntax/provenance output. The predicted eliminated
+allocation is one N-byte boolean table; the exact high-water difference may
+also reflect alignment and arena allocation ordering and must be measured.
+Use a no-alignment control to confirm the experiment only affects cache users.
+
+For Callgrind, both comparison arms must use the parent's same 1 GiB
+`parser-study-small-regions` configuration and phase-7 collection boundary;
+change only `parser-study-leak-alignment`. Report simulated instructions and
+cache/branch events actually collected, normalized per token where useful.
+Retain default 100 GiB regions for the separate native timing/RSS comparison.
+Results are pending; this document does not claim a measured speedup or byte
+delta.
