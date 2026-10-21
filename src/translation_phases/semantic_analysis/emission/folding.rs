@@ -8,8 +8,9 @@
 //! `functions.rs` models on its own (`EmitWhileStmt`).
 //!
 //! The evaluator starts from the constants semantic analysis already
-//! computed, except where Clang's evaluator differs (`__builtin_constant_p`
-//! and weak entities), and extends them as Clang's evaluator does in C: a
+//! computed, except where Clang's evaluator differs (`__builtin_constant_p`,
+//! weak entities and floating arithmetic with a NaN result, which it
+//! refuses as undefined), and extends them as Clang's evaluator does in C: a
 //! comma whose left operand evaluates, a conditional, `&&` and `||` that
 //! skip what they do not take, a statement expression of null and
 //! side-effect-free expression statements, a `const` non-volatile object
@@ -21,7 +22,12 @@
 //! `__builtin_choose_expr`, `__builtin_abs`, the count-bit and byte-swap
 //! builtins, and `strlen` of a string. Any other call, an assignment, an
 //! increment, a volatile or other object read, a declaration in a statement
-//! expression and anything this model does not know do not fold.
+//! expression and anything this model does not know do not fold. An entity
+//! is weak when any file-scope declaration or `#pragma weak` makes it so,
+//! wherever it is: Clang emits some bodies after the whole unit. A value
+//! that is a whole result (`?:` operands, initializers) holds no address of
+//! an automatic, thread-local or `dllimport` object, which
+//! `CheckLValueConstantExpression` refuses.
 //! C99: §6.6 paragraphs 2-3, 6 and 10, pp. 95-96; PDF pp. 107-108;
 //! §6.5.13-§6.5.15, pp. 89-91; PDF pp. 101-103; §6.5.17 paragraph 2, p. 94;
 //! PDF p. 106.
@@ -32,6 +38,7 @@ use super::super::{
     ArrayBound,
     BindingKind,
     ConstantClass,
+    DllStorage,
     Duration,
     ExpressionType,
     Floating,
@@ -53,6 +60,8 @@ use crate::{
     translation_phases::{
         parsing::{
             declaration_syntax::{
+                DeclarationSpecifiers,
+                Declarator,
                 Initializer,
                 InitializerType,
                 TypeQualifiers,
@@ -62,6 +71,7 @@ use crate::{
                 BlockItem,
                 Expression,
                 ExpressionSlot,
+                ExternalDeclaration,
                 StatementType,
                 UnaryOperator,
             },
@@ -109,11 +119,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Clang's `Expr::isEvaluatable`: whether `expression` evaluates to a
     /// constant of any type without side effects. A `void` expression has
-    /// no value, so it is not evaluatable.
+    /// no value, so it is not evaluatable, nor is an address that is no
+    /// constant result ([`Self::constant_result`]).
     pub(super) fn evaluatable(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let ty = self.expression_info(expression).ty;
         !matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void))
-            && self.evaluate_value(expression, 0).is_some()
+            && self
+                .evaluate_value(expression, 0)
+                .is_some_and(|value| self.constant_result(value))
+    }
+
+    /// Whether `value` may be the whole result of a constant evaluation, as
+    /// Clang's `CheckLValueConstantExpression` decides: an address must be
+    /// of a function or of an object with static storage duration that is
+    /// neither thread-local nor `dllimport`. Within a larger expression,
+    /// such as a comparison with null, any address still evaluates.
+    /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    fn constant_result(&mut self, value: Value) -> bool {
+        let Value::Address(Some((base, _))) = value else {
+            return true;
+        };
+        let Some(&data) = self.bindings.get(base) else {
+            return false;
+        };
+        match data.kind {
+            | BindingKind::Function => true,
+            | BindingKind::Object =>
+                data.duration == Duration::Static
+                    && self.dll_storage(base) != Some(DllStorage::Import),
+            | _ => false,
+        }
     }
 
     /// Whether `expression` evaluates to a number, which code generation
@@ -126,14 +161,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The value of `expression` as Clang's evaluator computes it, if it
-    /// does; memoized, since conditions nest.
+    /// does; memoized, since conditions nest. A value that [`DEPTH`] cut
+    /// short is kept only for queries at least as deep: a shallower one
+    /// computes it again, so a fold does not depend on which query came
+    /// first.
     fn evaluate_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
         let key = std::ptr::from_ref(expression).addr();
-        if let Some(&value) = self.functions.emission.folded.get(&key) {
+        if let Some(&(value, cut)) = self.functions.emission.folded.get(&key)
+            && cut.is_none_or(|cut| depth >= cut)
+        {
+            self.functions.emission.depth_cut |= cut.is_some();
             return value;
         }
+        let outer = std::mem::take(&mut self.functions.emission.depth_cut);
         let value = self.compute_value(expression, depth);
-        _ = self.functions.emission.folded.insert(key, value);
+        let cut = self.functions.emission.depth_cut;
+        _ = self
+            .functions
+            .emission
+            .folded
+            .insert(key, (value, cut.then_some(depth)));
+        self.functions.emission.depth_cut = outer || cut;
         value
     }
 
@@ -153,6 +201,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         if depth > DEPTH {
+            self.functions.emission.depth_cut = true;
             return None;
         }
         let depth = depth + 1;
@@ -469,7 +518,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 if !data.ty.qualifiers.contains(TypeQualifiers::CONST)
                     || data.ty.qualifiers.contains(TypeQualifiers::VOLATILE)
-                    || self.declared_weak(binding)
+                    || self.may_be_weak(binding)
                 {
                     return None;
                 }
@@ -488,8 +537,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The value of `initializer`, the initializer of an object Clang's
     /// evaluator reads (`VarDecl::evaluateValue`), when it is a constant
-    /// there: not the address of an object with automatic storage
-    /// duration, which is no address constant.
+    /// result there ([`Self::constant_result`]).
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
     fn initializer_value(
         &mut self,
@@ -497,16 +545,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         depth: u32,
     ) -> Option<Value> {
         let value = self.evaluate_value(initializer, depth)?;
-        let automatic = matches!(value, Value::Address(Some((base, _)))
-        if self.bindings.get(base).is_some_and(|data| {
-            data.linkage == Linkage::None && data.duration == Duration::Automatic
-        }));
-        (!automatic).then_some(value)
+        self.constant_result(value).then_some(value)
     }
 
     /// The size of the elements that pointer or array `expression` steps
     /// over in pointer arithmetic, if known.
-    /// C99: §6.5.6 paragraph 8, pp. 82-83; PDF pp. 94-95.
+    /// C99: §6.5.6 paragraph 8, p. 83; PDF p. 95.
     fn element_size(&self, expression: &'tu Expression<'tu>) -> Option<u64> {
         let ty = self.types.non_atomic(self.expression_info(expression).ty);
         match self.types.nodes[ty.index] {
@@ -702,7 +746,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let data = self.bindings[binding];
                     if data.kind != BindingKind::Object
                         || !self.constant_object(data.ty)
-                        || self.declared_weak(binding)
+                        || self.may_be_weak(binding)
                     {
                         return None;
                     }
@@ -824,9 +868,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether Clang's evaluator may fold `expression` differently from
     /// the constant semantic analysis computed, memoized: it calls
     /// `__builtin_constant_p`, which semantic analysis folds as GCC's front
-    /// end does, or it names a weak object or function, whose initializer
+    /// end does; it names a weak object or function, whose initializer
     /// (`evaluateVarDeclInit`) and address Clang's evaluator never trust,
-    /// while GNU modes fold a weak `const` object's value.
+    /// while GNU modes fold a weak `const` object's value; or it holds
+    /// floating `+`, `-`, `*` or `/` with a NaN result, which Clang's
+    /// evaluator notes as undefined (`handleFloatFloatBinOp`), so that
+    /// `ConstantFoldsToSimpleInteger` and `isEvaluatable` refuse it.
     fn refolds(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
         work.push((expression, false));
@@ -856,7 +903,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 BindingKind::Object | BindingKind::Function
                             )
                         })
-                        .is_some_and(|binding| self.declared_weak(binding)),
+                        .is_some_and(|binding| self.may_be_weak(binding)),
+                    | ExpressionType::Binary {
+                        operator:
+                            BinaryOperator::Addition
+                            | BinaryOperator::Subtraction
+                            | BinaryOperator::Multiplication
+                            | BinaryOperator::Division,
+                        ..
+                    } => self
+                        .expression_info(current)
+                        .floating
+                        .is_some_and(|value| not_a_number(value.real) || not_a_number(value.imag)),
                     | _ => false,
                 };
                 super::labels::expression_children(self.scratch, current, |child| {
@@ -885,7 +943,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The address of `operand`, when it designates an object or function
-    /// that is not weak: Clang's evaluator knows it is not null.
+    /// that is not weak ([`Self::may_be_weak`]): Clang's evaluator knows it
+    /// is not null.
     fn address_of_value(&mut self, operand: &'tu Expression<'tu>) -> Option<Value> {
         let mut operand = operand;
         while let ExpressionType::Parenthesized { expression } = operand.kind {
@@ -899,11 +958,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !matches!(
             data.kind,
             BindingKind::Function | BindingKind::Object | BindingKind::Parameter
-        ) || self.declared_weak(binding)
+        ) || self.may_be_weak(binding)
         {
             return None;
         }
         Some(Value::Address(Some((self.entity_of(binding).0, 0))))
+    }
+
+    /// Whether the entity of `binding` is weak for Clang's evaluator, or
+    /// may become so before Clang emits the code being analyzed: a
+    /// declaration so far makes it weak, or one anywhere in the unit
+    /// declares its name `weak` or `weak_import` at file scope, or
+    /// `#pragma weak` names it. Clang emits a deferred body, such as a
+    /// static or inline function's, only after the whole unit.
+    /// GNU extension: GCC manual, "Common Function Attributes", `weak`, and
+    /// "Weak Pragmas".
+    fn may_be_weak(&mut self, binding: usize) -> bool {
+        let data = self.bindings[binding];
+        data.linkage != Linkage::None
+            && (self
+                .functions
+                .emission
+                .weak_names
+                .contains_key(&data.name.name)
+                || self.declared_weak(binding))
     }
 
     /// The builtins Clang's evaluator folds that a condition may call:
@@ -1172,6 +1250,55 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Records the names [`Self::may_be_weak`] reads before the unit is
+    /// analyzed: those of `#pragma weak`, and those of the file-scope
+    /// declarations in `roots` that write `weak` or `weak_import`.
+    pub(in crate::translation_phases::semantic_analysis) fn record_weak_names(
+        &mut self,
+        roots: &[ExternalDeclaration<'tu>],
+    ) {
+        for index in 0..self.context.weak_pragmas.len() {
+            let name = self.context.weak_pragmas[index];
+            _ = self.functions.emission.weak_names.insert(name, ());
+        }
+        for &root in roots {
+            let (spec, declarators) = match root {
+                | ExternalDeclaration::Declaration(declaration)
+                | ExternalDeclaration::RecoveredDeclaration(declaration) => (
+                    declaration.declaration_specifiers,
+                    declaration.init_declarators.as_slice(),
+                ),
+                | ExternalDeclaration::FunctionDefinition(definition)
+                | ExternalDeclaration::RecoveredFunctionDefinition(definition) => {
+                    self.record_weak_name(definition.declaration_specifiers, definition.declarator);
+                    continue;
+                },
+                | ExternalDeclaration::Error(_) | ExternalDeclaration::Asm(_) => continue,
+            };
+            for init in declarators {
+                self.record_weak_name(spec, init.declarator);
+            }
+        }
+    }
+
+    /// Records the name `declarator` declares when its declaration writes
+    /// `weak` or `weak_import`.
+    fn record_weak_name(&mut self, spec: DeclarationSpecifiers<'tu>, declarator: Declarator<'tu>) {
+        if !super::super::attributes::written_on(spec.extensions, declarator) {
+            return;
+        }
+        let Some(name) = declarator.identifier() else {
+            return;
+        };
+        let weak = self
+            .declaration_attribute_lists(spec.extensions, Some(declarator))
+            .iter()
+            .any(|list| super::super::attributes::weak_spelling(list, self.context));
+        if weak {
+            _ = self.functions.emission.weak_names.insert(name.name, ());
+        }
+    }
+
     /// Keeps the initializer of `binding` when it is a `const`,
     /// non-volatile object, whose value Clang's evaluator may read.
     /// C99: §6.7.3 paragraph 3, p. 108; PDF p. 120.
@@ -1234,6 +1361,13 @@ impl Value {
             | Self::Other => None,
         }
     }
+}
+
+/// Whether `value` is a NaN.
+fn not_a_number(value: LongDouble) -> bool {
+    value
+        .x87_parts()
+        .is_some_and(|(_, exponent, mantissa)| exponent == 0x7FFF && mantissa & !(1 << 63) != 0)
 }
 
 /// The integer a real floating value converts to, truncated toward zero:

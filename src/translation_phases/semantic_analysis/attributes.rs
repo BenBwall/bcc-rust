@@ -442,6 +442,26 @@ pub(super) fn noreturn_spelling(
     spelling
 }
 
+/// Whether `specifier` writes `weak` or Clang's `weak_import`, which make a
+/// declared function or object weak for Clang's evaluator
+/// (`ValueDecl::isWeak`), although bcc drops `weak_import`.
+/// GNU extension: GCC manual, "Common Function Attributes", `weak`.
+pub(super) fn weak_spelling(
+    specifier: &AttributeSpecifier<'_>,
+    context: &crate::translation_phases::Context<'_>,
+) -> bool {
+    written::written(specifier, context).any(|attribute| {
+        matches!(attribute.name, "weak" | "weak_import")
+            && catalog::rule(
+                specifier.syntax,
+                attribute.namespace,
+                attribute.name,
+                context.configuration.target(),
+            )
+            .is_some()
+    })
+}
+
 /// Whether a declaration's specifiers or declarator carry any attribute
 /// list, so that its end must be marked for a possible cleanup region.
 pub(super) fn written_on(

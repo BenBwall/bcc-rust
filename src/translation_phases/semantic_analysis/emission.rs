@@ -106,13 +106,20 @@ pub(super) struct State<'tu, 's> {
     label_positions:         ArenaMap<'s, usize, usize>,
     /// The functions walked so far, by address.
     walked:                  ArenaMap<'s, usize, ()>,
-    /// The values the evaluator found, by expression address.
-    folded:                  ArenaMap<'s, usize, Option<folding::Value>>,
+    /// The values the evaluator found, by expression address, with the
+    /// depth of a query that `folding::DEPTH` cut short.
+    folded:                  ArenaMap<'s, usize, (Option<folding::Value>, Option<u32>)>,
+    /// The evaluation in progress was cut short by `folding::DEPTH`.
+    depth_cut:               bool,
     /// Whether an expression holds a label, by address.
     labeled_expressions:     ArenaMap<'s, usize, bool>,
     /// Whether Clang's evaluator may fold an expression differently from
     /// semantic analysis, by address.
     refolds:                 ArenaMap<'s, usize, bool>,
+    /// The names that a file-scope declaration anywhere in the unit
+    /// declares `weak` or `weak_import`, or that `#pragma weak` names: a
+    /// function's body may be emitted after them.
+    weak_names:              ArenaMap<'s, StringCacheId, ()>,
     /// The initializers of `const` non-volatile objects, which Clang's
     /// evaluator may read.
     constant_initializers:   ArenaMap<'s, usize, &'tu Expression<'tu>>,
@@ -146,8 +153,10 @@ impl<'s> State<'_, 's> {
             label_positions:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             walked:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             folded:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            depth_cut:             false,
             refolds:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             labeled_expressions:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            weak_names:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified:     ArenaVec::new_in(scratch),

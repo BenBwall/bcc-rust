@@ -222,6 +222,7 @@ pub(crate) fn analyze<'tu>(
 ) -> SemanticTranslationUnit<'tu> {
     let scratch = Bump::new();
     let mut analyzer = Analyzer::new(context, &scratch);
+    analyzer.record_weak_names(unit.external_declarations());
     for &root in unit.external_declarations() {
         analyzer.assert_balanced();
         analyzer.work.push(Work::Root(root));
