@@ -14,6 +14,7 @@ let firstStep = 0;
 let targetLine;
 let busy = false;
 let running = false;
+let pauseRequested = false;
 let edited = false;
 let failed = false;
 
@@ -48,7 +49,7 @@ function bindControls() {
   element("step").addEventListener("click", () => action(async () => { await stepForward(); showState(true); }));
   element("back").addEventListener("click", () => { if (busy || running || cursor <= 0 || edited) return; cursor -= 1; showState(true); });
   element("reset").addEventListener("click", () => action(() => loadProgram(source, filename)));
-  element("run").addEventListener("click", () => { if (running) { running = false; updateControls(); } else run(); });
+  element("run").addEventListener("click", () => { if (running) { pauseRequested = true; updateControls(); } else run(); });
   element("run-to-cursor").addEventListener("click", () => run(targetLine));
   element("code-view").addEventListener("click", event => {
     const button = event.target.closest("button[data-line]");
@@ -90,9 +91,13 @@ async function stageProgram(text, name) {
     filename = name;
     history = [];
     cursor = -1;
+    firstStep = 0;
     targetLine = undefined;
+    element("cursor-line").textContent = "—";
+    element("cursor-label").textContent = "Highlight: next operation. Select a target line.";
     element("source-editor").value = text;
     element("source-name").textContent = name;
+    selectLoadedProgram();
     edited = false;
     showState();
   }
@@ -111,6 +116,7 @@ async function loadProgram(text, name) {
   failed = false;
   element("source-editor").value = text;
   element("source-name").textContent = name;
+  selectLoadedProgram();
   element("cursor-line").textContent = "—";
   element("cursor-label").textContent = "Highlight: next operation. Select a target line.";
   showState();
@@ -131,12 +137,13 @@ async function stepForward() {
 async function run(line) {
   if (busy || running || !canStep()) return;
   running = true;
+  pauseRequested = false;
   updateControls();
   let steps = 0;
   try {
     // Yield between real Rust steps so Pause stays available and large loops do
     // not lock the page. The budget also bounds accidental infinite loops.
-    while (running && canStep() && steps < RUN_LIMIT) {
+    while (!pauseRequested && canStep() && steps < RUN_LIMIT) {
       await stepForward();
       steps += 1;
       showState();
@@ -177,8 +184,8 @@ function updateControls() {
   element("back").disabled = locked || edited || cursor <= 0;
   element("back").title = firstStep ? `Back through the most recent ${HISTORY_LIMIT} snapshots` : "Back one engine snapshot";
   element("reset").disabled = locked || !engine;
-  element("run").disabled = busy || (!running && !canStep());
-  element("run-label").textContent = running ? "Pause" : "Run";
+  element("run").disabled = busy || (running && pauseRequested) || (!running && !canStep());
+  element("run-label").textContent = running ? pauseRequested ? "Pausing…" : "Pause" : "Run";
   element("run").title = running ? "Pause execution" : "Run until completion or undefined behavior";
   element("run").setAttribute("aria-pressed", String(running));
   element("run-to-cursor").disabled = locked || !canStep() || !targetLine;
@@ -212,3 +219,4 @@ function showError(error) {
 function showUnavailable(error) { element("engine-notice").hidden = false; element("notice-message").textContent = message(error); element("engine-label").textContent = "Rust / Wasm unavailable"; announce("Rust WebAssembly engine unavailable. Build instructions are displayed."); }
 function containsLine(snapshot, line) { const range = snapshot?.location; return range && line >= range.start.line && line <= range.end.line && !(line === range.end.line && range.end.column === 1 && line !== range.start.line); }
 function message(error) { return error instanceof Error ? error.message : String(error); }
+function selectLoadedProgram() { element("demo-select").value = Object.keys(demos).find(key => demos[key].source === source) || "custom"; }
