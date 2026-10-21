@@ -129,6 +129,49 @@ fn limited_depth_returns_one_terminal_error_root() {
     );
 }
 
+#[test]
+fn calls_and_compounds_reuse_scratch_between_functions() {
+    let function = "int f(void) { g(1, 2, 3); { g(4); } }\n";
+    for mode in [
+        StudyMode::Machine,
+        StudyMode::Recursive,
+        StudyMode::Growing,
+        StudyMode::Hybrid { depth: 4 },
+    ] {
+        let one = scratch_bytes(function, mode);
+        let repeated = scratch_bytes(&function.repeat(128), mode);
+        assert!(
+            repeated <= one * 2,
+            "{mode:?} scratch grew from {one} to {repeated}; function-local collections must \
+             return to their pools"
+        );
+    }
+}
+
+fn scratch_bytes(source: &str, mode: StudyMode) -> usize {
+    let tu = Bump::new();
+    let pp = Bump::new();
+    let parse = Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocessor = Preprocessor::new(
+        &pp,
+        &mut context,
+        PathBuf::from("<recursive-study-pool-test>").into_boxed_path(),
+        source,
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let (_unit, _stats) = Parser::new(preprocessor, &mut context, &parse)
+        .with_study_mode(mode)
+        .parse_study_translation_unit();
+    assert_eq!(
+        context.pending_error_count(),
+        0,
+        "pool workload parses without diagnostics"
+    );
+    parse.high_water()
+}
+
 fn inspect(source: &str, mode: StudyMode, stack_samples: bool) -> (String, StudyStats) {
     let tu = Bump::new();
     let pp = Bump::new();
