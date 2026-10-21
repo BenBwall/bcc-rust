@@ -139,12 +139,13 @@ on 2026-10-21. The tour returns `15`; changing its input array to `{4, 6, 8}`
 returns `21`. Checks cover actual calls, pointer writes into arrays, indeterminate
 storage, ended lifetimes, pending stores, separate policy/UB stops with citations,
 Rust reverse replay/reset, rejected source, UTF-8 columns, and runtime limits.
-The local generated artifact is `web/pkg/bcc_rust.wasm` (about 1.3 MiB with the
-repository's release debug information).
+The final local artifact is `web/pkg/bcc_rust.wasm` (1,319,989 bytes with the
+repository's release debug information). All adapter, raw ABI and Worker checks
+passed against this build, including the postfix/call-visibility regressions.
 
 JavaScript and shell syntax checks, HTML ID/ARIA/asset checks, local HTTP asset
-checks, and `git diff --check` also passed. T3 browser preview and HTML preview both failed because the host lacks the
-required browser shared libraries. Browser rendering, mobile layout, screenshots
+checks, and `git diff --check` also passed. T3 browser preview and HTML preview
+both failed because the host lacks the required browser shared libraries. Browser rendering, mobile layout, screenshots
 and assistive-technology behavior remain unverified. See the research document
 for the exact prerequisite error. The launch commands above provide a local
 manual check. Rust test, Clippy and Rustfmt results are recorded there as well.

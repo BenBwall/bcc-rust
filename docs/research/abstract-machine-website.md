@@ -469,7 +469,8 @@ Commands below run from this worktree root. Every Cargo invocation used
   and LLVM comparison arms. Log: `target/abstract-machine/native-pipeline-tests.log`.
 - Native `cargo check --all-targets` and
   `cargo clippy --all-targets -- -D warnings`: passed during build isolation.
-  The final feature-enabled lint pass is queued separately.
+  The final `cargo clippy --all-targets --features abstract-machine --
+  -D warnings` pass also passed, covering native plus evaluator test code.
 - Static page checks: HTML IDs are unique, all literal renderer/control
   element references exist, and local assets/module imports resolve.
 - `node --experimental-default-type=module web/worker-check.mjs`: passed
@@ -489,6 +490,26 @@ Commands below run from this worktree root. Every Cargo invocation used
 - `cargo clippy --lib --no-default-features --features abstract-machine
   --target wasm32-unknown-unknown --target-dir target/abstract-machine/build
   -- -D warnings`: passed after correcting the bridge's initial style lints.
+- Final release wasm build: passed with `cargo rustc --lib
+  --no-default-features --features abstract-machine --target
+  wasm32-unknown-unknown --target-dir target/abstract-machine/build --release
+  --crate-type cdylib`. The final artifact was copied to ignored
+  `web/pkg/bcc_rust.wasm`: **1,319,989 bytes**, no host imports. Native default
+  builds retain their original artifact types.
+- `node --experimental-default-type=module web/check.mjs`: passed against
+  that final artifact. The tour returns `15`; changing its input array returns
+  `21`. Checks cover actual calls, pointer aliases into arrays, indeterminate
+  and ended objects, pending stores, UB/policy stops with citations, complete
+  reverse replay/reset, rejected source (including the final parser
+  regressions), UTF-8 ranges and execution limits.
+- `node --experimental-default-type=module web/abi-check.mjs`: passed against
+  the final artifact, covering raw ABI exports, allocation contracts, invalid
+  input and UTF-8 rejection, state/trace JSON, replay/reset and terminal states.
+- Both `web/worker-check.mjs` modes passed again against the final artifact.
+- `git diff --check 145898d4`: passed. The generated wasm and validation logs
+  are local build artifacts, not committed binaries.
 
-The final combined lint, wasm rebuild and integrated web execution checks are
-still in progress.
+The engine, bridge and integrated web execution checks are complete. Actual
+browser rendering, interaction, responsive layout and screenshots remain
+unverified because of the host prerequisite error above. No deployment or
+server execution is needed to reproduce the demo.
