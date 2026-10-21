@@ -2600,6 +2600,11 @@ struct InlineObject {
     binding:  usize,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Insertion, visitation, elision and the enclosing switch are independent emission \
+              facts."
+)]
 pub(super) struct State<'tu, 's> {
     pub(super) reference_context: Option<usize>,
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
