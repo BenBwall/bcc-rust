@@ -19,6 +19,13 @@ def parse_metrics(output):
 
 
 def main():
+    # Overflow is an expected result of explicit small-stack probes. Do not
+    # retain core images containing the compiler's large reserved address space.
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except ImportError:
+        pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["bench", "diff", "stack"])
     parser.add_argument("--binary", type=Path, required=True)
@@ -60,6 +67,7 @@ def main():
         destination = scratch / (source.name + "." + mode.replace(":", "-") + ".ast")
         if args.action == "diff":
             command += ["--inspect", str(destination)]
+            destination.unlink(missing_ok=True)
         before = time.monotonic()
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
@@ -69,8 +77,10 @@ def main():
             if args.action == "diff" and completed.returncode == 0:
                 row["inspection_sha256"] = hashlib.sha256(destination.read_bytes()).hexdigest()
                 baseline = scratch / (source.name + ".machine.ast")
-                row["identical"] = destination.read_bytes() == baseline.read_bytes()
-                if not row["identical"]:
+                row["identical"] = destination.read_bytes() == baseline.read_bytes() if baseline.exists() else None
+                if row["identical"] is None:
+                    row["comparison_error"] = "machine inspection unavailable"
+                elif not row["identical"]:
                     # Bounded evidence: inspection can contain large, deeply
                     # indented trees. Retain full files in scratch for review.
                     with baseline.open() as left, destination.open() as right:
