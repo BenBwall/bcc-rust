@@ -474,6 +474,18 @@ fn internal_definitions_exclude_constant_sizeof_uses() {
         kinds("static int f(void); void g(int n) {sizeof(int[f()]);}"),
         [SemanticErrorKind::UndefinedInternal]
     );
+    // A constant query's operand is used, even where only its value is
+    // emitted.
+    for source in [
+        "static int f(void); int g(void) {return __builtin_constant_p(f());}",
+        "static int f(void); int g(void) {static int s = __builtin_constant_p(f()); return s;}",
+    ] {
+        assert_eq!(
+            kinds(source),
+            [SemanticErrorKind::UndefinedInternal],
+            "{source}"
+        );
+    }
 }
 
 #[test]

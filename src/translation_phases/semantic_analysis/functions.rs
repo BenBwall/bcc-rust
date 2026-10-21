@@ -476,15 +476,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }) {
                     // Clang visits query operands while emitting function code,
                     // but emits only their value in static initializer data.
-                    let initializer = self.functions.initializer;
-                    let kind = if initializer.is_some_and(|binding| {
+                    let static_data = self.functions.initializer.is_some_and(|binding| {
                         self.bindings[binding].duration.is_static_or_thread()
-                    }) {
-                        ReferenceContextKind::Unevaluated
-                    } else {
-                        ReferenceContextKind::ConstantQuery(initializer)
-                    };
-                    self.enter_reference_context_kind(kind);
+                    });
+                    self.enter_reference_context_kind(ReferenceContextKind::ConstantQuery {
+                        static_data,
+                    });
                 }
                 for &argument in arguments.iter().rev() {
                     self.work.push(Work::Expression(argument));
@@ -693,12 +690,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut ignored_references = ArenaVec::new_in(self.scratch);
         let mut ignored_definitions = ArenaVec::new_in(self.scratch);
+        // A query operand is still used in an expression (C99 §6.9p3,
+        // p. 140; PDF p. 152), even where Clang emits only its value.
+        let mut ignored_uses = ArenaVec::new_in(self.scratch);
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
-            ignored_definitions.push(
-                (!matches!(context.kind, ReferenceContextKind::ConstantQuery(_))
-                    && self.reference_context_unevaluated(index))
-                    || context.parent.is_some_and(|p| ignored_definitions[p]),
-            );
+            let (definitions, uses) = match context.kind {
+                | ReferenceContextKind::ConstantQuery { static_data } => (static_data, false),
+                | _ => {
+                    let unevaluated = self.reference_context_unevaluated(index);
+                    (unevaluated, unevaluated)
+                },
+            };
+            ignored_definitions
+                .push(definitions || context.parent.is_some_and(|p| ignored_definitions[p]));
+            ignored_uses.push(uses || context.parent.is_some_and(|p| ignored_uses[p]));
             ignored_references.push(
                 self.reference_context_unevaluated(index)
                     || context.parent.is_some_and(|p| ignored_references[p]),
@@ -783,7 +788,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if b.linkage == Linkage::Internal
                 && !usage.sizeof.is_some_and(|s| ignored[s])
-                && !ignored_reference
+                && !usage
+                    .reference_context
+                    .is_some_and(|index| ignored_uses[index])
             {
                 _ = used
                     .entry(self.function_identity(usage.binding))
@@ -1887,8 +1894,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         owner: Option<ReferenceOwner>,
     ) -> bool {
         match self.functions.reference_contexts[index].kind {
-            | ReferenceContextKind::ConstantQuery(initializer) =>
-                !matches!(owner, Some(ReferenceOwner::Object(binding)) if initializer != Some(binding)),
+            | ReferenceContextKind::ConstantQuery { static_data } =>
+                static_data || !matches!(owner, Some(ReferenceOwner::Object(_))),
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
                 .typeof_sites
@@ -2332,13 +2339,19 @@ struct ReferenceContext<'tu> {
 }
 
 #[derive(Clone, Copy)]
+#[expect(
+    variant_size_differences,
+    reason = "Typeof contexts retain their syntax for deferred VM checks"
+)]
 enum ReferenceContextKind<'tu> {
     Typeof(&'tu super::ExtendedType<'tu>),
     Unevaluated,
-    /// Query operands in function code keep declarations and their static data.
-    /// Queries in static initializer data use `Unevaluated` instead. The
-    /// payload records the initializer active when the query was entered.
-    ConstantQuery(Option<usize>),
+    /// A `__builtin_constant_p` operand. In function code it keeps nested
+    /// static declarations and their initializer data; in static initializer
+    /// data nothing of it is emitted. Its references remain uses either way.
+    ConstantQuery {
+        static_data: bool,
+    },
 }
 
 /// Parameter type sites execute as part of the definition, before its binding
