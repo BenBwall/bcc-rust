@@ -1312,9 +1312,10 @@ wins. `--emit=asm` prints the same listing either way. The encoder reads only
 the emitter's vocabulary, so a module with file-scope assembly takes the text
 path by default and is refused under `--native-object`.
 `driver::object_writer` makes this choice from the target, the flags and the
-module, in one place. When the default direct writer's encoder refuses a
-listing, `driver::build` assembles it instead, so the Windows default still
-builds everything the text default did: a user section name outside
+module, in one place, including whether an encoder refusal is final, and
+`driver::build` runs it. When the default direct writer's encoder refuses a
+listing, `build` assembles it instead, so the Windows default still builds
+everything the text default did: a user section name outside
 `[A-Za-z0-9_.$-]`, a user `.pdata` or `.xdata` section, a non-ASCII export name,
 or more than 65,279 sections (big-object COFF). Only `--native-object` keeps
 such a refusal as an error.

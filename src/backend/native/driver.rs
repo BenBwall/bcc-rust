@@ -25,42 +25,53 @@ use crate::{
     util::bump::Bump,
 };
 
-/// How `-o` turns the native listing into an object.
+/// How `-o` turns the native listing into an object, as [`object_writer`]
+/// chose it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ObjectWriter {
-    /// ELF or COFF bytes encoded in process ([`build_object`]).
+    /// ELF or COFF bytes encoded in process ([`build_object`]); an encoder
+    /// refusal is an error.
     Direct,
+    /// Bytes encoded in process, except that a listing the encoder refuses
+    /// is assembled.
+    DirectOrAssembler,
     /// The listing assembled by the bundled clang ([`assemble`]).
     Assembler,
 }
 
-/// The object writer for `module` on `target`: the one `requested` names
-/// (`--native-object` or `--no-native-object`), else direct COFF objects on
-/// both Windows targets and the assembler on Linux, where direct ELF objects
+/// The object writer `--native-object` (`Direct`) or `--no-native-object`
+/// (`Assembler`) asks for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RequestedWriter {
+    Direct,
+    Assembler,
+}
+
+/// The object writer for `module` on `target`. A `requested` writer is used
+/// as asked, and only it makes an encoder refusal final. Otherwise both
+/// Windows targets encode COFF objects directly and assemble a listing the
+/// encoder refuses, as every Windows listing was assembled before direct COFF
+/// objects became the default, and Linux assembles, since direct ELF objects
 /// stay opt-in. The encoder reads only the emitter's own vocabulary, so a
 /// module with file-scope assembly, which is arbitrary assembler input, takes
 /// the assembler by default and is refused when direct objects are requested.
-/// [`build`] also assembles any other listing a default direct writer refuses.
 pub(crate) fn object_writer(
     module: &Module<'_>,
     target: Target,
-    requested: Option<ObjectWriter>,
+    requested: Option<RequestedWriter>,
 ) -> Result<ObjectWriter, NativeError<'static>> {
     let encodable = module.module_asm().is_empty();
     match requested {
-        | Some(ObjectWriter::Direct) if !encodable => Err(NativeError::ObjectModuleAsm),
-        | Some(writer) => Ok(writer),
+        | Some(RequestedWriter::Direct) if !encodable => Err(NativeError::ObjectModuleAsm),
+        | Some(RequestedWriter::Direct) => Ok(ObjectWriter::Direct),
         | None if encodable && matches!(target, Target::WindowsGnu | Target::WindowsMsvc) =>
-            Ok(ObjectWriter::Direct),
-        | None => Ok(ObjectWriter::Assembler),
+            Ok(ObjectWriter::DirectOrAssembler),
+        | Some(RequestedWriter::Assembler) | None => Ok(ObjectWriter::Assembler),
     }
 }
 
-/// Builds `out_path` from the native listing `text` with `writer`, which
-/// [`object_writer`] chose for `requested`. Only a requested direct writer
-/// (`--native-object`) makes an encoder refusal final; by default a listing
-/// the encoder refuses is assembled, as every Windows listing was before
-/// direct COFF objects became the default. The assembler accepts forms the
+/// Builds `out_path` from the native listing `text` with `writer`. The
+/// assembler behind [`ObjectWriter::DirectOrAssembler`] accepts forms the
 /// encoder lacks, such as a user section name outside `[A-Za-z0-9_.$-]`, a
 /// user `.pdata` section, a non-ASCII export name or more sections than a
 /// regular COFF object holds. Encoding finishes before any output is opened,
@@ -71,14 +82,13 @@ pub(crate) fn build(
     target: Target,
     kind: OutputKind,
     writer: ObjectWriter,
-    requested: Option<ObjectWriter>,
 ) -> io::Result<()> {
-    match (writer, requested) {
-        | (ObjectWriter::Assembler, _) => assemble(text, out_path, target, kind),
-        | (ObjectWriter::Direct, Some(_)) => build_object(text, out_path, target, kind),
-        | (ObjectWriter::Direct, None) => encode_object(text, out_path, target, kind, |_| {
+    match writer {
+        | ObjectWriter::Direct => build_object(text, out_path, target, kind),
+        | ObjectWriter::DirectOrAssembler => encode_object(text, out_path, target, kind, |_| {
             assemble(text, out_path, target, kind)
         }),
+        | ObjectWriter::Assembler => assemble(text, out_path, target, kind),
     }
 }
 

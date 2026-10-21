@@ -20,6 +20,7 @@ use crate::{
         native::{
             NativeError,
             ObjectWriter,
+            RequestedWriter,
             object_writer,
         },
     },
@@ -648,7 +649,8 @@ fn coff_option_preserves_unwind_comdats_refptr_and_exports() {
 }
 
 /// Both Windows targets write direct COFF objects unless the assembler is
-/// requested, and Linux keeps the assembler unless direct objects are.
+/// requested, and assemble what the encoder refuses unless direct objects
+/// are; Linux keeps the assembler unless direct objects are requested.
 /// File-scope assembly, which only the assembler reads, takes it by default
 /// on every target and is refused when direct objects are requested.
 #[test]
@@ -663,8 +665,8 @@ fn object_writer_defaults_to_direct_coff_and_assembles_file_scope_asm() {
     for (target, default) in [
         (Target::LinuxGnu, ObjectWriter::Assembler),
         (Target::LinuxMusl, ObjectWriter::Assembler),
-        (Target::WindowsGnu, ObjectWriter::Direct),
-        (Target::WindowsMsvc, ObjectWriter::Direct),
+        (Target::WindowsGnu, ObjectWriter::DirectOrAssembler),
+        (Target::WindowsMsvc, ObjectWriter::DirectOrAssembler),
     ] {
         assert_eq!(object_writer(&plain, target, None).unwrap(), default);
         assert_eq!(
@@ -674,19 +676,19 @@ fn object_writer_defaults_to_direct_coff_and_assembles_file_scope_asm() {
         );
         for module in [&plain, &assembly] {
             assert_eq!(
-                object_writer(module, target, Some(ObjectWriter::Assembler)).unwrap(),
+                object_writer(module, target, Some(RequestedWriter::Assembler)).unwrap(),
                 ObjectWriter::Assembler,
                 "{target:?}"
             );
         }
         assert_eq!(
-            object_writer(&plain, target, Some(ObjectWriter::Direct)).unwrap(),
+            object_writer(&plain, target, Some(RequestedWriter::Direct)).unwrap(),
             ObjectWriter::Direct,
             "{target:?}"
         );
         assert!(
             matches!(
-                object_writer(&assembly, target, Some(ObjectWriter::Direct)),
+                object_writer(&assembly, target, Some(RequestedWriter::Direct)),
                 Err(NativeError::ObjectModuleAsm)
             ),
             "{target:?}"

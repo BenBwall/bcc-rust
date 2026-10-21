@@ -487,12 +487,12 @@ impl CodeGeneration {
     }
 
     /// The native object writer `--native-object` or `--no-native-object`
-    /// selects, whichever came last, or `None` for the target's default.
-    fn object_writer(&self) -> Option<native::ObjectWriter> {
+    /// requests, whichever came last, or `None` for the target's default.
+    fn requested_object_writer(&self) -> Option<native::RequestedWriter> {
         if self.native_object {
-            Some(native::ObjectWriter::Direct)
+            Some(native::RequestedWriter::Direct)
         } else if self.no_native_object {
-            Some(native::ObjectWriter::Assembler)
+            Some(native::RequestedWriter::Assembler)
         } else {
             None
         }
@@ -643,7 +643,7 @@ fn build_native(
         ));
         return FAILURE_STATUS;
     }
-    let writer = match native::object_writer(module, target, options.object_writer()) {
+    let writer = match native::object_writer(module, target, options.requested_object_writer()) {
         | Ok(writer) => writer,
         | Err(error) => {
             report_stderr(format_args!("error: {error}"));
@@ -666,16 +666,8 @@ fn build_native(
     } else {
         Ok(())
     };
-    let result = writable.and_then(|()| {
-        native::build(
-            &text,
-            output,
-            target,
-            options.output_kind(),
-            writer,
-            options.object_writer(),
-        )
-    });
+    let result =
+        writable.and_then(|()| native::build(&text, output, target, options.output_kind(), writer));
     match result {
         | Ok(()) => 0,
         | Err(error) => {
