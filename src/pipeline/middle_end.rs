@@ -57,21 +57,58 @@ pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     profile: Profile,
     copies: InlineCopies,
 ) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
+    lower_translation_unit_with_locals(
+        context,
+        syntax,
+        sema,
+        arena,
+        optimizer,
+        profile,
+        (copies, true),
+    )
+}
+
+/// Retry the diagnosed pipeline without optional O0 local retention when a
+/// backend cannot emit the retained initializer tree. Other emission roots,
+/// semantic diagnostics and optimization policy remain unchanged.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+pub(crate) fn lower_translation_unit_with_locals<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    arena: &'ir Bump,
+    optimizer: Option<&OptimizerOptions<'_>>,
+    profile: Profile,
+    emission: (InlineCopies, bool),
+) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
+    let (copies, retain_locals) = emission;
     let mut scratch = Bump::new();
     let target = context.configuration.target();
     let crate::lowering::LoweredUnit {
         mut module,
         function_sources,
         call_diagnostics,
-    } = crate::lowering::lower_with_sources(
-        context,
-        syntax,
-        sema,
-        target,
-        arena,
-        &mut scratch,
-        copies == InlineCopies::Keep,
-    )
+    } = if retain_locals {
+        crate::lowering::lower_with_sources(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            &mut scratch,
+            copies == InlineCopies::Keep,
+        )
+    } else {
+        crate::lowering::lower_with_emission(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            &mut scratch,
+            (copies == InlineCopies::Keep, false),
+        )
+    }
     .map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {
         scratch.reset();

@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn unsupported_unused_local_statics_keep_main_acceptance() {
         assert_runs_like_clang(
-            r#"
+            r"
             typedef int vector __attribute__((vector_size(16)));
             typedef int extvector __attribute__((ext_vector_type(4)));
             int f(int a) {
@@ -93,14 +93,14 @@ mod tests {
                 return a + 1;
             }
             int main(void) { return f(4) != 5; }
-        "#,
+        ",
         );
         assert_runs_like_clang(
-            r#"
+            r"
             static void unsupported(void) { __float128 q = 1.5Q; (void)q; }
             int f(void) { static void (*hook)(void) = unsupported; return 42; }
             int main(void) { return f() != 42; }
-        "#,
+        ",
         );
         assert_runs_like_clang(
             r#"
@@ -117,6 +117,18 @@ mod tests {
             "int g; static void helper(void){g=__builtin_ia32_rdtsc();} void f(void){static void \
              (*p)(void)=helper;}int main(void){f();return 0;}",
         );
+        assert_runs_like_clang(
+            "int rt(void) __attribute__((returns_twice));int rt(void){return 0;} static int \
+             helper(void){return rt();}int f(void){static int(*p)(void)=helper;return 0;} int \
+             main(void){return f();}",
+        );
+        let used_native_helper = bcc(
+            "int rt(void) __attribute__((returns_twice));int rt(void){return 0;} static int \
+             helper(void){return rt();}int f(void){static int(*p)(void) \
+             __attribute__((used))=helper;return 0;}int main(void){return f();}",
+            &["--backend=native", "--emit=asm"],
+        );
+        assert!(!used_native_helper.status.success());
         let used_helper = bcc(
             "int g; static void helper(void){g=__builtin_ia32_rdtsc();} void f(void){static void \
              (*p)(void) __attribute__((used))=helper;} int main(void){f();return 0;}",
@@ -243,7 +255,7 @@ mod tests {
     #[test]
     fn discarded_comma_queries_keep_control_flow_and_pointer_answers() {
         assert_runs_like_clang(
-            r#"
+            r"
             extern int puts(const char *);
             int x;
             static int slow(void) { static int count; return ++count; }
@@ -263,7 +275,7 @@ mod tests {
                     __builtin_constant_p((x, (void *)0))) return 1;
                 return f() != 11;
             }
-        "#,
+        ",
         );
         // Neither the evaluator nor the emitted-value shortcut may remove
         // an arm's used section entry before the linker builds the table.
@@ -292,7 +304,7 @@ mod tests {
     #[test]
     fn constant_query_operands_share_one_emission_decision() {
         assert_runs_like_clang(
-            r#"
+            r"
             int x;
             static int g = 4;
             static int h(void) { return 3; }
@@ -305,7 +317,7 @@ mod tests {
                 int e = __builtin_constant_p(({ static int no2; ++x + no2; }));
                 return a + b + c + d + e;
             }
-        "#,
+        ",
         );
     }
 

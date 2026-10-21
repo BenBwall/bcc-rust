@@ -64,6 +64,7 @@ use crate::{
         MiddleEndError,
         analyze_translation_unit,
         lower_translation_unit_diagnosed,
+        lower_translation_unit_with_locals,
         parse_translation_unit,
     },
     target::{
@@ -123,7 +124,7 @@ pub(super) fn generate_code<'tu>(
         Profile::PostAbi
     };
     let copies = options.inline_copies();
-    let lowered = lower_translation_unit_diagnosed(
+    let mut lowered = lower_translation_unit_diagnosed(
         context,
         &unit,
         &sema,
@@ -132,6 +133,27 @@ pub(super) fn generate_code<'tu>(
         profile,
         copies,
     );
+    // Native support is checked before reporting retained call diagnostics.
+    // An optional static may be the only root of an unsupported helper tree.
+    let native_output = options.emit == Some(Emit::Asm)
+        || (options.backend == BackEnd::Native
+            && options.emit.is_none()
+            && options.output_path.is_some());
+    if native_output
+        && lowered.as_ref().is_ok_and(|diagnosed| {
+            native::check_module(&diagnosed.module, context.configuration.target()).is_err()
+        })
+    {
+        lowered = lower_translation_unit_with_locals(
+            context,
+            &unit,
+            &sema,
+            &ir,
+            optimizer.as_ref(),
+            profile,
+            (copies, false),
+        );
+    }
     let llvm_output =
         options.emit.is_none() && options.output_path.is_some() && options.backend == BackEnd::Llvm;
     let diagnosed = match lowered {

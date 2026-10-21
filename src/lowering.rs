@@ -169,6 +169,30 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
     scratch: &mut Bump,
     plain_inline: bool,
 ) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
+    lower_with_emission(
+        context,
+        syntax,
+        sema,
+        target,
+        arena,
+        scratch,
+        (plain_inline, true),
+    )
+}
+
+/// The same lowering contract, with optional O0 local storage controlled by
+/// the caller after a backend support refusal. Required and used storage stay.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+pub(crate) fn lower_with_emission<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    target: Target,
+    arena: &'ir Bump,
+    scratch: &mut Bump,
+    emission: (bool, bool),
+) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
+    let (plain_inline, retain_locals) = emission;
     let mut errors = ArenaVec::new_in(arena);
     if !sema.lowerable(context) {
         errors.push(LoweringError {
@@ -186,12 +210,21 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
         target,
         arena,
         scratch,
-        (plain_inline, true),
+        (plain_inline, retain_locals),
     );
     // Optional inline bodies cannot refuse an otherwise supported unit.
     let plain_inline = plain_inline && !copied;
     if result.is_err() && copied {
-        result = lower_unit(context, syntax, sema, target, arena, scratch, (false, true)).0;
+        result = lower_unit(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            scratch,
+            (false, retain_locals),
+        )
+        .0;
     }
     // Retaining an unused local, or an implementation reached only through
     // its initializer, must not expose a backend limitation main avoided.

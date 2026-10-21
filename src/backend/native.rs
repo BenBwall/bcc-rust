@@ -55,7 +55,10 @@ pub(crate) use driver::{
     assemble,
     build_object,
 };
-pub(crate) use support::Unsupported;
+pub(crate) use support::{
+    Unsupported,
+    check_module,
+};
 
 use self::{
     conv::CallConv,
@@ -246,7 +249,7 @@ fn emit<'m>(
     {
         return Err(NativeError::SharedLibraryCode);
     }
-    support::check_module(module, target)?;
+    check_module(module, target)?;
     let conv = CallConv::of(target);
     let stubs = Bump::new();
     let mut emitter = Emitter::new(module, target, out, &stubs);

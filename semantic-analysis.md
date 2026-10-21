@@ -1071,7 +1071,10 @@ their initializers reach. Semantic diagnostics, including BSS initializer
 checks, still run before this fallback. The native backend also omits unused
 internal TLS objects in named sections it cannot support, and allows an unread
 internal initializer to hold a returns-twice function's address. Required and
-`used` objects retain their support checks.
+`used` objects retain their support checks. A native support preflight can
+also retry the diagnosed pipeline without optional retention when an unread
+initializer is the only root of an unsupported helper tree. This fallback
+runs before any retained call diagnostics are reported.
 The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still

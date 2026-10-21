@@ -38,6 +38,7 @@ pub(crate) use middle_end::{
     InlineCopies,
     MiddleEndError,
     lower_translation_unit_diagnosed,
+    lower_translation_unit_with_locals,
 };
 pub(crate) use stages::{
     parse_with_arena,
