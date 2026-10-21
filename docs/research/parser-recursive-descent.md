@@ -157,3 +157,11 @@ without crashes or inspection differences. The separate 150-case grammar corpus
 is exposing malformed-condition recovery differences; these remain under review.
 Linux RSS collection is being changed from inherited `getrusage` high-water marks
 to `/proc/self/status` `VmHWM`, outside the measured interval.
+
+A first explicit 1 MiB debug worker probe already reproduces the stack concern:
+recursive parsing aborts on 127 nested blocks, and `limited:256` aborts before
+its check can protect that case. The explicit machine, `growing`, and `hybrid:16`
+survive all generated depths through 16,384 in this preliminary binary. Final
+stack tables will be rerun on the final build. The timing runner now supports
+`--baseline-binary` and `--alignment-binary`, allowing these binaries to rotate
+in the same interleaved run instead of comparing different load windows.
