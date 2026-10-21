@@ -137,7 +137,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // does, which differs from Clang's evaluator; recompute around it.
         if info.constant == ConstantClass::Arithmetic
             && !info.unfolded_binary128
-            && !self.holds_constant_p(expression)
+            && !self.refolds(expression)
         {
             if let Some(integer) = info.integer {
                 return Some(Value::Integer(integer));
@@ -448,6 +448,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 if !data.ty.qualifiers.contains(TypeQualifiers::CONST)
                     || data.ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+                    || self.declared_weak(binding)
                 {
                     return None;
                 }
@@ -771,31 +772,54 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         matches!(self.types.nodes[ty.index], TypeKind::Array(..))
     }
 
-    /// Whether `expression` calls `__builtin_constant_p`, memoized.
-    fn holds_constant_p(&mut self, expression: &'tu Expression<'tu>) -> bool {
+    /// Whether Clang's evaluator may fold `expression` differently from
+    /// the constant semantic analysis computed, memoized: it calls
+    /// `__builtin_constant_p`, which semantic analysis folds as GCC's front
+    /// end does, or it names a weak object or function, whose initializer
+    /// (`evaluateVarDeclInit`) and address Clang's evaluator never trust,
+    /// while GNU modes fold a weak `const` object's value.
+    fn refolds(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let mut work = crate::util::bump::ArenaVec::new_in(self.scratch);
         work.push((expression, false));
         while let Some((current, children_done)) = work.pop() {
             let key = std::ptr::from_ref(current).addr();
-            if self.functions.emission.constant_p.contains_key(&key) {
+            if self.functions.emission.refolds.contains_key(&key) {
                 continue;
             }
             if children_done {
-                let mut holds = matches!(current.kind, ExpressionType::Call { function_expression, .. }
-                if self.expression_info(function_expression).binding.is_some_and(|binding| {
-                    self.bindings[binding].origin
-                        == super::super::BindingOrigin::Intrinsic(BuiltinId::ConstantP)
-                }));
+                let mut refolds = match current.kind {
+                    | ExpressionType::Call {
+                        function_expression,
+                        ..
+                    } => self
+                        .expression_info(function_expression)
+                        .binding
+                        .is_some_and(|binding| {
+                            self.bindings[binding].origin
+                                == super::super::BindingOrigin::Intrinsic(BuiltinId::ConstantP)
+                        }),
+                    | ExpressionType::Identifier(_) => self
+                        .expression_info(current)
+                        .binding
+                        .filter(|&binding| {
+                            matches!(
+                                self.bindings[binding].kind,
+                                BindingKind::Object | BindingKind::Function
+                            )
+                        })
+                        .is_some_and(|binding| self.declared_weak(binding)),
+                    | _ => false,
+                };
                 super::labels::expression_children(self.scratch, current, |child| {
-                    holds |= self
+                    refolds |= self
                         .functions
                         .emission
-                        .constant_p
+                        .refolds
                         .get(&std::ptr::from_ref(child).addr())
                         .copied()
                         .unwrap_or(false);
                 });
-                _ = self.functions.emission.constant_p.insert(key, holds);
+                _ = self.functions.emission.refolds.insert(key, refolds);
             } else {
                 work.push((current, true));
                 super::labels::expression_children(self.scratch, current, |child| {
@@ -805,7 +829,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.functions
             .emission
-            .constant_p
+            .refolds
             .get(&std::ptr::from_ref(expression).addr())
             .copied()
             .unwrap_or(false)
