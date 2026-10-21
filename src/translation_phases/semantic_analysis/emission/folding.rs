@@ -1050,17 +1050,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The length `strlen` gives for element `offset` of string literal
     /// `literal`: the elements before the first null one.
+    /// None outside the array, its terminator included. One pass over the
+    /// literal's units.
     fn string_strlen(&self, literal: StringTokenType, offset: i128) -> Option<Value> {
-        let mut index = offset;
-        loop {
-            let Value::Integer(unit) = self.string_element(literal, index)? else {
-                return None;
-            };
-            if unit.value == 0 {
-                return Some(Value::Integer(Integer::int(index - offset)));
-            }
-            index += 1;
-        }
+        let start = usize::try_from(offset).ok()?;
+        let length = match literal {
+            | StringTokenType::String(id) => units_to_null(
+                self.context
+                    .encoded_literal_units(id, LiteralEncoding::Utf8),
+                start,
+            ),
+            | StringTokenType::WideString(id) =>
+                units_to_null(self.context.wide_literal_units(id), start),
+            | StringTokenType::EncodedString(id, encoding) =>
+                units_to_null(self.context.encoded_literal_units(id, encoding), start),
+        }?;
+        Some(Value::Integer(Integer::int(i128::try_from(length).ok()?)))
     }
 
     /// Clang's `Expr::HasSideEffects`, syntactically: an assignment, an
@@ -1284,6 +1289,19 @@ enum Read<'tu> {
     Value(&'tu Expression<'tu>),
     /// An element of a string literal.
     String(StringTokenType, i128),
+}
+
+/// The number of `units` from index `start` before the first null one or
+/// the terminator after them: none when `start` is past the terminator.
+fn units_to_null(units: impl Iterator<Item = u32>, start: usize) -> Option<usize> {
+    let mut count = 0;
+    for (index, unit) in units.enumerate() {
+        if index >= start && unit == 0 {
+            return Some(index - start);
+        }
+        count = index + 1;
+    }
+    count.checked_sub(start)
 }
 
 fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
