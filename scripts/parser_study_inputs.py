@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import tarfile
 import urllib.request
 import zipfile
 
@@ -15,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path(".scratch/parser-study/inputs"))
     parser.add_argument("--sqlite", action="store_true", help="download SQLite 3.50.4 amalgamation")
+    parser.add_argument("--lua", action="store_true", help="download and preprocess Lua v5.4.8 onelua.c")
     parser.add_argument("--cc", default="gcc")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -69,6 +71,25 @@ return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c
     for size in [1000, 10000, 100000]:
         save(f"chain-{size}.c", "int f(int a){return " + "+".join(["a"] * size) + ";}\n", f"generated size={size}")
         save(f"initializer-list-{size}.c", "int x[]={" + ",".join(["1"] * size) + "};\n", f"generated size={size}")
+
+    if args.lua:
+        url = "https://codeload.github.com/lua/lua/tar.gz/refs/tags/v5.4.8"
+        archive_path = args.output / "lua-5.4.8.tar.gz"
+        if not archive_path.exists():
+            with urllib.request.urlopen(url, timeout=120) as response:
+                archive_path.write_bytes(response.read())
+        payload = archive_path.read_bytes()
+        # Pinned archive hash, observed from GitHub's v5.4.8 tag on 2026-10-21.
+        digest = hashlib.sha256(payload).hexdigest()
+        expected = "d85b70a65f43c5d2254944d58d625e822c8e2e10d9c6a3bd9b5b657e46376a19"
+        if digest != expected:
+            raise SystemExit(f"Lua archive checksum mismatch: {digest}")
+        manifest[archive_path.name] = {"sha256": digest, "bytes": len(payload), "origin": url}
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            archive.extractall(args.output, filter="data")
+        command = [args.cc, "-std=gnu99", "-E", "-P", str(args.output / "lua-5.4.8/onelua.c")]
+        result = subprocess.run(command, check=True, capture_output=True)
+        save("lua.i", result.stdout, " ".join(command))
 
     if args.sqlite:
         url = "https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip"
