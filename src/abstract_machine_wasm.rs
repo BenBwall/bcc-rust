@@ -154,7 +154,9 @@ pub unsafe extern "C" fn bcc_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() {
         return;
     }
-    let layout = Layout::array::<u8>(len).expect("original allocation layout");
+    let Ok(layout) = Layout::array::<u8>(len) else {
+        return;
+    };
     // SAFETY: the caller promises the original pointer, layout and ownership.
     unsafe { alloc::dealloc(ptr, layout) };
 }
