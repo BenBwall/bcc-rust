@@ -259,3 +259,11 @@ On the release 1 MiB worker, raw recursion overflows by 4,096 parentheses or
 kind/depth combinations through 16,384. A limit of 256 rejects the combined
 C99-floor probe; limit 512 accepts it in release. Debug validation and isolated
 counter collection remain in progress.
+
+Final debug medians for clean Lua are 174.633 ms production, 117.420 ms
+recursive, 122.763 ms growing and 131.710 ms hybrid 16. All 672 ordinary debug
+samples completed. One declaration/hybrid sample had large scheduling noise
+(CV 35.45%); retain its minimum, median and raw observations instead of claiming
+a small ordering difference there. The 64 MiB worker still overflows at 16,384
+blocks in debug. Growing and hybrid pass the exact and combined C99 floor probes
+on 1 MiB; raw recursion and limits 256/512 abort on those block cases.
