@@ -480,9 +480,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .is_none_or(|statement| !self.statement_contains_label(statement, false));
                 self.functions.dead = outer || skipped;
             },
-            | FunctionWork::DeadArm(condition, live, outer) => {
-                let value = self.folded_condition(condition);
-                self.functions.dead = outer || value == Some(!live);
+            | FunctionWork::DeadArm(condition, live, outer, arm) => {
+                // Clang emits a folded-away operand that holds a label.
+                let skipped = self.folded_condition(condition) == Some(!live)
+                    && !self.expression_contains_label(arm);
+                self.functions.dead = outer || skipped;
             },
             | FunctionWork::GenericMark(generic) => {
                 let at = self.functions.uses.len();
@@ -1637,14 +1639,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Pushes the work that enters the arm of `condition` taken when it is
-    /// `live`: code generation skips it when the condition folds to the
-    /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
-    pub(super) fn dead_arm(&mut self, condition: &'tu Expression<'tu>, live: bool) {
+    /// Pushes the work that enters operand `arm` of `condition`, taken when
+    /// it is `live`: code generation skips it when the condition folds to
+    /// the other value (`CodeGenFunction::ConstantFoldsToSimpleInteger`),
+    /// unless it holds a label (`CodeGenFunction::ContainsLabel`).
+    pub(super) fn dead_arm(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+        live: bool,
+        arm: &'tu Expression<'tu>,
+    ) {
         self.work.push(Work::FunctionWork(FunctionWork::DeadArm(
             condition,
             live,
             self.functions.dead,
+            arm,
         )));
     }
 
@@ -1976,9 +1985,10 @@ pub(super) enum FunctionWork<'tu> {
     ThenEnd,
     /// Skips the code after an `if` statement when both arms end skipped.
     JoinArms,
-    /// Enters the arm of a condition taken when it is `live`, given whether
-    /// the code around the condition is skipped.
-    DeadArm(&'tu Expression<'tu>, bool, bool),
+    /// Enters operand `arm` of a condition, taken when it is `live`, given
+    /// whether the code around the condition is skipped; an operand that
+    /// holds a label is not skipped.
+    DeadArm(&'tu Expression<'tu>, bool, bool, &'tu Expression<'tu>),
     /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
     /// the arm holds a label, which keeps Clang from skipping it.
     DeadStatementArm(

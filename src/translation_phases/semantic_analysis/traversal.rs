@@ -84,7 +84,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 self.work.push(Work::Expression(right_expression));
                 if let Some(live) = live {
-                    self.dead_arm(left_expression, live);
+                    self.dead_arm(left_expression, live, right_expression);
                 }
                 self.work.push(Work::Expression(left_expression));
             },
@@ -93,9 +93,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.functions.dead,
                 )));
                 self.work.push(Work::Expression(c.else_expression));
-                self.dead_arm(c.condition_expression, false);
+                self.dead_arm(c.condition_expression, false, c.else_expression);
                 self.work.push(Work::Expression(c.then_expression));
-                self.dead_arm(c.condition_expression, true);
+                self.dead_arm(c.condition_expression, true, c.then_expression);
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {
