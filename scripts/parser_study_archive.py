@@ -5,8 +5,30 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import re
 import shutil
 import statistics
+
+
+def call_counts(path):
+    lines = path.read_text().splitlines()
+    names = {}
+    for line in lines:
+        match = re.match(r"c?fn=\((\d+)\) (.*)", line)
+        if match:
+            names[match[1]] = match[2]
+    fragments = ["ParseFrame>::step_once", "retained_node_count", "reclaim_pooled", "push_frame", "store_expression", "merge_vectors", "VecPool"]
+    counts = dict.fromkeys(fragments, 0)
+    current = ""
+    for line in lines:
+        match = re.match(r"cfn=\((\d+)\)", line)
+        if match:
+            current = names[match[1]]
+        if line.startswith("calls="):
+            for fragment in fragments:
+                if fragment in current:
+                    counts[fragment] += int(line.split()[0][6:])
+    return counts
 
 
 def main():
@@ -23,14 +45,19 @@ def main():
         shutil.copyfile(path, args.output / name)
     timing = []
     events = []
+    calls = []
     for path in sorted(args.scratch.glob("final-*.json")):
         data = json.loads(path.read_text())
-        (args.output / path.name).write_text(json.dumps(data, separators=(",", ":")) + "\n")
         groups = {}
         for row in data["rows"]:
             groups.setdefault((row["input"], row["mode"]), []).append(row)
             if "events" in row:
                 events.append({"run": path.stem, "input": row["input"], "mode": row["mode"], "repeat": row["repeat"], **row["events"]})
+                raw = next((item.split("=", 1)[1] for item in row["command"] if item.startswith("--callgrind-out-file=")), None)
+                if raw and Path(raw).exists():
+                    row["calls"] = call_counts(Path(raw))
+                    calls.append({"run": path.stem, "input": row["input"], "mode": row["mode"], "repeat": row["repeat"], **row["calls"]})
+        (args.output / path.name).write_text(json.dumps(data, separators=(",", ":")) + "\n")
         if data.get("metadata", {}).get("action") != "bench":
             continue
         for (name, mode), rows in groups.items():
@@ -49,7 +76,7 @@ def main():
                 **{key: metric[key] for key in ["tokens", "diagnostics", "parse_bytes", "tu_bytes", "commit_bytes", "global_calls", "global_bytes", "depth", "fallbacks"]},
                 "median_rss_bytes": int(statistics.median(row["metrics"][0]["rss_after"] for row in good)),
             })
-    for name, rows in [("timing.tsv", timing), ("events.tsv", events)]:
+    for name, rows in [("timing.tsv", timing), ("events.tsv", events), ("calls.tsv", calls)]:
         if rows:
             with (args.output / name).open("w") as output:
                 writer = csv.DictWriter(output, fieldnames=list(rows[0]), delimiter="\t", lineterminator="\n")
