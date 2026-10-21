@@ -718,6 +718,21 @@ mod tests {
     }
 
     #[test]
+    fn refused_local_statics_are_reported_once() {
+        let output = bcc(
+            "int dup=3; int f(void){static int x __asm__(\"dup\")=1;return x;}",
+            &["-std=gnu99", "-O0", "--emit=llvm"],
+        );
+        assert!(!output.status.success());
+        let diagnostic = text(&output.stderr);
+        assert_eq!(
+            diagnostic.matches("assembler labels").count(),
+            1,
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
     fn lowered_control_uses_the_same_fold_as_elision() {
         assert_runs_like_clang(
             "int printf(const char*,...); int f(void){if(__builtin_constant_p(\"abc\"))return \

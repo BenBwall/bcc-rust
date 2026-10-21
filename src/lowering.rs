@@ -231,10 +231,13 @@ fn lower_unit<'tu, 'ir>(
             // A plain inline-only body is optional: one that lowering
             // refuses is not emitted, and calls keep reaching the external
             // definition (C99 §6.7.4p6). Its copy stays bodiless.
+            // The module planner already reports a local static it could not
+            // define; the body declaring it refuses with the same error.
             if !record
                 .0
                 .binding
                 .is_some_and(|binding| unit.optional_inline_body(binding))
+                && !errors.contains(&error)
             {
                 errors.push(error);
             }
