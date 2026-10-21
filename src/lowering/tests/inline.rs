@@ -2010,13 +2010,13 @@ fn always_inline_order_keeps_used_bodies_eager_when_forced_external() {
 
 #[test]
 fn always_inline_order_ignores_overridden_static_initializer_values() {
-    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
     const CYCLE: &str =
         "inline __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) \
          int g(int); inline __attribute__((always_inline)) int h(int); inline \
          __attribute__((always_inline)) int h(int x) { return x > 0 ? f(x-1)+1 : 0; } inline \
          __attribute__((always_inline)) int g(int x) { return x > 0 ? h(x-1)+1 : 0; } inline \
          __attribute__((always_inline)) int f(int x) { return x > 0 ? g(x-1)+1 : 0; }";
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
     for declaration in [
         "static int (*p[1])(int) = { [0]=g, [0]=h };",
         "static struct { int (*p)(int); } s = { .p=g, .p=h };",

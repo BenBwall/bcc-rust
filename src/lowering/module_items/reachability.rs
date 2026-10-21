@@ -18,6 +18,7 @@ use crate::{
         Leaf,
         Storage,
     },
+    translation_phases::semantic_analysis::InitOperation,
     util::{
         bump::Bump,
         interval_cover::last_writes,
@@ -96,10 +97,9 @@ impl<'a> Unit<'a, '_, '_> {
             if binding.kind == BindingKind::Object
                 && binding.linkage == Linkage::None
                 && binding.duration.is_static_or_thread()
+                && let Some(function) = scope_functions[binding.scope]
             {
-                if let Some(function) = scope_functions[binding.scope] {
-                    return canonical[function];
-                }
+                return canonical[function];
             }
             canonical[owner]
         };
@@ -298,6 +298,11 @@ impl<'a> Unit<'a, '_, '_> {
     ) -> Option<ArenaMap<'a, usize, usize>> {
         let initializer = self.sema.entity(binding)?.initializer?;
         let plan = self.sema.initializers.plan(initializer)?;
+        // A single scalar store has no replacement or element-order work.
+        // In particular, nested pointer statics need no temporary arena.
+        if matches!(plan.operations, [InitOperation::Store { .. }]) {
+            return None;
+        }
         let scratch = Bump::new();
         let (leaves, _) =
             initializers::leaves(self.sema, plan.ty, initializer, Storage::Static, &scratch)
