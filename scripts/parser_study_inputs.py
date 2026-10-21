@@ -71,7 +71,7 @@ return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c
         save(f"alignment-nested-{depth}.c", "int x __attribute__((aligned(" + "sizeof(struct {int y __attribute__((aligned(" * depth + "8" + ")));})" * depth + ")));\n", f"generated nested alignment operands depth={depth}")
     # 63 expressions/declarators and 127 total blocks are C99 minimums;
     # blocks-126 includes the function's outer compound statement.
-    for depth in [32, 63, 126, 127, 256, 1024, 4096, 16384]:
+    for depth in [32, 63, 126, 127, 256, 1024, 4096, 16000, 16384, 16500]:
         fixtures = {
             "parentheses": "int f(void){return " + "(" * depth + "1" + ")" * depth + ";}\n",
             "unary": "int f(void){return " + "! " * depth + "1;}\n",
