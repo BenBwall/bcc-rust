@@ -65,6 +65,9 @@ return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c
     save("expression-mix.c", "".join(expressions), "generated 4000 expression-heavy functions")
     save("declaration-mix.c", "".join(declarations), "generated 4000 aggregate/typedef/initializer groups")
     save("statement-mix.c", "".join(statements), "generated 4000 control-flow-heavy functions")
+    save("alignment-cache.c", "int aligned __attribute__((aligned(8)));\n" + "".join(f"int a{index} = {index};\n" for index in range(50000)), "generated full-token alignment index plus 50000 scalar declarations")
+    for depth in [16, 128, 1024]:
+        save(f"alignment-nested-{depth}.c", "int x __attribute__((aligned(" + "sizeof(struct {int y __attribute__((aligned(" * depth + "8" + ")));})" * depth + ")));\n", f"generated nested alignment operands depth={depth}")
     for depth in [32, 127, 256, 1024, 4096, 16384]:
         fixtures = {
             "parentheses": "int f(void){return " + "(" * depth + "1" + ")" * depth + ";}\n",
