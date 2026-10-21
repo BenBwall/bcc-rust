@@ -694,7 +694,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // p. 140; PDF p. 152), even where Clang emits only its value.
         let mut ignored_uses = ArenaVec::new_in(self.scratch);
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
-            let (definitions, uses) = match context.kind {
+            let (skip_definitions, skip_uses) = match context.kind {
                 | ReferenceContextKind::ConstantQuery { static_data } => (static_data, false),
                 | _ => {
                     let unevaluated = self.reference_context_unevaluated(index);
@@ -702,8 +702,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
             };
             ignored_definitions
-                .push(definitions || context.parent.is_some_and(|p| ignored_definitions[p]));
-            ignored_uses.push(uses || context.parent.is_some_and(|p| ignored_uses[p]));
+                .push(skip_definitions || context.parent.is_some_and(|p| ignored_definitions[p]));
+            ignored_uses.push(skip_uses || context.parent.is_some_and(|p| ignored_uses[p]));
             ignored_references.push(
                 self.reference_context_unevaluated(index)
                     || context.parent.is_some_and(|p| ignored_references[p]),

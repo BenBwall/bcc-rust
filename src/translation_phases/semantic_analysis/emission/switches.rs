@@ -546,8 +546,8 @@ fn selection_path<'a, 'tu>(
                 nodes.push((child, Some(next))),
             | StatementType::CaseRange(range) => nodes.push((range.statement, Some(next))),
             | StatementType::Compound { items } =>
-                for item in items.iter() {
-                    if let BlockItem::Statement(child) = *item {
+                for &item in items {
+                    if let BlockItem::Statement(child) = item {
                         nodes.push((child, Some(next)));
                     }
                 },
