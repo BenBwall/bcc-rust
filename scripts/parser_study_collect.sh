@@ -16,8 +16,8 @@ case "${1:-native}" in
             python3 scripts/parser_study.py stack --binary "$binary" --stack 1048576 \
                 --output "$study_dir/final-$profile-stack-1m.json"
             python3 scripts/parser_study.py stack --binary "$binary" --stack 1048576 \
-                --files parentheses-63.c blocks-126.c declarator-63.c \
-                --modes machine recursive growing hybrid:16 limited:64 limited:256 \
+                --files parentheses-63.c blocks-126.c declarator-63.c c99-floors.c \
+                --modes machine recursive growing hybrid:16 limited:64 limited:256 limited:512 \
                 --output "$study_dir/final-$profile-floors.json"
             python3 scripts/parser_study.py stack --binary "$binary" --stack 67108864 \
                 --files parentheses-256.c parentheses-1024.c parentheses-4096.c parentheses-16384.c \

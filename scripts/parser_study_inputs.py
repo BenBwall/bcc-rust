@@ -55,6 +55,7 @@ return (a += b = c), a ? b, c : a ? b : c, a || b && c | a ^ b & c == a < b << c
 }
 """, "generated grammar differential fixture")
     save("malformed.c", "int f(void){ int a = ; if(1) return (2+); else return 3; } int following;\n", "generated recovery fixture")
+    save("c99-floors.c", "int f(void){" + "{" * 126 + "return " + "(" * 63 + "1" + ")" * 63 + ";" + "}" * 126 + "}\n", "generated combined 127-total-block and 63-parenthesis C99 floors")
     expressions = []
     declarations = []
     statements = []
