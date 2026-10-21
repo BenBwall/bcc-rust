@@ -912,15 +912,19 @@ label. One evaluator stands for Clang's `ConstantFoldsToSimpleInteger` in
 every condition the flag folds (`if`, `switch`, scalar `?:`, `&&`, `||`), which
 must have an integer or enumerated type, as `EvaluateAsInt` requires: an
 integer constant, a comma whose left operand evaluates, a statement expression
-of side-effect-free expression statements, a `const` non-volatile object with
-a constant initializer, a scalar inside a `const` non-volatile array or
+of side-effect-free expression statements, a `const` non-volatile object that
+is not weak with a constant initializer (converted to its type; the address of
+an automatic object is no constant there), a scalar inside such an array or
 structure whose initializer evaluates (read from its initializer plan), an
-element of a string literal, the address of a non-weak object or function,
+element of a string literal, the address of a non-weak object or function
+(compared within one object in bytes),
 `__builtin_expect`, `__builtin_strlen`, `__builtin_abs`, the count bit builtins
 and byte swaps, and `__builtin_constant_p` as Clang's evaluator computes
 them (a volatile read, also through `*`, `[]`, `.` or `->`, is a side effect),
 but no call, assignment, volatile or other object read, and no condition
-holding a label. Loops instead test the value IR emission produces. Two forms
+holding a label. Semantic analysis's own constant is trusted except around
+`__builtin_constant_p` and weak entities, whose GNU-mode fold Clang's
+evaluator does not make. Loops instead test the value IR emission produces. Two forms
 take more than the statement walk (`emission/`). A `switch` whose
 controlling expression folds emits only the statements Clang's
 `CollectStatementsForCase` gathers from the matching case, else `default`
@@ -947,16 +951,23 @@ declaration attributes, C11 §6.7.4p8), to `__builtin_unreachable` or
 (`abort`, `exit`, `_Exit`, in GNU modes `_exit`, and `longjmp` or
 `siglongjmp` after their buffer typedef), or through any callee whose type
 carries the function type attribute: pointers, arrays, members, call results,
-casts, typedefs and `__typeof__`, and a conditional when both operands do. The
-rest of the same expression is still emitted. An expression whose paths join in
+casts, typedefs and `__typeof__`, and a conditional when both operands do. A
+written type attribute belongs to the function derivation nearest the declared
+name, or, after a `*`, to the function type that pointer points to; one a
+typedef name or `__typeof__` brings belongs below the declarator's function
+derivations, so `NP (*gp)(void)` returns a `noreturn` pointer rather than not
+returning. The rest of the same expression is still emitted. An expression whose paths join in
 a block with predecessors ends that state: a `&&`, `||` or scalar or `void`
 `?:` whose condition does not fold (unless the `?:` selects between constants,
 which a `void` operand is not), a complex or aggregate `?:`, a product of two
 floating complex values, an atomic update `atomicrmw` cannot perform (an atomic
 `_Bool` decrement among them), an atomic compare-and-exchange, an atomic
 builtin whose memory order is not a constant (unless a library call copies its
-object), and a System V `va_arg` of a type passed in registers; unevaluated and
-skipped operands change nothing. These rules read the expression's type, so
+object), a `__builtin_fpclassify` that does not evaluate, and a System V
+`va_arg` of a type passed in registers (its members judged by their types'
+natural alignment, as the ABI classifies them); unevaluated and skipped
+operands change nothing, nor do the operands of `__builtin_constant_p`, the
+object-size builtins, `__builtin_classify_type` and `__builtin_choose_expr`. These rules read the expression's type, so
 they run once it is analyzed. A statement
 expression's value statement is emitted even after a jump, and one whose body
 ends skipped ends its expression statement's code only where it is emitted
