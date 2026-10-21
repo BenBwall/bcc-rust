@@ -9,6 +9,13 @@ import subprocess
 
 
 def main():
+    # A profiler may reject a CPU instruction. Do not dump the compiler's
+    # large reserved address space when the tool raises SIGILL.
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except ImportError:
+        pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, default=Path(".scratch/parser-study/inputs"))
