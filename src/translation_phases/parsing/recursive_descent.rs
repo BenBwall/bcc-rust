@@ -20,6 +20,12 @@ mod expressions;
 mod statements;
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "test workloads and owned inspection snapshots use the global allocator"
+)]
 mod tests;
 
 use super::{
@@ -145,29 +151,34 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     fn study_enter(&mut self, kind: ParseFrameKind, address: usize) -> StudyEntry {
         let entry = StudyEntry {
-            active:    self.active_frame,
-            base:      self.study.base,
-            remaining: self.study.remaining,
+            active:      self.active_frame,
+            base:        self.study.base,
+            segment_low: self.study.segment_low,
         };
         self.study.depth += 1;
         self.study.stats.max_depth = self.study.stats.max_depth.max(self.study.depth);
         // A new stacker segment has a different address interval. Only compare
         // samples within one segment (stacker supplies its remaining size).
         if self.study.stack_samples {
-            let remaining = stacker::remaining_stack();
+            let segment_low =
+                stacker::remaining_stack().map(|remaining| address.saturating_sub(remaining));
             if self.study.depth == 1
-                || remaining
-                    .zip(self.study.remaining)
-                    .is_some_and(|(now, before)| now > before + 128 * 1024)
+                || segment_low
+                    .zip(self.study.segment_low)
+                    .is_some_and(|(now, before)| now.abs_diff(before) > 4096)
             {
                 self.study.base = address;
             }
-            self.study.remaining = remaining;
-            self.study.stats.native_stack_span = self
-                .study
-                .stats
-                .native_stack_span
-                .max(self.study.base.abs_diff(address));
+            self.study.segment_low = segment_low;
+            // Without a platform stack bound, raw/hybrid samples still share
+            // one native stack, but growing segments cannot be compared.
+            if self.study.mode != StudyMode::Growing || segment_low.is_some() {
+                self.study.stats.native_stack_span = self
+                    .study
+                    .stats
+                    .native_stack_span
+                    .max(self.study.base.abs_diff(address));
+            }
         }
         self.active_frame = kind;
         entry
@@ -177,14 +188,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         self.study.depth -= 1;
         self.active_frame = entry.active;
         self.study.base = entry.base;
-        self.study.remaining = entry.remaining;
+        self.study.segment_low = entry.segment_low;
     }
 }
 
+#[derive(Clone, Copy)]
 struct StudyEntry {
-    active:    ParseFrameKind,
-    base:      usize,
-    remaining: Option<usize>,
+    active:      ParseFrameKind,
+    base:        usize,
+    segment_low: Option<usize>,
 }
 
 /// Study-only parser selection; no mode changes the default compiler path.
@@ -225,7 +237,7 @@ pub(super) struct StudyState<'tu> {
     depth:              usize,
     suspended:          usize,
     base:               usize,
-    remaining:          Option<usize>,
+    segment_low:        Option<usize>,
     stack_samples:      bool,
 }
 

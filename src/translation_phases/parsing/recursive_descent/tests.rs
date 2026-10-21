@@ -78,6 +78,35 @@ fn expression_precedence_and_statement_forms_match_machine() {
 }
 
 #[test]
+fn malformed_punctuation_and_assignment_flags_match_machine() {
+    let sources = [
+        "int f(void) { a + b = c; a = 1; return a; } int after;",
+        "int f(void) { switch (a) { case 1 a++; default: break; } return a; } int after;",
+        "int f(void) { a ? b; a = 1; return a; } int after;",
+        "int f(void) { sizeof(int; a = 1; return a; } int after;",
+        "int f(void) { a = (b + c; return a; } int after;",
+        "int f(void) { a = p[b; return a; } int after;",
+        "int f(void) { g(a, b; return a; } int after;",
+        "int f(void) { return (a + b",
+        "int f(void) { return a;",
+    ];
+    for source in sources {
+        let (expected, _) = inspect(source, StudyMode::Machine, false);
+        for mode in [
+            StudyMode::Recursive,
+            StudyMode::Growing,
+            StudyMode::Hybrid { depth: 16 },
+        ] {
+            let (actual, _) = inspect(source, mode, false);
+            assert_eq!(
+                actual, expected,
+                "malformed mismatch for {mode:?}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
 fn hybrid_fallback_preserves_binding_power_at_every_threshold() {
     let source = "int f(void) { return a = b ? c, d + e * f : g ? h : i, j + k * l; }";
     let (expected, _) = inspect(source, StudyMode::Machine, false);

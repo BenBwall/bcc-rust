@@ -163,18 +163,15 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     self.switch_scopes.push(SwitchScope::default());
                 }
                 self.rd_consume();
-                self.rd_append_expected(
-                    &mut source,
-                    OperatorTokenType::OpeningParenthesis,
-                    "`(` before controlling expression",
-                );
+                let owner = match keyword {
+                    | KeywordTokenType::If => "if statement",
+                    | KeywordTokenType::Switch => "switch statement",
+                    | _ => "while statement",
+                };
+                self.rd_append_expected(&mut source, OperatorTokenType::OpeningParenthesis, owner);
                 let condition =
                     self.rd_slot(&mut source, ExpressionTerminator::ClosingParenthesis)?;
-                self.rd_append_expected(
-                    &mut source,
-                    OperatorTokenType::ClosingParenthesis,
-                    "`)` after controlling expression",
-                );
+                self.rd_append_expected(&mut source, OperatorTokenType::ClosingParenthesis, owner);
                 let body = self.rd_statement(Some(scope), false)?;
                 source = self.context.merge_vectors(source, body.source_vectors);
                 if switch {
@@ -233,19 +230,19 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::OpeningParenthesis,
-                    "`(` after do-while",
+                    "do-while statement",
                 );
                 let condition =
                     self.rd_slot(&mut source, ExpressionTerminator::ClosingParenthesis)?;
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::ClosingParenthesis,
-                    "`)` after do-while condition",
+                    "do-while statement",
                 );
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::Semicolon,
-                    "`;` after do-while",
+                    "do-while statement",
                 );
                 StatementType::DoWhile {
                     condition_expression: condition,
@@ -258,14 +255,14 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::OpeningParenthesis,
-                    "`(` after for",
+                    "for statement",
                 );
                 let initializer =
                     if is_operator(self.cursor.current(), OperatorTokenType::Semicolon) {
                         self.rd_append_expected(
                             &mut source,
                             OperatorTokenType::Semicolon,
-                            "`;` in for",
+                            "for initializer",
                         );
                         None
                     } else if self
@@ -296,7 +293,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         self.rd_append_expected(
                             &mut source,
                             OperatorTokenType::Semicolon,
-                            "`;` after for initializer",
+                            "for initializer",
                         );
                         Some(ForInitializer::Expression(slot))
                     };
@@ -306,11 +303,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 } else {
                     Some(self.rd_slot(&mut source, ExpressionTerminator::ForSemicolon)?)
                 };
-                self.rd_append_expected(
-                    &mut source,
-                    OperatorTokenType::Semicolon,
-                    "`;` after for condition",
-                );
+                self.rd_append_expected(&mut source, OperatorTokenType::Semicolon, "for condition");
                 let iteration =
                     if is_operator(self.cursor.current(), OperatorTokenType::ClosingParenthesis) {
                         None
@@ -320,7 +313,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::ClosingParenthesis,
-                    "`)` after for clauses",
+                    "for statement",
                 );
                 let body = self.rd_statement(Some(ScopeKind::ImplicitIteration), false)?;
                 source = self.context.merge_vectors(source, body.source_vectors);
@@ -342,7 +335,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::Semicolon,
-                    "`;` after return",
+                    "return statement",
                 );
                 StatementType::Return(expression)
             },
@@ -351,7 +344,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::Semicolon,
-                    "`;` after jump",
+                    if keyword == Some(KeywordTokenType::Break) {
+                        "break statement"
+                    } else {
+                        "continue statement"
+                    },
                 );
                 if keyword == Some(KeywordTokenType::Break) {
                     StatementType::Break
@@ -374,7 +371,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::Semicolon,
-                    "`;` after goto",
+                    "goto statement",
                 );
                 StatementType::Goto(identifier)
             },
@@ -418,7 +415,17 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 } else {
                     None
                 };
-                self.rd_append_expected(&mut source, OperatorTokenType::Colon, "`:` after label");
+                self.rd_append_expected(
+                    &mut source,
+                    OperatorTokenType::Colon,
+                    if default {
+                        "default label"
+                    } else if upper.is_some() {
+                        "case range"
+                    } else {
+                        "case label"
+                    },
+                );
                 let body = self.rd_labeled_body(&mut source, block_item)?;
                 match (lower, upper) {
                     | (Some(lower), Some(upper)) =>
@@ -439,7 +446,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     _ = labels.definitions.insert(identifier.name);
                 }
                 self.rd_consume();
-                self.rd_append_expected(&mut source, OperatorTokenType::Colon, "`:` after label");
+                self.rd_append_expected(&mut source, OperatorTokenType::Colon, "identifier label");
                 let child = self.rd_labeled_body(&mut source, block_item)?;
                 StatementType::Label(identifier, child)
             },
@@ -482,7 +489,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::Semicolon,
-                    "`;` after expression",
+                    "expression statement",
                 );
                 StatementType::Expression(slot)
             },
@@ -540,10 +547,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         let errors = self.hard_error_count;
         let mut sources = ArenaVec::new_in(self.arena);
         self.pools.source_vectors.lend(&mut sources);
-        sources.push(self.rd_expect(
-            OperatorTokenType::OpeningCurlyBrace,
-            "`{` at start of compound statement",
-        ));
+        sources.push(self.rd_expect(OperatorTokenType::OpeningCurlyBrace, "compound statement"));
         if function_body {
             let name = *self
                 .func_name
@@ -619,10 +623,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 items.push(BlockItem::Statement(child));
             }
         }
-        sources.push(self.rd_expect(
-            OperatorTokenType::ClosingCurlyBrace,
-            "`}` after compound statement",
-        ));
+        sources.push(self.rd_expect(OperatorTokenType::ClosingCurlyBrace, "compound statement"));
         let source_vectors = self.context.merge_vector_list(&sources);
         let stored_items = self.alloc_syntax_list(&mut items);
         self.pools.block_items.reclaim(&mut items);
