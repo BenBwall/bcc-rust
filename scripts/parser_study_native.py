@@ -32,8 +32,20 @@ def jobs():
             "--example", "parser_stack_probe", "reserved_stack::tests::", "--", "--test-threads=1"]
 
 
+def lowering_jobs():
+    feature = "recursive-lowering-study,benchmarking-internals"
+    for profile in ("debug", "release"):
+        release = ["--release"] if profile == "release" else []
+        yield f"lowering-tests-{profile}", release + [
+            "--features", feature, "--lib", "lowering::tests", "--", "--test-threads=2"]
+        yield f"lowering-measurements-{profile}", release + [
+            "--features", feature, "--example", "lowering_study", "--",
+            "--include-ignored", "--nocapture", "--test-threads=1"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--study", choices=("parser", "lowering"), default="parser")
     parser.add_argument("--sha", required=True, help="exact already-pushed source SHA")
     parser.add_argument("--adopt-first", type=int, help="existing recovery-debug run ID")
     parser.add_argument("--output", type=Path,
@@ -48,7 +60,10 @@ def main():
     def save():
         manifest.write_text(json.dumps(data, indent=2) + "\n")
 
-    for name, arguments in jobs():
+    if data.get("study", "parser") != args.study:
+        raise SystemExit("output directory belongs to another study")
+    data["study"] = args.study
+    for name, arguments in (jobs() if args.study == "parser" else lowering_jobs()):
         row = next((row for row in data["jobs"] if row["name"] == name), None)
         command = ["bcc-windows", "test", "--sha", args.sha, "--", *arguments]
         if row is None:
