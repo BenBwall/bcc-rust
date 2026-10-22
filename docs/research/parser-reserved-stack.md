@@ -62,7 +62,18 @@ as `reserved:recursive` and `reserved:machine`, using a default 100 GiB usable
 reservation. `--reserve-stack BYTES` changes that reservation. `--stack BYTES`
 continues to apply only to ordinary, non-reserved labels.
 
-## Results
+## Initial smoke observations
+
+Both builds successfully parsed Lua and 65,536 nested blocks with a 100 GiB
+usable reservation. These are single smoke samples, not the final throughput
+comparison. Lua's stack mapping was 44 KiB resident after parsing in release
+and 168 KiB in debug. At 65,536 blocks, stack residency was about 63 MiB release
+and 511 MiB debug. The mapping reports `nr`, zero swap and zero anonymous huge
+pages. Every smoke parse made zero global allocator calls during phase 7.
+The reservation is therefore demand-backed; active recursive frames still cost
+physical memory. Repeated measurements are running.
+
+## Validation so far
 
 The study feature passes strict Clippy. All three native-stack tests pass:
 borrowed callback/result transfer with a lazily backed 1 GiB stack; worker panic
