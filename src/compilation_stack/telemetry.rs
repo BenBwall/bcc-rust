@@ -13,6 +13,13 @@ pub(crate) struct Snapshot {
 }
 
 impl Bounds {
+    #[cfg_attr(
+        target_os = "linux",
+        expect(
+            clippy::disallowed_methods,
+            reason = "Untimed study stack telemetry reads procfs outside compiler measurement."
+        )
+    )]
     pub(crate) fn snapshot(self) -> Snapshot {
         #[cfg(target_os = "linux")]
         {

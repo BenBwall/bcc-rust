@@ -11,6 +11,10 @@ repository = "https://www.github.com/bwallker/bcc-rust"
 rust-version = "1.99.0"
 
 [features]
+# One demand-paged native stack for the complete command-line compilation.
+reserved-compilation-stack = []
+# Experimental recursive lowering; the CLI runs on the reserved worker.
+recursive-lowering-study = ["reserved-compilation-stack"]
 benchmarking-internals = ["dep:coz"]
 # Experimental parser study; never selected by the normal compilation pipeline.
 parser-recursive-descent-study = ["benchmarking-internals", "dep:stacker"]
@@ -153,3 +157,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Stora
 # Native test deadlines own a kill-on-close job. Security supplies the job
 # constructor's SECURITY_ATTRIBUTES type; no security attributes are passed.
 windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Diagnostics_Debug"] }
+
+[[example]]
+name = "lowering_study"
+required-features = ["benchmarking-internals", "recursive-lowering-study"]

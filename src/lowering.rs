@@ -74,6 +74,8 @@ mod expressions;
 mod gnu;
 mod initializers;
 mod places;
+#[cfg(feature = "recursive-lowering-study")]
+mod recursive;
 mod statements;
 mod vla;
 mod work;
@@ -169,6 +171,28 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
     scratch: &mut Bump,
     plain_inline: bool,
 ) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
+    lower_with_options(
+        context,
+        syntax,
+        sema,
+        target,
+        arena,
+        scratch,
+        &mut LoweringOptions::default_for_build(plain_inline),
+    )
+}
+
+/// Shared construction seam for task-based and experimental recursive
+/// traversal.
+pub(crate) fn lower_with_options<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    target: Target,
+    arena: &'ir Bump,
+    scratch: &mut Bump,
+    options: &mut LoweringOptions,
+) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
     let mut errors = ArenaVec::new_in(arena);
     if !sema.lowerable(context) {
         errors.push(LoweringError {
@@ -179,13 +203,16 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
             errors: arena.alloc_slice_copy(&errors),
         });
     }
-    match lower_unit(context, syntax, sema, target, arena, scratch, plain_inline) {
+    match lower_unit(context, syntax, sema, target, arena, scratch, options) {
         // A plain inline-only body that lowering refuses is dropped on its
         // own, and so is one whose attribute refusals would apply. Other
         // errors that only such bodies cause, such as an object they alone
         // reach, are rarer: this backstop lowers the unit again without
         // any, so that they never refuse it (C99 §6.7.4p6).
-        | (Err(_), true) => lower_unit(context, syntax, sema, target, arena, scratch, false).0,
+        | (Err(_), true) => {
+            options.plain_inline = false;
+            lower_unit(context, syntax, sema, target, arena, scratch, options).0
+        },
         | (result, _) => result,
     }
 }
@@ -199,7 +226,7 @@ fn lower_unit<'tu, 'ir>(
     target: Target,
     arena: &'ir Bump,
     scratch: &mut Bump,
-    plain_inline: bool,
+    options: &mut LoweringOptions,
 ) -> (Result<LoweredUnit<'ir>, LoweringErrors<'ir>>, bool) {
     let mut errors = ArenaVec::new_in(arena);
     let tables = Bump::new();
@@ -210,7 +237,7 @@ fn lower_unit<'tu, 'ir>(
             return (Err(LoweringErrors { errors }), false);
         },
     };
-    let plain_inline = plain_inline && unit.lower_plain_inline_bodies();
+    let plain_inline = options.plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);
     for record in functions {
@@ -227,7 +254,7 @@ fn lower_unit<'tu, 'ir>(
                 sema.bindings[binding].name.source_vectors,
             ));
         }
-        if let Err(error) = FunctionLowerer::lower(&mut unit, record.0, func, scratch) {
+        if let Err(error) = FunctionLowerer::lower(&mut unit, record.0, func, scratch, options) {
             // A plain inline-only body is optional: one that lowering
             // refuses is not emitted, and calls keep reaching the external
             // definition (C99 §6.7.4p6). Its copy stays bodiless.
@@ -284,9 +311,19 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         record: &'tu FunctionRecord<'tu>,
         func: FuncId,
         scratch: &'s Bump,
+        options: &mut LoweringOptions,
     ) -> Result<(), LoweringError> {
         let mut lowerer = Self::new(unit, record, func, scratch)?;
-        lowerer.run()?;
+        #[cfg(feature = "recursive-lowering-study")]
+        {
+            lowerer.recursion = recursive::State::new(options.recursive, options.sample_stack);
+        }
+        let result = lowerer.run();
+        #[cfg(feature = "recursive-lowering-study")]
+        options.stats.merge(lowerer.recursion.stats);
+        #[cfg(not(feature = "recursive-lowering-study"))]
+        let _ = options;
+        result?;
         lowerer.finish_body()?;
         let FunctionLowerer { unit, draft, .. } = lowerer;
         emit::emit(draft, &mut unit.module, func, &mut unit.call_diagnostics)?;
@@ -305,6 +342,10 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
 
     /// Pops and performs tasks until the body is lowered.
     fn run(&mut self) -> Result<(), LoweringError> {
+        #[cfg(feature = "recursive-lowering-study")]
+        if self.recursion.enabled {
+            return self.run_recursive();
+        }
         while let Some(task) = self.tasks.pop() {
             self.step(task)?;
         }
@@ -476,6 +517,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     name:               &'a str,
     draft:              Draft<'s>,
     scratch:            &'s Bump,
+    #[cfg(feature = "recursive-lowering-study")]
+    recursion:          recursive::State,
     tasks:              ArenaVec<'s, Task<'tu>>,
     operands:           ArenaVec<'s, Item>,
     complex_values:     ArenaVec<'s, [crate::ir::Value; 2]>,
@@ -510,3 +553,28 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
               compiler, not its tests."
 )]
 pub(crate) mod tests;
+
+/// Traversal controls kept outside the AST and retained IR.
+pub(crate) struct LoweringOptions {
+    pub(crate) plain_inline: bool,
+    #[cfg(feature = "recursive-lowering-study")]
+    pub(crate) recursive:    bool,
+    #[cfg(feature = "recursive-lowering-study")]
+    pub(crate) sample_stack: bool,
+    #[cfg(feature = "recursive-lowering-study")]
+    pub(crate) stats:        recursive::Stats,
+}
+
+impl LoweringOptions {
+    pub(crate) fn default_for_build(plain_inline: bool) -> Self {
+        Self {
+            plain_inline,
+            #[cfg(feature = "recursive-lowering-study")]
+            recursive: true,
+            #[cfg(feature = "recursive-lowering-study")]
+            sample_stack: false,
+            #[cfg(feature = "recursive-lowering-study")]
+            stats: recursive::Stats::default(),
+        }
+    }
+}

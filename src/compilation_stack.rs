@@ -1,19 +1,19 @@
-//! Study-only native worker stacks with a fixed, lazily backed reservation.
+//! Native compilation worker stacks with a fixed, lazily backed reservation.
 //!
 //! Linux supplies a guarded `MAP_NORESERVE` mapping to pthreads. Windows asks
 //! `CreateThread` to reserve the requested size and lets its guard commit
-//! pages. The parser itself has no stack-growth checks. Neither implementation
+//! pages. Compiler calls have no stack-growth checks. Neither implementation
 //! moves active frames or catches overflow; exhausting the reservation remains
 //! fatal. The callback and its arenas live on the worker, and completion is
 //! synchronous.
 
 #[cfg(target_os = "linux")]
-#[path = "reserved_stack/linux.rs"]
+#[path = "compilation_stack/linux.rs"]
 mod linux;
-#[path = "reserved_stack/telemetry.rs"]
+#[path = "compilation_stack/telemetry.rs"]
 mod telemetry;
 #[cfg(windows)]
-#[path = "reserved_stack/windows.rs"]
+#[path = "compilation_stack/windows.rs"]
 mod windows;
 
 use std::{
@@ -25,14 +25,14 @@ use std::{
     thread,
 };
 
-pub(super) use telemetry::{
+pub(crate) use telemetry::{
     Faults,
     Snapshot,
 };
 
 /// Runs one borrowed, sendable callback and joins before returning. Panics are
 /// captured inside the native entry point and resumed on the calling thread.
-pub(super) fn run<F, R>(bytes: usize, callback: F) -> io::Result<R>
+pub(crate) fn run<F, R>(bytes: usize, callback: F) -> io::Result<R>
 where
     F: FnOnce(Bounds) -> R + Send,
     R: Send,
@@ -54,10 +54,10 @@ where
 /// Usable address interval, excluding explicit Linux guards. Windows fills
 /// the interval from `VirtualQuery` on the worker's actual stack reservation.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Bounds {
-    pub(super) base:        usize,
-    pub(super) bytes:       usize,
-    pub(super) guard_bytes: usize,
+pub(crate) struct Bounds {
+    pub(crate) base:        usize,
+    pub(crate) bytes:       usize,
+    pub(crate) guard_bytes: usize,
 }
 
 impl Bounds {

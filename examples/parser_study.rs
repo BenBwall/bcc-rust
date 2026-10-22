@@ -25,7 +25,7 @@ use std::{
 
 use bcc_rust::ParserStudyMode;
 
-#[path = "parser_study/reserved_stack.rs"]
+#[path = "../src/compilation_stack.rs"]
 mod reserved_stack;
 
 fn main() {

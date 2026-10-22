@@ -88,6 +88,15 @@ use crate::{
 /// and `--interpret` with the program's status.
 #[doc(hidden)]
 pub fn run() -> Result<i32, MainError> {
+    #[cfg(feature = "reserved-compilation-stack")]
+    return crate::with_compilation_stack(100 * 1024_usize.pow(3), run_on_current_thread)
+        .map_err(MainError::CompilationStack)?;
+    #[cfg(not(feature = "reserved-compilation-stack"))]
+    run_on_current_thread()
+}
+
+/// Keeps all compilation arenas, phases and output on the same thread.
+fn run_on_current_thread() -> Result<i32, MainError> {
     let arguments = normalize_language_arguments(std::env::args_os())?;
     // Clap would demand an input for this flag, so it is answered before
     // parsing; the declaration below only documents it in `--help`.
