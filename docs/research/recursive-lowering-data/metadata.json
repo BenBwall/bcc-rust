@@ -1,0 +1,7 @@
+{
+  "rust_source_commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+  "linux_binary_hashes": {
+    "release": "204042dc0ef56fd5b042a93c2e73b83d5446f29a3a31c906f5387b8e9c0f75a7",
+    "debug": "725cf78b021619df68c2e313a3add1bdda07c618f35c59b557f1ad27be17393b"
+  }
+}
