@@ -29,16 +29,18 @@ mod stages;
 
 // Middle end
 mod middle_end;
-
 use std::path::Path;
 
 #[cfg(test)]
 pub(crate) use middle_end::lower_translation_unit;
+#[cfg(feature = "recursive-lowering-study")]
+pub(crate) use middle_end::lower_translation_unit_recursive_with_locals as lower_translation_unit_with_locals;
+#[cfg(not(feature = "recursive-lowering-study"))]
+pub(crate) use middle_end::lower_translation_unit_with_locals;
 pub(crate) use middle_end::{
     DiagnosedModule,
     InlineCopies,
     MiddleEndError,
-    lower_translation_unit_with_locals,
     with_optional_retention,
 };
 pub(crate) use stages::{

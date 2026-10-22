@@ -567,7 +567,7 @@ impl LoweringOptions {
             plain_inline,
             retain_locals: true,
             #[cfg(feature = "recursive-lowering-study")]
-            recursive: true,
+            recursive: false,
             #[cfg(feature = "recursive-lowering-study")]
             sample_stack: false,
             #[cfg(feature = "recursive-lowering-study")]
