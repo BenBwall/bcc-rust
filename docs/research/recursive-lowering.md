@@ -79,6 +79,13 @@ The first lowering suite recorded 205 passes and one failure in an existing
 range-initializer test: its thread-local copy-policy override did not follow the
 compilation onto the new worker. The helper now explicitly carries the override
 and replay/effect counters, and excludes the extra differential passes from
-those counters. The failure was in test setup, not an IR mismatch; the complete
-suite is being rerun. Initial compile/Clippy failures are retained in scratch
+those counters. The failure was in test setup, not an IR mismatch. The corrected Linux debug
+suite passes 206 tests (one existing ignored test); strict combined-feature
+Clippy and the five-case focused example test also pass. Initial compile/Clippy failures are retained in scratch
 logs alongside the successful checks.
+
+The shared worker's `CreateThread` binding requires `Win32_Security`. The
+compilation-stack feature now explicitly enables that dependency feature for
+normal Windows builds, rather than relying on the test-only dependency to
+provide it. Native source cohort `932f32a8` already receives it from its test
+configuration; this later declaration does not change its compiled test code.
