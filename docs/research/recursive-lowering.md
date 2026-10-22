@@ -2,7 +2,8 @@
 
 2026-10-22. Follow-up to [the parser study](parser-recovery-windows.md).
 The opt-in implementation is complete. Linux measurements and native Windows
-debug validation are complete; native release validation is running.
+debug validation and release tests are complete; native release measurements
+are running.
 The feature-disabled compiler retains its existing pipeline.
 
 ## Implementation boundary
@@ -191,7 +192,8 @@ rotating samples and 1 GiB workers described above.
 Debug recursion uses 4.7% more lowering time for expressions and 0.9% more for
 statements. The 206 lowering tests pass (one existing ignored), as do all 19
 corpus parity inputs, 342 timing samples and four deep probes. No measured
-lowering interval allocates globally. Native release jobs remain in progress.
+lowering interval allocates globally. Native release also passes 206 lowering tests (one existing ignored); release
+measurements remain in progress.
 
 Windows debug address-span slopes are 12,592 B/expression level and
 1,296 B/compound level; at 4,096 levels, the spans are 51,580,201 B and
