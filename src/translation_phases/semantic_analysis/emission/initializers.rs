@@ -1,7 +1,7 @@
 //! Constant automatic aggregate initialization bypasses Clang's aggregate
 //! expression visitor. Ordinary aggregate values, including member bases,
 //! call arguments and return values, emit both conditional arms.
-//! C99: §6.7.8p11-22, pp. 126-127; PDF pp. 138-139. CodeGen policy follows
+//! C99: §6.7.8p11-22, pp. 126-127; PDF pp. 138-139. Emission policy follows
 //! Clang.
 
 use super::super::{
@@ -65,7 +65,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !constant && !self.constant_aggregate_initializer(root, true) {
             return;
         }
-        for &owner in arms.iter() {
+        for &owner in &arms {
             _ = self
                 .functions
                 .emission
