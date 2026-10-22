@@ -14,6 +14,7 @@ native test cohort. No Rust source changed after the measured cohort.
   eight deep probes and per-input medians/ranges/population CVs.
 - `linux-build.log.gz`: complete successful build and release/debug harness log.
 - `linux-validation.log.gz`: focused lowering tests and strict study Clippy.
+- `linux-checks.log.gz`: complete successful canonical and study checks.
 - `linux-width.json.gz`: 36 fresh-process timings/RSS samples, input and binary
   hashes, and task/recursive inspection identity for both profiles.
 - `linux-width.log.gz`: wide-function timing progress; the JSON contains the
