@@ -1,5 +1,7 @@
 # Reserved native-stack follow-up
 
+Follow-up: [whole-compilation worker and recursive lowering](recursive-lowering.md).
+
 Follow-up: [recovery parity and Windows validation](parser-recovery-windows.md)
 records all ten recovery fixes and completed native Windows GNU validation in
 release/debug. A 100 GiB stack starts with 8 KiB writable; reserved RD reduces
@@ -79,7 +81,7 @@ parser limits unchanged; it does not establish graceful recovery from OS OOM.
 - [Native worker protocol](../../src/compilation_stack.rs)
 - [Linux mapping/guards](../../src/compilation_stack/linux.rs)
   and [Windows reservation](../../src/compilation_stack/windows.rs)
-- [Untimed OS telemetry](../../examples/parser_study/reserved_stack/telemetry.rs)
+- [Untimed OS telemetry](../../src/compilation_stack/telemetry.rs)
 
 ## Method and reproduction
 
