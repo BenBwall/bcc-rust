@@ -2188,3 +2188,28 @@ fn always_inline_order_follows_final_review_emission_boundaries() {
         }
     }
 }
+
+/// Many short copies must query only overlapping current writers, including
+/// when the copied values carry function addresses.
+#[test]
+fn short_static_range_copies_stay_linear() {
+    let count = 20_000;
+    let mut source = String::from(
+        "static inline __attribute__((always_inline)) int f(void) { return 1; } static inline \
+         __attribute__((always_inline)) int h(void) { return f(); } int main(void) { static int \
+         (*const p[])(void) = {",
+    );
+    for index in 0..count {
+        write!(source, "[{} ... {}]=h,", 2 * index, 2 * index + 1).unwrap();
+    }
+    source.push_str("}; return p[0](); }");
+    let start = std::time::Instant::now();
+    drop(
+        lower_with(
+            &source,
+            CompilerConfiguration::default().with_gnu_extensions(true),
+        )
+        .unwrap(),
+    );
+    assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
+}

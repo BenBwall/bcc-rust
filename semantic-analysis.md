@@ -1022,11 +1022,22 @@ constant evaluation, including narrowing, underflow and complex-to-real
 conversion; unsupported formats stay unfolded. Complex and aggregate
 conditional expressions preserve both emitted arms, even when the condition
 folds; scalar and void conditionals skip only an unlabeled unselected arm.
+Labels that prevent omission also preserve the arm's insertion effects and any
+merge. VLA bounds in declarations, typedefs and `sizeof` type operands take
+part in label collection. Conditional values, including GNU omitted-middle
+forms, convert to the result type before further folding. `__builtin_constant_p`
+checks only selected generic/choose operands for side effects, walks statement
+expressions and honors direct pure/const calls; its operands and those of
+`__builtin_classify_type` create no emitted reference.
 Bit-field and union reads, GNU ranges in `const` initializers and the
 unselected operand of `__builtin_choose_expr` remain unmodeled; each leaves
 code emitted that Clang may skip. Aggregate read coverage uses a sorted
 endpoint sweep, and constant-array `strlen` results are memoized with their
-evaluation-depth and weak-horizon dependencies. The module-item planner
+evaluation-depth and weak-horizon dependencies. Literal lengths reached through
+constant pointers reuse the decoded literal and offset. Static creation-order
+provenance indexes current writers by bit position, snapshots only overlapping
+source runs for range copies, and skips replay for owners with no emitted
+symbol references. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.

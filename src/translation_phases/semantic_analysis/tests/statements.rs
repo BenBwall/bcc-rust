@@ -863,8 +863,9 @@ fn emission_model_queries_stay_linear() {
         write!(table, "if (t[{index}]) r++; ").unwrap();
     }
     table.push_str("return r; }");
-    let mut reverse = format!("static const int t[{size}] = {{");
-    for index in (0..size).rev() {
+    let reverse_size = 200_000;
+    let mut reverse = format!("static const int t[{reverse_size}] = {{");
+    for index in (0..reverse_size).rev() {
         write!(reverse, "[{index}]={},", index % 7).unwrap();
     }
     reverse.push_str("}; int f(void) { if (t[1]) return 1; return 0; }");
@@ -906,7 +907,8 @@ fn emission_model_queries_stay_linear() {
         ),
         (table, None),
         (reverse, None),
-        (repeated_strlen, None),
+        (repeated_strlen.clone(), None),
+        (repeated_strlen.replace("char s[]", "char *const s"), None),
         (blocks, None),
         (assignment, None),
         (compound, None),
