@@ -24,6 +24,15 @@ def main():
     for profile in ("release", "debug"):
         binary = Path(f".scratch/lowering-study/study-{profile}")
         result[f"{profile}_binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+        inspections = []
+        for mode in ("machine", "recursive"):
+            run = subprocess.run([str(binary), str(source), mode, "1", "--inspect"],
+                                 capture_output=True, text=True, check=True)
+            inspections.append(run.stdout.split("\n", 1)[1])
+        if inspections[0] != inspections[1]:
+            raise SystemExit(f"{profile}: wide-function IR/provenance mismatch")
+        result[f"{profile}_inspection_sha256"] = hashlib.sha256(inspections[0].encode()).hexdigest()
+        destination.write_text(json.dumps(result, indent=2) + "\n")
         for repeat in range(args.repeats):
             for offset in range(2):
                 mode = ("machine", "recursive")[(repeat+offset) % 2]
