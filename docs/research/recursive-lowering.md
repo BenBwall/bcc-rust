@@ -122,6 +122,12 @@ median reductions are 3.9% / 2.9% release; debug expressions take 3.8% more and
 statements 6.3% less. Those deltas sit amid substantial variation. These results
 do not establish a general speed advantage, especially in debug.
 
+The 17 real C files are small: release task medians range from 0.093 to
+0.287 ms and recursive medians from 0.095 to 0.256 ms. Individual files move
+in both directions, with population CVs up to 50.6%. Their full per-input
+medians/ranges/CVs are archived; these short intervals do not support a broad
+throughput claim. The larger synthetic mixes above amortize more fixed costs.
+
 Each profile completes all 342 timing samples, 19 parity inputs and four deep
 probes. Every input is clean and supported; none was excluded. Printed IR,
 function sources, call diagnostics and refusal output match. Every measured
@@ -191,7 +197,8 @@ Windows debug address-span slopes are 12,592 B/expression level and
 1,296 B/compound level; at 4,096 levels, the spans are 51,580,201 B and
 5,311,785 B respectively. These exceed the ordinary Windows 1 MiB stack and
 complete on the reserved worker. This is native execution, not cross-compilation
-or Wine. As with Linux, these are address samples rather than exact stack peak
+or Wine. MSVC, other operating systems and Windows physical working-set costs
+are outside this validation. As with Linux, these are address samples rather than exact stack peak
 or physical working-set measurements. The Windows stack implementation and its
 lazy-commit/100 GiB probes are also covered by the prior
 [reserved-stack Windows study](parser-recovery-windows.md).
