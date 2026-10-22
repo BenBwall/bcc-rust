@@ -87,18 +87,21 @@ pub(crate) fn lower_translation_unit_with_locals<'tu, 'ir>(
     let (copies, retain_locals) = emission;
     let mut scratch = Bump::new();
     let target = context.configuration.target();
+    let mut options =
+        crate::lowering::LoweringOptions::default_for_build(copies == InlineCopies::Keep);
+    options.retain_locals = retain_locals;
     let crate::lowering::LoweredUnit {
         mut module,
         function_sources,
         call_diagnostics,
-    } = crate::lowering::lower_with_emission(
+    } = crate::lowering::lower_with_options(
         context,
         syntax,
         sema,
         target,
         arena,
         &mut scratch,
-        (copies == InlineCopies::Keep, retain_locals),
+        &mut options,
     )
     .map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {

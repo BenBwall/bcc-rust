@@ -11,7 +11,7 @@
     reason = "The experiment owns arguments and output outside the compiler."
 )]
 
-#[path = "parser_study/reserved_stack.rs"]
+#[path = "../src/compilation_stack.rs"]
 mod reserved_stack;
 
 use std::{
