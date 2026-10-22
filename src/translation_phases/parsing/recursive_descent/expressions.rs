@@ -67,8 +67,21 @@ impl<'tu> Parser<'_, 'tu, '_> {
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
     ) -> Option<&'tu Expression<'tu>> {
-        self.rd_precedence(mode_limit(mode), mode, boundary)
-            .map(|operand| operand.expression)
+        let errors = self.hard_error_count;
+        let operand = self.rd_precedence(mode_limit(mode), mode, boundary)?;
+        let mut frame = ExpressionFrame::new(self.arena, mode, boundary, errors);
+        if !frame.study_needs_recovery(self.cursor.current()) {
+            return Some(operand.expression);
+        }
+        // Reuse synchronization and diagnostics without rewinding the token
+        // stream or rebuilding the already constructed expression.
+        frame.lend_pooled(&mut self.pools);
+        frame.study_resume_operand(operand.expression, operand.unary);
+        match self.study_frame(ParseFrame::Expression(frame), true)? {
+            | ParseValue::Expression(result) => Some(result.expression),
+            | ParseValue::ConstantExpression(result) => Some(result.expression.0),
+            | _ => unreachable!("recovery returns an expression"),
+        }
     }
 
     /// C99: precedence and associativity follow §6.5 paragraph 3 and footnote
@@ -497,7 +510,25 @@ impl<'tu> Parser<'_, 'tu, '_> {
                                 call.operator_sources.push(comma.source_vectors);
                                 self.rd_consume();
                             } else {
-                                break;
+                                let frame = ExpressionFrame::new(
+                                    self.arena,
+                                    ExpressionMode::Expression,
+                                    _boundary,
+                                    self.hard_error_count,
+                                );
+                                if self.cursor.current().is_some_and(|token| {
+                                    frame.study_call_argument_follows(self, token)
+                                }) {
+                                    let token = self.cursor.current();
+                                    self.report(
+                                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionCall(
+                                            token.map(|token| token.kind),
+                                        ),
+                                        token,
+                                    );
+                                } else {
+                                    break;
+                                }
                             }
                         }
                     }

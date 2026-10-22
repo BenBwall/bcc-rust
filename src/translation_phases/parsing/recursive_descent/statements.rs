@@ -70,16 +70,17 @@ impl<'tu> Parser<'_, 'tu, '_> {
         &mut self,
         scope: Option<ScopeKind>,
         block_item: bool,
+        leave_else: bool,
     ) -> Option<&'tu Statement<'tu>> {
         if self.study_fallback()? {
-            return self.rd_statement_fallback(scope, block_item, true);
+            return self.rd_statement_fallback(scope, block_item, leave_else, true);
         }
         if self.study.mode == StudyMode::Growing {
             stacker::maybe_grow(64 * 1024, 1024 * 1024, || {
-                self.rd_statement_entered(scope, block_item)
+                self.rd_statement_entered(scope, block_item, leave_else)
             })
         } else {
-            self.rd_statement_entered(scope, block_item)
+            self.rd_statement_entered(scope, block_item, leave_else)
         }
     }
 
@@ -87,6 +88,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         &mut self,
         scope: Option<ScopeKind>,
         block_item: bool,
+        leave_else: bool,
     ) -> Option<&'tu Statement<'tu>> {
         let marker = 0_u8;
         let address = if self.study.stack_samples {
@@ -100,7 +102,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         if let Some(scope) = scope {
             self.scopes.enter_scope(scope);
         }
-        let result = self.rd_statement_body(block_item);
+        let result = self.rd_statement_body(block_item, leave_else);
         if !self.resource_limit_reported {
             self.scopes.restore_depth(depth);
         }
@@ -108,11 +110,20 @@ impl<'tu> Parser<'_, 'tu, '_> {
         result
     }
 
-    fn rd_statement_body(&mut self, block_item: bool) -> Option<&'tu Statement<'tu>> {
+    fn rd_statement_body(
+        &mut self,
+        block_item: bool,
+        leave_else: bool,
+    ) -> Option<&'tu Statement<'tu>> {
         let errors = self.hard_error_count;
         let token = self.cursor.current();
-        if self.attribute_starter(token) || token.is_none() {
-            return self.rd_statement_fallback(None, block_item, false);
+        if self.attribute_starter(token)
+            || token.is_none()
+            || token.is_some_and(|token| {
+                matches!(token.kind, TokenType::Keyword(KeywordTokenType::Else))
+            })
+        {
+            return self.rd_statement_fallback(None, block_item, leave_else, false);
         }
         let token = token.expect("statement token was checked");
         if is_operator(Some(token), OperatorTokenType::OpeningCurlyBrace) {
@@ -146,7 +157,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     .following()
                     .is_some_and(|lookahead| matches!(lookahead.kind, TokenType::Identifier))
         {
-            return self.rd_statement_fallback(None, block_item, false);
+            return self.rd_statement_fallback(None, block_item, leave_else, false);
         }
         let mut source = token.source_vectors;
         let kind = match keyword {
@@ -169,10 +180,13 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     | _ => "while statement",
                 };
                 self.rd_append_expected(&mut source, OperatorTokenType::OpeningParenthesis, owner);
-                let condition =
-                    self.rd_slot(&mut source, ExpressionTerminator::ClosingParenthesis)?;
+                let condition = self.rd_header_slot(&mut source, owner)?;
                 self.rd_append_expected(&mut source, OperatorTokenType::ClosingParenthesis, owner);
-                let body = self.rd_statement(Some(scope), false)?;
+                let body = self.rd_statement(
+                    Some(scope),
+                    false,
+                    keyword == KeywordTokenType::If || leave_else,
+                )?;
                 source = self.context.merge_vectors(source, body.source_vectors);
                 if switch {
                     let _scope = self.switch_scopes.pop();
@@ -192,7 +206,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         }) {
                         source = self.context.merge_vectors(source, otherwise.source_vectors);
                         self.rd_consume();
-                        let child = self.rd_statement(Some(ScopeKind::ImplicitSelection), false)?;
+                        let child = self.rd_statement(
+                            Some(ScopeKind::ImplicitSelection),
+                            false,
+                            leave_else,
+                        )?;
                         source = self.context.merge_vectors(source, child.source_vectors);
                         Some(child)
                     } else {
@@ -208,7 +226,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
             | Some(KeywordTokenType::Do) => {
                 self.scopes.enter_scope(ScopeKind::ImplicitIteration);
                 self.rd_consume();
-                let body = self.rd_statement(Some(ScopeKind::ImplicitIteration), false)?;
+                let body =
+                    self.rd_statement(Some(ScopeKind::ImplicitIteration), false, leave_else)?;
                 source = self.context.merge_vectors(source, body.source_vectors);
                 let following = self.cursor.current();
                 if let Some(while_token) = following.filter(|token| {
@@ -220,20 +239,27 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     self.rd_consume();
                 } else {
                     self.report(
-                        ParserErrorType::ExpectedIsoSyntax(
-                            "`while` after do body",
-                            following.map(|x| x.kind),
-                        ),
+                        ParserErrorType::ExpectedWhileAfterDoBody(following.map(|x| x.kind)),
                         following,
                     );
+                    if !is_operator(following, OperatorTokenType::OpeningParenthesis) {
+                        let missing = self.missing_syntax_source();
+                        return Some(self.alloc_syntax(Statement {
+                            kind:           StatementType::DoWhile {
+                                condition_expression: ExpressionSlot::Missing(missing),
+                                body_statement:       body,
+                            },
+                            source_vectors: source,
+                            recovered:      true,
+                        }));
+                    }
                 }
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::OpeningParenthesis,
                     "do-while statement",
                 );
-                let condition =
-                    self.rd_slot(&mut source, ExpressionTerminator::ClosingParenthesis)?;
+                let condition = self.rd_header_slot(&mut source, "do-while statement")?;
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::ClosingParenthesis,
@@ -310,12 +336,26 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     } else {
                         Some(self.rd_slot(&mut source, ExpressionTerminator::ClosingParenthesis)?)
                     };
+                let extra_clause =
+                    if is_operator(self.cursor.current(), OperatorTokenType::Semicolon) {
+                        StatementFrame::for_header_closer_distance(self)
+                    } else {
+                        None
+                    };
                 self.rd_append_expected(
                     &mut source,
                     OperatorTokenType::ClosingParenthesis,
                     "for statement",
                 );
-                let body = self.rd_statement(Some(ScopeKind::ImplicitIteration), false)?;
+                if let Some(distance) = extra_clause {
+                    for _ in 0..=distance {
+                        let token = self.cursor.current().expect("header closer was found");
+                        source = self.context.merge_vectors(source, token.source_vectors);
+                        self.rd_consume();
+                    }
+                }
+                let body =
+                    self.rd_statement(Some(ScopeKind::ImplicitIteration), false, leave_else)?;
                 source = self.context.merge_vectors(source, body.source_vectors);
                 StatementType::For(self.alloc_syntax_part(ForStatement {
                     initializer,
@@ -426,7 +466,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         "case label"
                     },
                 );
-                let body = self.rd_labeled_body(&mut source, block_item)?;
+                let body = self.rd_labeled_body(&mut source, block_item, leave_else)?;
                 match (lower, upper) {
                     | (Some(lower), Some(upper)) =>
                         StatementType::CaseRange(self.alloc_syntax(CaseRange {
@@ -447,7 +487,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 }
                 self.rd_consume();
                 self.rd_append_expected(&mut source, OperatorTokenType::Colon, "identifier label");
-                let child = self.rd_labeled_body(&mut source, block_item)?;
+                let child = self.rd_labeled_body(&mut source, block_item, leave_else)?;
                 StatementType::Label(identifier, child)
             },
             | _ if is_operator(Some(token), OperatorTokenType::Semicolon) => {
@@ -482,7 +522,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         )
                     )
                 {
-                    return self.rd_statement_fallback(None, block_item, false);
+                    return self.rd_statement_fallback(None, block_item, leave_else, false);
                 }
                 source = SourceVectors::default();
                 let slot = self.rd_slot(&mut source, ExpressionTerminator::Semicolon)?;
@@ -617,7 +657,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     items.push(BlockItem::Declaration(declaration));
                 }
             } else {
-                let child = self.rd_statement(None, true)?;
+                let child = self.rd_statement(None, true, false)?;
                 sources.push(child.source_vectors);
                 has_statement |= !matches!(child.kind, StatementType::LocalLabels(_));
                 items.push(BlockItem::Statement(child));
@@ -641,6 +681,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         &mut self,
         source: &mut SourceVectors,
         block_item: bool,
+        leave_else: bool,
     ) -> Option<&'tu Statement<'tu>> {
         let token = self.cursor.current();
         let is_label = token.is_some_and(|token| matches!(token.kind, TokenType::Identifier))
@@ -700,10 +741,33 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 recovered:      declaration.recovered,
             })
         } else {
-            self.rd_statement(None, block_item)?
+            self.rd_statement(None, block_item, leave_else)?
         };
         *source = self.context.merge_vectors(*source, child.source_vectors);
         Some(child)
+    }
+
+    fn rd_header_slot(
+        &mut self,
+        source: &mut SourceVectors,
+        owner: &'static str,
+    ) -> Option<ExpressionSlot<'tu>> {
+        let token = self.cursor.current();
+        if StatementFrame::at_expression_boundary(token, ExpressionTerminator::ClosingParenthesis) {
+            self.report(
+                ParserErrorType::ExpectedStatementExpression(owner, token.map(|token| token.kind)),
+                token,
+            );
+            return Some(ExpressionSlot::Missing(self.missing_syntax_source()));
+        }
+        let expression = self.rd_expression(
+            ExpressionMode::Expression,
+            ExpressionBoundary::ClosingParenthesis,
+        )?;
+        *source = self
+            .context
+            .merge_vectors(*source, expression.source_vectors);
+        Some(ExpressionSlot::Parsed(expression))
     }
 
     fn rd_slot(
@@ -748,9 +812,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
         &mut self,
         scope: Option<ScopeKind>,
         block_item: bool,
+        leave_else: bool,
         suspend: bool,
     ) -> Option<&'tu Statement<'tu>> {
-        let frame = StatementFrame::new(self.hard_error_count, scope).with_block_item(block_item);
+        let frame = StatementFrame::with_else_ownership(self.hard_error_count, scope, leave_else)
+            .with_block_item(block_item);
         let Some(ParseValue::Statement(statement)) =
             self.study_frame(ParseFrame::Statement(frame), suspend)
         else {

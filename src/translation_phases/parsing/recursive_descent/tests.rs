@@ -107,6 +107,46 @@ fn malformed_punctuation_and_assignment_flags_match_machine() {
 }
 
 #[test]
+fn recovery_preserves_delimiters_bodies_and_following_statements() {
+    let bodies = [
+        "a = (a b); a = 1;",
+        "a = (b + c]; a = 1;",
+        "call(a b, c); a = 1;",
+        "if () a++; else a--;",
+        "if (a b) { a++; } else a--;",
+        "if (a) else a--;",
+        "while (a b { a--; } a = 1;",
+        "do a--; a = 1;",
+        "for (a; b; c; a) a--;",
+        "switch (a b) { default: a--; }",
+        // Else ownership must survive intervening iterations and labels,
+        // including a hybrid handoff while the then-body is still missing.
+        "if (a) while (b) else a--;",
+        "if (a) label: else a--;",
+        "if (a) for (;;) else a--;",
+        "if (a) do else a--;",
+        "if (a) if (b) else a--; else b--;",
+        "do a--; (a); a = 1;",
+        "while () a--;",
+        "switch () { default: a--; }",
+        "do a--; while ();",
+        "call(a b c); a = 1;",
+    ];
+    for body in bodies {
+        let source =
+            format!("typedef int T; int f(int a, int b, int c) {{ {body} return a; }} T after;");
+        let (expected, _) = inspect(&source, StudyMode::Machine, false);
+        for mode in [StudyMode::Recursive, StudyMode::Growing]
+            .into_iter()
+            .chain((0..=16).map(|depth| StudyMode::Hybrid { depth }))
+        {
+            let (actual, _) = inspect(&source, mode, false);
+            assert_eq!(actual, expected, "recovery mismatch for {mode:?}: {body}");
+        }
+    }
+}
+
+#[test]
 fn hybrid_fallback_preserves_binding_power_at_every_threshold() {
     let source = "int f(void) { return a = b ? c, d + e * f : g ? h : i, j + k * l; }";
     let (expected, _) = inspect(source, StudyMode::Machine, false);

@@ -99,8 +99,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 })
             },
             | ParseFrame::Statement(frame) => {
-                let (scope, block_item) = frame.study_parameters();
-                self.rd_statement(scope, block_item)
+                let (scope, block_item, leave_else) = frame.study_parameters();
+                self.rd_statement(scope, block_item, leave_else)
                     .map(ParseValue::Statement)
             },
             | ParseFrame::CompoundStatement(frame) => {
