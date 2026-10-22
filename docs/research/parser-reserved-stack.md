@@ -3,7 +3,7 @@
 2026-10-22. Follow-up to [the recursive descent study](parser-recursive-descent.md).
 Native stack code is `462812f9`; the build batch completed at `916047b8`
 (subsequent source changes concern collection/analysis only). Per-run binary
-hashes and commands/options are retained in [the data directory](parser-reserved-stack-data/).
+hashes and options are retained in [the data directory](parser-reserved-stack-data/).
 The default compiler/parser path is unchanged.
 
 ## Result and recommendation
@@ -236,8 +236,9 @@ Three trials per reservation/workload:
 
 There are nine expected guard-exhaustion SIGSEGV subprocesses in these sweeps.
 All other reserved parses succeed, including both 56-case grids through depth
-65,536. A 1 GiB reservation already suffices for all tested depths; 100 GiB
-adds virtual headroom without proportional residency. This is bounded by both
+65,536. A 1 GiB reservation suffices for the 16,384-block probe in both builds;
+the larger grid uses 100 GiB. Larger reservations add virtual headroom without
+proportional residency. This is bounded by both
 address space and available physical memory, not an unlimited-memory guarantee.
 
 A standard Rust worker requested with `--stack 107374182400` fails to start in

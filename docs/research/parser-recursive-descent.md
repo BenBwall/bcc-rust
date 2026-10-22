@@ -7,7 +7,10 @@ Later commits add analysis, inputs and collection scripts. Binary hashes and
 sample observations are archived in [the data directory](parser-recursive-descent-data/).
 
 A [2026-10-22 follow-up](parser-reserved-stack.md) implements and measures a
-large, demand-paged native stack for recursive parsing.
+large, demand-paged native stack for recursive parsing. It finds a 39% release
+Lua parser speedup with a 100 GiB reservation using 44 KiB of stack pages after
+parsing, adding a reserved worker as an alternative to the hybrid recommendation
+below. The original measurements and their interpretation remain recorded here.
 
 ## Recommendation
 
