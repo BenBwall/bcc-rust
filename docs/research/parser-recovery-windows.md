@@ -199,8 +199,9 @@ pushed, workflow dispatched, or host credentials modified.
 
 Two ignored example tests prepare a focused native run without changing the
 operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
-through 65,536 live page frames and asserts small initial commitment plus growth
-on native Windows; `runner_parser_measurements` records nine rotating samples
+through 65,536 live page frames, asserts small initial commitment plus growth
+on native Windows, and records exhaustion outcomes in dialog-suppressed child
+processes for deliberately undersized 1/64 MiB stacks; `runner_parser_measurements` records nine rotating samples
 of machine/raw/reserved-machine/reserved-recursive modes, exact inspection parity
 on the 17 benchmark C files, and deep parenthesis/block stack spans. The two
 4,000-function synthetic inputs match the existing generator. Preprocessing
