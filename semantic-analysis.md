@@ -1028,7 +1028,7 @@ initializer's references are not skipped, and they count as made by the
 function where it declares the object. An expression whose paths join in
 a block with predecessors ends that state: a `&&`, `||` or scalar or `void`
 `?:` whose condition does not fold (unless the `?:` selects between constants,
-which a `void` operand is not), a complex or aggregate `?:`, a product of two
+which a `void` operand is not), a complex `?:` or an ignored-result aggregate `?:`, a product of two
 floating complex values, an atomic update `atomicrmw` cannot perform (an atomic
 `_Bool` decrement among them), an atomic compare-and-exchange, an atomic
 builtin whose memory order is not a constant (unless a library call copies its
@@ -1068,13 +1068,20 @@ unfolded. Constant queries still miss `(long)"a" + 1 - 1`, `(long)"a" - 0`,
 These gaps can leave code emitted that Clang skips. For a pure condition
 built from constants, addresses and nonvolatile const-object reads whose
 value remains unknown, optional local-static retention falls back to the
-required/`used` closure in the affected if, scalar conditional, logical or
-foldable-switch region. Deferred definition contexts keep aggregate and
-complex conditional visitors and neighboring declarations independent.
+required/`used` closure in the affected if, value-folding conditional, logical or
+foldable-switch region. Deferred definition contexts keep ignored aggregate
+and complex conditional visitors and neighboring declarations independent.
 This is a retention capability boundary, not a new value or branch fold;
 required references and `used` storage remain checked. Parameters and
 ordinary runtime loads do not trigger it. The VLA-after-jump gap above
 instead omits code Clang revives.
+Scalar conditionals and aggregates with a value destination omit an
+unselected constant arm. Ignored-result aggregates and complex visitors emit
+both arms. A sparse discarded-result context follows parentheses, comma
+results, selected-expression wrappers, statement-expression value tails and
+void casts; expression statements and for initializers/steps start it. Arm
+omission is resolved after typing, so nonvoid statement-expression tails stay
+available to lowering and omitted tails cannot leak insertion state.
 `functions.elided` omits lowering traversal and storage collection
 for whole skipped statements and operands; there is no separate `unemitted`
 state. A missing insertion point (`dead`) alone still permits simple

@@ -8,6 +8,7 @@ use super::super::{
     Analyzer,
     DefinitionKind,
     Scalar,
+    TypeId,
     TypeKind,
     Work,
     functions::FunctionWork,
@@ -124,7 +125,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 work.push((e, true));
                 super::labels::expression_children(self.scratch, e, |child| {
-                    work.push((child, false))
+                    work.push((child, false));
                 });
             }
         }
@@ -136,13 +137,78 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .unwrap_or(false)
     }
 
-    /// Clang's scalar visitor alone folds a conditional's unselected arm.
+    /// Track the ignored-result path before typing its conditional children.
+    /// Only transparent result wrappers propagate this context; operands
+    /// whose values an operator needs keep the ordinary value visitor.
+    /// C99: §6.8.3p2, p. 132; PDF p. 144; GNU statement expressions.
+    pub(in crate::translation_phases::semantic_analysis) fn discard_expression_result(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) {
+        use crate::translation_phases::parsing::syntax::{
+            BlockItem,
+            ExpressionSlot,
+            StatementType,
+        };
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push(expression);
+        while let Some(e) = work.pop() {
+            if self
+                .functions
+                .emission
+                .discarded_results
+                .insert(std::ptr::from_ref(e).addr(), ())
+                .is_some()
+            {
+                continue;
+            }
+            match e.kind {
+                ExpressionType::Parenthesized { expression } => work.push(expression),
+                ExpressionType::Binary { operator: BinaryOperator::Comma, right_expression, .. } => work.push(right_expression),
+                ExpressionType::Conditional(c) => work.extend([c.then_expression, c.else_expression]),
+                ExpressionType::OmittedConditional(c) => work.push(c.else_expression),
+                ExpressionType::Generic(g) => {
+                    for association in g.associations { work.push(association.expression); }
+                },
+                ExpressionType::Builtin(b) if b.keyword == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr => {
+                    for &operand in b.operands.iter().skip(1) {
+                        if let super::super::SyntaxOperand::Expression(value) = operand { work.push(value); }
+                    }
+                },
+                ExpressionType::StatementExpression(block) => {
+                    if let StatementType::Compound { items } = block.kind
+                        && let Some(&BlockItem::Statement(mut tail)) = items.last() {
+                        loop {
+                            match tail.kind {
+                                StatementType::Label(_, child) => tail = child,
+                                StatementType::Attributed(a) => tail = a.statement,
+                                StatementType::Expression(ExpressionSlot::Parsed(value)) => { work.push(value); break; },
+                                _ => break,
+                            }
+                        }
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+
+    /// Scalar visitors and aggregate visitors with a value destination fold
+    /// a conditional's unselected arm. Discarded aggregates and complex
+    /// visitors emit both operands.
     /// C99: §6.5.15p3-6, pp. 90-91; PDF pp. 102-103.
-    pub(in crate::translation_phases::semantic_analysis) fn scalar_conditional_emission(
+    pub(in crate::translation_phases::semantic_analysis) fn folded_conditional_emission(
         &self,
         expression: &'tu Expression<'tu>,
     ) -> bool {
-        let ty = self.expression_info(expression).ty;
+        self.conditional_visitor_folds(expression, self.expression_info(expression).ty)
+    }
+
+    pub(in crate::translation_phases::semantic_analysis) fn conditional_visitor_folds(
+        &self,
+        expression: &'tu Expression<'tu>,
+        ty: TypeId,
+    ) -> bool {
         // Keep main's conservative VM emission until composite pointer
         // bounds follow the selected arm; eliding one exposes a missing bound.
         !self.types.variably_modified(ty)
@@ -150,7 +216,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 || matches!(
                     self.types.nodes[ty.index],
                     TypeKind::Pointer(_) | TypeKind::Nullptr | TypeKind::Scalar(Scalar::Void)
-                ))
+                )
+                || (matches!(self.types.nodes[ty.index], TypeKind::Tag(id)
+                    if self.types.tags[id].kind != super::super::TagKind::Enum)
+                    && !self
+                        .functions
+                        .emission
+                        .discarded_results
+                        .contains_key(&std::ptr::from_ref(expression).addr())))
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn complete_conditional_elision(
@@ -167,7 +240,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .emission
             .branches
             .contains_key(&std::ptr::from_ref(expression).addr())
-            || !self.scalar_conditional_emission(expression)
+            || !self.folded_conditional_emission(expression)
         {
             return;
         }

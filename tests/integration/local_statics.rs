@@ -167,6 +167,62 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_value_and_ignored_results_use_distinct_conditional_visitors() {
+        for tag in ["struct", "union"] {
+            let prelude = format!("{tag} S{{int a;}};");
+            for selection in [
+                format!("0?({{STATIC ({tag} S){{1}};}}):({tag} S){{2}}"),
+                format!("1?({tag} S){{2}}:({{STATIC ({tag} S){{1}};}})"),
+            ] {
+                for value in [selection.clone(), format!("({{{selection};}})")] {
+                    let template =
+                        format!("{prelude}int main(void){{{tag} S s={value};return s.a-2;}}");
+                    assert_o0_static_emission(&template, false);
+                    assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+                    assert_runs_like_clang(&template.replace(
+                        "STATIC",
+                        "static int a __attribute__((used,section(\".bss.t\")))=1;",
+                    ));
+                }
+                let helper = format!(
+                    "{prelude}static {tag} S h(void){{STATIC return ({tag} S){{1}};}}int \
+                     main(void){{{tag} S s=0?h():({tag} S){{2}};return s.a-2;}}"
+                );
+                assert_o0_static_emission(&helper, false);
+                assert_runs_like_clang(&helper.replace("STATIC", "static int a;"));
+                for statement in [
+                    format!("(void)({selection});"),
+                    format!("typedef void V;(V)({selection});"),
+                    format!("({selection}),0;"),
+                    format!("for({selection};0;){{}}"),
+                    format!("for(;0;{selection}){{}}"),
+                    format!("__builtin_choose_expr(1,({selection}),({tag} S){{0}});"),
+                    format!("_Generic(0,int:({selection}));"),
+                ] {
+                    let template = format!("{prelude}int main(void){{{statement}return 0;}}");
+                    assert_o0_static_emission(&template, true);
+                    assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn omitted_scalar_statement_expression_tails_preserve_following_code() {
+        for statement in ["for(;;);", "return 99;", "__builtin_unreachable();"] {
+            for expression in [
+                format!("0?({{{statement}0;}}):0"),
+                format!("1?0:({{{statement}0;}})"),
+            ] {
+                assert_runs_like_clang(&format!(
+                    "int f(void){{(void)({expression});return 17;}}int main(void){{return \
+                     f()-17;}}"
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn scalar_logical_left_operands_use_branch_emission() {
         for body in [
             "return (v&&(0&&h()))&&v;",

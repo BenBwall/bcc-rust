@@ -478,6 +478,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.statements.switch = switch;
                 self.control.targets.truncate(targets);
             },
+            | FunctionWork::CastOperand(operand) => {
+                let ty = self.take_type();
+                if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void)) {
+                    self.discard_expression_result(operand);
+                }
+                self.work.push(Work::Expression(operand));
+            },
             | FunctionWork::CallArguments(callee, arguments) => {
                 let callee = self.selected_designator(callee);
                 if self.expression_info(callee).binding.is_some_and(|binding| {
@@ -601,6 +608,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.elide_branch_operand(condition);
                 }
             },
+            | FunctionWork::ConditionalArmEnd(owner, arm, orphan) => {
+                // The selected visitor omits this arm. A value tail can have
+                // created an orphan block while its type was still unknown;
+                // it must not make a later emitted statement disappear.
+                if self.conditional_visitor_folds(owner, self.expression_info(arm).ty) {
+                    self.functions.emission.orphan = orphan;
+                }
+            },
             | FunctionWork::ConditionalArm {
                 owner,
                 arm,
@@ -627,12 +642,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Neither insertion-state omission nor whole-statement
                 // omission is known before both operands have been typed.
                 // In particular an aggregate statement-expression tail must
-                // be visited. The deferred context applies scalar omission
+                // be visited. The deferred context applies visitor omission
                 // to references and definitions once the result is known.
                 self.functions.dead = outer.dead;
                 self.functions.unvisited = outer.unvisited;
                 self.functions.elided = outer_elided;
                 if skipped {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::ConditionalArmEnd(
+                            owner,
+                            arm,
+                            self.functions.emission.orphan,
+                        )));
                     self.enter_reference_context_kind(ReferenceContextKind::ConditionalArm {
                         owner,
                     });
@@ -827,7 +848,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
             required_locals.push(
                 matches!(context.kind, ReferenceContextKind::RequiredLocalsOnly { scalar_owner }
-                    if scalar_owner.is_none_or(|owner| self.scalar_conditional_emission(owner)))
+                    if scalar_owner.is_none_or(|owner| self.folded_conditional_emission(owner)))
                     || context.parent.is_some_and(|p| required_locals[p]),
             );
             let (skip_definitions, skip_uses) = match context.kind {
@@ -2124,7 +2145,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match self.functions.reference_contexts[index].kind {
             | ReferenceContextKind::ConstantQuery { emitted } => !emitted,
             | ReferenceContextKind::ConditionalArm { owner } =>
-                self.scalar_conditional_emission(owner),
+                self.folded_conditional_emission(owner),
             | ReferenceContextKind::RequiredLocalsOnly { .. } => false,
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
@@ -2428,6 +2449,8 @@ pub(super) struct FunctionContext<'tu> {
 
 #[derive(Clone, Copy)]
 pub(super) enum FunctionWork<'tu> {
+    /// A cast's resolved target selects the operand's value visitor.
+    CastOperand(&'tu Expression<'tu>),
     Finish(
         Option<FunctionContext<'tu>>,
         usize,
@@ -2492,6 +2515,8 @@ pub(super) enum FunctionWork<'tu> {
         outer:        Skipped,
         outer_elided: bool,
     },
+    /// Restore insertion effects after typing an omitted conditional arm.
+    ConditionalArmEnd(&'tu Expression<'tu>, &'tu Expression<'tu>, Option<usize>),
     /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
     /// the arm holds a label, which keeps Clang from skipping it.
     DeadStatementArm {

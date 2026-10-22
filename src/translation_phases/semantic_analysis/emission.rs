@@ -148,8 +148,12 @@ pub(super) struct State<'tu, 's> {
     /// The evaluation in progress read whether a name in `weak_names`
     /// applies, so that its result holds only at the same horizon.
     weak_read: bool,
-    /// Syntactic array-literal reads, memoized across nested query operands.
+    /// Expressions whose results Clang discards, including transparent
+    /// wrappers.
+    pub(super) discarded_results: ArenaMap<'s, usize, ()>,
+    /// Pure syntax that may need an unsupported constant fold.
     pub(super) potential_constants: ArenaMap<'s, usize, bool>,
+    /// Syntactic array-literal reads, memoized across nested query operands.
     pub(super) array_literal_reads: ArenaMap<'s, usize, bool>,
     #[cfg(test)]
     pub(super) array_scan_steps: usize,
@@ -218,6 +222,7 @@ impl<'s> State<'_, 's> {
             folded: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             depth_cut: false,
             refolds: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            discarded_results: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             potential_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             array_literal_reads: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             #[cfg(test)]

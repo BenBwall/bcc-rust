@@ -73,6 +73,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 right_expression,
                 operator,
             } => {
+                if operator == BinaryOperator::Comma {
+                    self.discard_expression_result(left_expression);
+                }
                 let live = match operator {
                     | BinaryOperator::LogicalAnd => Some(true),
                     | BinaryOperator::LogicalOr => Some(false),
@@ -142,8 +145,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 target_type,
                 operand_expression,
             } => {
-                self.work.push(Work::Expression(operand_expression));
-                self.work.push(Work::DiscardType);
+                self.work.push(Work::FunctionWork(FunctionWork::CastOperand(operand_expression)));
                 self.work.push(Work::TypeName(target_type, false));
             },
             | E::SizeofType(name) | E::AlignofType(name) => {
@@ -514,6 +516,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::StatementWork(W::LoopBody(s, f.body_statement)));
                 if let Some(e) = f.iteration_expression {
+                    if let ExpressionSlot::Parsed(expression) = e {
+                        self.discard_expression_result(expression);
+                    }
                     self.expression_slot(e);
                 }
                 if let Some(e) = f.condition_expression {
@@ -526,7 +531,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             self.for_declaration(d);
                             self.work.push(Work::Declaration(d));
                         },
-                        | ForInitializer::Expression(e) => self.expression_slot(e),
+                        | ForInitializer::Expression(e) => {
+                            if let ExpressionSlot::Parsed(expression) = e {
+                                self.discard_expression_result(expression);
+                            }
+                            self.expression_slot(e);
+                        },
                     }
                 }
             },
@@ -578,6 +588,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Expression(e) => {
                 if let ExpressionSlot::Parsed(expression) = e {
+                    if !value_statement {
+                        self.discard_expression_result(expression);
+                    }
                     self.begin_expression_statement(s, expression);
                 }
                 self.expression_slot(e);
