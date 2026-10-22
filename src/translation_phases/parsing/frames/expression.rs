@@ -2482,7 +2482,34 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
 }
 
 #[cfg(feature = "parser-recursive-descent-study")]
-impl ExpressionFrame<'_, '_> {
+impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
+    /// Resumes the existing recovery policy after a recursively parsed operand.
+    /// Recovery serves C99 §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(in crate::translation_phases::parsing) fn study_needs_recovery(
+        &self,
+        token: Option<Token>,
+    ) -> bool {
+        token.is_some_and(|token| self.should_consume_unowned_closer(token.kind))
+            || !self.is_boundary(token.map(|token| token.kind))
+    }
+
+    pub(in crate::translation_phases::parsing) fn study_resume_operand(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        unary: bool,
+    ) {
+        self.push_operand(expression, unary, unary);
+        self.state = ExpressionParserState::Operator;
+    }
+
+    pub(in crate::translation_phases::parsing) fn study_call_argument_follows(
+        &self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Token,
+    ) -> bool {
+        is_expression_operand_starter(token.kind) && !self.is_strong_grammar_boundary(parser, token)
+    }
+
     pub(in crate::translation_phases::parsing) fn study_parameters(
         &self,
     ) -> (ExpressionMode, ExpressionBoundary) {

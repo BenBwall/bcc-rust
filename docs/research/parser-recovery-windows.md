@@ -17,3 +17,8 @@ full compiler cross-build is unsupported. An isolated harness can compile the
 actual example-only Windows reserved-stack module without altering the compiler
 build. Wine results, if obtained, will be identified as compatibility-layer
 checks and will not be used as native Windows performance evidence.
+
+Study-only fixes now seed expression recovery with the already parsed operand,
+retain statement else ownership across recursive/hybrid calls, represent absent
+header operands as missing slots, preserve the next statement after a missing
+`while`, and reuse bounded `for`-header lookahead. Validation is pending.
