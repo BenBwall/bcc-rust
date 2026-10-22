@@ -36,6 +36,11 @@ fn recursive_lowering_matches_tasks() {
 #[test]
 #[ignore = "explicit nine-sample native timing and deep lowering run"]
 fn runner_lowering_measurements() {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     let mut cases = Vec::new();
     for (name, body) in [
         (
@@ -76,7 +81,7 @@ fn runner_lowering_measurements() {
             "{name}: differential result"
         );
         println!(
-            "lowering_parity input={name} identical=1 errors={} diagnostics={}",
+            "lowering_parity profile={profile} input={name} identical=1 errors={} diagnostics={}",
             results[0].errors, results[0].diagnostics
         );
         if results[0].errors != 0 || results[0].diagnostics != 0 {
@@ -92,8 +97,9 @@ fn runner_lowering_measurements() {
                 .expect("worker");
                 assert_eq!(m.errors, 0);
                 println!(
-                    "lowering_timing input={name} repeat={repeat} recursive={recursive} ns={} \
-                     total_ns={} scratch_bytes={} ir_bytes={}",
+                    "lowering_timing profile={profile} input={name} repeat={repeat} \
+                     recursive={recursive} ns={} total_ns={} scratch_bytes={} ir_bytes={} \
+                     global_calls=0 global_bytes=0",
                     m.nanoseconds,
                     wall.elapsed().as_nanos(),
                     m.scratch_bytes,
@@ -122,8 +128,8 @@ fn runner_lowering_measurements() {
                     .expect("deep compilation worker");
             assert_eq!(m.errors, 0);
             println!(
-                "lowering_stack input={name} levels={depth} ns={} stack_span={} depth={} \
-                 scratch_bytes={} ir_bytes={}",
+                "lowering_stack profile={profile} input={name} levels={depth} ns={} stack_span={} \
+                 depth={} scratch_bytes={} ir_bytes={} global_calls=0 global_bytes=0",
                 m.nanoseconds, m.stack_span, m.max_depth, m.scratch_bytes, m.ir_bytes
             );
         }
