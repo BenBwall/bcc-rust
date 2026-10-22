@@ -452,7 +452,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     fn rd_postfix(
         &mut self,
         mut base: &'tu Expression<'tu>,
-        _boundary: ExpressionBoundary,
+        boundary: ExpressionBoundary,
     ) -> Option<Operand<'tu>> {
         while let Some(token) = self.cursor.current() {
             if !is_postfix_starter(token.kind) {
@@ -513,7 +513,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                                 let frame = ExpressionFrame::new(
                                     self.arena,
                                     ExpressionMode::Expression,
-                                    _boundary,
+                                    boundary,
                                     self.hard_error_count,
                                 );
                                 if self.cursor.current().is_some_and(|token| {

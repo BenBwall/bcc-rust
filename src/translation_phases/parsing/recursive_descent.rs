@@ -7,10 +7,12 @@
 //! and provenance. Machine mode is the default, including when this study
 //! feature is compiled.
 //!
-//! The experiment targets valid C99 syntax. Extension atoms/statements and
-//! malformed operand recovery use frames. Recovery after an already consumed
-//! recursive prefix can produce different repairs; corpus comparisons must
-//! report those differences. It is not a replacement for the production parser.
+//! Extension atoms/statements and malformed operand recovery use frames.
+//! Operator recovery resumes a frame seeded with the parsed expression;
+//! statement recovery preserves the frame grammar's delimiter and else
+//! ownership. Corpus comparisons check ASTs, provenance and diagnostics,
+//! but do not prove recovery equivalence for arbitrary malformed input.
+//! This remains an experiment rather than the production parser.
 //!
 //! C99: phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22;
 //! expressions §6.5, pp. 67-94; PDF pp. 79-106; statements §6.8,
