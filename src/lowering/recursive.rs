@@ -258,7 +258,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     ));
                 }
             }
-            for item in items.iter() {
+            for item in items {
                 let task = match *item {
                     | BlockItem::Statement(child) if mode == StatementMode::Effects =>
                         Task::StatementEffects(child),
