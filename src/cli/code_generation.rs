@@ -31,10 +31,6 @@ use clap::{
 };
 
 use super::diagnostic_reporter::DiagnosticReporter;
-#[cfg(not(feature = "recursive-lowering-study"))]
-use crate::pipeline::lower_translation_unit_diagnosed;
-#[cfg(feature = "recursive-lowering-study")]
-use crate::pipeline::lower_translation_unit_recursive_diagnosed as lower_translation_unit_diagnosed;
 use crate::{
     backend::{
         interpreter::{
@@ -67,6 +63,7 @@ use crate::{
         InlineCopies,
         MiddleEndError,
         analyze_translation_unit,
+        lower_translation_unit_diagnosed,
         parse_translation_unit,
     },
     target::{

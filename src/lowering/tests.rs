@@ -74,7 +74,7 @@ fn lower_with(
         .expect("reserved compilation worker");
         initializers::REPLAY_STEPS.set(replay);
         crate::test_support::EFFECT_RECIPE_STEPS.set(effects);
-        return result;
+        result
     }
     #[cfg(not(feature = "recursive-lowering-study"))]
     lower_with_here(source, configuration)

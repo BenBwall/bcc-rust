@@ -48,6 +48,7 @@ use crate::{
 /// shared diagnostic interface; a case ABI lowering does not handle names
 /// its function.
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+#[cfg(any(test, not(feature = "recursive-lowering-study")))]
 pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
@@ -97,6 +98,7 @@ pub(crate) fn lower_translation_unit_recursive_diagnosed<'tu, 'ir>(
     )
 }
 
+#[derive(Clone, Copy)]
 struct LoweringControl {
     copies:    InlineCopies,
     #[cfg(feature = "recursive-lowering-study")]
