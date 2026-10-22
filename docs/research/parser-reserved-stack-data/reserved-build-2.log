@@ -1,0 +1,34 @@
+Using build slot cargo.lock
+Refreshing bcc-rust package artifacts for this checkout
+     Removed 69 files, 95.9MiB total
+     Removed 0 files
+Running: sh scripts/parser_study_build.sh reserved
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+    Finished `dev` profile [unoptimized] target(s) in 24.26s
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+    Finished `test` profile [unoptimized] target(s) in 31.60s
+     Running unittests examples/parser_study.rs (/home/agent/workspace/bcc-rust/build/swarm-target/x86_64-unknown-linux-gnu/debug/examples/parser_study-60eea8612a5681b0)
+
+running 3 tests
+test reserved_stack::tests::borrows_and_returns_on_a_lazy_stack ... FAILED
+test reserved_stack::tests::propagates_panics_after_join ... ok
+test reserved_stack::tests::rejects_unrepresentable_reservations ... ok
+
+failures:
+
+---- reserved_stack::tests::borrows_and_returns_on_a_lazy_stack stdout ----
+
+thread 'reserved_stack::tests::borrows_and_returns_on_a_lazy_stack' (3474320) panicked at examples/parser_study/reserved_stack.rs:114:10:
+reserve and join stack: Os { code: 22, kind: InvalidInput, message: "Invalid argument" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reserved_stack::tests::borrows_and_returns_on_a_lazy_stack
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--example parser_study`
+EXIT 101
