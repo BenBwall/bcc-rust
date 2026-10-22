@@ -2,7 +2,7 @@
 
 2026-10-22. Follow-up to [the parser study](parser-recovery-windows.md).
 The opt-in implementation is complete. Linux measurements and native Windows
-debug tests are complete; remaining native measurements/checks are running.
+debug validation are complete; native release validation is running.
 The feature-disabled compiler retains its existing pipeline.
 
 ## Implementation boundary
@@ -24,7 +24,9 @@ builtins, VLA actions and initialization reuse the existing task descriptions,
 with recursive draining bounded to the current construct's pending-work floor.
 The prototype retains their task and operand buffers; it does not replace every
 continuation with a typed Rust function. Retained AST, type and IR storage stays
-in arenas. Semantic analysis and optimizer worklists remain unchanged.
+in arenas. Semantic analysis and optimizer worklists remain unchanged. The CLI
+still uses the existing frame-machine parser; the recursive parser remains a
+separate study feature and probe.
 
 Ordinary library pipeline entry points retain task lowering even with the study
 feature enabled; only the reserved-worker CLI and explicit study options select
@@ -82,8 +84,7 @@ compilation onto the new worker. The helper now explicitly carries the override
 and replay/effect counters, and excludes the extra differential passes from
 those counters. The failure was in test setup, not an IR mismatch. The corrected Linux debug
 suite passes 206 tests (one existing ignored test); strict combined-feature
-Clippy and the five-case focused example test also pass. Initial compile/Clippy failures are retained in scratch
-logs alongside the successful checks.
+Clippy and the five-case focused example test also pass. Initial compile/Clippy failures are archived alongside the successful checks.
 
 The shared worker's `CreateThread` binding requires `Win32_Security`. The
 compilation-stack feature now explicitly enables that dependency feature for
@@ -158,6 +159,34 @@ working set. Release lowering is 7.9% lower; debug is 5.3% higher with 22.2% CV
 for recursion. This is a scratch-storage improvement, not a measured process
 memory win.
 
+
+## Native Windows measurements
+
+The self-hosted `bcc-win-x64` runner executes native
+`x86_64-pc-windows-gnu`, Rust 1.99.0 / LLVM 23.1.1, Windows build 26300.
+These timings compare modes on the Windows host and should not be compared
+across machines to the Linux timings. The test suite and harness use the same
+source cohort `932f32a89c75682029e7f90b208b74960fc71e94`, exact commands,
+rotating samples and 1 GiB workers described above.
+
+| Profile/input | Task median ms | Recursive median ms | Task range ms / CV % | Recursive range ms / CV % |
+| --- | ---: | ---: | --- | --- |
+| debug / expressions | 557.419 | 583.747 | 544.702–600.283 / 2.81 | 561.287–610.277 / 2.43 |
+| debug / statements | 934.042 | 942.666 | 881.439–955.794 / 2.67 | 895.208–986.167 / 2.62 |
+
+Debug recursion uses 4.7% more lowering time for expressions and 0.9% more for
+statements. The 206 lowering tests pass (one existing ignored), as do all 19
+corpus parity inputs, 342 timing samples and four deep probes. No measured
+lowering interval allocates globally. Native release jobs remain in progress.
+
+Windows debug address-span slopes are 12,592 B/expression level and
+1,296 B/compound level; at 4,096 levels, the spans are 51,580,201 B and
+5,311,785 B respectively. These exceed the ordinary Windows 1 MiB stack and
+complete on the reserved worker. This is native execution, not cross-compilation
+or Wine. As with Linux, these are address samples rather than exact stack peak
+or physical working-set measurements. The Windows stack implementation and its
+lazy-commit/100 GiB probes are also covered by the prior
+[reserved-stack Windows study](parser-recovery-windows.md).
 
 ## Whole-compilation CLI checks
 
