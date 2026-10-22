@@ -7,7 +7,6 @@
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
-    clippy::disallowed_macros,
     reason = "The harness owns inputs and output outside the compiler interval."
 )]
 
@@ -16,7 +15,11 @@ use std::{
     time::Instant,
 };
 
+#[path = "lowering_study/allocations.rs"]
+mod allocations;
+
 use bcc_rust::{
+    LoweringMeasurement,
     measure_lowering_source,
     with_compilation_stack,
 };
@@ -28,7 +31,7 @@ fn main() {
         "usage: lowering_study SOURCE [machine|recursive] [REPEATS] [--inspect] [--sample-stack]"
     );
     let source = fs::read_to_string(&args[1]).expect("read source");
-    let recursive = match args.get(2).map(String::as_str).unwrap_or("machine") {
+    let recursive = match args.get(2).map_or("machine", String::as_str) {
         | "machine" => false,
         | "recursive" => true,
         | other => panic!("unknown mode {other}"),
@@ -42,7 +45,7 @@ fn main() {
     for repeat in 0..repeats {
         let wall = Instant::now();
         let measured = with_compilation_stack(100 * 1024_usize.pow(3), || {
-            measure_lowering_source(&source, recursive, sample, inspect, || {}, || {})
+            measure(&source, recursive, sample, inspect)
         })
         .expect("compilation worker");
         println!(
@@ -65,6 +68,23 @@ fn main() {
             println!("{text}");
         }
     }
+}
+
+fn measure(source: &str, recursive: bool, sample: bool, inspect: bool) -> LoweringMeasurement {
+    let result = measure_lowering_source(
+        source,
+        recursive,
+        sample,
+        inspect,
+        allocations::begin,
+        allocations::end,
+    );
+    assert_eq!(
+        allocations::counts(),
+        (0, 0),
+        "lowering must use arena/OS memory exclusively"
+    );
+    result
 }
 
 #[cfg(test)]
