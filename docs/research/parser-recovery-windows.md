@@ -136,15 +136,123 @@ recursion. A large reserved worker or an explicitly bounded hybrid is required.
 The reservation is finite, and OS exhaustion remains a process/runtime failure,
 not a normal parser-limit diagnostic.
 
-## Windows evidence and its limits
+## Native Windows results
 
-The probe at `examples/parser_stack_probe.rs` imports the actual study worker
-module, including `reserved_stack/windows.rs`. It gives each recursive call a
-live 4,096-byte array, queries the stack at maximum depth and after return, and
-checks panic propagation, borrowed callback data, and invalid reservations.
-The isolated manifest copies the repository's Rust/Clippy lint configuration.
-It avoids the full compiler build's `TARGET == HOST` requirement without
-changing that build contract. It does not contain the parser or LLVM.
+Native execution uses the owner's self-hosted `bcc-win-x64` Actions runner,
+Windows x64 build `10.0.26300.0`, Rust `1.99.0 (b940084d7 2026-09-28)` GNU,
+LLVM 23.1.1, and MinGW from `C:\Strawberry\c`. Every artifact identifies
+source commit `32fb7b0a0aa52c7d896568f79266425d1ce5dba2` and tree
+`34f5c75629574cbfeb583be2cc28a1699300ee87`. No dispatcher or default CI
+changes were needed. MSVC has compile/check evidence only.
+
+### Reservation and demand commitment
+
+The actual worker uses `CreateThread` with
+`STACK_SIZE_PARAM_IS_A_RESERVATION`. Windows manages commitment behind its
+moving guard; the implementation installs no exception handler and never moves
+the stack. `VirtualQuery` measures writable committed regions, excluding the
+guard. This is commitment, not physical residency.
+
+| Page-frame probe | Debug | Release |
+| --- | ---: | ---: |
+| Initial writable commitment, 1 GiB reservation | 8,192 B | 8,192 B |
+| Initial writable commitment, 100 GiB reservation | 8,192 B | 8,192 B |
+| Native stack bytes per live frame | 4,384 | 4,208 |
+| Address span at 65,536 frames | 287,314,015 B | 275,779,687 B |
+| Deepest writable commit, 1 GiB reservation | 287,318,016 B | 275,783,680 B |
+| Deepest writable commit, 100 GiB reservation | 287,322,112 B | 275,783,680 B |
+| Undersized 1 MiB and 64 MiB children | Both `0xC00000FD` | Both `0xC00000FD` |
+
+Each page-probe call keeps a 4,096-byte array live. Both reservations finish
+at depths 0, 256, 4,096 and 65,536. These are page frames, not parser grammar
+levels. Commitment remains after unwinding until the thread exits. The two
+negative probes use depth 4,096 on 1 MiB and depth 16,384 on 64 MiB. Each child
+runs through `scripts/cargo_runner.py` to suppress desktop crash dialogs; the
+parent verifies stack-overflow evidence and passes. The Wine-only release exit
+101 described below does not reproduce in either native profile.
+
+### Parser throughput and memory
+
+The ignored `runner_parser_measurements` test prepares two exact existing
+synthetic generators, each with 4,000 functions, and all 17 `benches/c/*.c`
+files. The expression mix has 264,000 tokens; the statement mix has 332,000.
+Nine samples rotate machine, recursive, reserved-machine and reserved-recursive
+modes within one test process. The reserved parser uses a 1 GiB native worker.
+Preprocessing/token preparation, thread creation/join, inspection and arena
+destruction are outside the phase-7 timer. These results compare the
+feature-matched machine; Windows has no feature-disabled timing cohort.
+
+The debug results below are complete; release parser collection is in progress.
+CV is population standard deviation divided by mean.
+
+| Debug input | Mode | Median ms | Range ms | CV % |
+| --- | --- | ---: | --- | ---: |
+| Expression mix | Machine | 211.100 | 201.650–274.709 | 9.62 |
+| Expression mix | Recursive | 165.538 | 150.950–229.081 | 12.64 |
+| Expression mix | Reserved machine | 219.462 | 197.491–264.294 | 8.75 |
+| Expression mix | Reserved recursive | 164.523 | 154.351–187.256 | 6.30 |
+| Statement mix | Machine | 265.460 | 254.625–288.334 | 3.56 |
+| Statement mix | Recursive | 183.434 | 175.984–189.206 | 2.02 |
+| Statement mix | Reserved machine | 260.027 | 251.805–273.707 | 2.39 |
+| Statement mix | Reserved recursive | 181.757 | 173.278–207.285 | 4.93 |
+
+Reserved recursive uses 22.1% less debug parser time for the expression mix and
+31.5% less for the statement mix. The sum of per-input medians over the 17 small
+real C files is 9.086 ms machine, 7.449 ms recursive, 9.090 ms reserved machine,
+and 8.166 ms reserved recursive. This aggregate describes those small inputs;
+it is not an end-to-end timing. Individual samples and variability are archived.
+
+| Arena requests, bytes | Expression machine / RD | Statement machine / RD |
+| --- | ---: | ---: |
+| Parse scratch | 8,632 / 4,856 | 8,112 / 5,168 |
+| Translation-unit arena | 10,688,002 / 10,688,002 | 12,736,002 / 12,736,002 |
+| Phase-7 global allocation calls / bytes | 0 / 0, both | 0 / 0, both |
+
+### Parser depth and correctness
+
+Debug passes all 684 timing samples, 17 real-corpus parity checks and four deep
+parser probes. Each corpus check compares the complete rendered
+AST/provenance/diagnostics with machine output in recursive, growing,
+hybrid-depth-16 and reserved-recursive modes (68 comparisons per profile).
+The seven focused recovery tests also pass in both profiles. Parser timing
+samples have zero diagnostics and zero phase-7 global allocation calls/bytes.
+
+Deep parser runs sample grammar-entry addresses at 4,096 and 16,384 parenthesis
+or block levels. They use an explicit 1 GiB worker. They finish with no hybrid
+fallbacks, limit hits or diagnostics.
+
+| Native debug parser shape | Stack B/level | Span at 16,384 | Writable commit at 16,384 |
+| --- | ---: | ---: | ---: |
+| Parentheses | 2,880 | 47,199,944 B | 47,235,072 B |
+| Blocks | 13,872 | 227,278,848 B | 227,336,192 B |
+
+The slopes measure entry-address spans, not exact peak stack use. Extrapolating
+the block slope to C99's 127 nested blocks already gives about 1.7 MiB, above
+a 1 MiB main-stack budget; this is not a measured overflow threshold. Raw timing
+runs execute on Rust's test worker and do not establish main-thread stack safety.
+The 65,536-depth native result above is a page probe, not a parser result.
+
+### Native measurement limits
+
+- Native GNU x64 execution only; no native MSVC run.
+- No staged Lua fixture in the clean Actions checkout; Linux Lua numbers do not
+  imply Windows Lua performance.
+- No CPU isolation. Desktop activity and other work can affect timings; ranges
+  and CVs are reported rather than treating all deltas as deterministic.
+- Windows process RSS, physical stack residency, page faults and hardware
+  instructions/cycles are unavailable in this harness. Zero-valued RSS/fault
+  fields mean unavailable, not zero consumption. Writable commit and arena
+  requests are measured.
+- Worker creation/join is excluded and not independently measured on Windows.
+  A fresh worker per tiny file may erase phase-7 savings.
+- This native cohort rotates modes in one process, unlike the fresh-process
+  Linux cohort. Their timings are not pooled.
+
+## Cross-build and Wine compatibility evidence
+
+The standalone probe imports the actual study worker, copies repository lint
+settings into an isolated manifest, and avoids the compiler build's
+`TARGET == HOST` requirement without weakening it. It has no parser or LLVM.
 
 | Check | Result |
 | --- | --- |
@@ -153,110 +261,29 @@ changing that build contract. It does not contain the parser or LLVM.
 | x86_64 Windows MSVC compile check / strict Clippy | Pass; no SDK/linker runtime test |
 | Wine 10 worker unit tests | 3/3 pass |
 | Wine 1 GiB stack, depths 0/256/4,096/16,384/65,536 | Both builds pass |
-| Wine 64 GiB / 100 GiB thread reservation | Both fail at creation, Windows error 8 |
-| Native Windows debug parser / demand commit / overflow | Pass; release jobs in progress |
+| Wine 64 GiB / 100 GiB reservation | Thread creation fails, Windows error 8 |
+| Wine undersized-stack negative cases | Three expected outcomes, one anomalous exit 101 |
 
-The Wine page-probe slope is 4,208 B/level release and 4,336 B/level debug. These
-are Windows GNU ABI page-probe frames under Wine, not native parser frames.
-At depth 65,536 its spans are 275,779,695 / 284,168,511 bytes. Do not compare
-these numbers with the parser nesting slopes above.
-
-Wine reports 1,073,737,728 writable committed bytes for a 1 GiB reservation
-before recursion, at maximum depth, and after unwinding. This is commit state,
-not physical residency. Wine 10's
+Wine's page-frame slopes are 4,208 B/level release and 4,336 debug. At depth
+65,536 the spans are 275,779,695 / 284,168,511 bytes. Wine reports
+1,073,737,728 writable committed bytes for a 1 GiB reservation before descent,
+at maximum depth and after unwinding. This is commit state, not residency.
+Wine 10's
 [`virtual_alloc_thread_stack`](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/ntdll/unix/virtual.c#L3880)
 maps the whole reservation with `VPROT_COMMITTED` and enforces a minimum 1 MiB
-stack. It therefore does not exercise Windows' normal guard-driven commitment.
-Windows implementation uses `CreateThread` with
-`STACK_SIZE_PARAM_IS_A_RESERVATION`, leaving guard handling to the native OS.
-A native run must verify small initial commitment, commitment growth with depth,
-and the failure mode at the end of the reservation.
+stack. Its behavior differs from the verified native demand commitment above.
 
-The Wine collector deliberately rejects unexpected negative-probe outcomes.
-Three undersized-stack runs return the transported stack-overflow status 253
-(`0xC00000FD` on Windows). The 1 MiB release run instead prints a stack-overflow
-message and exits 101 when the joined worker supplies no result. Consequently
-the 22-run compatibility collection exits 1 with one unexpected outcome; it
-must not be described as an entirely passing Windows suite. Successful workloads
-are unaffected. Native debug probes now return the standard stack-overflow status in both
-cases; release behavior is still being measured.
+The Wine collector rejects unexpected negative-probe outcomes: three runs
+return transported stack-overflow status 253 (`0xC00000FD`), but the 1 MiB
+release child prints overflow then exits 101 when the joined worker supplies
+no result. Thus the 22-run compatibility collection exits 1; it is not an
+entirely passing Windows suite. Native debug and release children all return
+the expected Windows overflow status.
 
-Initial GNU linking with Rust's bundled startup objects and a different MinGW
-CRT crashed before `main` (recursive `atexit`/`_onexit`). The final build uses the
-matching extracted MinGW GCC driver and `link-self-contained=no`. This was a
-cross-tool setup failure, not evidence about parser performance. Pinned tool
-versions, URLs and checksums are archived.
-
-The owner clarified the native execution route: `bcc-windows` dispatches the
-`ci/windows-runner` GitHub Actions workflow to the outbound-polling self-hosted
-`bcc-win-x64` runner. The sandbox has no inbound Windows command connection.
-The runner was confirmed online and idle. Setup is documented in
-`/home/agent/workspace/bcc-rust/WINDOWS-RUNNER.md`.
-
-The owner authorized publishing this study branch and dispatching native jobs.
-Source `32fb7b0a0aa52c7d896568f79266425d1ce5dba2` is now pushed. The first
-recovery job is [39757463234](https://github.com/BenBwall/bcc-rust/actions/runs/39757463234);
-checkout and native toolchain setup passed. The serial collector records every
-run ID before waiting and verifies the requested source SHA in downloaded
-`results.json` artifacts. No dispatcher or default CI changes were needed.
-
-The first native job completed successfully: all seven recovery tests passed
-on Windows x64 build 26300 with Rust 1.99.0 GNU / LLVM 23.1.1. Its artifacts
-confirm the exact requested source SHA and tree. Debug stack probes are next;
-release recovery and both parser timing profiles remain queued by the collector.
-
-Native debug stack job
-[39758189652](https://github.com/BenBwall/bcc-rust/actions/runs/39758189652)
-also passes. Both 1 GiB and 100 GiB reservations initially have only 8 KiB of
-writable committed memory (excluding the guard). At 65,536 live page frames,
-span is 287,314,015 bytes and writable commitment about 274.01 MiB. The stack
-retains commitment after return until the worker exits. Both deliberately
-undersized children (1 MiB and 64 MiB) exit with `0xC00000FD` and the parent
-passes. Unlike Wine, native Windows demonstrates the intended demand-commit
-behavior and successfully reserves 100 GiB. Physical residency is not measured.
-
-Native debug parser job
-[39758407362](https://github.com/BenBwall/bcc-rust/actions/runs/39758407362)
-also passes: 684 timing samples, 17 corpus parity checks and four deep parser
-probes. Expression-mix medians are 211.100 ms machine / 164.523 ms reserved RD;
-statement-mix medians are 265.460 / 181.757 ms. Debug grammar stack slopes are
-2,880 B per parenthesis and 13,872 B per block; 16,384 blocks commit about
-216.80 MiB. The Windows process-RSS fields are unavailable (zero), as are
-physical stack RSS and hardware counters. Lua was not staged in the Actions
-checkout. Release recovery job
-[39758809123](https://github.com/BenBwall/bcc-rust/actions/runs/39758809123)
-has also passed all seven tests; release stack and timing jobs remain in
-progress. The full release unit-test binary took about ten minutes to build;
-only the seven selected tests ran, in 0.85 seconds.
-
-Native release stack job
-[39760102752](https://github.com/BenBwall/bcc-rust/actions/runs/39760102752)
-passes all reservation/growth/exhaustion checks as well. Both reservations start
-with 8 KiB writable; depth 65,536 spans 275,779,687 bytes and commits
-275,783,680 bytes (263.01 MiB). Both undersized children return `0xC00000FD`.
-The Wine-only release exit 101 does not reproduce in either native profile.
-
-Two ignored example tests prepare a focused native run without changing the
-operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
-through 65,536 live page frames, asserts small initial commitment plus growth
-on native Windows, and records exhaustion outcomes in dialog-suppressed child
-processes for deliberately undersized 1/64 MiB stacks; `runner_parser_measurements` records nine rotating samples
-of machine/raw/reserved-machine/reserved-recursive modes, exact inspection parity
-on the 17 benchmark C files, and deep parenthesis/block stack spans. The two
-4,000-function synthetic inputs match the existing generator. Preprocessing
-stays outside the parser timer. Lua runs only if the exact preprocessed fixture
-has been staged; the normal clean Actions checkout does not include scratch.
-These tests are opt-in to avoid turning normal tests into performance runs.
-The local Linux pilot passed 17 corpus parity checks, 720 timing samples
-(including locally staged Lua), four deep parser samples, and all eight page
-probes across 1/100 GiB reservations. Study strict Clippy passed. The Windows
-GNU cross-target check caught an unused-result lint in the overflow child;
-after binding that result, strict Clippy and both probe builds passed. The
-preparation logs preserve both the initial failed batch and successful retry.
-These are harness validation results, not native Windows results.
-They rotate modes within one test process; they are a separate cohort from the
-fresh-process Linux measurements above. Whole-process RSS fields accumulate
-across inputs in that process and cannot be used as independent per-input peaks.
+Initial GNU linking with bundled Rust startup objects and a different MinGW
+CRT crashed before `main` (recursive `atexit`/`_onexit`). Using the matching
+extracted MinGW GCC driver with `link-self-contained=no` fixed that cross-tool
+setup failure. Versions, URLs, checksums and failed/successful logs are archived.
 
 ## Reproduction and saved evidence
 
@@ -307,13 +334,18 @@ credible way to preserve simple recursive expression/statement control flow,
 with a large memory cost for pathological debug nesting. The bounded hybrid is
 still the option that limits native stack consumption.
 
-Before changing the default, run native Windows release and debug parser cases,
-commit-growth and overflow probes, and decide the reservation/failure policy.
+Before changing the default, decide a reservation/resource policy and how to
+preserve parser-limit diagnostics near exhaustion. A finite reserved stack can
+still terminate the process; it does not preserve the frame machine's arbitrary
+nesting guarantee. The bounded hybrid preserves an iterative fallback.
+
 Also decide whether worker ownership of the full preparation/parse arena lifetime
-fits the production API, since existing arena/context values cannot simply be
-sent across threads. Reusing frame recovery and declaration/extension handoffs
-means the prototype still needs those frames; it does not yet justify deleting
-the production expression/statement machinery.
+fits the production API: the callback and result require `Send`, and existing
+arena/context values cannot simply cross threads. Preparation inside the worker
+is what this prototype measures. Reusing frame recovery and declaration/extension
+handoffs means it still needs those frames; this study does not justify deleting
+the production expression/statement machinery. Measure end-to-end worker cost
+on representative Windows files before choosing a per-file worker design.
 
 Use the measured source SHA `32fb7b0a0aa52c7d896568f79266425d1ce5dba2` in these
 native runner commands. Submit sequentially on the single Windows host; do not
