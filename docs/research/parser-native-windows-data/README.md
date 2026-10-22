@@ -21,7 +21,8 @@ and use a fixed timestamp. Read with `gzip -dc PATH`.
 | recovery-release | [39758809123](https://github.com/BenBwall/bcc-rust/actions/runs/39758809123) | success |
 | stack-release | [39760102752](https://github.com/BenBwall/bcc-rust/actions/runs/39760102752) | success |
 | parser-release | [39760488673](https://github.com/BenBwall/bcc-rust/actions/runs/39760488673) | success |
-| worker-debug | [39760964833](https://github.com/BenBwall/bcc-rust/actions/runs/39760964833) | in progress |
+| worker-debug | [39760964833](https://github.com/BenBwall/bcc-rust/actions/runs/39760964833) | success |
+| worker-release | [39761185241](https://github.com/BenBwall/bcc-rust/actions/runs/39761185241) | success |
 
 ## Inputs
 
