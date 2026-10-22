@@ -223,7 +223,11 @@ statement-mix medians are 265.460 / 181.757 ms. Debug grammar stack slopes are
 2,880 B per parenthesis and 13,872 B per block; 16,384 blocks commit about
 216.80 MiB. The Windows process-RSS fields are unavailable (zero), as are
 physical stack RSS and hardware counters. Lua was not staged in the Actions
-checkout. Release data remains pending.
+checkout. Release recovery job
+[39758809123](https://github.com/BenBwall/bcc-rust/actions/runs/39758809123)
+has also passed all seven tests; release stack and timing jobs remain in
+progress. The full release unit-test binary took about ten minutes to build;
+only the seven selected tests ran, in 0.85 seconds.
 
 Two ignored example tests prepare a focused native run without changing the
 operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
