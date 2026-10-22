@@ -26,6 +26,10 @@ def jobs():
         yield f"parser-{profile}", release + [
             "--features", FEATURE, "--example", "parser_study", "runner_parser_measurements",
             "--", "--ignored", "--nocapture", "--test-threads=1"]
+    for profile in ("debug", "release"):
+        release = ["--release"] if profile == "release" else []
+        yield f"worker-{profile}", release + [
+            "--example", "parser_stack_probe", "reserved_stack::tests::", "--", "--test-threads=1"]
 
 
 def main():
