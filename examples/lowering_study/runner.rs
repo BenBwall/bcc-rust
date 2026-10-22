@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_macros,
+    reason = "Generated study inputs use formatting outside measurements."
+)]
 //! Native runner tests use the same library seam and demand-paged worker.
 
 use super::*;
@@ -15,8 +19,8 @@ fn recursive_lowering_matches_tasks() {
     ] {
         let (task, recursive) = with_compilation_stack(1024_usize.pow(3), || {
             (
-                measure_lowering_source(source, false, false, true, || {}, || {}),
-                measure_lowering_source(source, true, false, true, || {}, || {}),
+                measure(source, false, false, true),
+                measure(source, true, false, true),
             )
         })
         .expect("compilation worker");
@@ -64,9 +68,7 @@ fn runner_lowering_measurements() {
     }
     for (name, source) in cases {
         let results = with_compilation_stack(1024_usize.pow(3), || {
-            [false, true].map(|recursive| {
-                measure_lowering_source(&source, recursive, false, true, || {}, || {})
-            })
+            [false, true].map(|recursive| measure(&source, recursive, false, true))
         })
         .expect("worker");
         assert_eq!(
@@ -85,7 +87,7 @@ fn runner_lowering_measurements() {
                 let recursive = (repeat + offset) % 2 != 0;
                 let wall = Instant::now();
                 let m = with_compilation_stack(1024_usize.pow(3), || {
-                    measure_lowering_source(&source, recursive, false, false, || {}, || {})
+                    measure(&source, recursive, false, false)
                 })
                 .expect("worker");
                 assert_eq!(m.errors, 0);
@@ -115,10 +117,9 @@ fn runner_lowering_measurements() {
                 ),
             ),
         ] {
-            let m = with_compilation_stack(1024_usize.pow(3), || {
-                measure_lowering_source(&source, true, true, false, || {}, || {})
-            })
-            .expect("deep compilation worker");
+            let m =
+                with_compilation_stack(1024_usize.pow(3), || measure(&source, true, true, false))
+                    .expect("deep compilation worker");
             assert_eq!(m.errors, 0);
             println!(
                 "lowering_stack input={name} levels={depth} ns={} stack_span={} depth={} \
