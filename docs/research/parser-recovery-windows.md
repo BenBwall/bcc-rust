@@ -214,6 +214,16 @@ undersized children (1 MiB and 64 MiB) exit with `0xC00000FD` and the parent
 passes. Unlike Wine, native Windows demonstrates the intended demand-commit
 behavior and successfully reserves 100 GiB. Physical residency is not measured.
 
+Native debug parser job
+[39758407362](https://github.com/BenBwall/bcc-rust/actions/runs/39758407362)
+also passes: 684 timing samples, 17 corpus parity checks and four deep parser
+probes. Expression-mix medians are 211.100 ms machine / 164.523 ms reserved RD;
+statement-mix medians are 265.460 / 181.757 ms. Debug grammar stack slopes are
+2,880 B per parenthesis and 13,872 B per block; 16,384 blocks commit about
+216.80 MiB. The Windows process-RSS fields are unavailable (zero), as are
+physical stack RSS and hardware counters. Lua was not staged in the Actions
+checkout. Release data remains pending.
+
 Two ignored example tests prepare a focused native run without changing the
 operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
 through 65,536 live page frames, asserts small initial commitment plus growth
