@@ -1,8 +1,8 @@
 # Recursive lowering on a compilation worker
 
 2026-10-22. Follow-up to [the parser study](parser-recovery-windows.md).
-Implementation and measurement are in progress; no lowering speed claim is
-established yet. The feature-disabled compiler retains its existing pipeline.
+The opt-in implementation is complete. Linux measurements and native Windows
+debug tests are complete; remaining native measurements/checks are running. The feature-disabled compiler retains its existing pipeline.
 
 ## Implementation boundary
 
@@ -89,3 +89,70 @@ compilation-stack feature now explicitly enables that dependency feature for
 normal Windows builds, rather than relying on the test-only dependency to
 provide it. Native source cohort `932f32a8` already receives it from its test
 configuration; this later declaration does not change its compiled test code.
+
+## Linux measurements
+
+Rust source cohort `932f32a8`, Rust 1.99.0 / LLVM 23.1.1 on the same shared
+Ryzen 9 5900X Linux host as the parser study. The feature-matched task and
+recursive modes use identical IR builders, frontend and reservation policy.
+These are nine rotating samples in one test process, with a fresh 1 GiB worker
+and fresh arenas per sample. There is no CPU isolation; shared builds ran during
+collection. CV is population standard deviation divided by mean.
+
+| Profile/input | Task median ms | Recursive median ms | Task range ms / CV % | Recursive range ms / CV % |
+| --- | ---: | ---: | --- | --- |
+| release / expressions | 69.216 | 64.481 | 63.769–77.326 / 6.47 | 60.184–68.680 / 4.17 |
+| release / statements | 101.422 | 96.807 | 91.856–109.022 / 6.29 | 91.341–104.946 / 4.34 |
+| debug / expressions | 626.830 | 700.345 | 491.809–707.785 / 13.14 | 507.813–747.149 / 13.66 |
+| debug / statements | 1007.462 | 939.039 | 824.045–1334.743 / 15.63 | 841.685–1141.212 / 11.14 |
+
+Release lowering uses 6.8% less time for expressions and 4.6% less for statements.
+Debug expressions use 11.7% more time; debug statements use 6.8% less. Whole-worker
+median reductions are 3.9% / 2.9% release; debug expressions take 3.8% more and
+statements 6.3% less. Those deltas sit amid substantial variation. These results
+do not establish a general speed advantage, especially in debug.
+
+Each profile completes all 342 timing samples, 19 parity inputs and four deep
+probes. Every input is clean and supported; none was excluded. Printed IR,
+function sources, call diagnostics and refusal output match. Every measured
+lowering interval has zero global allocation calls/bytes.
+
+| Input | Task scratch B, release / debug | Recursive scratch B, release / debug | IR arena B (both) |
+| --- | ---: | ---: | ---: |
+| Expressions | 14,639 / 15,872 | 13,359 / 14,592 | 18,264,688 |
+| Statements | 27,904 / 29,896 | 26,688 / 28,680 | 28,376,672 |
+
+The scratch high-water mark includes spare capacity/alignment and survives
+per-function resets. The many-function mixes save only 1,216–1,280 scratch bytes;
+retained IR size is identical.
+
+| Native stack shape | Release B/level | Debug B/level | Release span at 4,096 | Debug span at 4,096 |
+| --- | ---: | ---: | ---: | ---: |
+| Nonconstant `a+a+...` | 672 | 8,016 | 2,753,513 B | 32,836,112 B |
+| Nested compounds | 464 | 1,024 | 1,901,472 B | 4,196,880 B |
+
+Slopes use entry-address differences between 256 and 4,096 source levels, with
+separate instrumented runs. They are not exact native peak measurements. Debug
+expression traversal is stack-heavy even though nested compounds are small.
+
+### Wide function
+
+A separate fresh-process cohort rotates nine samples per mode/profile for one
+function containing 50,000 `a+=1;` statements. Both modes use the same 100 GiB
+worker; `/usr/bin/time` measures process peak RSS. Input and binary SHA-256 hashes
+are archived. The runner creates the source in scratch, so no huge fixture is
+committed. Compilation preparation/destruction is outside lowering time.
+
+| Profile/mode | Lowering median ms | Range ms | CV % | Scratch B | Peak RSS median KiB |
+| --- | ---: | --- | ---: | ---: | ---: |
+| release / machine | 84.104 | 75.095–92.336 | 6.93 | 25,018,238 | 219,548 |
+| release / recursive | 77.500 | 70.590–101.692 | 11.57 | 20,824,190 | 219,396 |
+| debug / machine | 285.561 | 250.721–350.327 | 11.26 | 27,318,377 | 226,688 |
+| debug / recursive | 300.789 | 267.107–478.510 | 22.21 | 23,124,329 | 226,580 |
+
+Recursion removes 4,194,048 requested scratch bytes by iterating compound siblings
+instead of retaining them as pending tasks. IR requests remain 11,536,992 B.
+Peak process RSS is essentially unchanged: it includes the larger frontend
+working set. Release lowering is 7.9% lower; debug is 5.3% higher with 22.2% CV
+for recursion. This is a scratch-storage improvement, not a measured process
+memory win.
