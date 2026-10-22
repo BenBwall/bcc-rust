@@ -26,8 +26,8 @@ host overcommit policy; physical-memory exhaustion and crossing the bottom
 stack guard are fatal, not parser resource diagnostics. This experiment does
 not install a signal handler or attempt recovery from actual stack overflow.
 
-`/proc/self/smaps` snapshots identify the stack mapping's resident, writable and
-swapped bytes and its `nr` flag, before/after phase 7. Per-thread minor/major
+Opt-in `--stack-memory` `/proc/self/smaps` snapshots identify the stack mapping's resident, writable and
+swapped bytes and its `nr` flag, before/after phase 7. Timing runs leave this option disabled. Per-thread minor/major
 fault counts bracket the same interval. All OS snapshots, setup and join are
 outside the parser timer/global allocation counter. Reported RSS remains
 whole-process high water, including preparation. Windows commit/protection

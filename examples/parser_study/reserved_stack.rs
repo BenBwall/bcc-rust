@@ -1,10 +1,10 @@
 //! Study-only native worker stacks with a fixed, lazily backed reservation.
 //!
-//! Linux supplies a guarded MAP_NORESERVE mapping to pthreads. Windows asks
-//! CreateThread to reserve the requested size and lets its guard commit pages.
-//! The parser itself has no stack-growth checks. Neither implementation moves
-//! active frames or catches overflow; exhausting the reservation remains fatal.
-//! The callback and its arenas live on the worker, and completion is
+//! Linux supplies a guarded `MAP_NORESERVE` mapping to pthreads. Windows asks
+//! `CreateThread` to reserve the requested size and lets its guard commit
+//! pages. The parser itself has no stack-growth checks. Neither implementation
+//! moves active frames or catches overflow; exhausting the reservation remains
+//! fatal. The callback and its arenas live on the worker, and completion is
 //! synchronous.
 
 #[cfg(target_os = "linux")]
@@ -52,7 +52,7 @@ where
 }
 
 /// Usable address interval, excluding explicit Linux guards. Windows fills
-/// the interval from VirtualQuery on the worker's actual stack reservation.
+/// the interval from `VirtualQuery` on the worker's actual stack reservation.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Bounds {
     pub(super) base:        usize,

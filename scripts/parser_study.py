@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--files", nargs="+")
     parser.add_argument("--manifest", type=Path, help="use the grammar manifest's exact case list")
     parser.add_argument("--stack", type=int)
+    parser.add_argument("--stack-memory", action="store_true", help="untimed stack mapping snapshots")
     parser.add_argument("--reserve-stack", type=int, default=100 * 1024**3, help="reservation for reserved:MODE labels")
     args = parser.parse_args()
     args.binary = args.binary.resolve()
@@ -64,7 +65,7 @@ def main():
         files = [args.inputs / f"{kind}-{depth}.c" for depth in [32, 127, 256, 1024, 4096, 16384] for kind in ["parentheses", "unary", "assignment", "conditional", "statements", "blocks", "declarator", "initializer"]]
 
     rows = []
-    metadata = {"binaries": {label: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for label, path in binaries.items()}, "action": args.action, "repeats": args.repeats, "modes": args.modes, "stack_bytes": args.stack, "reserved_stack_bytes": args.reserve_stack}
+    metadata = {"binaries": {label: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for label, path in binaries.items()}, "action": args.action, "repeats": args.repeats, "modes": args.modes, "stack_bytes": args.stack, "reserved_stack_bytes": args.reserve_stack, "stack_memory": args.stack_memory}
 
     def save():
         args.output.write_text(json.dumps({"metadata": metadata, "rows": rows}, indent=2) + "\n")
@@ -80,6 +81,8 @@ def main():
             command += ["--stack", str(args.stack)]
         if args.action == "stack":
             command += ["--sample-stack"]
+        if args.stack_memory:
+            command += ["--stack-memory"]
         destination = scratch / (source.name + "." + mode.replace(":", "-") + ".ast")
         if args.action == "diff":
             command += ["--inspect", str(destination)]
