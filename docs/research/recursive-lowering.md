@@ -86,6 +86,14 @@ those counters. The failure was in test setup, not an IR mismatch. The corrected
 suite passes 206 tests (one existing ignored test); strict combined-feature
 Clippy and the five-case focused example test also pass. Initial compile/Clippy failures are archived alongside the successful checks.
 
+The complete Linux check script passes: default all-target tests, all 31
+allocation tests, strict default/benchmark/study Clippy, the feature-enabled
+full library suite, the parser differential example and shared worker tests.
+Rustfmt, Python byte-compilation, shell syntax, archive decoding, research
+Markdown links and `git diff --check` also pass. Full test counts and commands
+are retained in `recursive-lowering-data/linux-checks.log.gz` and the build
+script, rather than inferred from filtered harness counts.
+
 The shared worker's `CreateThread` binding requires `Win32_Security`. The
 compilation-stack feature now explicitly enables that dependency feature for
 normal Windows builds, rather than relying on the test-only dependency to
