@@ -22,6 +22,65 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / ".scratch/parser-study/windows"
 
 
+
+def setup():
+    """Unpack pinned cross tools and Wine locally; never install system-wide."""
+    downloads = BASE / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    pins = {
+        "wine64": "10.0~repack-12ubuntu1", "libwine": "10.0~repack-12ubuntu1",
+        "wine-common": "10.0~repack-12ubuntu1", "libz-mingw-w64": None,
+        "mingw-w64-x86-64-dev": "13.0.0-2ubuntu1", "mingw-w64-common": "13.0.0-2ubuntu1",
+        "gcc-mingw-w64-x86-64-posix": "13.2.0-6ubuntu1+26.1",
+        "gcc-mingw-w64-x86-64-posix-runtime": "13.2.0-6ubuntu1+26.1",
+        "binutils-mingw-w64-x86-64": "2.45.90.20260125-1ubuntu1+13.3",
+        "libunwind8": "1.8.3-0ubuntu1",
+    }
+    manifest = []
+
+    def download(url, destination, digest=None):
+        if not destination.exists() or digest and hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+            subprocess.run(["curl", "--fail", "--location", "--retry", "2", "--max-time", "180",
+                            "--output", str(destination), url], check=True)
+        actual = hashlib.sha256(destination.read_bytes()).hexdigest()
+        if digest and actual != digest:
+            raise ValueError("download checksum mismatch: " + str(destination))
+        return actual
+
+    for package, version in pins.items():
+        selector = package + ("=" + version if version else "")
+        metadata = subprocess.check_output(["apt-cache", "show", selector], text=True).split("\n\n")[0]
+        fields = dict(line.split(": ", 1) for line in metadata.splitlines() if ": " in line and not line.startswith(" "))
+        url = "https://archive.ubuntu.com/ubuntu/" + fields["Filename"]
+        destination = downloads / Path(fields["Filename"]).name
+        digest = download(url, destination, fields["SHA256"])
+        subprocess.run(["dpkg-deb", "-x", str(destination), str(BASE / "root")], check=True)
+        manifest.append({"package": package, "version": fields["Version"], "url": url, "sha256": digest})
+    for target in ("x86_64-pc-windows-gnu", "x86_64-pc-windows-msvc"):
+        name = f"rust-std-1.99.0-{target}"
+        url = f"https://static.rust-lang.org/dist/{name}.tar.xz"
+        checksum = downloads / (name + ".sha256")
+        download(url + ".sha256", checksum)
+        archive = downloads / (name + ".tar.xz")
+        digest = download(url, archive, checksum.read_text().split()[0])
+        subprocess.run(["tar", "-xf", str(archive), "-C", str(BASE)], check=True)
+        shutil.copytree(BASE / name / ("rust-std-" + target) / "lib", BASE / "sysroot/lib", dirs_exist_ok=True)
+        manifest.append({"target": target, "url": url, "sha256": digest})
+    # Debian's data prefix includes wine, and Wine appends another wine/nls.
+    nested = BASE / "root/usr/share/wine/wine"
+    nested.mkdir(parents=True, exist_ok=True)
+    if not (nested / "nls").exists():
+        (nested / "nls").symlink_to("../nls")
+    # Local extraction skips package installation's integration of native DLLs.
+    system = BASE / "wine-prefix-2/drive_c/windows/system32"
+    system.mkdir(parents=True, exist_ok=True)
+    for source in (BASE / "root/usr/lib/x86_64-linux-gnu/wine/x86_64-windows").iterdir():
+        if source.suffix in (".dll", ".exe") and not (system / source.name).exists():
+            (system / source.name).symlink_to(source)
+    shutil.copy2(BASE / "root/usr/x86_64-w64-mingw32/lib/zlib1.dll", system / "zlib1.dll")
+    (BASE / "setup-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
 def prepare():
     BASE.mkdir(parents=True, exist_ok=True)
     original = tomllib.loads((ROOT / "Cargo.toml").read_text())
@@ -62,8 +121,8 @@ def build(args):
     env = os.environ.copy()
     flags = ["--sysroot=" + str(args.sysroot.resolve())]
     if args.target.endswith("-gnu"):
-        flags += ["-C", "linker=" + str(ROOT / "target/llvm/bin/ld.lld"),
-                  "-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes",
+        flags += ["-C", "linker=" + str(BASE / "root/usr/bin/x86_64-w64-mingw32-gcc-posix"),
+                  "-C", "link-self-contained=no",
                   "-C", "target-feature=+crt-static", "-L", "native=" + str(args.mingw.resolve())]
     for directory in sorted((BASE / "root/usr/lib/gcc/x86_64-w64-mingw32").glob("*")):
         flags += ["-L", "native=" + str(directory)]
@@ -99,9 +158,12 @@ def collect(args):
         runner += [str(args.wine.resolve())]
     env = os.environ.copy()
     if args.wine:
-        env.update(WINEPREFIX=str(BASE / "wine-prefix"), WINEDEBUG="-all", WINEDLLOVERRIDES="mscoree,mshtml=")
+        env.update(WINEPREFIX=str(BASE / "wine-prefix-2"), WINEDEBUG="-all",
+                   WINEDLLPATH=str(args.wine.resolve().parent), WINEDLLOVERRIDES="mscoree,mshtml=")
         env["WINESERVER"] = str(args.wine.resolve().parent / "wineserver")
-        env["LD_LIBRARY_PATH"] = str(args.wine.resolve().parents[1]) + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = os.pathsep.join([str(args.wine.resolve().parents[1]),
+                                                          str(args.wine.resolve().parent / "x86_64-unix"),
+                                                          env.get("LD_LIBRARY_PATH", "")])
     rows = []
     # Avoid claiming failure-reservation probes as normal successful samples.
     probes = [(1024**3 * 100, d) for d in (0, 256, 4096, 16384, 65536)]
@@ -134,6 +196,7 @@ def collect(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
+    sub.add_parser("setup")
     sub.add_parser("prepare")
     builder = sub.add_parser("build")
     builder.add_argument("--sysroot", type=Path, default=BASE / "sysroot")
@@ -144,7 +207,9 @@ def main():
     collector.add_argument("--repeats", type=int, default=3)
     collector.add_argument("--output", type=Path, default=BASE / "results.json")
     args = parser.parse_args()
-    if args.action == "prepare":
+    if args.action == "setup":
+        setup()
+    elif args.action == "prepare":
         prepare()
     elif args.action == "build":
         build(args)
