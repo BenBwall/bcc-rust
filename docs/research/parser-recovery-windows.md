@@ -8,7 +8,7 @@ tracked alongside this report.
 
 **All ten recorded recovery differences are fixed.** Both release and debug
 match the frame machine on the 150-case grammar corpus and 50 broader inputs
-across every tested mode. Reserved-stack Lua parsing takes 23.189 ms release
+across every tested mode. Linux reserved-stack Lua parsing takes 23.189 ms release
 and 120.428 ms debug: 36.6% and 25.2% below the feature-disabled production
 baseline in this cohort. The production parser remains the frame machine.
 
@@ -262,6 +262,24 @@ the block slope to C99's 127 nested blocks already gives about 1.7 MiB, above
 a 1 MiB main-stack budget; this is not a measured overflow threshold. Raw timing
 runs execute on Rust's test worker and do not establish main-thread stack safety.
 The 65,536-depth native result above is a page probe, not a parser result.
+
+### Native run outcomes
+
+All eight jobs pass against the same source SHA/tree. The worker unit tests
+check borrowed callback data and returned values, panic propagation after join,
+and invalid reservation rejection: 3/3 pass in each profile. The expected panic
+message in their logs belongs to the passing panic-propagation test.
+
+| Job | Run | Result |
+| --- | --- | --- |
+| recovery-debug | [39757463234](https://github.com/BenBwall/bcc-rust/actions/runs/39757463234) | success |
+| stack-debug | [39758189652](https://github.com/BenBwall/bcc-rust/actions/runs/39758189652) | success |
+| parser-debug | [39758407362](https://github.com/BenBwall/bcc-rust/actions/runs/39758407362) | success |
+| recovery-release | [39758809123](https://github.com/BenBwall/bcc-rust/actions/runs/39758809123) | success |
+| stack-release | [39760102752](https://github.com/BenBwall/bcc-rust/actions/runs/39760102752) | success |
+| parser-release | [39760488673](https://github.com/BenBwall/bcc-rust/actions/runs/39760488673) | success |
+| worker-debug | [39760964833](https://github.com/BenBwall/bcc-rust/actions/runs/39760964833) | success |
+| worker-release | [39761185241](https://github.com/BenBwall/bcc-rust/actions/runs/39761185241) | success |
 
 ### Native measurement limits
 
