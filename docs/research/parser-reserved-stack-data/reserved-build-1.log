@@ -1,0 +1,70 @@
+Using build slot cargo.lock
+Refreshing bcc-rust package artifacts for this checkout
+     Removed 12 files, 40.1MiB total
+     Removed 12 files, 136.8MiB total
+Running: sh scripts/parser_study_build.sh reserved
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+error: item in documentation is missing backticks
+ --> examples/parser_study/reserved_stack.rs:3:30
+  |
+3 | //! Linux supplies a guarded MAP_NORESERVE mapping to pthreads. Windows asks
+  |                              ^^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_markdown
+  = note: `-D clippy::doc-markdown` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+help: try
+  |
+3 - //! Linux supplies a guarded MAP_NORESERVE mapping to pthreads. Windows asks
+3 + //! Linux supplies a guarded `MAP_NORESERVE` mapping to pthreads. Windows asks
+  |
+
+error: item in documentation is missing backticks
+ --> examples/parser_study/reserved_stack.rs:4:5
+  |
+4 | //! CreateThread to reserve the requested size and lets its guard commit pages.
+  |     ^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_markdown
+help: try
+  |
+4 - //! CreateThread to reserve the requested size and lets its guard commit pages.
+4 + //! `CreateThread` to reserve the requested size and lets its guard commit pages.
+  |
+
+error: checked cast can be simplified
+  --> examples/parser_study/reserved_stack/linux.rs:25:54
+   |
+25 |         .filter(|&n| n >= libc::PTHREAD_STACK_MIN && n <= isize::MAX as usize)
+   |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `isize::try_from(n).is_ok()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#checked_conversions
+   = note: `-D clippy::checked-conversions` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::checked_conversions)]`
+
+error: checked cast can be simplified
+  --> examples/parser_study/reserved_stack/linux.rs:30:22
+   |
+30 |         .filter(|&n| n <= isize::MAX as usize)
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `isize::try_from(n).is_ok()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#checked_conversions
+
+error: item in documentation is missing backticks
+  --> examples/parser_study/reserved_stack.rs:55:23
+   |
+55 | /// the interval from VirtualQuery on the worker's actual stack reservation.
+   |                       ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_markdown
+help: try
+   |
+55 - /// the interval from VirtualQuery on the worker's actual stack reservation.
+55 + /// the interval from `VirtualQuery` on the worker's actual stack reservation.
+   |
+
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+error: could not compile `bcc-rust` (example "parser_study") due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+EXIT 101

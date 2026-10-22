@@ -1,0 +1,51 @@
+Using build slot cargo.lock
+Refreshing bcc-rust package artifacts for this checkout
+     Removed 115 files, 476.5MiB total
+     Removed 0 files
+Running: sh scripts/parser_study_build.sh reserved
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+    Finished `dev` profile [unoptimized] target(s) in 24.99s
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+    Finished `test` profile [unoptimized] target(s) in 29.71s
+     Running unittests examples/parser_study.rs (/home/agent/workspace/bcc-rust/build/swarm-target/x86_64-unknown-linux-gnu/debug/examples/parser_study-60eea8612a5681b0)
+
+running 3 tests
+test reserved_stack::tests::borrows_and_returns_on_a_lazy_stack ... ok
+test reserved_stack::tests::propagates_panics_after_join ...
+thread '<unnamed>' (3475150) panicked at examples/parser_study/reserved_stack.rs:132:34:
+worker failure
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test reserved_stack::tests::rejects_unrepresentable_reservations ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 57s
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+    Finished `dev` profile [unoptimized] target(s) in 21.29s
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 56s
+   Compiling bcc-rust v0.1.0 (/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study)
+warning: bcc-rust@0.1.0: Native C and bindgen use LLVM 23.1.1; static C archive and Rust/C fat LTO enabled
+    Finished `dev` profile [unoptimized] target(s) in 42.88s
+12dfe4f00f1c1806235db3b33a4a736f1041c35295b16d1526ee2bf40eb55451  .scratch/parser-study/alignment-release
+d33826613fe1a2426c36c6698b9c1db636cfcee14ae568debf4c13b0c2a6532a  .scratch/parser-study/baseline-final-release
+a5acf2134dda6f0cc87ea9353db5323893fa0b8a33e2db3bfa9cea0a47bae449  .scratch/parser-study/baseline-release
+dc940c01f384d90c280050f508c496ba5ad473d5483102d895c6410aee265e7e  .scratch/parser-study/reserved-baseline-release
+05295bbbcdf9ea4820d7fa217667aefdb4fe3a0d687c111360c13bee8b29b913  .scratch/parser-study/reserved-release
+3ed7071f4a7c10743f31314d83ff029eabe838851cb259bdb18e640b3782fb9e  .scratch/parser-study/study-release
+f8aca015dcaad7deec49e2b9f8c35d66fe5900bc9ac8cfbefb84ee3a6a04c953  .scratch/parser-study/baseline-final-debug
+e565d611acfbbb25f12165dd651616fd93983574f91879d9a9f6b83d45aecd6a  .scratch/parser-study/reserved-baseline-debug
+55e0ba0b53cc281fb2caa6aa11e6a1030ab54520ac7433a677c03647617fc4bb  .scratch/parser-study/reserved-debug
+81bff86a6184651f80438b141e94f84e3a27e55f635f91eed5e0b131ecd800c4  .scratch/parser-study/study-debug
+1b3ef12258df21f3e0bba1ac889e9b4d00c10cd8bf1ab56e9089ad3719fddc60  .scratch/parser-study/study-profile-debug
+b572af4e825ceb34f72ef0ffac48e9f8b1d91595cc20e1b5325640b4819d4963  .scratch/parser-study/alignment-profile
+2bae7a34e1ebef03c6faa95d536c4d6e15b30f3bc2e7d82fd97b3042a0b12209  .scratch/parser-study/baseline-profile
+094ce698a13c9c60c456a90f897c16551ad67122e634cdf77325e4fb021af9c9  .scratch/parser-study/study-profile
+EXIT 0

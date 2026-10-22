@@ -111,9 +111,11 @@ def archive(args):
             for source in sorted({row["input"] for row in data["rows"]}):
                 by_mode = {row["mode"]: row for row in data["rows"] if row["input"] == source}
                 for mode in ["machine", "recursive"]:
-                    left, right = by_mode[mode], by_mode["reserved:" + mode]
+                    left, right = by_mode.get(mode), by_mode.get("reserved:" + mode)
                     checks.append({"run": path.stem, "input": source, "mode": mode,
-                                   "identical": left["returncode"] == right["returncode"] == 0
+                                   "identical": left is not None and right is not None
+                                   and left["returncode"] == right["returncode"] == 0
+                                   and left.get("inspection_sha256") is not None
                                    and left.get("inspection_sha256") == right.get("inspection_sha256")})
         for (source, mode), rows in groups.items():
             good = [row for row in rows if row["returncode"] == 0 and row.get("metrics")]
@@ -136,7 +138,7 @@ def archive(args):
             tables.append(summary)
     keys = list(dict.fromkeys(key for row in tables for key in row))
     with (output / "summary.tsv").open("w") as stream:
-        writer = csv.DictWriter(stream, fieldnames=keys, delimiter="\t", lineterminator="\n")
+        writer = csv.DictWriter(stream, fieldnames=keys, restval="NA", delimiter="\t", lineterminator="\n")
         writer.writeheader()
         writer.writerows(tables)
     (output / "transport-identity.json").write_text(json.dumps(checks, indent=2) + "\n")
@@ -146,9 +148,11 @@ def archive(args):
         # collection stdout already represented in raw observation JSON.
         if "build" in path.name or "checks" in path.name or "verification" in path.name:
             text = path.read_text()
-            (output / path.name).write_text("\n".join(line.rstrip() for line in text.splitlines()).rstrip() + "\n")
+            archived = "\n".join(line.rstrip() for line in text.splitlines()).rstrip() + "\n"
+            (output / path.name).write_text(archived)
             validation[path.name] = {
                 "raw_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "archived_sha256": hashlib.sha256(archived.encode()).hexdigest(),
                 "complete": text.rstrip().endswith("EXIT 0"),
                 "test_results": [line for line in text.splitlines() if line.startswith("test result:")],
             }
