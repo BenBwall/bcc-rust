@@ -48,3 +48,37 @@ reported, including preprocessing, analysis, setup/join and destruction.
 - Check rustfmt, strict Clippy, default checks and native Windows execution.
 
 Exact commands and measured results will be added after validation.
+
+## Reproduction
+
+Run from `/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study`.
+Every local Cargo invocation below is inside the shared two-slot wrapper. The
+build script copies each executable before releasing its slot. Detach long
+wrapper invocations and retain their complete logs.
+
+```sh
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts/lowering_study_build.sh build
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts/lowering_study_build.sh checks
+cargo +nightly fmt --check
+python3 scripts/lowering_study_results.py .scratch/lowering-study/build.log --output .scratch/lowering-study/linux-summary.json
+
+# Native GNU Windows source cohort, sequential self-hosted Actions jobs.
+python3 scripts/parser_study_native.py --study lowering --sha 932f32a89c75682029e7f90b208b74960fc71e94 --output .scratch/lowering-study/windows
+
+# Explicit file/mode runs, each using a fresh compilation worker.
+.scratch/lowering-study/study-release benches/c/bits.c recursive 9 --inspect
+```
+
+The last command selects one real benchmark file; the measured
+input list comes from that exact source tree, sorted by path. The opt-in runner
+retains diagnosed/unsupported cases as differential evidence and excludes them
+from timing comparisons. All timed lowering intervals assert zero global
+allocation calls/bytes using thread-local allocator hooks.
+
+The first lowering suite recorded 205 passes and one failure in an existing
+range-initializer test: its thread-local copy-policy override did not follow the
+compilation onto the new worker. The helper now explicitly carries the override
+and replay/effect counters, and excludes the extra differential passes from
+those counters. The failure was in test setup, not an IR mismatch; the complete
+suite is being rerun. Initial compile/Clippy failures are retained in scratch
+logs alongside the successful checks.
