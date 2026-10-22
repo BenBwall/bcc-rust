@@ -9,6 +9,7 @@ pub(crate) struct Snapshot {
     pub(crate) swap_bytes:     usize,
     pub(crate) writable_bytes: usize,
     pub(crate) noreserve:      bool,
+    pub(crate) huge_bytes:     usize,
 }
 
 impl Bounds {
@@ -50,6 +51,13 @@ impl Bounds {
                                 .expect("swap integer")
                                 * 1024,
                         | "VmFlags:" => snapshot.noreserve |= fields.any(|flag| flag == "nr"),
+                        | "AnonHugePages:" =>
+                            snapshot.huge_bytes += fields
+                                .next()
+                                .expect("huge page value")
+                                .parse::<usize>()
+                                .expect("huge page integer")
+                                * 1024,
                         | _ => {},
                     }
                 }

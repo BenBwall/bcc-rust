@@ -53,10 +53,9 @@ where
         return Err(io::Error::last_os_error());
     }
     // SAFETY: advice covers our writable stack mapping and changes backing
-    // granularity only. Small pages avoid THP obscuring shallow residency.
-    if unsafe { libc::madvise(usable.cast(), bytes, libc::MADV_NOHUGEPAGE) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    // granularity only. Some kernels reject THP advice with EINVAL; it is an
+    // optimization, not a requirement. smaps reports actual huge-page backing.
+    let _ = unsafe { libc::madvise(usable.cast(), bytes, libc::MADV_NOHUGEPAGE) };
     let mut raw_attr = MaybeUninit::<libc::pthread_attr_t>::uninit();
     // SAFETY: raw_attr provides writable, aligned storage for one attribute.
     check(unsafe { libc::pthread_attr_init(raw_attr.as_mut_ptr()) })?;

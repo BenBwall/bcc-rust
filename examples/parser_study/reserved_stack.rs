@@ -130,8 +130,9 @@ mod tests {
     fn propagates_panics_after_join() {
         let result = panic::catch_unwind(|| {
             run(1024 * 1024, |_| panic!("worker failure")).expect("start worker")
-        });
-        assert!(result.is_err(), "worker panic must reach caller");
+        })
+        .expect_err("worker panic must reach caller");
+        assert_eq!(result.downcast_ref::<&str>(), Some(&"worker failure"));
     }
 
     #[test]
