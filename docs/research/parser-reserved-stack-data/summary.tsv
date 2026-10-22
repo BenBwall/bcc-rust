@@ -1,0 +1,5 @@
+run	input	mode	n	failed	minimum_ms	median_ms	cv_percent	rss_after	parse_bytes	tu_bytes	commit_bytes	global_calls	global_bytes	depth	stack_span	fallbacks	minor_faults	major_faults	stack_reserved	stack_rss_before	stack_rss_after	stack_swap_after	stack_writable	stack_noreserve	stack_sampled	stack_huge_bytes	launch_median_ns
+reserved-debug-smoke	lua-supported.i	reserved:recursive	1	0	117.5605	117.5605	0.0	40337408	593552	15989008	18915328	0	0	36	0	0	4458	0	107374182400	49152	172032	0	107374182400	1	1	0	182000
+reserved-debug-smoke	blocks-65536.c	reserved:recursive	1	0	330.2535	330.2535	0.0	577708032	27266648	4719256	32403456	0	0	131073	0	0	137354	0	107374182400	49152	535867392	0	107374182400	1	1	0	99000
+reserved-release-smoke	lua-supported.i	reserved:recursive	1	0	39.2862	39.2862	0.0	35139584	593552	15989008	18915328	0	0	36	0	0	4433	0	107374182400	20480	45056	0	107374182400	1	1	0	114300
+reserved-release-smoke	blocks-65536.c	reserved:recursive	1	0	66.8676	66.8676	0.0	102608896	27266648	4719256	32403456	0	0	131073	0	0	22665	0	107374182400	16384	66080768	0	107374182400	1	1	0	109800

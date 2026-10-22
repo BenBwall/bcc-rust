@@ -1,0 +1,30 @@
+{
+  "reserved-build-1.log": {
+    "raw_sha256": "67c4fbfa5d3749cc6a9eb3c84d352985c7a72c394cc3bdce4ad615731e6a4a95",
+    "complete": false,
+    "test_results": []
+  },
+  "reserved-build-2.log": {
+    "raw_sha256": "57e7da142ebda44536938e6802b7b670c6d79571c796abb21d44190a06533add",
+    "complete": false,
+    "test_results": [
+      "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ]
+  },
+  "reserved-build-3.log": {
+    "raw_sha256": "989a3c98a52e642d613c4613f68736d9745c4885d146b25a591cb9e7f1cb930a",
+    "complete": false,
+    "test_results": [
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ]
+  },
+  "reserved-checks.log": {
+    "raw_sha256": "fea7f7be0faaa4486aa3290386937e4311673d677e432ce010517756caa98874",
+    "complete": false,
+    "test_results": [
+      "test result: ok. 2304 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 48.36s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s"
+    ]
+  }
+}
