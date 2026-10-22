@@ -10,7 +10,8 @@ The default compiler/parser path is unchanged.
 fresh native worker, joined synchronously. Linux reserves the requested usable
 range plus two 64 KiB inaccessible guards using `mmap(MAP_NORESERVE | MAP_STACK)`.
 The usable range is made writable without touching its pages and advised against
-transparent huge pages. `pthread_attr_setstack` registers it as the worker stack.
+transparent huge pages where the kernel supports that advice. The host rejects
+that optional advice with `EINVAL`; snapshots record actual huge-page use. `pthread_attr_setstack` registers it as the worker stack.
 The kernel backs ordinary pages on demand; recursion performs no growth checks.
 The mapping stays fixed and is unmapped after successful join. Callback panics
 are caught inside the native entry point and resumed after joining.

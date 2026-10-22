@@ -162,7 +162,7 @@ fn run(
              statements={} compounds={} depth={} stack_span={} fallbacks={} limit_hits={} \
              rss_before={} rss_after={} stack_reserved={} stack_rss_before={} stack_rss_after={} \
              stack_swap_after={} stack_writable={} stack_noreserve={} minor_faults={} \
-             major_faults={} stack_sampled={}",
+             major_faults={} stack_sampled={} stack_huge_bytes={}",
             result.nanoseconds,
             result.tokens,
             result.roots,
@@ -196,7 +196,8 @@ fn run(
                 .get()
                 .major
                 .saturating_sub(faults_before.get().major),
-            usize::from(sample_stack_memory)
+            usize::from(sample_stack_memory),
+            stack_after.get().huge_bytes
         );
         if let Some(text) = &result.inspection {
             fs::write(inspection.expect("inspection destination"), text).expect("write inspection");
