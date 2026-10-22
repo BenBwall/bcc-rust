@@ -27,3 +27,8 @@ Windows GNU strict Clippy passes for the isolated probe. Initial linking
 requires the MinGW `dlltool` utility in addition to import libraries. The
 first expanded regression run found a duplicate diagnostic on a hybrid handoff;
 the prototype now tracks whether the frame already finished recovery.
+
+Debug validation: all 1,050 grammar runs (150 cases × seven modes) match the
+frame machine byte-for-byte, including ASTs, provenance and diagnostics. The
+seven focused study tests pass, including 20 recovery snippets across recursive,
+growing, and hybrid depths 0–16. Release validation is pending.

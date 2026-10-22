@@ -64,6 +64,8 @@ def build(args):
     if args.target.endswith("-gnu"):
         flags += ["-C", "linker=" + str(ROOT / "target/llvm/bin/ld.lld"),
                   "-C", "linker-flavor=ld.lld", "-L", "native=" + str(args.mingw.resolve())]
+    for directory in sorted((BASE / "root/usr/lib/gcc/x86_64-w64-mingw32").glob("*")):
+        flags += ["-L", "native=" + str(directory)]
     env["PATH"] = str(BASE / "root/usr/bin") + os.pathsep + env.get("PATH", "")
     env["RUSTFLAGS"] = " ".join(flags)
     common = ["--manifest-path", str(BASE / "Cargo.toml"), "--target", args.target, "--locked"]
