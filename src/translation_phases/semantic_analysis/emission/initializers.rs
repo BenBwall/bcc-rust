@@ -60,28 +60,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         else {
             return;
         };
-        if !self.constant_aggregate_initializer(Node::Initializer(initializer)) {
+        let root = Node::Initializer(initializer);
+        let constant = self.constant_aggregate_initializer(root, false);
+        if !constant && !self.constant_aggregate_initializer(root, true) {
             return;
         }
         for &owner in arms.iter() {
             _ = self
                 .functions
                 .emission
-                .constant_aggregate_arms
+                .potential_aggregate_arms
                 .insert(std::ptr::from_ref(owner).addr(), ());
-            self.complete_conditional_elision(owner);
+            if constant {
+                _ = self
+                    .functions
+                    .emission
+                    .constant_aggregate_arms
+                    .insert(std::ptr::from_ref(owner).addr(), ());
+                self.complete_conditional_elision(owner);
+            }
         }
     }
 
     /// A bounded capability scan over typed values and retained plans, not
-    /// an integer evaluator. Unknown values conservatively use the ordinary
-    /// aggregate visitor. Memoization also bounds shared const-object plans.
-    fn constant_aggregate_initializer(&mut self, root: Node<'tu>) -> bool {
+    /// an integer evaluator. Potential mode accepts a pure unmodeled choice
+    /// with a constant-capable arm, solely to limit optional storage. Only
+    /// proven mode permits elision. Both modes memoize shared object plans.
+    fn constant_aggregate_initializer(&mut self, root: Node<'tu>, potential: bool) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         let mut children = ArenaVec::new_in(self.scratch);
         work.push((root, false));
         while let Some((node, done)) = work.pop() {
-            let key = node.key();
+            let key = (node.key(), potential);
             if self
                 .functions
                 .emission
@@ -106,7 +116,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 continue;
             }
             children.clear();
-            let leaf = self.aggregate_constant_children(node, &mut children);
+            let (leaf, alternatives) =
+                self.aggregate_constant_children(node, potential, &mut children);
             if let Some(value) = leaf {
                 _ = self
                     .functions
@@ -114,13 +125,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .aggregate_constants
                     .insert(key, Some(value));
             } else if done {
-                let value = children.iter().all(|child| {
+                let eligible = |child: &Node<'tu>| {
                     self.functions
                         .emission
                         .aggregate_constants
-                        .get(&child.key())
+                        .get(&(child.key(), potential))
                         == Some(&Some(true))
-                });
+                };
+                let value = if alternatives {
+                    children.iter().any(eligible)
+                } else {
+                    children.iter().all(eligible)
+                };
                 _ = self
                     .functions
                     .emission
@@ -136,44 +152,53 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 work.extend(children.iter().rev().map(|&child| (child, false)));
             }
         }
-        self.functions.emission.aggregate_constants.get(&root.key()) == Some(&Some(true))
+        self.functions
+            .emission
+            .aggregate_constants
+            .get(&(root.key(), potential))
+            == Some(&Some(true))
     }
 
     fn aggregate_constant_children(
         &mut self,
         node: Node<'tu>,
+        potential: bool,
         children: &mut ArenaVec<'_, Node<'tu>>,
-    ) -> Option<bool> {
+    ) -> (Option<bool>, bool) {
         let Node::Expression(e) = node else {
             let Node::Initializer(initializer) = node else {
                 unreachable!()
             };
             let Some(&plan) = self.initializers.plan(initializer) else {
-                return Some(false);
+                return (Some(false), false);
             };
             if plan
                 .operations
                 .iter()
                 .any(|op| matches!(op, InitOperation::Unmodeled { .. }))
             {
-                return Some(false);
+                return (Some(false), false);
             }
             children.extend(plan.values.iter().map(|v| Node::Expression(v.expression)));
-            return None;
+            return (None, false);
         };
         let info = self.expression_info(e);
         if !self.aggregate(info.ty) {
-            return Some(
-                info.constant == ConstantClass::Address
-                    || (info.constant == ConstantClass::Arithmetic
-                        && (info.integer.is_some()
-                            || info.floating.is_some()
-                            || info.unfolded_binary128))
-                    || (info.static_address
-                        && matches!(
-                            self.types.nodes[info.ty.index],
-                            TypeKind::Array(..) | TypeKind::Function { .. }
-                        )),
+            return (
+                Some(
+                    (potential && self.potential_constant_condition(e))
+                        || info.constant == ConstantClass::Address
+                        || (info.constant == ConstantClass::Arithmetic
+                            && (info.integer.is_some()
+                                || info.floating.is_some()
+                                || info.unfolded_binary128))
+                        || (info.static_address
+                            && matches!(
+                                self.types.nodes[info.ty.index],
+                                TypeKind::Array(..) | TypeKind::Function { .. }
+                            )),
+                ),
+                false,
             );
         }
         match e.kind {
@@ -183,7 +208,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 children.push(Node::Initializer(initializer)),
             | ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c) => {
                 let Some(value) = self.folded_condition(c.condition_expression) else {
-                    return Some(false);
+                    if potential && self.potential_constant_condition(c.condition_expression) {
+                        children.extend([
+                            Node::Expression(c.then_expression),
+                            Node::Expression(c.else_expression),
+                        ]);
+                        return (None, true);
+                    }
+                    return (Some(false), false);
                 };
                 children.push(Node::Expression(if value {
                     c.then_expression
@@ -197,13 +229,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 right_expression,
             } => {
                 if !self.effects_pure(left_expression, super::super::EffectContext::Value) {
-                    return Some(false);
+                    return (Some(false), false);
                 }
                 children.push(Node::Expression(right_expression));
             },
             | ExpressionType::Generic(_) | ExpressionType::Builtin(_) => {
                 let Some(selected) = info.selected_expression else {
-                    return Some(false);
+                    return (Some(false), false);
                 };
                 children.push(Node::Expression(selected));
             },
@@ -211,10 +243,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // A transparent value tail can carry the initializer; other
                 // block execution needs the ordinary aggregate visitor.
                 if !matches!(block.kind, StatementType::Compound { items } if items.len() == 1) {
-                    return Some(false);
+                    return (Some(false), false);
                 }
                 let Some((_, tail)) = self.statement_expression_tail(block) else {
-                    return Some(false);
+                    return (Some(false), false);
                 };
                 children.push(Node::Expression(tail));
             },
@@ -224,13 +256,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .and_then(|b| self.functions.emission.constant_aggregates.get(&b))
                     .copied();
                 let Some(initializer) = initializer else {
-                    return Some(false);
+                    return (Some(false), false);
                 };
                 children.push(Node::Initializer(initializer));
             },
-            | _ => return Some(false),
+            | _ => return (Some(false), false),
         }
-        None
+        (None, false)
     }
 }
 

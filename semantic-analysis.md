@@ -1079,7 +1079,11 @@ Scalar conditionals omit an unselected constant arm. Aggregate and complex
 visitors emit both arms, including member bases, arguments, assignments and
 return values. Clang can bypass the aggregate visitor for a constant automatic
 initializer; that decision waits for the complete typed initializer plan. A
-dynamic sibling member prevents the bypass. A sparse discarded-result context
+dynamic sibling member prevents the bypass. A separate potential-constant
+initializer scan only limits optional retention when a pure condition needs
+an unmodeled fold; it never chooses an arm. Required-only retention propagates
+through helper references. A certain path to the same helper restores its
+optional locals, and required/used entities stay reachable on either path. A sparse discarded-result context
 follows parentheses, comma
 results, selected-expression wrappers, statement-expression value tails and
 void casts; expression statements and for initializers/steps start it. Arm

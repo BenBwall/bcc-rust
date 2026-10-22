@@ -102,7 +102,15 @@ impl SemanticTranslationUnit<'_> {
                 continue;
             }
             let owner = canonical[reference.owner];
-            edges.push((canonical[reference.binding], heads[owner]));
+            edges.push((
+                canonical[reference.binding],
+                heads[owner],
+                if reference.required_locals_only {
+                    LocalRetention::RequiredOnly
+                } else {
+                    LocalRetention::Inherit
+                },
+            ));
             heads[owner] = Some(edges.len() - 1);
         }
         // Scope parents precede their children. Resolve each scope's nearest
@@ -149,7 +157,15 @@ impl SemanticTranslationUnit<'_> {
                     || (context.configuration.optimization().0 && used(definition.binding))
             }) {
                 let owner = canonical[owner];
-                edges.push((canonical[definition.binding], heads[owner]));
+                edges.push((
+                    canonical[definition.binding],
+                    heads[owner],
+                    if used(definition.binding) {
+                        LocalRetention::Required
+                    } else {
+                        LocalRetention::Optional
+                    },
+                ));
                 heads[owner] = Some(edges.len() - 1);
             }
         }
@@ -163,7 +179,7 @@ impl SemanticTranslationUnit<'_> {
                 continue;
             }
             if binding.linkage == Linkage::External {
-                work.push(canonical[definition.binding]);
+                work.push((canonical[definition.binding], true));
             }
         }
         // GNU symbol attributes keep definitions without references, as
@@ -172,31 +188,45 @@ impl SemanticTranslationUnit<'_> {
         // retains its entity. GNU extension: GCC manual, "Common Function
         // Attributes" (alias, constructor, destructor, used).
         for init in self.symbols.init_functions {
-            work.push(canonical[init.binding]);
+            work.push((canonical[init.binding], true));
         }
         for alias in self.symbols.aliases {
-            work.extend([canonical[alias.binding], canonical[alias.target]]);
+            work.extend([
+                (canonical[alias.binding], true),
+                (canonical[alias.target], true),
+            ]);
         }
         for binding in 0..canonical.len() {
             if used(binding) && local_owner(binding).is_none() {
-                work.push(canonical[binding]);
+                work.push((canonical[binding], true));
             }
         }
         let mut reached = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
-        while let Some(owner) = work.pop() {
-            if !reached.insert(owner) {
+        // Each entity has at most two visits. A later certain path restores
+        // all of its optional locals; uncertainty propagates through helper
+        // references without discarding their required or used entities.
+        while let Some((owner, retain_optional)) = work.pop() {
+            if !reached.insert((owner, retain_optional)) {
                 continue;
             }
             let mut edge = heads[owner];
             while let Some(index) = edge {
-                let (binding, next) = edges[index];
-                work.push(binding);
+                let (binding, next, policy) = edges[index];
+                let retain = match policy {
+                    | LocalRetention::Inherit => Some(retain_optional),
+                    | LocalRetention::RequiredOnly => Some(false),
+                    | LocalRetention::Required => Some(true),
+                    | LocalRetention::Optional => retain_optional.then_some(true),
+                };
+                if let Some(retain) = retain {
+                    work.push((binding, retain));
+                }
                 edge = next;
             }
         }
         let mut bindings = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
         for (binding, entity) in canonical.iter().enumerate() {
-            if reached.contains(entity) {
+            if reached.contains(&(*entity, false)) || reached.contains(&(*entity, true)) {
                 _ = bindings.insert(binding);
             }
         }
@@ -208,4 +238,15 @@ impl SemanticTranslationUnit<'_> {
 enum Entity<'a> {
     Linked(&'a str),
     Local(usize),
+}
+
+/// Optional storage follows certain emission paths. Required entities stay
+/// reachable on every path, including an unmodeled pure constant selection.
+/// C99: §6.2.4p3, p. 32; PDF p. 44; optional retention follows Clang.
+#[derive(Clone, Copy)]
+enum LocalRetention {
+    Inherit,
+    RequiredOnly,
+    Required,
+    Optional,
 }

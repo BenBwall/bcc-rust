@@ -107,6 +107,45 @@ mod tests {
                 )
             ));
         }
+        for tag in ["struct", "union"] {
+            let template = format!(
+                "{tag} S{{int a;}};int x,y;int main(void){{{tag} S s=(&x==&y)?({{STATIC ({tag} \
+                 S){{1}};}}):({tag} S){{2}};return s.a-2;}}"
+            );
+            assert_o0_static_emission(&template, false);
+            assert_runs_like_clang(&template.replace(
+                "STATIC",
+                "static int b __attribute__((section(\".bss.bad\")))=1;",
+            ));
+            let dynamic = format!(
+                "{tag} S{{int a;}};int x,y;int main(void){{struct O{{{tag} S s;int \
+                 v;}}o={{(&x==&y)?({{STATIC ({tag} S){{1}};}}):({tag} S){{2}},x}};return \
+                 o.s.a-2;}}"
+            );
+            assert_o0_static_emission(&dynamic, true);
+        }
+        for body in [
+            "if(&x==&y)h();return 0;",
+            "struct S s=(&x==&y)?h():(struct S){2};return s.a-2;",
+        ] {
+            for helpers in [
+                "static struct S h(void){STATIC return (struct S){1};}",
+                "static int leaf(void){STATIC return 1;}static struct S h(void){return (struct \
+                 S){leaf()};}",
+            ] {
+                let template =
+                    format!("struct S{{int a;}};int x,y;{helpers}int main(void){{{body}}}");
+                // The evaluator still emits the helper. Protect baseline
+                // acceptance without asserting Clang's folded symbol set.
+                assert_runs_like_clang(&template.replace(
+                    "STATIC",
+                    "static int a __attribute__((section(\".bss.bad\")))=1;",
+                ));
+            }
+        }
+        let live_helper = "struct S{int a;};int x,y;static struct S h(void){STATIC return (struct \
+                           S){1};}int main(void){if(&x==&y)h();return h().a-1;}";
+        assert_o0_static_emission(live_helper, true);
         // Required storage retains its diagnostic even under an unmodeled
         // fold; the best-effort policy only removes optional roots.
         let output = bcc(

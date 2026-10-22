@@ -155,7 +155,10 @@ pub(super) struct State<'tu, 's> {
     /// Aggregate arms in automatic initializers, resolved after planning.
     pub(super) aggregate_initializer_arms: ArenaMap<'s, usize, ArenaVec<'s, &'tu Expression<'tu>>>,
     pub(super) constant_aggregate_arms: ArenaMap<'s, usize, ()>,
-    pub(super) aggregate_constants: ArenaMap<'s, usize, Option<bool>>,
+    /// Potential eligibility only limits optional retention; it never elides
+    /// code.
+    pub(super) potential_aggregate_arms: ArenaMap<'s, usize, ()>,
+    pub(super) aggregate_constants: ArenaMap<'s, (usize, bool), Option<bool>>,
     /// Pure syntax that may need an unsupported constant fold.
     pub(super) potential_constants: ArenaMap<'s, usize, bool>,
     /// Syntactic array-literal reads, memoized across nested query operands.
@@ -230,6 +233,7 @@ impl<'s> State<'_, 's> {
             discarded_results: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             aggregate_initializer_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregate_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            potential_aggregate_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             aggregate_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             potential_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             array_literal_reads: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

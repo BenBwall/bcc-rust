@@ -853,7 +853,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
             required_locals.push(
                 matches!(context.kind, ReferenceContextKind::RequiredLocalsOnly { scalar_owner }
-                    if scalar_owner.is_none_or(|owner| self.folded_conditional_emission(owner)))
+                    if scalar_owner.is_none_or(|owner| self.folded_conditional_emission(owner)
+                        || self.functions.emission.potential_aggregate_arms.contains_key(&std::ptr::from_ref(owner).addr())))
                     || context.parent.is_some_and(|p| required_locals[p]),
             );
             let (skip_definitions, skip_uses) = match context.kind {
@@ -942,6 +943,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         binding: usage.binding,
                         dead: usage.dead,
                         unlowered: usage.unlowered,
+                        required_locals_only: usage
+                            .reference_context
+                            .is_some_and(|index| required_locals[index]),
                     });
                 }
                 if let Some(import) = usage.dll_import {
@@ -2320,7 +2324,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Wrap the already queued child in a retention-only context when a
     /// pure constant condition needs an unmodeled fold. References, insertion
     /// state and required/used roots remain unchanged. A conditional's result
-    /// type decides later whether its scalar visitor can omit an arm.
+    /// type and whole initializer decide later whether its visitor could
+    /// omit an arm.
     /// C99: §6.6p10, p. 96; PDF p. 108; best-effort retention follows Clang.
     pub(super) fn limit_optional_locals_for_next(
         &mut self,
@@ -2334,6 +2339,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .work
                 .pop()
                 .expect("retention context has a queued child");
+            if let Some(owner) = scalar_owner {
+                self.record_aggregate_initializer_arm(owner);
+            }
             self.enter_reference_context_kind(ReferenceContextKind::RequiredLocalsOnly {
                 scalar_owner,
             });

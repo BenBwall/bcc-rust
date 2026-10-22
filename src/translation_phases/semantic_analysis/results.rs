@@ -107,14 +107,17 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 /// PDF pp. 137-142.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EntityReference {
-    pub(crate) owner:     usize,
-    pub(crate) binding:   usize,
+    pub(crate) owner:                usize,
+    pub(crate) binding:              usize,
     /// Clang does not create an LLVM value here; used for creation order
     /// and DLL import selection. Static initializer data stays live.
-    pub(crate) dead:      bool,
+    pub(crate) dead:                 bool,
     /// Lowering emits no reference here. Only this flag drops a reachability
     /// edge.
-    pub(crate) unlowered: bool,
+    pub(crate) unlowered:            bool,
+    /// This reference may exist only because a pure Clang fold is unmodeled.
+    /// Keep its required closure without making helper-local optional roots.
+    pub(crate) required_locals_only: bool,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than
