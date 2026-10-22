@@ -51,9 +51,11 @@ def main():
     parser.add_argument("--output", type=Path,
                         default=ROOT / ".scratch/parser-study/windows/native")
     args = parser.parse_args()
+    args.sha = subprocess.check_output(
+        ["git", "rev-parse", "--verify", f"{args.sha}^{{commit}}"], cwd=ROOT, text=True).strip()
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = args.output / "runs.json"
-    data = json.loads(manifest.read_text()) if manifest.exists() else {"sha": args.sha, "jobs": []}
+    data = json.loads(manifest.read_text()) if manifest.exists() else {"sha": args.sha, "study": args.study, "jobs": []}
     if data["sha"] != args.sha:
         raise SystemExit("output directory belongs to another source SHA")
 
