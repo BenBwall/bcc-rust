@@ -1,8 +1,11 @@
 # Recursive descent parser study
 
 Follow-up: [recovery parity and Windows validation](parser-recovery-windows.md)
-records fixes and later validation of the recovery differences described here.
-The measurements below remain the original cohort.
+records all ten recovery fixes and completed native Windows GNU validation in
+release/debug. A 100 GiB stack starts with 8 KiB writable; reserved RD reduces
+native synthetic parser time by 30.5–46.7% release and 22.1–31.5% debug, with
+worker launch excluded. The measurements and open blockers below describe the
+original cohort; the follow-up supersedes its recovery/Windows status.
 
 2026-10-21. Original baseline: `145898d4`. Study branch:
 `codex/parser-recursive-descent-study`. Native binaries were built at `e8f95dd6`
