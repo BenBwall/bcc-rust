@@ -73,4 +73,58 @@ fn runner_stack_measurements() {
             }
         }
     }
+    #[cfg(windows)]
+    for (bytes, depth) in [(1024 * 1024, 4096), (64 * 1024 * 1024, 16_384)] {
+        let child = std::process::Command::new("python")
+            .arg("scripts/cargo_runner.py")
+            .arg(std::env::current_exe().expect("probe test executable"))
+            .args([
+                "--ignored",
+                "--exact",
+                "runner_tests::runner_stack_overflow_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("BCC_STUDY_OVERFLOW_RESERVE", bytes.to_string())
+            .env("BCC_STUDY_OVERFLOW_DEPTH", depth.to_string())
+            .output()
+            .expect("dialog-suppressed overflow child");
+        let stdout = String::from_utf8_lossy(&child.stdout);
+        let stderr = String::from_utf8_lossy(&child.stderr);
+        let code = child.status.code().map(|value| value as u32);
+        println!(
+            "runner_stack_overflow reserve={bytes} depth={depth} code={code:?} stdout={stdout:?} \
+             stderr={stderr:?}"
+        );
+        assert!(
+            !child.status.success(),
+            "undersized stack must fail in child"
+        );
+        assert!(
+            matches!(code, Some(0xC000_00FD | 0xC000_0409))
+                || stdout.contains("overflowed its stack")
+                || stderr.contains("overflowed its stack"),
+            "child must fail from stack exhaustion rather than setup or test selection"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "child process only; intentionally exhausts its worker stack"]
+fn runner_stack_overflow_child() {
+    let bytes = std::env::var("BCC_STUDY_OVERFLOW_RESERVE")
+        .expect("parent-selected reservation")
+        .parse()
+        .expect("reservation bytes");
+    let depth = std::env::var("BCC_STUDY_OVERFLOW_DEPTH")
+        .expect("parent-selected depth")
+        .parse()
+        .expect("page recursion depth");
+    let _unexpected_result = reserved_stack::run(bytes, |bounds| {
+        let marker = 0_u8;
+        touch(depth, (&raw const marker).addr(), bounds)
+    })
+    .expect("start deliberately undersized worker");
+    panic!("undersized worker unexpectedly completed");
 }
