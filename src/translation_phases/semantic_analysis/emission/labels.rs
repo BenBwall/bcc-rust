@@ -377,7 +377,7 @@ struct OpenSwitch<'tu, 's> {
 
 /// One step of the function walk.
 #[derive(Clone, Copy)]
-enum Step<'tu> {
+pub(super) enum Step<'tu> {
     Enter(&'tu Statement<'tu>),
     /// The body of this switch begins: case labels belong to it.
     EnterSwitch(&'tu Statement<'tu>),
@@ -389,7 +389,7 @@ enum Step<'tu> {
 /// substatements, expressions and the initializers of declarations. A
 /// nested function definition is not a child; a switch marks where its body
 /// begins.
-fn statement_children<'tu>(
+pub(super) fn statement_children<'tu>(
     scratch: &Bump,
     statement: &'tu Statement<'tu>,
     mut push: impl FnMut(Step<'tu>),
@@ -497,7 +497,7 @@ fn declaration_children<'tu>(
 ) {
     for init in declaration.init_declarators {
         declarator_bounds(scratch, init.declarator, &mut |expression| {
-            push(Step::Expression(expression))
+            push(Step::Expression(expression));
         });
         if let Some(initializer) = init.initializer {
             initializer_expressions(scratch, initializer, &mut |expression| {

@@ -136,7 +136,7 @@ pub(super) struct State<'tu, 's> {
     /// or `weak_import`, or that `#pragma weak` names, each with the
     /// output-token ordinal from which it is weak (`folding.rs`).
     weak_names:              ArenaMap<'s, StringCacheId, usize>,
-    /// Weak value reads exclude weak_import once an initializer defines it.
+    /// Weak value reads exclude `weak_import` once an initializer defines it.
     weak_values:             ArenaMap<'s, StringCacheId, usize>,
     /// Direct calls annotated pure or const, inherited by redeclarations.
     pure_functions:          ArenaMap<'s, usize, ()>,

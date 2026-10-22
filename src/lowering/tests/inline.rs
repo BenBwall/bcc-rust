@@ -2117,6 +2117,21 @@ fn always_inline_order_follows_final_review_emission_boundaries() {
             true,
         ),
         (
+            "",
+            "switch(__builtin_constant_p(({int d;c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({if(c) c; c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({for(;c;){} c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
             "int pure(void) __attribute__((pure));",
             "switch(__builtin_constant_p(pure())) { case 0: break; case 1: h(0); }",
             true,

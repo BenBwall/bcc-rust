@@ -1171,7 +1171,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.weak_at_horizon(binding, false)
     }
 
-    /// A defined weak_import object has a readable initializer even when
+    /// A defined `weak_import` object has a readable initializer even when
     /// an earlier declaration still makes its address weak.
     fn value_may_be_weak(&mut self, binding: usize) -> bool {
         self.weak_at_horizon(binding, true)
@@ -1437,19 +1437,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let mut statements = ArenaVec::new_in(self.scratch);
                     statements.push(block);
                     while let Some(statement) = statements.pop() {
-                        match statement.kind {
-                            | StatementType::Compound { items } =>
-                                for item in items {
-                                    match *item {
-                                        | BlockItem::Statement(child) => statements.push(child),
-                                        | _ => return true,
-                                    }
-                                },
-                            | StatementType::Expression(ExpressionSlot::Parsed(value)) =>
-                                work.push((value, true)),
-                            | StatementType::Null => {},
-                            | _ => return true,
+                        if matches!(
+                            statement.kind,
+                            StatementType::Asm(_) | StatementType::MsAsm(_) | StatementType::Seh(_)
+                        ) {
+                            return true;
                         }
+                        super::labels::statement_children(
+                            self.scratch,
+                            statement,
+                            |step| match step {
+                                | super::labels::Step::Enter(child) => statements.push(child),
+                                | super::labels::Step::Expression(value) =>
+                                    work.push((value, true)),
+                                | _ => {},
+                            },
+                        );
                     }
                     false
                 },
