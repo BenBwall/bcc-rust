@@ -1358,6 +1358,9 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         }
         bytes.truncate(length);
         relocations.retain(|relocation| relocation.offset + relocation.size() <= size);
+        // Designators and range replacements visit offsets out of order.
+        // Native storage emission consumes the final addresses in order.
+        relocations.sort_unstable_by_key(|relocation| relocation.offset);
         Ok((bytes, relocations))
     }
 

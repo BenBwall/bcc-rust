@@ -27,6 +27,18 @@ mod tests {
     use crate::native::run_native;
 
     #[test]
+    fn retained_static_relocations_follow_final_element_order() {
+        for initializer in ["[0 ... 2].p=g,[0].p=h", "[2].p=g,[1].p=g,[0].p=h"] {
+            for result in ["0", "s[0].p()!=2 || s[1].p()!=1 || s[2].p()!=1"] {
+                assert_runs_like_clang(&format!(
+                    "int g(void){{return 1;}} int h(void){{return 2;}} int main(void){{static \
+                     struct {{int (*p)(void);int x;}} s[3]={{{initializer}}};return {result};}}"
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn optional_retention_covers_all_preparation_refusals() {
         for source in [
             "struct S{unsigned:32;unsigned:32;int x;};static int h(struct S s){return s.x;} int \
