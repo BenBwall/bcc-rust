@@ -13,7 +13,7 @@ baseline in this cohort. The production parser remains the frame machine.
 The Windows worker builds and passes strict Clippy for GNU; MSVC passes compile
 checking and strict Clippy. The GNU binaries run successfully under Wine through
 65,536 live page-sized recursion frames. **Native Windows execution is still
-pending host access.** Wine commits its entire stack reservation and cannot
+pending publication of the study commit.** Wine commits its entire stack reservation and cannot
 validate the demand-commit mechanism this experiment needs. These results do
 not establish native Windows parser throughput or stack safety.
 
@@ -185,11 +185,28 @@ matching extracted MinGW GCC driver and `link-self-contained=no`. This was a
 cross-tool setup failure, not evidence about parser performance. Pinned tool
 versions, URLs and checksums are archived.
 
-The current T3 environment reports Linux. Its exposed tools and SSH configuration
-provide no native Windows executor/destination. Forwarded SSH-agent and clipboard
-bridges alone do not establish command access. The owner has been asked for the
-configured host connection name/path; native execution is still outstanding.
-No host credentials or unrelated worktrees were modified.
+The owner clarified the native execution route: `bcc-windows` dispatches the
+`ci/windows-runner` GitHub Actions workflow to the outbound-polling self-hosted
+`bcc-win-x64` runner. The sandbox has no inbound Windows command connection.
+The runner was confirmed online and idle. Setup is documented in
+`/home/agent/workspace/bcc-rust/WINDOWS-RUNNER.md`.
+
+GitHub returns HTTP 422 for the unpublished study SHA `9e3d9ace`; this runner
+requires a commit already accessible in the repository. The original study's
+explicit “do not push” rule still applies. Publishing the study branch needs
+owner authorization before a native job can be dispatched. No branch has been
+pushed, workflow dispatched, or host credentials modified.
+
+Two ignored example tests prepare a focused native run without changing the
+operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
+through 65,536 live page frames and asserts small initial commitment plus growth
+on native Windows; `runner_parser_measurements` records nine rotating samples
+of machine/raw/reserved-machine/reserved-recursive modes, exact inspection parity
+on the 17 benchmark C files, and deep parenthesis/block stack spans. The two
+4,000-function synthetic inputs match the existing generator. Preprocessing
+stays outside the parser timer. Lua runs only if the exact preprocessed fixture
+has been staged; the normal clean Actions checkout does not include scratch.
+These tests are opt-in to avoid turning normal tests into performance runs.
 
 ## Reproduction and saved evidence
 
@@ -247,3 +264,19 @@ fits the production API, since existing arena/context values cannot simply be
 sent across threads. Reusing frame recovery and declaration/extension handoffs
 means the prototype still needs those frames; it does not yet justify deleting
 the production expression/statement machinery.
+
+After publication is authorized, substitute the final pushed SHA in these
+native runner commands. Submit sequentially on the single Windows host; do not
+use the Linux shared-build wrapper for the runner's own Windows Cargo process.
+The dispatcher provides its native serialization and crash-dialog wrapper.
+
+```sh
+bcc-windows test --sha SHA -- --features parser-recursive-descent-study --lib recursive_descent -- --test-threads=1
+bcc-windows test --sha SHA -- --example parser_stack_probe runner_stack_measurements -- --ignored --nocapture --test-threads=1
+bcc-windows test --sha SHA -- --release --example parser_stack_probe runner_stack_measurements -- --ignored --nocapture --test-threads=1
+bcc-windows test --sha SHA -- --features parser-recursive-descent-study --example parser_study runner_parser_measurements -- --ignored --nocapture --test-threads=1
+bcc-windows test --sha SHA -- --release --features parser-recursive-descent-study --example parser_study runner_parser_measurements -- --ignored --nocapture --test-threads=1
+```
+
+Each submission prints its run ID. Inspect completion and download that exact
+run's artifacts into this worktree's `.scratch/parser-study/windows/native/`.
