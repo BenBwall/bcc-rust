@@ -207,6 +207,9 @@ on the 17 benchmark C files, and deep parenthesis/block stack spans. The two
 stays outside the parser timer. Lua runs only if the exact preprocessed fixture
 has been staged; the normal clean Actions checkout does not include scratch.
 These tests are opt-in to avoid turning normal tests into performance runs.
+They rotate modes within one test process; they are a separate cohort from the
+fresh-process Linux measurements above. Whole-process RSS fields accumulate
+across inputs in that process and cannot be used as independent per-input peaks.
 
 ## Reproduction and saved evidence
 
