@@ -198,6 +198,11 @@ checkout and native toolchain setup passed. The serial collector records every
 run ID before waiting and verifies the requested source SHA in downloaded
 `results.json` artifacts. No dispatcher or default CI changes were needed.
 
+The first native job completed successfully: all seven recovery tests passed
+on Windows x64 build 26300 with Rust 1.99.0 GNU / LLVM 23.1.1. Its artifacts
+confirm the exact requested source SHA and tree. Debug stack probes are next;
+release recovery and both parser timing profiles remain queued by the collector.
+
 Two ignored example tests prepare a focused native run without changing the
 operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
 through 65,536 live page frames, asserts small initial commitment plus growth
