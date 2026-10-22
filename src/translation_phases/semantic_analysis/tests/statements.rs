@@ -863,12 +863,14 @@ fn emission_model_queries_stay_linear() {
         write!(table, "if (t[{index}]) r++; ").unwrap();
     }
     table.push_str("return r; }");
-    let reverse_size = 200_000;
-    let mut reverse = format!("static const int t[{reverse_size}] = {{");
-    for index in (0..reverse_size).rev() {
-        write!(reverse, "[{index}]={},", index % 7).unwrap();
-    }
-    reverse.push_str("}; int f(void) { if (t[1]) return 1; return 0; }");
+    let reverse = |count| {
+        let mut source = format!("static const int t[{count}] = {{");
+        for index in (0..count).rev() {
+            write!(source, "[{index}]={},", index % 7).unwrap();
+        }
+        source.push_str("}; int f(void) { if (t[1]) return 1; return 0; }");
+        source
+    };
     let repeated_strlen = format!(
         "static const char s[] = \"{}\"; int f(void) {{ int r=0; {} return r; }}",
         "a".repeat(length),
@@ -896,7 +898,7 @@ fn emission_model_queries_stay_linear() {
     );
     let msvc = crate::configuration::CompilerConfiguration::default()
         .with_target(crate::target::Target::WindowsMsvc);
-    for (source, configuration) in [
+    for (source, configuration, budget) in [
         (
             format!(
                 "static const char s[] = \"{}\"; int f(void) {{ if (__builtin_strlen(s) == 0) \
@@ -904,15 +906,23 @@ fn emission_model_queries_stay_linear() {
                 "a".repeat(length)
             ),
             None,
+            15,
         ),
-        (table, None),
-        (reverse, None),
-        (repeated_strlen.clone(), None),
-        (repeated_strlen.replace("char s[]", "char *const s"), None),
-        (blocks, None),
-        (assignment, None),
-        (compound, None),
-        (arguments, Some(msvc)),
+        (table, None, 15),
+        (reverse(size), None, 15),
+        // Keep the original budgets; this larger independent row rejects
+        // the quadratic painter after parsing cost is paid as well.
+        (reverse(600_000), None, 40),
+        (repeated_strlen.clone(), None, 15),
+        (
+            repeated_strlen.replace("char s[]", "char *const s"),
+            None,
+            15,
+        ),
+        (blocks, None, 15),
+        (assignment, None, 15),
+        (compound, None, 15),
+        (arguments, Some(msvc), 15),
     ] {
         let start = std::time::Instant::now();
         match configuration {
@@ -920,8 +930,8 @@ fn emission_model_queries_stay_linear() {
             | None => with_source(&source, |_, _| {}),
         }
         assert!(
-            start.elapsed().as_secs() < 15,
-            "{:?}: {}",
+            start.elapsed().as_secs() < budget,
+            "{:?} (limit {budget}s): {}",
             start.elapsed(),
             &source[..80]
         );
