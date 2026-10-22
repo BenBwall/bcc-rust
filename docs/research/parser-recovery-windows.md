@@ -177,7 +177,8 @@ Three undersized-stack runs return the transported stack-overflow status 253
 message and exits 101 when the joined worker supplies no result. Consequently
 the 22-run compatibility collection exits 1 with one unexpected outcome; it
 must not be described as an entirely passing Windows suite. Successful workloads
-are unaffected. Native behavior of this path remains unverified.
+are unaffected. Native debug probes now return the standard stack-overflow status in both
+cases; release behavior is still being measured.
 
 Initial GNU linking with Rust's bundled startup objects and a different MinGW
 CRT crashed before `main` (recursive `atexit`/`_onexit`). The final build uses the
@@ -202,6 +203,16 @@ The first native job completed successfully: all seven recovery tests passed
 on Windows x64 build 26300 with Rust 1.99.0 GNU / LLVM 23.1.1. Its artifacts
 confirm the exact requested source SHA and tree. Debug stack probes are next;
 release recovery and both parser timing profiles remain queued by the collector.
+
+Native debug stack job
+[39758189652](https://github.com/BenBwall/bcc-rust/actions/runs/39758189652)
+also passes. Both 1 GiB and 100 GiB reservations initially have only 8 KiB of
+writable committed memory (excluding the guard). At 65,536 live page frames,
+span is 287,314,015 bytes and writable commitment about 274.01 MiB. The stack
+retains commitment after return until the worker exits. Both deliberately
+undersized children (1 MiB and 64 MiB) exit with `0xC00000FD` and the parent
+passes. Unlike Wine, native Windows demonstrates the intended demand-commit
+behavior and successfully reserves 100 GiB. Physical residency is not measured.
 
 Two ignored example tests prepare a focused native run without changing the
 operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
