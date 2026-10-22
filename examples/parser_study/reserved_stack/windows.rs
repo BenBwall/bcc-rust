@@ -5,10 +5,7 @@
 use std::{
     ffi::c_void,
     io,
-    mem::{
-        self,
-        MaybeUninit,
-    },
+    mem::MaybeUninit,
     ptr,
 };
 
@@ -141,7 +138,7 @@ fn query(address: usize) -> io::Result<MEMORY_BASIC_INFORMATION> {
         VirtualQuery(
             ptr::with_exposed_provenance::<c_void>(address),
             info.as_mut_ptr(),
-            mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+            size_of::<MEMORY_BASIC_INFORMATION>(),
         )
     } == 0
     {

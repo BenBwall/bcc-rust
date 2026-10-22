@@ -70,7 +70,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         let errors = self.hard_error_count;
         let operand = self.rd_precedence(mode_limit(mode), mode, boundary)?;
         let mut frame = ExpressionFrame::new(self.arena, mode, boundary, errors);
-        if !frame.study_needs_recovery(self.cursor.current()) {
+        if operand.frame_finished || !frame.study_needs_recovery(self.cursor.current()) {
             return Some(operand.expression);
         }
         // Reuse synchronization and diagnostics without rewinding the token
@@ -589,8 +589,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
             base = self.store_expression(kind, source, Some(operators), false);
         }
         Some(Operand {
-            expression: base,
-            unary:      true,
+            expression:     base,
+            unary:          true,
+            frame_finished: false,
         })
     }
 
@@ -622,7 +623,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
             | ExpressionType::Binary { operator, .. } => operator == BinaryOperator::Subscript,
             | _ => true,
         };
-        Some(Operand { expression, unary })
+        Some(Operand {
+            expression,
+            unary,
+            frame_finished: true,
+        })
     }
 
     pub(super) fn rd_consume(&mut self) {
@@ -667,8 +672,10 @@ impl<'tu> Parser<'_, 'tu, '_> {
 
 #[derive(Clone, Copy)]
 struct Operand<'tu> {
-    expression: &'tu Expression<'tu>,
-    unary:      bool,
+    expression:     &'tu Expression<'tu>,
+    unary:          bool,
+    /// A hybrid/extension handoff already ran the frame's closing recovery.
+    frame_finished: bool,
 }
 
 impl<'tu> Operand<'tu> {
@@ -676,6 +683,7 @@ impl<'tu> Operand<'tu> {
         Self {
             expression,
             unary: true,
+            frame_finished: false,
         }
     }
 
@@ -683,6 +691,7 @@ impl<'tu> Operand<'tu> {
         Self {
             expression,
             unary: false,
+            frame_finished: false,
         }
     }
 }
