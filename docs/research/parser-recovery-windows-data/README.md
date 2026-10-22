@@ -10,3 +10,8 @@ They contain no native Windows measurements. `windows-wine-results.json` has
 one rejected negative-probe outcome; `windows-wine-collect.log.gz` ends EXIT 1.
 The saved manifest/lock, pinned setup manifest, and build logs identify the
 actual probe build and dependencies. Paths refer to this designated worktree.
+
+`native-preparation-*.log.gz` records the runner-adapted harness pilot on Linux
+and the subsequent Windows cross-check. The first batch ends EXIT 1 for a lint
+fixed in `eb362ffd`; the cross-check retry ends EXIT 0. The pilot's parser and
+page-probe tests passed before that lint failure. No native workflow has yet run.

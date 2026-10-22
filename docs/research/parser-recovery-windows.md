@@ -208,6 +208,13 @@ on the 17 benchmark C files, and deep parenthesis/block stack spans. The two
 stays outside the parser timer. Lua runs only if the exact preprocessed fixture
 has been staged; the normal clean Actions checkout does not include scratch.
 These tests are opt-in to avoid turning normal tests into performance runs.
+The local Linux pilot passed 17 corpus parity checks, 720 timing samples
+(including locally staged Lua), four deep parser samples, and all eight page
+probes across 1/100 GiB reservations. Study strict Clippy passed. The Windows
+GNU cross-target check caught an unused-result lint in the overflow child;
+after binding that result, strict Clippy and both probe builds passed. The
+preparation logs preserve both the initial failed batch and successful retry.
+These are harness validation results, not native Windows results.
 They rotate modes within one test process; they are a separate cohort from the
 fresh-process Linux measurements above. Whole-process RSS fields accumulate
 across inputs in that process and cannot be used as independent per-input peaks.
