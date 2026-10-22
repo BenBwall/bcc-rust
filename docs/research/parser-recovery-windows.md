@@ -10,12 +10,13 @@ across every tested mode. Reserved-stack Lua parsing takes 23.189 ms release
 and 120.428 ms debug: 36.6% and 25.2% below the feature-disabled production
 baseline in this cohort. The production parser remains the frame machine.
 
-The Windows worker builds and passes strict Clippy for GNU; MSVC passes compile
-checking and strict Clippy. The GNU binaries run successfully under Wine through
-65,536 live page-sized recursion frames. **Native Windows execution is now in progress** on the owner's self-hosted
-`bcc-win-x64` Actions runner, using source `32fb7b0a`. Wine commits its entire stack reservation and cannot
-validate the demand-commit mechanism this experiment needs. These results do
-not establish native Windows parser throughput or stack safety.
+**Native Windows debug now confirms the reserved-stack mechanism.** The 100 GiB
+reservation starts with 8 KiB of writable committed memory, grows on demand,
+and handles 65,536 live page frames. Reserved RD uses 22% less parser time on
+the expression-heavy input and 32% less on the statement-heavy input. Recovery,
+corpus parity, and deep parser probes pass. Release jobs are still running.
+Wine remains compatibility evidence only; its different commitment behavior is
+documented below. Native execution uses GNU x64; MSVC has only cross-checks.
 
 ## What the ten differences were
 
@@ -153,7 +154,7 @@ changing that build contract. It does not contain the parser or LLVM.
 | Wine 10 worker unit tests | 3/3 pass |
 | Wine 1 GiB stack, depths 0/256/4,096/16,384/65,536 | Both builds pass |
 | Wine 64 GiB / 100 GiB thread reservation | Both fail at creation, Windows error 8 |
-| Native Windows parser throughput / demand commit / overflow | Jobs in progress; results pending |
+| Native Windows debug parser / demand commit / overflow | Pass; release jobs in progress |
 
 The Wine page-probe slope is 4,208 B/level release and 4,336 B/level debug. These
 are Windows GNU ABI page-probe frames under Wine, not native parser frames.
