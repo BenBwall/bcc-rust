@@ -1,5 +1,9 @@
 # Reserved native-stack follow-up
 
+Follow-up: [recovery parity and Windows validation](parser-recovery-windows.md)
+records fixes and later validation of the recovery differences described here.
+The measurements below remain the original cohort.
+
 2026-10-22. Follow-up to [the recursive descent study](parser-recursive-descent.md).
 Native stack code is `462812f9`; the build batch completed at `916047b8`
 (subsequent source changes concern collection/analysis only). Per-run binary

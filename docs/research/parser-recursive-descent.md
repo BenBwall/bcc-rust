@@ -1,5 +1,9 @@
 # Recursive descent parser study
 
+Follow-up: [recovery parity and Windows validation](parser-recovery-windows.md)
+records fixes and later validation of the recovery differences described here.
+The measurements below remain the original cohort.
+
 2026-10-21. Original baseline: `145898d4`. Study branch:
 `codex/parser-recursive-descent-study`. Native binaries were built at `e8f95dd6`
 (the parser prototype is `2ed14574`; final Linux harness code is `fee12e29`).
