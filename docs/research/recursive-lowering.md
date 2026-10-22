@@ -25,7 +25,9 @@ The prototype retains their task and operand buffers; it does not replace every
 continuation with a typed Rust function. Retained AST, type and IR storage stays
 in arenas. Semantic analysis and optimizer worklists remain unchanged.
 
-The default helper remains available for task/recursive differential checks in
+Ordinary library pipeline entry points retain task lowering even with the study
+feature enabled; only the reserved-worker CLI and explicit study options select
+recursion. The same helper supports task/recursive differential checks in
 the same feature-enabled binary. Lowering tests compare complete printed IR,
 function sources, retained call diagnostics and refusal diagnostics. Measurements
 prepare the frontend outside the lowering timer and verify/inspect afterward.
