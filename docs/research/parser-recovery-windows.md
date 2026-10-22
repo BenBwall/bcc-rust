@@ -1,5 +1,7 @@
 # Recovery parity and Windows reserved-stack follow-up
 
+Follow-up: [whole-compilation worker and recursive lowering](recursive-lowering.md).
+
 2026-10-22. Follow-up to [recursive descent](parser-recursive-descent.md) and
 [reserved stacks](parser-reserved-stack.md). Parser changes measured here are
 at `c9fbaccf`; Linux collection commands are at `333c4904`. Native runner

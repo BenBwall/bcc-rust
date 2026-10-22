@@ -1,5 +1,7 @@
 # Recursive descent parser study
 
+Follow-up: [whole-compilation worker and recursive lowering](recursive-lowering.md).
+
 Follow-up: [recovery parity and Windows validation](parser-recovery-windows.md)
 records all ten recovery fixes and completed native Windows GNU validation in
 release/debug. A 100 GiB stack starts with 8 KiB writable; reserved RD reduces

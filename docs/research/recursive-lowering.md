@@ -2,7 +2,8 @@
 
 2026-10-22. Follow-up to [the parser study](parser-recovery-windows.md).
 The opt-in implementation is complete. Linux measurements and native Windows
-debug tests are complete; remaining native measurements/checks are running. The feature-disabled compiler retains its existing pipeline.
+debug tests are complete; remaining native measurements/checks are running.
+The feature-disabled compiler retains its existing pipeline.
 
 ## Implementation boundary
 
@@ -34,7 +35,7 @@ prepare the frontend outside the lowering timer and verify/inspect afterward.
 Stack sampling runs separately from timing. Whole-worker wall time is also
 reported, including preprocessing, analysis, setup/join and destruction.
 
-## Validation plan
+## Validation method
 
 - Existing lowering tests, including all target/extension/cleanup cases that
   use the shared test helper, compare task and recursive results.
@@ -47,7 +48,6 @@ reported, including preprocessing, analysis, setup/join and destruction.
   measure native-address spans in separate runs.
 - Check rustfmt, strict Clippy, default checks and native Windows execution.
 
-Exact commands and measured results will be added after validation.
 
 ## Reproduction
 
@@ -61,6 +61,7 @@ python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts
 python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts/lowering_study_build.sh checks
 cargo +nightly fmt --check
 python3 scripts/lowering_study_results.py .scratch/lowering-study/build.log --output .scratch/lowering-study/linux-summary.json
+python3 scripts/lowering_study_width.py --output .scratch/lowering-study/width --statements 50000 --repeats 9
 
 # Native GNU Windows source cohort, sequential self-hosted Actions jobs.
 python3 scripts/parser_study_native.py --study lowering --sha 932f32a89c75682029e7f90b208b74960fc71e94 --output .scratch/lowering-study/windows
@@ -156,3 +157,42 @@ Peak process RSS is essentially unchanged: it includes the larger frontend
 working set. Release lowering is 7.9% lower; debug is 5.3% higher with 22.2% CV
 for recursion. This is a scratch-storage improvement, not a measured process
 memory win.
+
+
+## Whole-compilation CLI checks
+
+The feature-only debug CLI build (without `benchmarking-internals`) successfully
+emits IR and LLVM, interprets a compound assignment with status 42, interprets
+an optimized loop with status 45, and emits IR for 4,096 nested blocks and a
+4,096-operator nonconstant expression. Each command has empty stderr. The CLI
+binary hash, exact arguments, exit statuses and output hashes are archived in
+`recursive-lowering-data/linux-cli.json.gz`. These exercise the actual command
+entry and backend/interpreter paths on the compilation worker, beyond the
+lowering-only harness.
+
+## Recommendation
+
+Keep both features opt-in. The shared worker implements the intended ownership
+boundary now: a synchronous caller submits a whole compilation, the worker owns
+its arenas/context until completion, and only a `Send` result crosses back.
+Library embedders choose their reservation size through `with_compilation_stack`;
+the CLI currently uses a fixed 100 GiB reservation. An OS reservation/thread
+creation error is returned, while exhausting a running stack remains fatal.
+No overflow handler, moving stack, automatic retry or parser fallback is added.
+
+The recursive lowering slice is a useful experiment, but these results do not
+justify switching its default. Its release benefit is modest and debug can
+regress. Removing the compound sibling task list provides a reproducible scratch
+saving on wide functions; consider bringing that traversal improvement to the
+explicit lowerer separately. That optimization has not been independently
+implemented or timed here. A full recursive rewrite should first replace the
+remaining task descriptions with typed return values, then repeat these same
+parity checks and debug measurements. Semantic analysis and optimizer worklists
+need their own profiles before any rewrite.
+
+Native address span, arena requests, OS commit and process RSS describe different
+resources. The worker makes a large virtual reservation cheap; touched pages,
+page faults and finite exhaustion still matter. This study does not establish
+whole-compiler speedups, and the earlier parser's speedups do not transfer to
+lowering. Hardware performance counters were unavailable on this host in the
+parser study; no instruction/cycle/cache claim is made for this follow-up.
