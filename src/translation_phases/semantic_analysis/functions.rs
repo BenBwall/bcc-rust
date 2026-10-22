@@ -855,6 +855,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 matches!(context.kind, ReferenceContextKind::RequiredLocalsOnly { scalar_owner }
                     if scalar_owner.is_none_or(|owner| self.folded_conditional_emission(owner)
                         || self.functions.emission.potential_aggregate_arms.contains_key(&std::ptr::from_ref(owner).addr())))
+                    || matches!(context.kind, ReferenceContextKind::InitializerValue { expression }
+                        if self.functions.emission.overridden_values.contains_key(&std::ptr::from_ref(expression).addr()))
                     || context.parent.is_some_and(|p| required_locals[p]),
             );
             let (skip_definitions, skip_uses) = match context.kind {
@@ -2155,7 +2157,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | ReferenceContextKind::ConstantQuery { emitted } => !emitted,
             | ReferenceContextKind::ConditionalArm { owner } =>
                 self.folded_conditional_emission(owner),
-            | ReferenceContextKind::RequiredLocalsOnly { .. } => false,
+            | ReferenceContextKind::RequiredLocalsOnly { .. }
+            | ReferenceContextKind::InitializerValue { .. } => false,
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
                 .typeof_sites
@@ -2319,6 +2322,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ReferenceContextKind::Unevaluated,
             ReferenceContextKind::Typeof,
         ));
+    }
+
+    /// A later initializer can overwrite this whole value. Its required
+    /// closure stays emitted while optional storage follows the final plan.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139; emission follows Clang.
+    pub(super) fn initializer_value_context(&mut self, expression: &'tu Expression<'tu>) {
+        if self.functions.initializer.is_some_and(|b| {
+            self.bindings[b].duration == Duration::Automatic && self.aggregate(self.bindings[b].ty)
+        }) {
+            self.enter_reference_context_kind(ReferenceContextKind::InitializerValue {
+                expression,
+            });
+        }
     }
 
     /// Wrap the already queued child in a retention-only context when a
@@ -2711,6 +2727,10 @@ enum ReferenceContextKind<'tu> {
     /// An unmodeled constant fold cannot safely add optional local roots.
     RequiredLocalsOnly {
         scalar_owner: Option<&'tu Expression<'tu>>,
+    },
+    /// Final overwrite coverage is known only once the initializer is planned.
+    InitializerValue {
+        expression: &'tu Expression<'tu>,
     },
     /// A folded-away conditional operand is omitted only for scalar results.
     ConditionalArm {

@@ -159,6 +159,8 @@ pub(super) struct State<'tu, 's> {
     /// code.
     pub(super) potential_aggregate_arms: ArenaMap<'s, usize, ()>,
     pub(super) aggregate_constants: ArenaMap<'s, (usize, bool), Option<bool>>,
+    pub(super) initializer_values: ArenaMap<'s, usize, Option<&'s [bool]>>,
+    pub(super) overridden_values: ArenaMap<'s, usize, ()>,
     /// Pure syntax that may need an unsupported constant fold.
     pub(super) potential_constants: ArenaMap<'s, usize, bool>,
     /// Syntactic array-literal reads, memoized across nested query operands.
@@ -235,6 +237,8 @@ impl<'s> State<'_, 's> {
             constant_aggregate_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             potential_aggregate_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             aggregate_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            initializer_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            overridden_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             potential_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             array_literal_reads: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             #[cfg(test)]

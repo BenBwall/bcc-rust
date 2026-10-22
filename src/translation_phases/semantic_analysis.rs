@@ -593,6 +593,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::InitializeDone(binding, initializer) => {
                 self.record_constant_initializer(binding, initializer);
                 self.initialize_declaration(binding, initializer);
+                self.finish_initializer_value_retention(binding, initializer);
                 self.finish_aggregate_initializer_emission(binding, initializer);
             },
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
@@ -635,8 +636,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Initializer(initializer) => {
                 self.taint(initializer.recovered);
                 match initializer.kind {
-                    | InitializerType::AssignmentExpression(e) =>
-                        self.work.push(Work::Expression(e)),
+                    | InitializerType::AssignmentExpression(e) => {
+                        self.initializer_value_context(e);
+                        self.work.push(Work::Expression(e));
+                    },
                     | InitializerType::InitializerList(list) => {
                         for element in list.elements.iter().rev() {
                             self.work.push(Work::Initializer(element.initializer));

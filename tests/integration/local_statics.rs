@@ -288,6 +288,30 @@ mod tests {
     }
 
     #[test]
+    fn overwritten_initializers_keep_optional_retention_best_effort() {
+        for value in ["h()", "0?h():g", "1?h():g", "0?({STATIC (struct S){1};}):g"] {
+            let source = format!(
+                "struct S{{int a;}};struct O{{struct S s;int b;}};static struct S g={{2}};static \
+                 struct S h(void){{STATIC return (struct S){{1}};}}int main(void){{struct O \
+                 o={{.s={value},.s={{2}}}};return o.s.a-2;}}"
+            );
+            assert_runs_like_clang(&source.replace(
+                "STATIC",
+                "static int a __attribute__((section(\".bss.bad\")))=1;",
+            ));
+        }
+        // A partial overwrite preserves the earlier aggregate value.
+        let output = bcc(
+            "struct S{int a,b;};static struct S h(void){static int a \
+             __attribute__((section(\".bss.bad\")))=1;return (struct S){1,2};}int \
+             main(void){struct S s={1,2};struct O{struct S s;}o={.s=h(),.s.a=2};return o.s.b-2;}",
+            &["--emit=llvm"],
+        );
+        assert!(!output.status.success());
+        assert!(text(&output.stderr).contains("BSS section"));
+    }
+
+    #[test]
     fn omitted_scalar_statement_expression_tails_preserve_following_code() {
         for statement in ["for(;;);", "return 99;", "__builtin_unreachable();"] {
             for expression in [

@@ -1083,7 +1083,11 @@ dynamic sibling member prevents the bypass. A separate potential-constant
 initializer scan only limits optional retention when a pure condition needs
 an unmodeled fold; it never chooses an arm. Required-only retention propagates
 through helper references. A certain path to the same helper restores its
-optional locals, and required/used entities stay reachable on either path. A sparse discarded-result context
+optional locals, and required/used entities stay reachable on either path. Fully
+overwritten automatic initializer values use that same required-only policy.
+A memoized backwards scan compresses written bit intervals and processes each
+interval once; unknown union/range operations conservatively retain values.
+It does not change the pre-existing evaluation of overridden initializers. A sparse discarded-result context
 follows parentheses, comma
 results, selected-expression wrappers, statement-expression value tails and
 void casts; expression statements and for initializers/steps start it. Arm

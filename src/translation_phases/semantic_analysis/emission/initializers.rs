@@ -24,7 +24,7 @@ use crate::{
     util::bump::ArenaVec,
 };
 
-impl<'tu> Analyzer<'_, 'tu, '_> {
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     pub(in crate::translation_phases::semantic_analysis) fn record_aggregate_initializer_arm(
         &mut self,
         owner: &'tu Expression<'tu>,
@@ -80,6 +80,117 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.complete_conditional_elision(owner);
             }
         }
+    }
+
+    /// A fully overwritten value must not introduce optional local storage.
+    /// Its existing evaluation and required closure are preserved; the
+    /// separate initializer-evaluation gap is not an integer-fold repair.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139; retention follows Clang.
+    pub(in crate::translation_phases::semantic_analysis) fn finish_initializer_value_retention(
+        &mut self,
+        binding: usize,
+        initializer: &'tu Initializer<'tu>,
+    ) {
+        let data = self.bindings[binding];
+        if data.duration != Duration::Automatic || !self.aggregate(data.ty) {
+            return;
+        }
+        let Some(live) = self.initializer_live_values(initializer) else {
+            return;
+        };
+        let Some(&plan) = self.initializers.plan(initializer) else {
+            return;
+        };
+        for (value, &live) in plan.values.iter().zip(live) {
+            if !live && !self.expression_contains_label(value.expression) {
+                _ = self
+                    .functions
+                    .emission
+                    .overridden_values
+                    .insert(std::ptr::from_ref(value.expression).addr(), ());
+            }
+        }
+    }
+
+    /// Backwards coverage on compressed bit intervals. Each interval is
+    /// consumed once using successor links; sorting bounds work by O(n log n),
+    /// without iterating an object's byte size. Unknown plan operations retain
+    /// every value. Memoized per complete plan.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139.
+    fn initializer_live_values(
+        &mut self,
+        initializer: &'tu Initializer<'tu>,
+    ) -> Option<&'s [bool]> {
+        let key = std::ptr::from_ref(initializer).addr();
+        if let Some(&live) = self.functions.emission.initializer_values.get(&key) {
+            return live;
+        }
+        let live = self.compute_initializer_live_values(initializer);
+        _ = self.functions.emission.initializer_values.insert(key, live);
+        live
+    }
+
+    fn compute_initializer_live_values(
+        &mut self,
+        initializer: &'tu Initializer<'tu>,
+    ) -> Option<&'s [bool]> {
+        let plan = *self.initializers.plan(initializer)?;
+        let mut spans = ArenaVec::new_in(self.scratch);
+        let mut points = ArenaVec::new_in(self.scratch);
+        let mut live = ArenaVec::new_in(self.scratch);
+        live.resize(plan.values.len(), false);
+        for &op in plan.operations {
+            let (destination, value, bits) = match op {
+                | InitOperation::Store {
+                    destination,
+                    value,
+                    bit_field,
+                    ..
+                } => (destination, Some(value), bit_field),
+                | InitOperation::Copy {
+                    destination, value, ..
+                } => (destination, Some(value), None),
+                | InitOperation::Zero { destination, .. }
+                | InitOperation::String { destination, .. }
+                | InitOperation::EmptyScalar { destination, .. } => (destination, None, None),
+                | InitOperation::Select { .. }
+                | InitOperation::Repeat { .. }
+                | InitOperation::Unmodeled { .. } => return None,
+            };
+            let start =
+                u128::from(destination.offset) * 8 + bits.map_or(0, |b| u128::from(b.bit_offset));
+            let width = if let Some(bits) = bits {
+                u128::from(bits.width)
+            } else {
+                u128::from(self.types.layout(destination.ty)?.size) * 8
+            };
+            let end = start + width;
+            if width == 0 {
+                if let Some(value) = value {
+                    live[value.0 as usize] = true;
+                }
+                continue;
+            }
+            points.extend([start, end]);
+            spans.push((start, end, value));
+        }
+        points.sort_unstable();
+        points.dedup();
+        let mut next = ArenaVec::new_in(self.scratch);
+        next.extend(0..points.len());
+        for &(start, end, value) in spans.iter().rev() {
+            let left = points.binary_search(&start).ok()?;
+            let right = points.binary_search(&end).ok()?;
+            let mut at = successor(&mut next, left);
+            while at < right {
+                if let Some(value) = value {
+                    live[value.0 as usize] = true;
+                }
+                next[at] = successor(&mut next, at + 1);
+                at = next[at];
+            }
+        }
+        Some(live.leak())
     }
 
     /// A bounded capability scan over typed values and retained plans, not
@@ -179,7 +290,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 return (Some(false), false);
             }
-            children.extend(plan.values.iter().map(|v| Node::Expression(v.expression)));
+            let live = self.initializer_live_values(initializer);
+            children.extend(plan.values.iter().enumerate().filter_map(|(i, v)| {
+                live.is_none_or(|live| live[i])
+                    .then_some(Node::Expression(v.expression))
+            }));
             return (None, false);
         };
         let info = self.expression_info(e);
@@ -278,4 +393,20 @@ impl Node<'_> {
             | Self::Initializer(i) => std::ptr::from_ref(i).addr(),
         }
     }
+}
+
+/// Find the next uncovered compressed interval with path compression.
+fn successor(next: &mut [usize], mut at: usize) -> usize {
+    let start = at;
+    while next[at] != at {
+        at = next[at];
+    }
+    let root = at;
+    at = start;
+    while next[at] != at {
+        let old = next[at];
+        next[at] = root;
+        at = old;
+    }
+    root
 }
