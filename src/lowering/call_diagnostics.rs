@@ -111,20 +111,9 @@ pub(crate) struct CallDiagnostic {
 
 impl CallDiagnostic {
     pub(crate) fn report(self, context: &mut Context<'_>) {
-        let severity = if self.warning {
-            let Some(severity) = context.group_severity(
-                crate::configuration::DiagnosticGroup::AttributeWarning,
-                self.source,
-            ) else {
-                return;
-            };
-            severity
-        } else {
-            crate::translation_phases::ErrorSeverity::Error
-        };
-        if context.withholds(severity, false, self.source) {
+        let Some(severity) = self.severity(context) else {
             return;
-        }
+        };
         context.append_pending_errors([crate::translation_phases::TranslationError::Semantic(
             crate::translation_phases::semantic_analysis::SemanticError {
                 kind: if self.warning {
@@ -138,5 +127,23 @@ impl CallDiagnostic {
                 previous:           Some(self.declaration),
             },
         )]);
+    }
+
+    /// The output preparation boundary must honor promotion and suppression
+    /// before an artifact is committed, without reporting a failed attempt.
+    pub(crate) fn is_error(self, context: &Context<'_>) -> bool {
+        self.severity(context) == Some(crate::translation_phases::ErrorSeverity::Error)
+    }
+
+    fn severity(self, context: &Context<'_>) -> Option<crate::translation_phases::ErrorSeverity> {
+        let severity = if self.warning {
+            context.group_severity(
+                crate::configuration::DiagnosticGroup::AttributeWarning,
+                self.source,
+            )?
+        } else {
+            crate::translation_phases::ErrorSeverity::Error
+        };
+        (!context.withholds(severity, false, self.source)).then_some(severity)
     }
 }

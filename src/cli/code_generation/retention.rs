@@ -3,7 +3,26 @@
 //! attempt can therefore be retried with the required emission closure.
 //! C99: §5.1.1.3p1, p. 11; PDF p. 23. Retention policy follows Clang.
 
-use super::*;
+use super::{
+    ArenaString,
+    BackEnd,
+    Bump,
+    CodeGeneration,
+    CodeOptions,
+    Context,
+    DefaultHost,
+    Emit,
+    FAILURE_STATUS,
+    MiddleEndError,
+    OutputKind,
+    TRAP_STATUS,
+    Target,
+    fmt,
+    interpreter,
+    io,
+    llvm,
+    native,
+};
 use crate::{
     lowering::CallDiagnostic,
     pipeline::DiagnosedModule,
@@ -15,6 +34,7 @@ use crate::{
 /// effects; actual execution happens only after the retry boundary.
 pub(super) fn prepare<'ir>(
     diagnosed: &DiagnosedModule<'ir>,
+    context: &Context<'_>,
     arena: &'ir Bump,
     target: Target,
     code: CodeOptions,
@@ -30,7 +50,7 @@ pub(super) fn prepare<'ir>(
     } else {
         &[]
     };
-    if diagnostics.iter().any(|d| !d.warning) {
+    if diagnostics.iter().any(|d| d.is_error(context)) {
         return Err(Failure::Calls(diagnostics));
     }
     if matches!(options.emit, Some(Emit::Ir | Emit::IrAbi | Emit::Asm))
@@ -121,7 +141,7 @@ pub(super) fn prepare<'ir>(
                             }
                         }
                         diagnostics = retained.leak();
-                        !diagnostics.iter().any(|d| !d.warning)
+                        !diagnostics.iter().any(|d| d.is_error(context))
                     },
                 )
                 .map_err(failure)?;

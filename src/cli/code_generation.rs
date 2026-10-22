@@ -139,7 +139,7 @@ pub(super) fn generate_code<'tu>(
             (copies, retain_locals),
         )
         .map_err(retention::Failure::MiddleEnd)?;
-        let prepared = retention::prepare(&diagnosed, &ir, target, code, options)?;
+        let prepared = retention::prepare(&diagnosed, context, &ir, target, code, options)?;
         Ok((diagnosed, prepared))
     });
     let (diagnosed, prepared) = match prepared {
