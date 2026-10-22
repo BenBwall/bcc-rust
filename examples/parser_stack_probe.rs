@@ -118,3 +118,7 @@ fn touch(
     let _page = black_box(&mut page);
     result
 }
+
+#[cfg(test)]
+#[path = "parser_study/probe_runner_tests.rs"]
+mod runner_tests;

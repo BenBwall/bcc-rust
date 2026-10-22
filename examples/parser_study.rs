@@ -263,3 +263,7 @@ fn record(bytes: usize) {
 
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
+
+#[cfg(all(test, feature = "parser-recursive-descent-study"))]
+#[path = "parser_study/parser_runner_tests.rs"]
+mod runner_tests;
