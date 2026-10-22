@@ -12,8 +12,8 @@ baseline in this cohort. The production parser remains the frame machine.
 
 The Windows worker builds and passes strict Clippy for GNU; MSVC passes compile
 checking and strict Clippy. The GNU binaries run successfully under Wine through
-65,536 live page-sized recursion frames. **Native Windows execution is still
-pending publication of the study commit.** Wine commits its entire stack reservation and cannot
+65,536 live page-sized recursion frames. **Native Windows execution is now in progress** on the owner's self-hosted
+`bcc-win-x64` Actions runner, using source `32fb7b0a`. Wine commits its entire stack reservation and cannot
 validate the demand-commit mechanism this experiment needs. These results do
 not establish native Windows parser throughput or stack safety.
 
@@ -153,7 +153,7 @@ changing that build contract. It does not contain the parser or LLVM.
 | Wine 10 worker unit tests | 3/3 pass |
 | Wine 1 GiB stack, depths 0/256/4,096/16,384/65,536 | Both builds pass |
 | Wine 64 GiB / 100 GiB thread reservation | Both fail at creation, Windows error 8 |
-| Native Windows parser throughput / demand commit / overflow | Pending native host connection |
+| Native Windows parser throughput / demand commit / overflow | Jobs in progress; results pending |
 
 The Wine page-probe slope is 4,208 B/level release and 4,336 B/level debug. These
 are Windows GNU ABI page-probe frames under Wine, not native parser frames.
@@ -191,11 +191,12 @@ The owner clarified the native execution route: `bcc-windows` dispatches the
 The runner was confirmed online and idle. Setup is documented in
 `/home/agent/workspace/bcc-rust/WINDOWS-RUNNER.md`.
 
-GitHub returns HTTP 422 for the unpublished study SHA `9e3d9ace`; this runner
-requires a commit already accessible in the repository. The original study's
-explicit “do not push” rule still applies. Publishing the study branch needs
-owner authorization before a native job can be dispatched. No branch has been
-pushed, workflow dispatched, or host credentials modified.
+The owner authorized publishing this study branch and dispatching native jobs.
+Source `32fb7b0a0aa52c7d896568f79266425d1ce5dba2` is now pushed. The first
+recovery job is [39757463234](https://github.com/BenBwall/bcc-rust/actions/runs/39757463234);
+checkout and native toolchain setup passed. The serial collector records every
+run ID before waiting and verifies the requested source SHA in downloaded
+`results.json` artifacts. No dispatcher or default CI changes were needed.
 
 Two ignored example tests prepare a focused native run without changing the
 operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
@@ -276,7 +277,7 @@ sent across threads. Reusing frame recovery and declaration/extension handoffs
 means the prototype still needs those frames; it does not yet justify deleting
 the production expression/statement machinery.
 
-After publication is authorized, substitute the final pushed SHA in these
+Use the measured source SHA `32fb7b0a0aa52c7d896568f79266425d1ce5dba2` in these
 native runner commands. Submit sequentially on the single Windows host; do not
 use the Linux shared-build wrapper for the runner's own Windows Cargo process.
 The dispatcher provides its native serialization and crash-dialog wrapper.
@@ -291,3 +292,14 @@ bcc-windows test --sha SHA -- --release --features parser-recursive-descent-stud
 
 Each submission prints its run ID. Inspect completion and download that exact
 run's artifacts into this worktree's `.scratch/parser-study/windows/native/`.
+
+The serial collector used for this cohort is:
+
+```sh
+python3 scripts/parser_study_native.py --sha 32fb7b0a0aa52c7d896568f79266425d1ce5dba2 --adopt-first 39757463234
+```
+
+`--adopt-first` reuses the already submitted first job; omit it for a fresh
+cohort. The collector also runs recovery tests in release, resumes from
+`.scratch/parser-study/windows/native/runs.json`, and stops if setup never
+reaches the workload. It never pushes code or modifies the dispatcher.
