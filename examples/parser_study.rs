@@ -25,13 +25,16 @@ use std::{
 
 use bcc_rust::ParserStudyMode;
 
+#[path = "parser_study/reserved_stack.rs"]
+mod reserved_stack;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     assert!(
         args.len() >= 2,
         "usage: parser_study SOURCE [REPEATS] [--mode \
          machine|recursive|growing|hybrid:N|limited:N] [--inspect DEST] [--stack BYTES] \
-         [--sample-stack]"
+         [--reserve-stack BYTES] [--sample-stack]"
     );
     let source = fs::read_to_string(&args[1]).expect("read study source");
     let repeats = args
@@ -57,7 +60,31 @@ fn main() {
     };
     let inspection = option("--inspect");
     let sample_stack = args.iter().any(|arg| arg == "--sample-stack");
-    if let Some(stack) = option("--stack") {
+    let stack = option("--stack");
+    if let Some(reserved) = option("--reserve-stack") {
+        assert!(stack.is_none(), "choose --stack or --reserve-stack");
+        let reserved = reserved
+            .parse::<usize>()
+            .expect("integer reserved stack bytes");
+        let before = Instant::now();
+        reserved_stack::run(reserved, move |bounds| {
+            println!(
+                "thread_launch_ns={} stack_bytes={} reserved_stack=1 guard_bytes={}",
+                before.elapsed().as_nanos(),
+                bounds.bytes,
+                bounds.guard_bytes
+            );
+            run(
+                &source,
+                repeats,
+                mode,
+                sample_stack,
+                inspection.as_deref(),
+                Some(bounds),
+            );
+        })
+        .expect("run parser on reserved stack");
+    } else if let Some(stack) = stack {
         let stack = stack.parse::<usize>().expect("integer stack bytes");
         let before = Instant::now();
         std::thread::Builder::new()
@@ -67,13 +94,27 @@ fn main() {
                     "thread_launch_ns={} stack_bytes={stack}",
                     before.elapsed().as_nanos()
                 );
-                run(&source, repeats, mode, sample_stack, inspection.as_deref());
+                run(
+                    &source,
+                    repeats,
+                    mode,
+                    sample_stack,
+                    inspection.as_deref(),
+                    None,
+                );
             })
             .expect("spawn parser thread")
             .join()
             .expect("join parser thread");
     } else {
-        run(&source, repeats, mode, sample_stack, inspection.as_deref());
+        run(
+            &source,
+            repeats,
+            mode,
+            sample_stack,
+            inspection.as_deref(),
+            None,
+        );
     }
 }
 
@@ -83,26 +124,39 @@ fn run(
     mode: ParserStudyMode,
     sample_stack: bool,
     inspection: Option<&str>,
+    stack: Option<reserved_stack::Bounds>,
 ) {
     for index in 0..repeats {
+        let stack_before = Cell::new(reserved_stack::Snapshot::default());
+        let stack_after = Cell::new(reserved_stack::Snapshot::default());
+        let faults_before = Cell::new(reserved_stack::Faults::default());
+        let faults_after = Cell::new(reserved_stack::Faults::default());
         let result = bcc_rust::with_study_source(source, |prepared| {
             prepared.measure_with_mode(
                 mode,
                 sample_stack,
                 inspection.is_some(),
                 || {
+                    stack_before.set(stack.map_or_default(reserved_stack::Bounds::snapshot));
+                    faults_before.set(reserved_stack::Faults::current());
                     CALLS.set(0);
                     BYTES.set(0);
                     ACTIVE.set(true);
                 },
-                || ACTIVE.set(false),
+                || {
+                    ACTIVE.set(false);
+                    faults_after.set(reserved_stack::Faults::current());
+                    stack_after.set(stack.map_or_default(reserved_stack::Bounds::snapshot));
+                },
             )
         });
         println!(
             "sample={index} ns={} tokens={} roots={} diagnostics={} parse_bytes={} tu_bytes={} \
              commit_bytes={} regions={} global_calls={} global_bytes={} expressions={} \
              statements={} compounds={} depth={} stack_span={} fallbacks={} limit_hits={} \
-             rss_before={} rss_after={}",
+             rss_before={} rss_after={} stack_reserved={} stack_rss_before={} stack_rss_after={} \
+             stack_swap_after={} stack_writable={} stack_noreserve={} minor_faults={} \
+             major_faults={}",
             result.nanoseconds,
             result.tokens,
             result.roots,
@@ -121,7 +175,21 @@ fn run(
             result.fallback_count,
             result.depth_limit_hits,
             result.peak_rss_before,
-            result.peak_rss_after
+            result.peak_rss_after,
+            stack.map_or(0, |bounds| bounds.bytes),
+            stack_before.get().resident_bytes,
+            stack_after.get().resident_bytes,
+            stack_after.get().swap_bytes,
+            stack_after.get().writable_bytes,
+            usize::from(stack_after.get().noreserve),
+            faults_after
+                .get()
+                .minor
+                .saturating_sub(faults_before.get().minor),
+            faults_after
+                .get()
+                .major
+                .saturating_sub(faults_before.get().major)
         );
         if let Some(text) = &result.inspection {
             fs::write(inspection.expect("inspection destination"), text).expect("write inspection");

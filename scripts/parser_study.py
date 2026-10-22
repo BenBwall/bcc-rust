@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--files", nargs="+")
     parser.add_argument("--manifest", type=Path, help="use the grammar manifest's exact case list")
     parser.add_argument("--stack", type=int)
+    parser.add_argument("--reserve-stack", type=int, default=100 * 1024**3, help="reservation for reserved:MODE labels")
     args = parser.parse_args()
     args.binary = args.binary.resolve()
     binaries = {"study": args.binary}
@@ -63,16 +64,19 @@ def main():
         files = [args.inputs / f"{kind}-{depth}.c" for depth in [32, 127, 256, 1024, 4096, 16384] for kind in ["parentheses", "unary", "assignment", "conditional", "statements", "blocks", "declarator", "initializer"]]
 
     rows = []
-    metadata = {"binaries": {label: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for label, path in binaries.items()}, "action": args.action, "repeats": args.repeats, "modes": args.modes, "stack_bytes": args.stack}
+    metadata = {"binaries": {label: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for label, path in binaries.items()}, "action": args.action, "repeats": args.repeats, "modes": args.modes, "stack_bytes": args.stack, "reserved_stack_bytes": args.reserve_stack}
 
     def save():
         args.output.write_text(json.dumps({"metadata": metadata, "rows": rows}, indent=2) + "\n")
 
     def execute(source, mode, repeat):
         binary = binaries[mode] if mode in ["baseline", "alignment"] else args.binary
-        parser_mode = "machine" if mode in ["baseline", "alignment"] else mode
+        reserved = mode.startswith("reserved:")
+        parser_mode = "machine" if mode in ["baseline", "alignment"] else mode.removeprefix("reserved:")
         command = [str(binary), str(source), "1", "--mode", parser_mode]
-        if args.stack:
+        if reserved:
+            command += ["--reserve-stack", str(args.reserve_stack)]
+        elif args.stack:
             command += ["--stack", str(args.stack)]
         if args.action == "stack":
             command += ["--sample-stack"]
