@@ -705,6 +705,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.limit_optional_locals_for_next(condition, None);
                 }
             },
+            | FunctionWork::ConditionalMark(expression, index, outer, outer_elided) =>
+                self.mark_conditional_arm(expression, index, outer, outer_elided),
             | FunctionWork::GenericMark(generic) => {
                 let at = EmissionMark {
                     references:  self.functions.uses.len(),
@@ -948,6 +950,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         required_locals_only: usage
                             .reference_context
                             .is_some_and(|index| required_locals[index]),
+                        initializer_value: usage.initializer_value,
                     });
                 }
                 if let Some(import) = usage.dll_import {
@@ -1891,6 +1894,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             owner: self.reference_owner(),
             binding,
             name,
+            initializer_value: self.functions.initializer_value,
             sizeof: self.functions.sizeof,
             inline_function,
             dll_import,
@@ -1987,6 +1991,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// references of the code analyzed next begin.
     pub(super) fn reference_count(&self) -> usize {
         self.functions.uses.len()
+    }
+
+    /// Marks the references recorded in `range` as skipped by code
+    /// generation, except those of nested function bodies, which are
+    /// emitted on their own.
+    pub(super) fn skip_references(&mut self, range: std::ops::Range<usize>) {
+        let function = self.functions.reference_function;
+        for usage in &mut self.functions.uses[range] {
+            if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
+            {
+                usage.dead = true;
+            }
+        }
     }
 
     /// Marks references that lowering omits, independently of LLVM creation
@@ -2388,24 +2405,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self.dll_storage(binding) != Some(super::DllStorage::Export)
     }
 
+    /// Whether Clang's code generation emits definition `f` of `binding`
+    /// where it appears rather than after the unit: a retained definition,
+    /// or a non-discardable external definition by the declarations seen
+    /// so far (`CodeGenModule::EmitGlobal`, `MustBeEmitted`).
+    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125.
+    fn emitted_where_defined(&mut self, binding: usize, _f: &FunctionDefinition<'tu>) -> bool {
+        let entity = self.entity_of(binding);
+        self.retained_by_used(entity)
+            || self.attributes.init_function(entity)
+            || (self.bindings[binding].linkage == Linkage::External
+                && self
+                    .functions
+                    .entities
+                    .get(&self.function_identity(binding))
+                    .is_some_and(|entity| self.body_external(entity)))
+    }
+
     /// Whether every file-scope declaration selects a C99 inline-only
     /// body, independently of the target's external-inline ABI rule.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
-    /// Whether Clang's code generation emits definition `f` of `binding`
-    /// where it appears rather than after the unit: an external function
-    /// that neither it nor an earlier declaration declares `inline`
-    /// (`CodeGenModule::EmitGlobal`, `MustBeEmitted`).
-    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125.
-    fn emitted_where_defined(&self, binding: usize, f: &FunctionDefinition<'tu>) -> bool {
-        self.bindings[binding].linkage == Linkage::External
-            && !f.declaration_specifiers.function_specifiers.is_inline
-            && self
-                .functions
-                .entities
-                .get(&self.function_identity(binding))
-                .is_none_or(|entity| !entity.msvc_inline.inline_declared)
-    }
-
     fn inline_only_declarations(&self, binding: usize) -> bool {
         self.functions
             .entities
@@ -2546,6 +2565,9 @@ pub(super) enum FunctionWork<'tu> {
     },
     /// Restore insertion effects after typing an omitted conditional arm.
     ConditionalArmEnd(&'tu Expression<'tu>, &'tu Expression<'tu>, Option<usize>),
+    /// The reference boundaries and insertion states of a conditional's
+    /// arms, before its result type settles whether either is skipped.
+    ConditionalMark(&'tu Expression<'tu>, usize, Skipped, bool),
     /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
     /// the arm holds a label, which keeps Clang from skipping it.
     DeadStatementArm {
@@ -2652,6 +2674,7 @@ struct Use {
     owner:             Option<ReferenceOwner>,
     binding:           usize,
     name:              Identifier,
+    initializer_value: Option<usize>,
     sizeof:            Option<usize>,
     inline_function:   Option<usize>,
     /// Whether the reference named an imported declaration, for an entity
@@ -2765,6 +2788,8 @@ pub(super) struct State<'tu, 's> {
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
     pub(super) reference_function: Option<usize>,
     pub(super) initializer: Option<usize>,
+    /// Root expression of the initializer value currently being analyzed.
+    pub(super) initializer_value: Option<usize>,
     pub(super) current: Option<FunctionContext<'tu>>,
     next_function: usize,
     old_names: ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
@@ -2834,6 +2859,7 @@ impl<'s> State<'_, 's> {
             reference_contexts: ArenaVec::new_in(scratch),
             reference_function: None,
             initializer: None,
+            initializer_value: None,
             current: None,
             next_function: 0,
             old_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

@@ -118,6 +118,10 @@ pub(crate) struct EntityReference {
     /// This reference may exist only because a pure Clang fold is unmodeled.
     /// Keep its required closure without making helper-local optional roots.
     pub(crate) required_locals_only: bool,
+    /// Syntax identity of the initializer value containing this reference,
+    /// so creation order can exclude values later stores fully replace.
+    /// Analysis and ordinary reachability still retain those references.
+    pub(crate) initializer_value:    Option<usize>,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than

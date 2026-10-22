@@ -145,7 +145,7 @@ impl Leaf<'_> {
 
     /// The bits the leaf writes, from the object's start. A replication
     /// whose copies are not adjacent reports none.
-    fn bits(self, table: &Types<'_>) -> Result<(u64, u64), LoweringErrorKind> {
+    pub(super) fn bits(self, table: &Types<'_>) -> Result<(u64, u64), LoweringErrorKind> {
         Ok(match self {
             | Self::Zero { offset, size, .. } | Self::String { offset, size, .. } =>
                 (8 * offset, 8 * (offset + size)),

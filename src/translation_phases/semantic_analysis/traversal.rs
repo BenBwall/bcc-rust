@@ -109,18 +109,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Expression(left_expression));
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
+                // The result type is known only after both arms. Clang's
+                // complex and aggregate emitters preserve both arms even
+                // for a folded condition; scalar emission skips one.
+                let outer = self.skipped_state();
                 self.work
-                    .push(Work::FunctionWork(FunctionWork::RestoreElided(
-                        self.functions.elided,
-                        )));
-                self.work
-                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
-                        self.functions.unvisited,
+                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, 2, outer, self.functions.elided,
                     )));
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
-                    self.functions.dead,
-                )));
-                for (arm, live) in [(c.else_expression, false), (c.then_expression, true)] {
+                for (arm, live, mark) in [(c.else_expression, false, 1), (c.then_expression, true, 0)] {
                     if branch {
                         self.work.push(Work::Expression(arm));
                     } else {
@@ -128,10 +125,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             owner: e,
                             arm,
                             live,
-                            outer: self.skipped_state(),
+                            outer,
                             outer_elided: self.functions.elided,
                         }));
                     }
+                    self.work.push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, mark, outer, self.functions.elided,
+                    )));
                 }
                 // GNU `x ?: y` binds its common operand before folding the
                 // condition (Clang `OpaqueValueMapping`), so it is always

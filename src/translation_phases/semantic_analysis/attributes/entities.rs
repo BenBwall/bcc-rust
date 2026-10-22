@@ -1403,6 +1403,14 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
 }
 
 impl<'tu, 's> AttributeState<'tu, 's> {
+    /// A constructor or destructor is retained at its definition.
+    pub(in crate::translation_phases::semantic_analysis) fn init_function(
+        &self,
+        entity: EntityId,
+    ) -> bool {
+        self.initializers.contains_key(&entity)
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn new(scratch: &'s Bump) -> Self {
         Self {
             checked:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),

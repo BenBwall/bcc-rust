@@ -26,6 +26,7 @@ use crate::{
         },
         syntax::{
             BlockItem,
+            ConstantExpressionSlot,
             Expression,
             ExpressionSlot,
             ForInitializer,
@@ -428,10 +429,22 @@ fn statement_children<'tu>(
         | StatementType::Declaration(declaration) =>
             declaration_children(scratch, declaration, &mut push),
         | StatementType::Attributed(attributed) => push(Step::Enter(attributed.statement)),
-        | StatementType::Label(_, child)
-        | StatementType::Default(child)
-        | StatementType::Case(_, child) => push(Step::Enter(child)),
-        | StatementType::CaseRange(range) => push(Step::Enter(range.statement)),
+        | StatementType::Label(_, child) | StatementType::Default(child) =>
+            push(Step::Enter(child)),
+        | StatementType::Case(expression, child) => {
+            if let ConstantExpressionSlot::Parsed(expression) = expression {
+                push(Step::Expression(expression.expression()));
+            }
+            push(Step::Enter(child));
+        },
+        | StatementType::CaseRange(range) => {
+            for bound in [range.lower, range.upper] {
+                if let ConstantExpressionSlot::Parsed(expression) = bound {
+                    push(Step::Expression(expression.expression()));
+                }
+            }
+            push(Step::Enter(range.statement));
+        },
         | StatementType::Expression(expression)
         | StatementType::ComputedGoto(expression)
         | StatementType::Return(Some(expression)) => slot(expression, &mut push),

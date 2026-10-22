@@ -126,6 +126,9 @@ pub(super) struct State<'tu, 's> {
     /// depth of a query that `folding::DEPTH` cut short and the weak
     /// horizon of one that read a weak name.
     folded: ArenaMap<'s, usize, folding::Memo<Option<folding::Value>>>,
+    /// A conditional's arm boundaries and insertion states, resolved after
+    /// its result type distinguishes scalar from complex/aggregate emission.
+    conditional_marks: ArenaMap<'s, usize, [(usize, Option<usize>, usize); 3]>,
     /// The evaluation in progress was cut short by `folding::DEPTH`.
     depth_cut: bool,
     /// Whether an expression holds a label, by address.
@@ -141,10 +144,9 @@ pub(super) struct State<'tu, 's> {
     /// The output-token ordinal past the root being analyzed.
     pub(super) root_end: usize,
     /// The weak names that apply to the code being analyzed: those before
-    /// this ordinal. Clang emits an external function that no declaration
-    /// makes inline where it is defined, and every other body after the
-    /// whole unit, so this is the root's end in such a function and
-    /// unbounded elsewhere.
+    /// this ordinal. A retained or currently nondiscardable external body
+    /// is emitted at its definition, so this is the root's end there and
+    /// unbounded for deferred bodies.
     pub(super) weak_horizon: usize,
     /// The evaluation in progress read whether a name in `weak_names`
     /// applies, so that its result holds only at the same horizon.
@@ -177,6 +179,9 @@ pub(super) struct State<'tu, 's> {
     /// operation that stores each, by the address of its initializer, with
     /// the depth of a query `folding::DEPTH` cut short (`folding.rs`).
     plan_covers: ArenaMap<'s, usize, folding::Memo<Option<folding::Cover<'s>>>>,
+    /// Cached constant-array strlen queries, including failed scans, with
+    /// the same depth and weak-horizon dependencies as other folds.
+    array_lengths: ArenaMap<'s, (usize, u64, super::TypeId), folding::Memo<Option<folding::Value>>>,
     /// The elements of each string literal the evaluator reads, by literal
     /// and encoding.
     literal_units: ArenaMap<'s, (u32, u8), &'s [u32]>,
@@ -230,6 +235,7 @@ impl<'s> State<'_, 's> {
             label_positions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             walked: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             folded: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            conditional_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             depth_cut: false,
             refolds: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             discarded_results: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -251,6 +257,7 @@ impl<'s> State<'_, 's> {
             constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             constant_aggregates: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             plan_covers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            array_lengths: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             literal_units: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified: ArenaVec::new_in(scratch),
             work_low: 0,

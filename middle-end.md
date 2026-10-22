@@ -621,6 +621,19 @@ See
 attribute. C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125), §6.9p5 (p. 140;
 PDF p. 152), and [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
 
+Creation order follows definitions already emitted because of `used`, a
+constructor or destructor even if a later declaration makes an inline body
+external. Plain C99 inline-only bodies are not created at O0 merely because
+`used` is written. A block-scope static initializer contributes only values
+whose bits survive later initializer replacements, in final element order; retained references carry
+their containing initializer-value identity for this query. Its enclosing
+function is indexed once per scope, so nested block statics do not repeatedly
+walk their ancestry. GNU range replications copy the source value identities
+before subsequent replacements; a uniform contiguous range stays one interval,
+and other ranges visit no more elements than static emission itself.
+These rules affect creation order, independently of ordinary reachability and
+of the stacked local-static elision work.
+
 ### Retained semantic interfaces
 
 Lowering consumes typed expressions and conversions, bindings and definitions,

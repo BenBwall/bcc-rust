@@ -12,6 +12,18 @@ use super::{
     Linkage,
     Unit,
 };
+use crate::{
+    lowering::initializers::{
+        self,
+        Leaf,
+        Storage,
+    },
+    translation_phases::semantic_analysis::InitOperation,
+    util::{
+        bump::Bump,
+        interval_cover::last_writes,
+    },
+};
 
 impl<'a> Unit<'a, '_, '_> {
     /// The bindings the module emits: semantic analysis's reachability,
@@ -71,33 +83,83 @@ impl<'a> Unit<'a, '_, '_> {
                 _ = function_scopes.insert(record.scope, binding);
             }
         }
+        // Scopes are created after their parents. Resolve enclosing
+        // functions once rather than climbing each static's ancestry for
+        // every reference (quadratic in nested blocks).
+        let mut scope_functions = ArenaVec::with_capacity_in(self.sema.scopes.len(), self.tables);
+        for (index, scope) in self.sema.scopes.iter().enumerate() {
+            let function = function_scopes
+                .get(&index)
+                .copied()
+                .or_else(|| scope.parent.and_then(|parent| scope_functions[parent]));
+            scope_functions.push(function);
+        }
         let owner_of = |owner: usize| {
             let binding = self.sema.bindings[owner];
             if binding.kind == BindingKind::Object
                 && binding.linkage == Linkage::None
                 && binding.duration.is_static_or_thread()
+                && let Some(function) = scope_functions[binding.scope]
             {
-                let mut scope = Some(binding.scope);
-                while let Some(index) = scope {
-                    if let Some(&function) = function_scopes.get(&index) {
-                        return canonical[function];
-                    }
-                    scope = self.sema.scopes[index].parent;
-                }
+                return canonical[function];
             }
             canonical[owner]
         };
-        // References grouped by owner, in source order.
+        let mut initializer_values =
+            ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        for definition in self.sema.definitions {
+            let binding = definition.binding;
+            if owner_of(binding) != canonical[binding]
+                && let Some(values) = self.materialized_initializer_values(binding)
+            {
+                drop(initializer_values.insert(binding, values));
+            }
+        }
+        // References grouped by owner, in source order. An analyzed value
+        // fully replaced by a later static initializer creates no symbol.
         let mut starts = ArenaVec::new_in(self.tables);
         starts.resize(canonical.len() + 1, 0usize);
         // Clang's code generation skips dead code, which creates nothing.
-        let live = || {
+        let mut live = ArenaVec::new_in(self.tables);
+        live.extend(
             self.sema
                 .references
                 .iter()
-                .filter(|reference| !reference.dead)
-        };
-        for reference in live() {
+                .enumerate()
+                .filter(|(_, reference)| {
+                    !reference.dead
+                        && initializer_values
+                            .get(&reference.owner)
+                            .is_none_or(|values| {
+                                reference
+                                    .initializer_value
+                                    .is_none_or(|value| values.contains_key(&value))
+                            })
+                }),
+        );
+        // Constant aggregate emission visits the final elements, in layout
+        // order, rather than the overwritten source designators. References
+        // within one value retain their original expression order.
+        let mut begin = 0;
+        while begin < live.len() {
+            let owner = live[begin].1.owner;
+            let mut end = begin + 1;
+            while end < live.len() && live[end].1.owner == owner {
+                end += 1;
+            }
+            if let Some(values) = initializer_values.get(&owner) {
+                live[begin..end].sort_unstable_by_key(|(index, reference)| {
+                    (
+                        reference
+                            .initializer_value
+                            .and_then(|value| values.get(&value).copied()),
+                        *index,
+                    )
+                });
+            }
+            begin = end;
+        }
+        for &(_, reference) in &live {
             starts[owner_of(reference.owner) + 1] += 1;
         }
         for index in 1..starts.len() {
@@ -106,7 +168,7 @@ impl<'a> Unit<'a, '_, '_> {
         let mut next = starts.clone();
         let mut targets = ArenaVec::new_in(self.tables);
         targets.resize(starts[canonical.len()], 0usize);
-        for reference in live() {
+        for &(_, reference) in &live {
             let owner = owner_of(reference.owner);
             targets[next[owner]] = canonical[reference.binding];
             next[owner] += 1;
@@ -116,12 +178,41 @@ impl<'a> Unit<'a, '_, '_> {
         for &binding in self.sema.external_redeclarations {
             _ = forced.insert(canonical[binding]);
         }
+        let mut retained = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        for init in self.sema.symbols.init_functions {
+            _ = retained.insert(canonical[init.binding]);
+        }
+        for definition in self.sema.definitions {
+            if self
+                .sema
+                .entity_attributes(definition.binding)
+                .is_some_and(|attributes| attributes.used)
+            {
+                _ = retained.insert(canonical[definition.binding]);
+            }
+        }
         let eager = |definition: &Definition| {
-            self.eagerly_emitted(definition) && !forced.contains(&canonical[definition.binding])
+            retained.contains(&canonical[definition.binding])
+                || (self.eagerly_emitted(definition)
+                    && !forced.contains(&canonical[definition.binding]))
+        };
+        // Plain C99 inline-only bodies are not emitted at O0, even when
+        // `used` is written. Weak and always_inline bodies are emitted
+        // once referenced; their special copies can affect this order.
+        let creates_body = |definition: &Definition| {
+            definition.kind != DefinitionKind::Inline
+                || self
+                    .sema
+                    .entity_attributes(definition.binding)
+                    .is_some_and(|attributes| {
+                        attributes.weak
+                            || attributes.inlining
+                                == crate::translation_phases::semantic_analysis::Inlining::Always
+                    })
         };
         let mut deferred = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
         for definition in self.sema.definitions {
-            if !eager(definition) {
+            if creates_body(definition) && !eager(definition) {
                 _ = deferred.insert(canonical[definition.binding]);
             }
         }
@@ -140,6 +231,9 @@ impl<'a> Unit<'a, '_, '_> {
                 redeclarations.next_if(|&&binding| binding < definition.binding)
             {
                 order.touch(canonical[binding], &deferred);
+            }
+            if !creates_body(definition) {
+                continue;
             }
             let entity = canonical[definition.binding];
             if eager(definition) {
@@ -192,6 +286,95 @@ impl<'a> Unit<'a, '_, '_> {
                 .map(|entity| order.ranks.get(entity).copied()),
         );
         ranks
+    }
+
+    /// Initializer values contributing to a static object's final bits.
+    /// Reuse lowering's plan replay for brace and union resets. Replications
+    /// copy the source's provenance at that point, before later stores can
+    /// replace it. A uniform contiguous range stays one interval; other
+    /// copies cost no more elements than static emission itself visits.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    fn materialized_initializer_values(
+        &self,
+        binding: usize,
+    ) -> Option<ArenaMap<'a, usize, usize>> {
+        let initializer = self.sema.entity(binding)?.initializer?;
+        let plan = self.sema.initializers.plan(initializer)?;
+        // A single scalar store has no replacement or element-order work.
+        // In particular, nested pointer statics need no temporary arena.
+        if matches!(plan.operations, [InitOperation::Store { .. }]) {
+            return None;
+        }
+        let scratch = Bump::new();
+        let (leaves, _) =
+            initializers::leaves(self.sema, plan.ty, initializer, Storage::Static, &scratch)
+                .ok()?;
+        let mut ranges: ArenaVec<'_, (u64, u64)> =
+            ArenaVec::with_capacity_in(leaves.len(), &scratch);
+        let mut writers: ArenaVec<'_, Option<usize>> =
+            ArenaVec::with_capacity_in(leaves.len(), &scratch);
+        for &leaf in &leaves {
+            if let Leaf::Replicate {
+                offset,
+                size,
+                stride,
+                count,
+                ..
+            } = leaf
+            {
+                let start = offset.checked_mul(8)?;
+                let end = offset.checked_add(size)?.checked_mul(8)?;
+                let replay = Bump::new();
+                let mut source = ArenaVec::new_in(&replay);
+                // Snapshot only the source run. Never read the final source
+                // after a later initializer has replaced its original value.
+                let mut inside = ArenaVec::new_in(&replay);
+                let mut origins = ArenaVec::new_in(&replay);
+                for (index, &(low, high)) in ranges.iter().enumerate() {
+                    if low < end && high > start {
+                        inside.push((low.max(start), high.min(end)));
+                        origins.push(writers[index]);
+                    }
+                }
+                for (low, high, index) in last_writes(&inside, &replay) {
+                    source.push((low, high, origins[index]));
+                }
+                if let &[(low, high, writer)] = source.as_slice()
+                    && low == start
+                    && high == end
+                    && size == stride
+                {
+                    ranges.push((
+                        end,
+                        end.checked_add(count.checked_mul(stride)?.checked_mul(8)?)?,
+                    ));
+                    writers.push(writer);
+                } else {
+                    for copy in 1..=count {
+                        let shift = copy.checked_mul(stride)?.checked_mul(8)?;
+                        for &(low, high, writer) in &source {
+                            ranges.push((low.checked_add(shift)?, high.checked_add(shift)?));
+                            writers.push(writer);
+                        }
+                    }
+                }
+            } else {
+                ranges.push(leaf.bits(&self.sema.types).ok()?);
+                writers.push(match leaf {
+                    | Leaf::Scalar { expression, .. } | Leaf::Copy { expression, .. } =>
+                        Some(std::ptr::from_ref(expression).addr()),
+                    | _ => None,
+                });
+            }
+        }
+        let mut values = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        for (_, _, index) in last_writes(&ranges, &scratch) {
+            if let Some(value) = writers[index] {
+                let rank = values.len();
+                _ = values.entry(value).or_insert(rank);
+            }
+        }
+        Some(values)
     }
 
     /// Whether Clang emits `definition` where it appears rather than once

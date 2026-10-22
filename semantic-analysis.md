@@ -938,9 +938,10 @@ refuses as undefined; a `sizeof`, `alignof` or `_Countof` operand does not
 count, as only its type is read. An entity is weak for a body when `#pragma
 weak` names it or a declaration, at file or block scope and before any
 definition of the entity, writes `weak` or `weak_import`: before the end of
-the body for an external function no declaration makes inline, which Clang
-emits where it is defined, and anywhere in the unit for every other body,
-which Clang emits after the whole unit. The pragmas and the ends of the
+the body for a function Clang emits at its definition (a used, constructor
+or destructor body, or a nondiscardable external definition under the
+inline rules and declarations seen so far), and anywhere in the unit for
+a deferred body. The pragmas and the ends of the
 external declarations are compared by output-token ordinal. The evaluator
 recurses through operands and object initializers, so it follows them at
 most 64 levels deep, which an unoptimized build runs within a 1 MiB stack;
@@ -1061,8 +1062,13 @@ not return, a declaration that may be variably modified still ahead in the
 enclosing blocks keeps the code after the call emitted instead, as it is
 without the model of such calls. A typedef name counts as variably modified
 there when a block-scope typedef of the function may give it such a type, so
-that typedefs coming into scope later cannot change a kept answer. Bit-field, union and floating reads and GNU
-ranges in `const` initializers remain unmodeled. Distinct-object address comparisons such as `&x1 == &x2` also remain
+that typedefs coming into scope later cannot change a kept answer. Floating
+object reads and explicit casts use the same target rounding as semantic
+constant evaluation, including narrowing, underflow and complex-to-real
+conversion; unsupported formats stay unfolded. Aggregate read coverage uses
+a sorted endpoint sweep, and constant-array `strlen` results are memoized
+with their evaluation-depth and weak-horizon dependencies. Bit-field and union
+reads and GNU ranges in `const` initializers remain unmodeled. Distinct-object address comparisons such as `&x1 == &x2` also remain
 unfolded. Constant queries still miss `(long)"a" + 1 - 1`, `(long)"a" - 0`,
 `(char *)8`, `!(long)"a"`, `(long)"a" == 0`, `(long)"a" != 0` and `__func__[0]`.
 These gaps can leave code emitted that Clang skips. For a pure condition

@@ -1478,3 +1478,53 @@ fn third_pr_review_forms_fix_generated_import_state() {
         }
     }
 }
+
+#[test]
+fn fourth_pr_review_forms_preserve_generated_import_state() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    for (source, imported) in [
+        (
+            "const float k=16777217.0; int h(void) { if ((int)k==16777216) return x; return 0; }",
+            false,
+        ),
+        (
+            "const float k[1]={16777217.0}; int h(void) { if ((int)k[0]==16777216) return x; \
+             return 0; }",
+            false,
+        ),
+        (
+            "const int k=1; struct S { int a; }; int h(void) { (void)(k ? (struct S){0} : \
+             (x,(struct S){0})); return 0; }",
+            false,
+        ),
+        (
+            "const int k=1; int h(void) { (void)(k ? 1.0i : (x,2.0i)); return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch(1) { case 1: break; case sizeof(({ L:;1; })): return x; } \
+             return 0; }",
+            false,
+        ),
+        (
+            "const int k=0; static __attribute__((used)) int h(void) { if(k) return x; return 0; \
+             } int p(void) { return h(); }\n#pragma weak k\n",
+            true,
+        ),
+        (
+            "const int k=0; static int h(void) { if(k) return x; return 0; } int p(void) { return \
+             h(); }\n#pragma weak k\n",
+            false,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}
