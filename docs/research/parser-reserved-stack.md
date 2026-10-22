@@ -44,12 +44,33 @@ python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts
 ```
 
 The build batch saves separate study and feature-disabled release/debug copies
-under `.scratch/parser-study/reserved-*`. The Python runner accepts labels such
+under `.scratch/parser-study/reserved-*`.
+
+```sh
+python3 scripts/parser_study_reserved.py prepare
+python3 scripts/parser_study_reserved.py collect --profile release
+python3 scripts/parser_study_reserved.py archive
+python3 scripts/parser_study_reserved.py collect --profile debug
+python3 scripts/parser_study_reserved.py archive
+```
+
+The collection batches contain exact inputs/options, rotate mode order over nine
+shallow or seven deep samples, record stack-memory samples separately, compare
+AST/provenance/diagnostic output and sweep reservation sizes. The generated extra
+fixtures reach depth 65,536. Deep full-tree rendering is deliberately avoided. The Python runner accepts labels such
 as `reserved:recursive` and `reserved:machine`, using a default 100 GiB usable
 reservation. `--reserve-stack BYTES` changes that reservation. `--stack BYTES`
 continues to apply only to ordinary, non-reserved labels.
 
 ## Results
 
-Implementation saved before the first build. Results and validation will be
-added after native measurements complete.
+The study feature passes strict Clippy. All three native-stack tests pass:
+borrowed callback/result transfer with a lazily backed 1 GiB stack; worker panic
+propagation after joining; and rejection of unrepresentable reservations.
+The first test confirms a writable mapping with Linux's `nr` flag and residency
+below 4 MiB. Release/debug measurements and canonical checks are running.
+
+The first build caught five Clippy issues, all corrected. The first native test
+run failed because the host rejected optional `MADV_NOHUGEPAGE` advice. Making
+that advice best-effort corrected the failure; actual backing is measured rather
+than assumed. Failed validation logs are retained alongside the successful run.
