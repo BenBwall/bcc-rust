@@ -229,6 +229,13 @@ has also passed all seven tests; release stack and timing jobs remain in
 progress. The full release unit-test binary took about ten minutes to build;
 only the seven selected tests ran, in 0.85 seconds.
 
+Native release stack job
+[39760102752](https://github.com/BenBwall/bcc-rust/actions/runs/39760102752)
+passes all reservation/growth/exhaustion checks as well. Both reservations start
+with 8 KiB writable; depth 65,536 spans 275,779,687 bytes and commits
+275,783,680 bytes (263.01 MiB). Both undersized children return `0xC00000FD`.
+The Wine-only release exit 101 does not reproduce in either native profile.
+
 Two ignored example tests prepare a focused native run without changing the
 operational dispatcher: `runner_stack_measurements` probes 1/100 GiB reservations
 through 65,536 live page frames, asserts small initial commitment plus growth
