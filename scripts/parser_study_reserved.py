@@ -7,7 +7,6 @@ import hashlib
 import json
 from pathlib import Path
 import platform
-import shutil
 import statistics
 import subprocess
 import sys
@@ -139,11 +138,19 @@ def archive(args):
         writer.writeheader()
         writer.writerows(tables)
     (output / "transport-identity.json").write_text(json.dumps(checks, indent=2) + "\n")
+    validation = {}
     for path in sorted(args.scratch.glob("reserved-*.log")):
         # Keep validation logs and failure evidence, not verbose repeated
         # collection stdout already represented in raw observation JSON.
         if "build" in path.name or "checks" in path.name or "verification" in path.name:
-            shutil.copyfile(path, output / path.name)
+            text = path.read_text()
+            (output / path.name).write_text("\n".join(line.rstrip() for line in text.splitlines()).rstrip() + "\n")
+            validation[path.name] = {
+                "raw_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "complete": text.rstrip().endswith("EXIT 0"),
+                "test_results": [line for line in text.splitlines() if line.startswith("test result:")],
+            }
+    (output / "validation.json").write_text(json.dumps(validation, indent=2) + "\n")
     print(f"Archived {len(tables)} groups, {sum(row['identical'] for row in checks)}/{len(checks)} transport identity checks")
 
 
