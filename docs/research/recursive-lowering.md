@@ -34,7 +34,9 @@ feature enabled; only the reserved-worker CLI and explicit study options select
 recursion. The same helper supports task/recursive differential checks in
 the same feature-enabled binary. Lowering tests compare complete printed IR,
 function sources, retained call diagnostics and refusal diagnostics. Measurements
-prepare the frontend outside the lowering timer and verify/inspect afterward.
+prepare the frontend outside the lowering timer and perform additional
+verification/inspection afterward. The existing debug-only per-function IR
+verifier remains inside lowering time in both modes; it is absent in release.
 Stack sampling runs separately from timing. Whole-worker wall time is also
 reported, including preprocessing, analysis, setup/join and destruction.
 

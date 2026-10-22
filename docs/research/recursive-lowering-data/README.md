@@ -46,7 +46,9 @@ The same frontend, semantic facts, IR builders and reservation policy serve
 both lowering modes. Preprocessing and semantic analysis are outside the
 lowering timer. Inspection verifies printed IR, function sources, call diagnostics
 and refusal diagnostics outside timing. Native stack sampling is also untimed.
-All timed lowering intervals assert zero global allocator calls/bytes.
+The existing debug-only per-function IR verifier remains inside lowering time
+in both modes. All timed lowering intervals assert zero global allocator
+calls/bytes.
 
 All real C inputs come from the measured source commit; their hashes are in
 `metadata.json`:
