@@ -73,3 +73,10 @@ at every hybrid threshold 0 through 16, plus recursive and growing modes.
 Release grammar validation also passes all 1,050 runs. The isolated Windows
 probe builds in debug and release for GNU, and passes strict Clippy for GNU
 and MSVC. Windows execution remains pending Wine initialization.
+
+An intermediate recovery implementation increased native stack use because a
+large recovery-frame temporary stayed in every recursive expression call.
+Grammar-entry samples found parentheses slopes of 1,152 B/level release and
+2,848 B/level debug, versus the original 704/1,952 B. Recovery completion is now
+outlined into a non-inlined helper called after descent returns; repeat
+measurement is pending. Intermediate timing data is not the final implementation.

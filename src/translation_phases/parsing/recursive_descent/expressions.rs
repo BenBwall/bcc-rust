@@ -69,6 +69,19 @@ impl<'tu> Parser<'_, 'tu, '_> {
     ) -> Option<&'tu Expression<'tu>> {
         let errors = self.hard_error_count;
         let operand = self.rd_precedence(mode_limit(mode), mode, boundary)?;
+        self.rd_finish_expression(operand, mode, boundary, errors)
+    }
+
+    // Keep the large, rarely used recovery frame out of live recursive
+    // activation records, including unoptimized Windows builds.
+    #[inline(never)]
+    fn rd_finish_expression(
+        &mut self,
+        operand: Operand<'tu>,
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+        errors: usize,
+    ) -> Option<&'tu Expression<'tu>> {
         let mut frame = ExpressionFrame::new(self.arena, mode, boundary, errors);
         if operand.frame_finished || !frame.study_needs_recovery(self.cursor.current()) {
             return Some(operand.expression);
