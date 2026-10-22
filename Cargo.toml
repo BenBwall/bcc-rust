@@ -152,4 +152,4 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Stora
 [target.'cfg(windows)'.dev-dependencies]
 # Native test deadlines own a kill-on-close job. Security supplies the job
 # constructor's SECURITY_ATTRIBUTES type; no security attributes are passed.
-windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_System_JobObjects"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Diagnostics_Debug"] }

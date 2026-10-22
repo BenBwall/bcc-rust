@@ -101,7 +101,8 @@ where
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", windows)))]
+#[cfg(test)]
+#[cfg(any(target_os = "linux", windows))]
 mod tests {
     use super::*;
 
