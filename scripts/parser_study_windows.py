@@ -166,7 +166,7 @@ def collect(args):
                                                           env.get("LD_LIBRARY_PATH", "")])
     rows = []
     # Avoid claiming failure-reservation probes as normal successful samples.
-    probes = [(1024**3 * 100, d) for d in (0, 256, 4096, 16384, 65536)]
+    probes = [(args.reservation, d) for d in (0, 256, 4096, 16384, 65536)]
     probes += [(1024**2, 0), (1024**2, 4096), (64 * 1024**2, 16384), (1024**3, 65536)]
     binaries = {p: BASE / f"probe-{p}.exe" for p in ("debug", "release")}
     metadata = {"runtime": "Wine compatibility layer" if args.wine else "native Windows",
@@ -190,6 +190,9 @@ def collect(args):
         print(fields, row["returncode"], flush=True)
 
     execute([BASE / "probe-tests.exe", "--test-threads=1"], kind="unit-tests")
+    # Reservation failure is an observation, not evidence of stack exhaustion.
+    for reserve in (1024**3, 64 * 1024**3, 100 * 1024**3):
+        execute([binaries["release"], reserve, 0], kind="reservation-sweep", reserve=reserve)
     for reserve, depth in probes:
         for repeat in range(args.repeats):
             for profile, binary in binaries.items():
@@ -198,19 +201,29 @@ def collect(args):
                                               or reserve == 64 * 1024**2 and depth == 16384))
     failures = []
     for row in rows:
+        if row.get("kind") == "reservation-sweep":
+            continue
         if row.get("expected_success", True):
             m = row.get("metrics", {})
             good = row["returncode"] == 0
             if row.get("kind") != "unit-tests":
-                good &= (m.get("actual", 0) >= row["reserve"] and m.get("before", row["reserve"]) < 4 * 1024**2
+                good &= (m.get("actual", 0) >= row["reserve"]
                          and m.get("span", row["reserve"]) < m.get("actual", 0)
                          and "passed=3" in row.get("stdout", ""))
-                if row["depth"] > 0:
+                # Wine 10 maps the whole reservation committed. It cannot
+                # validate native Windows guard-driven commitment growth.
+                if not args.wine:
+                    good &= m.get("before", row["reserve"]) < 4 * 1024**2
+                if row["depth"] > 0 and not args.wine:
                     good &= m.get("deepest", 0) > m.get("before", 0)
             if not good:
                 failures.append(row)
-        elif row["returncode"] in (0, "timeout"):
-            failures.append(row)
+        else:
+            overflow_codes = (0xC00000FD, 0xC00000FD - 2**32)
+            if args.wine:
+                overflow_codes += (0xFD,)  # Unix transports only the low byte.
+            if row["returncode"] not in overflow_codes:
+                failures.append(row)
     if failures:
         raise SystemExit(f"{len(failures)} unexpected probe outcomes; inspect {args.output}")
 
@@ -227,6 +240,7 @@ def main():
     collector = sub.add_parser("collect")
     collector.add_argument("--wine", type=Path)
     collector.add_argument("--repeats", type=int, default=3)
+    collector.add_argument("--reservation", type=int, default=1024**3)
     collector.add_argument("--output", type=Path, default=BASE / "results.json")
     args = parser.parse_args()
     if args.action == "setup":

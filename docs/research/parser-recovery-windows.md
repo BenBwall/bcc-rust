@@ -80,3 +80,18 @@ Grammar-entry samples found parentheses slopes of 1,152 B/level release and
 2,848 B/level debug, versus the original 704/1,952 B. Recovery completion is now
 outlined into a non-inlined helper called after descent returns; repeat
 measurement is pending. Intermediate timing data is not the final implementation.
+
+Final outlined implementation (parser source `c9fbaccf`) has now completed both
+builds: 1,050 grammar runs and 350 broader corpus runs per build, with zero
+process or differential failures. Lua reserved-stack medians are 23.189 ms
+release and 120.428 ms debug versus feature-disabled machine baselines 36.553
+and 161.014 ms. Parentheses stack slopes are now 736/2,240 B per level
+release/debug; nested-block slopes are 1,024/8,512 B. All canonical checks pass.
+Raw measurements and logs are saved in `parser-recovery-windows-data/`.
+
+Wine execution passes the three worker tests and the 1 GiB/depth-256 probe,
+but Wine 10 marks the whole stack committed: it cannot validate Windows' moving
+guard commitment semantics. Its 64/100 GiB thread reservations fail with error 8.
+Native host access is being investigated; the current T3 environment identifies
+itself as Linux, and no native Windows executor or SSH destination is configured
+in the exposed tool catalog or SSH configuration.
