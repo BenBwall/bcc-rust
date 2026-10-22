@@ -26,15 +26,24 @@ native test cohort. No Rust source changed after the measured cohort.
   retained initial compile/lint/test integration evidence; these precede the
   successful checks and do not describe the final code state.
 - `metadata.json`: measured Rust cohort, copied binary SHA-256s and every real
-  C input SHA-256.
+  C input SHA-256, plus reproduction-script hashes.
 
 ## Native Windows
 
-`windows-summary.json.gz` contains the parsed native samples. Per-run directories
+`windows-summary.json.gz` contains all 684 native timing samples, 38 parity
+comparisons and eight deep probes. `windows-collection.log.gz` records the
+successful serial collector. Per-run directories
 retain normalized UTF-8/LF `results.json` and compressed raw `source-setup.log`
 and `tests.log`, including requested/source identity, toolchain, command arguments
 and exit status. Windows jobs run through the crash-dialog suppression wrapper.
-The final manifest records every run ID and conclusion.
+`windows/runs.json` records every command, run ID, conclusion and source identity.
+
+| Job | Run | Conclusion |
+| --- | --- | --- |
+| lowering-tests-debug | [39769952926](https://github.com/BenBwall/bcc-rust/actions/runs/39769952926) | success |
+| lowering-measurements-debug | [39770784433](https://github.com/BenBwall/bcc-rust/actions/runs/39770784433) | success |
+| lowering-tests-release | [39771370581](https://github.com/BenBwall/bcc-rust/actions/runs/39771370581) | success |
+| lowering-measurements-release | [39772649911](https://github.com/BenBwall/bcc-rust/actions/runs/39772649911) | success |
 
 ## Inputs and storage
 

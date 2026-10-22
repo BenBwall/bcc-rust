@@ -22,5 +22,11 @@
     "benches/c/stencil.c": "9a0d9a99ab5e5a4e518e822b067c29513d854f4a7f6238f54829d402bfbda9ed",
     "benches/c/strings.c": "9638d106fa52eb657120851b4b754c228204589f5387557dfcf129e7f1fb9953",
     "benches/c/switchvm.c": "d9f98718a1b91f20ba0d12457f3e879199daae5967aeeaf975f988d742611b45"
+  },
+  "reproduction_scripts_sha256": {
+    "scripts/lowering_study_build.sh": "32a448b61340116f67da2aa13986435f55a90fd334dd193eabc54749eb6b424e",
+    "scripts/lowering_study_results.py": "dd5ac0818c8e8f1305403e51bc7ba6c35c43a2024c29c959e26968616d48bac3",
+    "scripts/lowering_study_width.py": "f3c1b9d7e7723bb9b8fac350847f8d979a69249a3c01f5776188bc6a75fb3df7",
+    "scripts/parser_study_native.py": "f5363d0772ecfb5592c37fb013d3ec4e7eeff0bfddd5042008759bf6871efe9c"
   }
 }

@@ -1,9 +1,8 @@
 # Recursive lowering on a compilation worker
 
 2026-10-22. Follow-up to [the parser study](parser-recovery-windows.md).
-The opt-in implementation is complete. Linux measurements and native Windows
-debug validation and release tests are complete; native release measurements
-are running.
+The opt-in implementation and Linux/native Windows release/debug validation
+are complete.
 The feature-disabled compiler retains its existing pipeline.
 
 ## Implementation boundary
@@ -37,8 +36,10 @@ function sources, retained call diagnostics and refusal diagnostics. Measurement
 prepare the frontend outside the lowering timer and perform additional
 verification/inspection afterward. The existing debug-only per-function IR
 verifier remains inside lowering time in both modes; it is absent in release.
-Stack sampling runs separately from timing. Whole-worker wall time is also
-reported, including preprocessing, analysis, setup/join and destruction.
+Stack sampling runs separately from timing. Whole-worker harness wall time
+includes frontend preparation, lowering, setup/join and destruction. It excludes
+source generation/loading, optimization and backend emission; the actual CLI
+paths are checked separately below.
 
 ## Validation method
 
@@ -53,11 +54,11 @@ reported, including preprocessing, analysis, setup/join and destruction.
   measure native-address spans in separate runs.
 - Check rustfmt, strict Clippy, default checks and native Windows execution.
 
-
 ## Reproduction
 
 Run from `/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study`.
-Every local Cargo invocation below is inside the shared two-slot wrapper. The
+Local Cargo builds/checks use the shared two-slot wrapper; the permitted
+format-only check runs directly. The
 build script copies each executable before releasing its slot. Detach long
 wrapper invocations and retain their complete logs.
 
@@ -85,9 +86,10 @@ The first lowering suite recorded 205 passes and one failure in an existing
 range-initializer test: its thread-local copy-policy override did not follow the
 compilation onto the new worker. The helper now explicitly carries the override
 and replay/effect counters, and excludes the extra differential passes from
-those counters. The failure was in test setup, not an IR mismatch. The corrected Linux debug
-suite passes 206 tests (one existing ignored test); strict combined-feature
-Clippy and the five-case focused example test also pass. Initial compile/Clippy failures are archived alongside the successful checks.
+those counters. The failure was in test setup, not an IR mismatch. The corrected
+Linux debug suite passes 206 tests (one existing ignored test); strict
+combined-feature Clippy and the five-case focused example test also pass.
+Initial compile/Clippy failures are archived alongside the successful checks.
 
 The complete Linux check script passes: default all-target tests, all 31
 allocation tests, strict default/benchmark/study Clippy, the feature-enabled
@@ -176,7 +178,6 @@ working set. Release lowering is 7.9% lower; debug is 5.3% higher with 22.2% CV
 for recursion. This is a scratch-storage improvement, not a measured process
 memory win.
 
-
 ## Native Windows measurements
 
 The self-hosted `bcc-win-x64` runner executes native
@@ -188,22 +189,34 @@ rotating samples and 1 GiB workers described above.
 
 | Profile/input | Task median ms | Recursive median ms | Task range ms / CV % | Recursive range ms / CV % |
 | --- | ---: | ---: | --- | --- |
+| release / expressions | 55.019 | 51.623 | 51.005–60.751 / 5.05 | 48.958–59.201 / 6.51 |
+| release / statements | 80.411 | 78.639 | 73.040–87.326 / 5.73 | 71.171–90.460 / 6.40 |
 | debug / expressions | 557.419 | 583.747 | 544.702–600.283 / 2.81 | 561.287–610.277 / 2.43 |
 | debug / statements | 934.042 | 942.666 | 881.439–955.794 / 2.67 | 895.208–986.167 / 2.62 |
 
-Debug recursion uses 4.7% more lowering time for expressions and 0.9% more for
-statements. The 206 lowering tests pass (one existing ignored), as do all 19
-corpus parity inputs, 342 timing samples and four deep probes. No measured
-lowering interval allocates globally. Native release also passes 206 lowering tests (one existing ignored); release
-measurements remain in progress.
+Release recursion uses 6.2% less lowering time for expressions and 2.2% less for
+statements. Whole-worker medians do not improve: 229.679 / 230.484 ms for
+expressions and 342.596 / 350.772 ms for statements (task / recursive). Debug
+recursion uses 4.7% more lowering time for expressions and 0.9% more for
+statements. These differences sit amid measurable variation.
 
-Windows debug address-span slopes are 12,592 B/expression level and
-1,296 B/compound level; at 4,096 levels, the spans are 51,580,201 B and
-5,311,785 B respectively. These exceed the ordinary Windows 1 MiB stack and
-complete on the reserved worker. This is native execution, not cross-compilation
+Both profiles pass 206 lowering tests (one existing ignored), all 19 corpus
+parity inputs, 342 timing samples and four deep probes each. No measured
+lowering interval allocates globally. The source commit/tree and command exits
+were checked in all four [native job artifacts](recursive-lowering-data/README.md#native-windows).
+Native release scratch/IR requests match Linux release; native debug requests
+match Linux debug.
+
+| Native stack shape | Release B/level | Debug B/level | Release span at 4,096 | Debug span at 4,096 |
+| --- | ---: | ---: | ---: | ---: |
+| Nonconstant `a+a+...` | 736 | 12,592 | 3,015,817 B | 51,580,201 B |
+| Nested compounds | 544 | 1,296 | 2,229,312 B | 5,311,785 B |
+
+Windows debug spans exceed the ordinary Windows 1 MiB stack and complete on
+the reserved worker. This is native execution, not cross-compilation
 or Wine. MSVC, other operating systems and Windows physical working-set costs
-are outside this validation. As with Linux, these are address samples rather than exact stack peak
-or physical working-set measurements. The Windows stack implementation and its
+are outside this validation. As with Linux, these are address samples rather
+than exact stack peak or physical working-set measurements. The Windows stack implementation and its
 lazy-commit/100 GiB probes are also covered by the prior
 [reserved-stack Windows study](parser-recovery-windows.md).
 

@@ -1,0 +1,590 @@
+{
+  "sha": "932f32a89c75682029e7f90b208b74960fc71e94",
+  "study": "lowering",
+  "jobs": [
+    {
+      "name": "lowering-tests-debug",
+      "command": [
+        "bcc-windows",
+        "test",
+        "--sha",
+        "932f32a89c75682029e7f90b208b74960fc71e94",
+        "--",
+        "--features",
+        "recursive-lowering-study,benchmarking-internals",
+        "--lib",
+        "lowering::tests",
+        "--",
+        "--test-threads=2"
+      ],
+      "run_id": 39769952926,
+      "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39769952926",
+      "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+      "suite": "test",
+      "request_id": "a5e9d16ede824c19827960f5a07dd64a",
+      "workflow": {
+        "conclusion": "success",
+        "jobs": [
+          {
+            "completedAt": "2026-10-22T11:27:51Z",
+            "conclusion": "success",
+            "databaseId": 119794698778,
+            "name": "windows",
+            "startedAt": "2026-10-22T11:21:28Z",
+            "status": "completed",
+            "steps": [
+              {
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Validate request",
+                "number": 2,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Mark requested commit pending",
+                "number": 3,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out dispatcher helpers",
+                "number": 4,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out requested compiler commit",
+                "number": 5,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Prepare native Windows toolchain and exact source pins",
+                "number": 6,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Run requested Windows workload",
+                "number": 7,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Upload results and benchmark reports",
+                "number": 8,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Publish result on requested commit",
+                "number": 9,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out requested compiler commit",
+                "number": 17,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out dispatcher helpers",
+                "number": 18,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 19,
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39769952926/job/119794698778"
+          }
+        ],
+        "status": "completed",
+        "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39769952926"
+      },
+      "watch_exit": 0,
+      "result": {
+        "runner": "bcc-win-x64",
+        "suite": "test",
+        "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+        "tree": "2277cd7eb5162d3c31d42338d24dc9f98648f7e0",
+        "windows": "Microsoft Windows NT 10.0.26300.0",
+        "architecture": "X64",
+        "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\r\nbinary: rustc\r\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\r\ncommit-date: 2026-09-28\r\nhost: x86_64-pc-windows-gnu\r\nrelease: 1.99.0\r\nLLVM version: 23.1.1",
+        "mingw_root": "C:\\Strawberry\\c",
+        "started_utc": "2026-10-22T11:22:05.8837101Z",
+        "finished_utc": "2026-10-22T11:27:34.9123346Z",
+        "checks": [
+          {
+            "exit_code": 0,
+            "name": "tests",
+            "started_utc": "2026-10-22T11:22:05.8900942Z",
+            "finished_utc": "2026-10-22T11:27:34.5814753Z",
+            "arguments": [
+              "test",
+              "--features",
+              "recursive-lowering-study,benchmarking-internals",
+              "--lib",
+              "lowering::tests",
+              "--",
+              "--test-threads=2"
+            ]
+          }
+        ],
+        "problem": null
+      },
+      "downloaded": true
+    },
+    {
+      "name": "lowering-measurements-debug",
+      "command": [
+        "bcc-windows",
+        "test",
+        "--sha",
+        "932f32a89c75682029e7f90b208b74960fc71e94",
+        "--",
+        "--features",
+        "recursive-lowering-study,benchmarking-internals",
+        "--example",
+        "lowering_study",
+        "--",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "run_id": 39770784433,
+      "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39770784433",
+      "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+      "suite": "test",
+      "request_id": "1016cdcb75d84acc9a3c8a0a9db7b186",
+      "workflow": {
+        "conclusion": "success",
+        "jobs": [
+          {
+            "completedAt": "2026-10-22T11:32:29Z",
+            "conclusion": "success",
+            "databaseId": 119797481636,
+            "name": "windows",
+            "startedAt": "2026-10-22T11:28:04Z",
+            "status": "completed",
+            "steps": [
+              {
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Validate request",
+                "number": 2,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Mark requested commit pending",
+                "number": 3,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out dispatcher helpers",
+                "number": 4,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out requested compiler commit",
+                "number": 5,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Prepare native Windows toolchain and exact source pins",
+                "number": 6,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Run requested Windows workload",
+                "number": 7,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Upload results and benchmark reports",
+                "number": 8,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Publish result on requested commit",
+                "number": 9,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out requested compiler commit",
+                "number": 17,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out dispatcher helpers",
+                "number": 18,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 19,
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39770784433/job/119797481636"
+          }
+        ],
+        "status": "completed",
+        "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39770784433"
+      },
+      "watch_exit": 0,
+      "result": {
+        "runner": "bcc-win-x64",
+        "suite": "test",
+        "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+        "tree": "2277cd7eb5162d3c31d42338d24dc9f98648f7e0",
+        "windows": "Microsoft Windows NT 10.0.26300.0",
+        "architecture": "X64",
+        "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\r\nbinary: rustc\r\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\r\ncommit-date: 2026-09-28\r\nhost: x86_64-pc-windows-gnu\r\nrelease: 1.99.0\r\nLLVM version: 23.1.1",
+        "mingw_root": "C:\\Strawberry\\c",
+        "started_utc": "2026-10-22T11:28:41.4604484Z",
+        "finished_utc": "2026-10-22T11:32:13.0657879Z",
+        "checks": [
+          {
+            "started_utc": "2026-10-22T11:28:41.4658101Z",
+            "finished_utc": "2026-10-22T11:32:12.8321750Z",
+            "name": "tests",
+            "exit_code": 0,
+            "arguments": [
+              "test",
+              "--features",
+              "recursive-lowering-study,benchmarking-internals",
+              "--example",
+              "lowering_study",
+              "--",
+              "--include-ignored",
+              "--nocapture",
+              "--test-threads=1"
+            ]
+          }
+        ],
+        "problem": null
+      },
+      "downloaded": true
+    },
+    {
+      "name": "lowering-tests-release",
+      "command": [
+        "bcc-windows",
+        "test",
+        "--sha",
+        "932f32a89c75682029e7f90b208b74960fc71e94",
+        "--",
+        "--release",
+        "--features",
+        "recursive-lowering-study,benchmarking-internals",
+        "--lib",
+        "lowering::tests",
+        "--",
+        "--test-threads=2"
+      ],
+      "run_id": 39771370581,
+      "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39771370581",
+      "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+      "suite": "test",
+      "request_id": "911c4df6c6784640b9e7e6cbb070105b",
+      "workflow": {
+        "conclusion": "success",
+        "jobs": [
+          {
+            "completedAt": "2026-10-22T11:42:40Z",
+            "conclusion": "success",
+            "databaseId": 119799469317,
+            "name": "windows",
+            "startedAt": "2026-10-22T11:32:43Z",
+            "status": "completed",
+            "steps": [
+              {
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Validate request",
+                "number": 2,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Mark requested commit pending",
+                "number": 3,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out dispatcher helpers",
+                "number": 4,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out requested compiler commit",
+                "number": 5,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Prepare native Windows toolchain and exact source pins",
+                "number": 6,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Run requested Windows workload",
+                "number": 7,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Upload results and benchmark reports",
+                "number": 8,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Publish result on requested commit",
+                "number": 9,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out requested compiler commit",
+                "number": 17,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out dispatcher helpers",
+                "number": 18,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 19,
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39771370581/job/119799469317"
+          }
+        ],
+        "status": "completed",
+        "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39771370581"
+      },
+      "watch_exit": 0,
+      "result": {
+        "runner": "bcc-win-x64",
+        "suite": "test",
+        "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+        "tree": "2277cd7eb5162d3c31d42338d24dc9f98648f7e0",
+        "windows": "Microsoft Windows NT 10.0.26300.0",
+        "architecture": "X64",
+        "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\r\nbinary: rustc\r\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\r\ncommit-date: 2026-09-28\r\nhost: x86_64-pc-windows-gnu\r\nrelease: 1.99.0\r\nLLVM version: 23.1.1",
+        "mingw_root": "C:\\Strawberry\\c",
+        "started_utc": "2026-10-22T11:33:18.0058556Z",
+        "finished_utc": "2026-10-22T11:42:25.8880856Z",
+        "checks": [
+          {
+            "arguments": [
+              "test",
+              "--release",
+              "--features",
+              "recursive-lowering-study,benchmarking-internals",
+              "--lib",
+              "lowering::tests",
+              "--",
+              "--test-threads=2"
+            ],
+            "finished_utc": "2026-10-22T11:42:25.5969255Z",
+            "exit_code": 0,
+            "name": "tests",
+            "started_utc": "2026-10-22T11:33:18.0121226Z"
+          }
+        ],
+        "problem": null
+      },
+      "downloaded": true
+    },
+    {
+      "name": "lowering-measurements-release",
+      "command": [
+        "bcc-windows",
+        "test",
+        "--sha",
+        "932f32a89c75682029e7f90b208b74960fc71e94",
+        "--",
+        "--release",
+        "--features",
+        "recursive-lowering-study,benchmarking-internals",
+        "--example",
+        "lowering_study",
+        "--",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "run_id": 39772649911,
+      "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39772649911",
+      "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+      "suite": "test",
+      "request_id": "2b07d4c47af44f9f9afacba3b73e29f6",
+      "workflow": {
+        "conclusion": "success",
+        "jobs": [
+          {
+            "completedAt": "2026-10-22T11:46:53Z",
+            "conclusion": "success",
+            "databaseId": 119803759209,
+            "name": "windows",
+            "startedAt": "2026-10-22T11:42:53Z",
+            "status": "completed",
+            "steps": [
+              {
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Validate request",
+                "number": 2,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Mark requested commit pending",
+                "number": 3,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out dispatcher helpers",
+                "number": 4,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Check out requested compiler commit",
+                "number": 5,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Prepare native Windows toolchain and exact source pins",
+                "number": 6,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Run requested Windows workload",
+                "number": 7,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Upload results and benchmark reports",
+                "number": 8,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Publish result on requested commit",
+                "number": 9,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out requested compiler commit",
+                "number": 17,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Post Check out dispatcher helpers",
+                "number": 18,
+                "status": "completed"
+              },
+              {
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 19,
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39772649911/job/119803759209"
+          }
+        ],
+        "status": "completed",
+        "url": "https://github.com/BenBwall/bcc-rust/actions/runs/39772649911"
+      },
+      "watch_exit": 0,
+      "result": {
+        "runner": "bcc-win-x64",
+        "suite": "test",
+        "commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+        "tree": "2277cd7eb5162d3c31d42338d24dc9f98648f7e0",
+        "windows": "Microsoft Windows NT 10.0.26300.0",
+        "architecture": "X64",
+        "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\r\nbinary: rustc\r\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\r\ncommit-date: 2026-09-28\r\nhost: x86_64-pc-windows-gnu\r\nrelease: 1.99.0\r\nLLVM version: 23.1.1",
+        "mingw_root": "C:\\Strawberry\\c",
+        "started_utc": "2026-10-22T11:43:27.4459010Z",
+        "finished_utc": "2026-10-22T11:46:37.8826523Z",
+        "checks": [
+          {
+            "arguments": [
+              "test",
+              "--release",
+              "--features",
+              "recursive-lowering-study,benchmarking-internals",
+              "--example",
+              "lowering_study",
+              "--",
+              "--include-ignored",
+              "--nocapture",
+              "--test-threads=1"
+            ],
+            "finished_utc": "2026-10-22T11:46:37.6781356Z",
+            "name": "tests",
+            "started_utc": "2026-10-22T11:43:27.4510185Z",
+            "exit_code": 0
+          }
+        ],
+        "problem": null
+      },
+      "downloaded": true
+    }
+  ]
+}
