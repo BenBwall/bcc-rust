@@ -1,8 +1,11 @@
 # Reserved native-stack follow-up
 
 Follow-up: [recovery parity and Windows validation](parser-recovery-windows.md)
-records fixes and later validation of the recovery differences described here.
-The measurements below remain the original cohort.
+records all ten recovery fixes and completed native Windows GNU validation in
+release/debug. A 100 GiB stack starts with 8 KiB writable; reserved RD reduces
+native synthetic parser time by 30.5–46.7% release and 22.1–31.5% debug, with
+worker launch excluded. The measurements and open blockers below describe the
+original cohort; the follow-up supersedes its recovery/Windows status.
 
 2026-10-22. Follow-up to [the recursive descent study](parser-recursive-descent.md).
 Native stack code is `462812f9`; the build batch completed at `916047b8`

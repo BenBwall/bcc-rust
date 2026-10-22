@@ -2,7 +2,9 @@
 
 2026-10-22. Follow-up to [recursive descent](parser-recursive-descent.md) and
 [reserved stacks](parser-reserved-stack.md). Parser changes measured here are
-at `c9fbaccf`; final collection commands are at `333c4904`.
+at `c9fbaccf`; Linux collection commands are at `333c4904`. Native runner
+harness source is `32fb7b0a`; the serial collector and analysis commands are
+tracked alongside this report.
 
 **All ten recorded recovery differences are fixed.** Both release and debug
 match the frame machine on the 150-case grammar corpus and 50 broader inputs
@@ -10,13 +12,14 @@ across every tested mode. Reserved-stack Lua parsing takes 23.189 ms release
 and 120.428 ms debug: 36.6% and 25.2% below the feature-disabled production
 baseline in this cohort. The production parser remains the frame machine.
 
-**Native Windows debug now confirms the reserved-stack mechanism.** The 100 GiB
-reservation starts with 8 KiB of writable committed memory, grows on demand,
-and handles 65,536 live page frames. Reserved RD uses 22% less parser time on
-the expression-heavy input and 32% less on the statement-heavy input. Recovery,
-corpus parity, and deep parser probes pass. Release jobs are still running.
-Wine remains compatibility evidence only; its different commitment behavior is
-documented below. Native execution uses GNU x64; MSVC has only cross-checks.
+**Native Windows confirms demand commitment in release and debug.** A 100 GiB
+reservation starts with 8 KiB writable and handles 65,536 live page frames.
+Reserved RD uses 30.5% / 46.7% less release parser time on the expression /
+statement mixes; debug reductions are 22.1% / 31.5%. Recovery, corpus parity,
+and 16,384-level parser probes pass. Timings exclude worker launch and are noisy.
+GNU x64 ran natively; MSVC has only cross-checks. This supports evaluating a
+reserved worker, while retaining the frame machine until API/resource policy
+is decided. It establishes a speed opportunity, not a general memory win.
 
 ## What the ten differences were
 
@@ -182,8 +185,18 @@ Preprocessing/token preparation, thread creation/join, inspection and arena
 destruction are outside the phase-7 timer. These results compare the
 feature-matched machine; Windows has no feature-disabled timing cohort.
 
-The debug results below are complete; release parser collection is in progress.
-CV is population standard deviation divided by mean.
+CV is population standard deviation divided by mean. All rows have nine samples.
+
+| Release input | Mode | Median ms | Range ms | CV % |
+| --- | --- | ---: | --- | ---: |
+| Expression mix | Machine | 29.525 | 28.652–41.725 | 12.48 |
+| Expression mix | Recursive | 19.105 | 17.934–24.746 | 12.03 |
+| Expression mix | Reserved machine | 31.233 | 27.987–39.154 | 10.99 |
+| Expression mix | Reserved recursive | 20.528 | 18.200–32.008 | 18.32 |
+| Statement mix | Machine | 44.319 | 42.589–50.780 | 5.16 |
+| Statement mix | Recursive | 27.338 | 21.026–30.717 | 11.19 |
+| Statement mix | Reserved machine | 49.909 | 39.654–78.163 | 20.73 |
+| Statement mix | Reserved recursive | 23.600 | 22.604–39.303 | 19.98 |
 
 | Debug input | Mode | Median ms | Range ms | CV % |
 | --- | --- | ---: | --- | ---: |
@@ -193,16 +206,28 @@ CV is population standard deviation divided by mean.
 | Expression mix | Reserved recursive | 164.523 | 154.351–187.256 | 6.30 |
 | Statement mix | Machine | 265.460 | 254.625–288.334 | 3.56 |
 | Statement mix | Recursive | 183.434 | 175.984–189.206 | 2.02 |
-| Statement mix | Reserved machine | 260.027 | 251.805–273.707 | 2.39 |
+| Statement mix | Reserved machine | 260.027 | 251.804–273.707 | 2.39 |
 | Statement mix | Reserved recursive | 181.757 | 173.278–207.285 | 4.93 |
 
-Reserved recursive uses 22.1% less debug parser time for the expression mix and
-31.5% less for the statement mix. The sum of per-input medians over the 17 small
-real C files is 9.086 ms machine, 7.449 ms recursive, 9.090 ms reserved machine,
-and 8.166 ms reserved recursive. This aggregate describes those small inputs;
-it is not an end-to-end timing. Individual samples and variability are archived.
+Against the machine median, reserved recursive uses 30.5% / 46.7% less release
+parser time for expression / statement mix, and 22.1% / 31.5% less debug time.
+Release CV reaches 20.73%, and the reserved-machine control also moves relative
+to machine. The results do not establish a speed advantage of reserved over raw
+recursive parsing; thread setup is excluded from both reserved timers.
 
-| Arena requests, bytes | Expression machine / RD | Statement machine / RD |
+| Sum of per-input medians, 17 small real C files | Release ms | Debug ms |
+| --- | ---: | ---: |
+| Machine | 4.476 | 9.086 |
+| Recursive | 3.744 | 7.449 |
+| Reserved machine | 4.375 | 9.090 |
+| Reserved recursive | 3.985 | 8.166 |
+
+This aggregate describes those small inputs; it is not an end-to-end timing.
+Individual samples and variability are archived. Reserved RD's reductions are
+11.0% release / 10.1% debug, with worker launch excluded. Tiny-input savings
+require an end-to-end check before choosing a fresh worker per file.
+
+| Arena requests, bytes (both profiles) | Expression machine / RD | Statement machine / RD |
 | --- | ---: | ---: |
 | Parse scratch | 8,632 / 4,856 | 8,112 / 5,168 |
 | Translation-unit arena | 10,688,002 / 10,688,002 | 12,736,002 / 12,736,002 |
@@ -210,8 +235,9 @@ it is not an end-to-end timing. Individual samples and variability are archived.
 
 ### Parser depth and correctness
 
-Debug passes all 684 timing samples, 17 real-corpus parity checks and four deep
-parser probes. Each corpus check compares the complete rendered
+Each profile passes 684 timing samples, 17 real-corpus parity checks and four
+deep parser probes (1,368 timing samples and 136 differential comparisons
+total). Each corpus check compares the complete rendered
 AST/provenance/diagnostics with machine output in recursive, growing,
 hybrid-depth-16 and reserved-recursive modes (68 comparisons per profile).
 The seven focused recovery tests also pass in both profiles. Parser timing
@@ -221,10 +247,15 @@ Deep parser runs sample grammar-entry addresses at 4,096 and 16,384 parenthesis
 or block levels. They use an explicit 1 GiB worker. They finish with no hybrid
 fallbacks, limit hits or diagnostics.
 
-| Native debug parser shape | Stack B/level | Span at 16,384 | Writable commit at 16,384 |
-| --- | ---: | ---: | ---: |
-| Parentheses | 2,880 | 47,199,944 B | 47,235,072 B |
-| Blocks | 13,872 | 227,278,848 B | 227,336,192 B |
+| Native parser shape | Release B/level | Debug B/level | Release writable commit at 16,384 | Debug writable commit at 16,384 |
+| --- | ---: | ---: | ---: | ---: |
+| Parentheses | 816 | 2,880 | 13,385,728 B | 47,235,072 B |
+| Blocks | 1,152 | 13,872 | 18,890,752 B | 227,336,192 B |
+
+At 16,384 levels, release entry-address spans are 13,370,270 B parentheses /
+18,874,368 B blocks; debug spans are 47,199,944 B / 227,278,848 B. Debug blocks
+commit 216.80 MiB. The Windows GNU ABI/build uses substantially more debug
+stack per block than the measured Linux build (8,512 B/level).
 
 The slopes measure entry-address spans, not exact peak stack use. Extrapolating
 the block slope to C99's 127 nested blocks already gives about 1.7 MiB, above
@@ -288,7 +319,8 @@ setup failure. Versions, URLs, checksums and failed/successful logs are archived
 ## Reproduction and saved evidence
 
 Run from `/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study`.
-Every Cargo invocation except nightly formatting stays inside the shared wrapper.
+Every local Linux Cargo invocation except nightly formatting stays inside the
+shared wrapper; native runner commands use its own Windows environment.
 For long jobs detach the entire wrapper invocation and retain its log, as in the
 original report. The final build/copy command is also retained in the build log.
 
@@ -325,6 +357,50 @@ Full raw JSON and build/check logs are gzip archives in
 there too. The probe sets error mode itself and all executions additionally use
 `scripts/cargo_runner.py` to suppress desktop crash dialogs.
 
+Use the measured source SHA `32fb7b0a0aa52c7d896568f79266425d1ce5dba2` in these
+native runner commands. Submit sequentially on the single Windows host; do not
+use the Linux shared-build wrapper for the runner's own Windows Cargo process.
+The dispatcher provides its native serialization and crash-dialog wrapper.
+
+```sh
+bcc-windows test --sha SHA -- --features parser-recursive-descent-study --lib recursive_descent -- --test-threads=1
+bcc-windows test --sha SHA -- --release --features parser-recursive-descent-study --lib recursive_descent -- --test-threads=1
+bcc-windows test --sha SHA -- --example parser_stack_probe runner_stack_measurements -- --ignored --nocapture --test-threads=1
+bcc-windows test --sha SHA -- --release --example parser_stack_probe runner_stack_measurements -- --ignored --nocapture --test-threads=1
+bcc-windows test --sha SHA -- --features parser-recursive-descent-study --example parser_study runner_parser_measurements -- --ignored --nocapture --test-threads=1
+bcc-windows test --sha SHA -- --release --features parser-recursive-descent-study --example parser_study runner_parser_measurements -- --ignored --nocapture --test-threads=1
+bcc-windows test --sha SHA -- --example parser_stack_probe reserved_stack::tests:: -- --test-threads=1
+bcc-windows test --sha SHA -- --release --example parser_stack_probe reserved_stack::tests:: -- --test-threads=1
+```
+
+Each submission prints its run ID. Inspect completion and download that exact
+run's artifacts into this worktree's `.scratch/parser-study/windows/native/`.
+
+The serial collector used for this cohort is:
+
+```sh
+python3 scripts/parser_study_native.py --sha 32fb7b0a0aa52c7d896568f79266425d1ce5dba2 --adopt-first 39757463234
+```
+
+`--adopt-first` reuses the already submitted first job; omit it for a fresh
+cohort. The collector runs recovery, page probes, parser measurements and worker
+unit tests in both profiles, resumes from
+`.scratch/parser-study/windows/native/runs.json`, and stops if setup never
+reaches the workload. It never pushes code or modifies the dispatcher.
+
+Summarize the exact downloaded cohort without rerunning it:
+
+```sh
+python3 scripts/parser_study_native_results.py
+```
+
+Native results, source-setup logs, workload logs, manifest and full parsed
+summary are archived in
+[`parser-native-windows-data/`](parser-native-windows-data/). JSON is normalized
+to UTF-8/LF; compressed logs retain the downloaded bytes. The archive README
+lists every input and run. Historical cross-build/Wine data remains in the
+separate compatibility directory above.
+
 ## Recommendation and remaining decisions
 
 Keep the default frame machine while evaluating reserved-worker integration;
@@ -346,30 +422,3 @@ is what this prototype measures. Reusing frame recovery and declaration/extensio
 handoffs means it still needs those frames; this study does not justify deleting
 the production expression/statement machinery. Measure end-to-end worker cost
 on representative Windows files before choosing a per-file worker design.
-
-Use the measured source SHA `32fb7b0a0aa52c7d896568f79266425d1ce5dba2` in these
-native runner commands. Submit sequentially on the single Windows host; do not
-use the Linux shared-build wrapper for the runner's own Windows Cargo process.
-The dispatcher provides its native serialization and crash-dialog wrapper.
-
-```sh
-bcc-windows test --sha SHA -- --features parser-recursive-descent-study --lib recursive_descent -- --test-threads=1
-bcc-windows test --sha SHA -- --example parser_stack_probe runner_stack_measurements -- --ignored --nocapture --test-threads=1
-bcc-windows test --sha SHA -- --release --example parser_stack_probe runner_stack_measurements -- --ignored --nocapture --test-threads=1
-bcc-windows test --sha SHA -- --features parser-recursive-descent-study --example parser_study runner_parser_measurements -- --ignored --nocapture --test-threads=1
-bcc-windows test --sha SHA -- --release --features parser-recursive-descent-study --example parser_study runner_parser_measurements -- --ignored --nocapture --test-threads=1
-```
-
-Each submission prints its run ID. Inspect completion and download that exact
-run's artifacts into this worktree's `.scratch/parser-study/windows/native/`.
-
-The serial collector used for this cohort is:
-
-```sh
-python3 scripts/parser_study_native.py --sha 32fb7b0a0aa52c7d896568f79266425d1ce5dba2 --adopt-first 39757463234
-```
-
-`--adopt-first` reuses the already submitted first job; omit it for a fresh
-cohort. The collector also runs recovery tests in release, resumes from
-`.scratch/parser-study/windows/native/runs.json`, and stops if setup never
-reaches the workload. It never pushes code or modifies the dispatcher.

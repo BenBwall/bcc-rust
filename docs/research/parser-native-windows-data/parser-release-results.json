@@ -1,0 +1,34 @@
+{
+  "runner": "bcc-win-x64",
+  "suite": "test",
+  "commit": "32fb7b0a0aa52c7d896568f79266425d1ce5dba2",
+  "tree": "34f5c75629574cbfeb583be2cc28a1699300ee87",
+  "windows": "Microsoft Windows NT 10.0.26300.0",
+  "architecture": "X64",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\r\nbinary: rustc\r\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\r\ncommit-date: 2026-09-28\r\nhost: x86_64-pc-windows-gnu\r\nrelease: 1.99.0\r\nLLVM version: 23.1.1",
+  "mingw_root": "C:\\Strawberry\\c",
+  "started_utc": "2026-10-22T10:06:20.5428053Z",
+  "finished_utc": "2026-10-22T10:08:47.1509718Z",
+  "checks": [
+    {
+      "exit_code": 0,
+      "finished_utc": "2026-10-22T10:08:46.9076134Z",
+      "started_utc": "2026-10-22T10:06:20.5482549Z",
+      "name": "tests",
+      "arguments": [
+        "test",
+        "--release",
+        "--features",
+        "parser-recursive-descent-study",
+        "--example",
+        "parser_study",
+        "runner_parser_measurements",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ]
+    }
+  ],
+  "problem": null
+}
