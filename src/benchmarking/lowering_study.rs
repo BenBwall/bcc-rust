@@ -32,8 +32,6 @@ use crate::{
 #[doc(hidden)]
 #[must_use]
 #[expect(
-    clippy::disallowed_types,
-    clippy::disallowed_methods,
     clippy::disallowed_macros,
     reason = "Study results own untimed IR/diagnostic inspection after compilation arenas die."
 )]
@@ -81,17 +79,15 @@ pub fn measure_lowering_source(
     let inspection = match lowered {
         | Ok(unit) => {
             functions = unit.module.functions().count();
-            if inspect {
+            inspect.then(|| {
                 let verifier = Bump::new();
                 let failures = verify_module(&unit.module, Profile::PreAbi, &verifier);
                 assert!(failures.is_empty(), "lowered IR must verify: {failures:?}");
-                Some(format!(
+                format!(
                     "{}\n=== sources ===\n{:?}\n=== call diagnostics ===\n{:?}",
                     unit.module, unit.function_sources, unit.call_diagnostics
-                ))
-            } else {
-                None
-            }
+                )
+            })
         },
         | Err(failures) => {
             errors = failures.errors.len();

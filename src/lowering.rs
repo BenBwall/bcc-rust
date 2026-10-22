@@ -541,17 +541,6 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     indirect:           Option<Block>,
 }
 
-// Tests
-#[cfg(test)]
-#[expect(
-    clippy::disallowed_types,
-    clippy::disallowed_macros,
-    clippy::disallowed_methods,
-    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
-              compiler, not its tests."
-)]
-pub(crate) mod tests;
-
 /// Traversal controls kept outside the AST and retained IR.
 #[cfg_attr(
     feature = "recursive-lowering-study",
@@ -586,3 +575,14 @@ impl LoweringOptions {
         }
     }
 }
+
+// Tests
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
+pub(crate) mod tests;

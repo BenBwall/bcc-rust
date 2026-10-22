@@ -76,9 +76,9 @@ The benchmark returns setup errors, contains worker panics and leaves ordinary
 parser limits unchanged; it does not establish graceful recovery from OS OOM.
 
 - [Runner and allocation interval](../../examples/parser_study.rs)
-- [Native worker protocol](../../examples/parser_study/reserved_stack.rs)
-- [Linux mapping/guards](../../examples/parser_study/reserved_stack/linux.rs)
-  and [Windows reservation](../../examples/parser_study/reserved_stack/windows.rs)
+- [Native worker protocol](../../src/compilation_stack.rs)
+- [Linux mapping/guards](../../src/compilation_stack/linux.rs)
+  and [Windows reservation](../../src/compilation_stack/windows.rs)
 - [Untimed OS telemetry](../../examples/parser_study/reserved_stack/telemetry.rs)
 
 ## Method and reproduction

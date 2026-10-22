@@ -134,15 +134,6 @@ pub use cli::{
 #[cfg(all(unix, feature = "benchmarking-internals"))]
 use coz as _;
 
-#[cfg(test)]
-#[doc(hidden)]
-mod shut_up_clippy_about_unused_dev_dependencies {
-    use criterion as _;
-    use pretty_assertions as _;
-    use proptest as _;
-    use rstest as _;
-}
-
 /// Runs a complete compilation callback on a demand-paged native stack.
 /// Create arenas and context inside the callback and keep all phases that
 /// borrow them there. Only sendable results may leave the joined worker.
@@ -170,3 +161,11 @@ pub use benchmarking::{
     LoweringMeasurement,
     measure_lowering_source,
 };
+#[cfg(test)]
+#[doc(hidden)]
+mod shut_up_clippy_about_unused_dev_dependencies {
+    use criterion as _;
+    use pretty_assertions as _;
+    use proptest as _;
+    use rstest as _;
+}
