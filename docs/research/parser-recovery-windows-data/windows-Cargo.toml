@@ -1,0 +1,80 @@
+[package]
+name = "parser-stack-windows-probe"
+version = "0.0.0"
+edition = "2024"
+description = "Reserved-stack portability probe"
+license-file = "/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study/LICENSE"
+repository = "https://github.com/BenBwall/bcc-rust"
+readme = "/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study/README.md"
+keywords = ["compiler", "benchmark"]
+categories = ["development-tools"]
+[workspace]
+[[bin]]
+name = "parser_stack_probe"
+path = "/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study/examples/parser_stack_probe.rs"
+[dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug"] }
+libc = "0.2"
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[lints.clippy]
+"allow_attributes" = "warn"
+"allow_attributes_without_reason" = "warn"
+"assertions_on_result_states" = "warn"
+"assigning_clones" = "warn"
+"empty_drop" = "warn"
+"empty_enum_variants_with_brackets" = "warn"
+"empty_structs_with_brackets" = "warn"
+"fn_to_numeric_cast_any" = "warn"
+"format_push_string" = "warn"
+"if_then_some_else_none" = "warn"
+"infinite_loop" = "warn"
+"large_include_file" = "warn"
+"missing_assert_message" = "warn"
+"mod_module_files" = "deny"
+"multiple_unsafe_ops_per_block" = "deny"
+"multiple_crate_versions" = "allow"
+"partial_pub_fields" = "warn"
+"pub_without_shorthand" = "warn"
+"rc_mutex" = "warn"
+"redundant_type_annotations" = "warn"
+"renamed_function_params" = "warn"
+"same_name_method" = "warn"
+"semicolon_inside_block" = "warn"
+"string_lit_chars_any" = "warn"
+"suspicious_xor_used_as_pow" = "warn"
+"tests_outside_test_module" = "warn"
+"undocumented_unsafe_blocks" = "deny"
+"unnecessary_safety_comment" = "deny"
+"unnecessary_safety_doc" = "deny"
+"unnecessary_self_imports" = "warn"
+"cargo" = {level="warn",priority=-1}
+"pedantic" = {level="warn",priority=-1}
+"cast_possible_wrap" = "allow"
+"cast_sign_loss" = "allow"
+"inline_always" = "allow"
+"perf" = {level="warn",priority=-1}
+
+[lints.rust]
+"absolute_paths_not_starting_with_crate" = "forbid"
+"elided_lifetimes_in_paths" = "warn"
+"explicit_outlives_requirements" = "warn"
+"let_underscore_drop" = "warn"
+"macro_use_extern_crate" = "warn"
+"missing_abi" = "forbid"
+"missing_debug_implementations" = "warn"
+"missing_docs" = "warn"
+"single_use_lifetimes" = "warn"
+"trivial_casts" = "warn"
+"trivial_numeric_casts" = "warn"
+"unsafe_op_in_unsafe_fn" = "forbid"
+"unused_crate_dependencies" = "warn"
+"unused_extern_crates" = "warn"
+"unused_import_braces" = "warn"
+"unused_lifetimes" = "warn"
+"unused_macro_rules" = "warn"
+"unused_qualifications" = "warn"
+"unused_results" = "warn"
+"variant_size_differences" = "warn"

@@ -1,37 +1,21 @@
 # Recovery parity and Windows reserved-stack follow-up
 
-Status: investigation in progress. This follow-up addresses the ten malformed
-cases recorded in `parser-reserved-stack.md`, and Windows validation requested
-by the owner. The production parser remains unchanged by study-only fixes.
+2026-10-22. Follow-up to [recursive descent](parser-recursive-descent.md) and
+[reserved stacks](parser-reserved-stack.md). Parser changes measured here are
+at `c9fbaccf`; final collection commands are at `333c4904`.
 
-Initial reproduction uses the preserved
-`.scratch/parser-study/reserved-release-grammar-inspections` snapshots. The ten
-cases cover missing or stray header operands, grouped expression synchronization,
-unowned closing delimiters, missing call separators, missing `if` bodies,
-missing `while` after `do`, and extra `for` header clauses. Some differences lose
-following statements or detach an `else`; they are not only message differences.
+**All ten recorded recovery differences are fixed.** Both release and debug
+match the frame machine on the 150-case grammar corpus and 50 broader inputs
+across every tested mode. Reserved-stack Lua parsing takes 23.189 ms release
+and 120.428 ms debug: 36.6% and 25.2% below the feature-disabled production
+baseline in this cohort. The production parser remains the frame machine.
 
-The available host is Linux. Neither Windows Rust targets nor Wine are initially
-installed. `build_support/native.rs` explicitly requires `TARGET == HOST`, so a
-full compiler cross-build is unsupported. An isolated harness can compile the
-actual example-only Windows reserved-stack module without altering the compiler
-build. Wine results, if obtained, will be identified as compatibility-layer
-checks and will not be used as native Windows performance evidence.
-
-Study-only fixes now seed expression recovery with the already parsed operand,
-retain statement else ownership across recursive/hybrid calls, represent absent
-header operands as missing slots, preserve the next statement after a missing
-`while`, and reuse bounded `for`-header lookahead. Validation is pending.
-
-Windows GNU strict Clippy passes for the isolated probe. Initial linking
-requires the MinGW `dlltool` utility in addition to import libraries. The
-first expanded regression run found a duplicate diagnostic on a hybrid handoff;
-the prototype now tracks whether the frame already finished recovery.
-
-Debug validation: all 1,050 grammar runs (150 cases × seven modes) match the
-frame machine byte-for-byte, including ASTs, provenance and diagnostics. The
-seven focused study tests pass, including 20 recovery snippets across recursive,
-growing, and hybrid depths 0–16. Release validation is pending.
+The Windows worker builds and passes strict Clippy for GNU; MSVC passes compile
+checking and strict Clippy. The GNU binaries run successfully under Wine through
+65,536 live page-sized recursion frames. **Native Windows execution is still
+pending host access.** Wine commits its entire stack reservation and cannot
+validate the demand-commit mechanism this experiment needs. These results do
+not establish native Windows parser throughput or stack safety.
 
 ## What the ten differences were
 
@@ -70,28 +54,196 @@ missing `while` with a visible parenthesized condition, and multiple missing
 call commas. It compares complete rendered AST/provenance/diagnostic output
 at every hybrid threshold 0 through 16, plus recursive and growing modes.
 
-Release grammar validation also passes all 1,050 runs. The isolated Windows
-probe builds in debug and release for GNU, and passes strict Clippy for GNU
-and MSVC. Windows execution remains pending Wine initialization.
+## Differential validation
 
-An intermediate recovery implementation increased native stack use because a
-large recovery-frame temporary stayed in every recursive expression call.
-Grammar-entry samples found parentheses slopes of 1,152 B/level release and
-2,848 B/level debug, versus the original 704/1,952 B. Recovery completion is now
-outlined into a non-inlined helper called after descent returns; repeat
-measurement is pending. Intermediate timing data is not the final implementation.
+The generated grammar corpus contains 108 valid/extension cases and 42 malformed
+cases. The broader set contains 50 real/synthetic inputs. Each runs in machine,
+recursive, growing, hybrid thresholds 1/3/16, and reserved recursive modes, in
+both builds. This is 2,800 successful executions, including 2,400 comparisons
+against machine output. All rendered ASTs, provenance, and diagnostics match.
+This establishes parity on these inputs; it is not proof for every malformed C
+program. Declarations and extension handoffs still use production frames.
 
-Final outlined implementation (parser source `c9fbaccf`) has now completed both
-builds: 1,050 grammar runs and 350 broader corpus runs per build, with zero
-process or differential failures. Lua reserved-stack medians are 23.189 ms
-release and 120.428 ms debug versus feature-disabled machine baselines 36.553
-and 161.014 ms. Parentheses stack slopes are now 736/2,240 B per level
-release/debug; nested-block slopes are 1,024/8,512 B. All canonical checks pass.
-Raw measurements and logs are saved in `parser-recovery-windows-data/`.
+The seven focused study tests pass, including 20 malformed snippets compared in
+recursive, growing, and hybrid thresholds 0–16 (380 comparisons in that test).
+The completed canonical bundle also passes: default all-targets tests, 31
+allocation tests, default/benchmark/combined-study strict Clippy, and the seven
+focused tests. Nightly rustfmt and diff whitespace checks pass.
 
-Wine execution passes the three worker tests and the 1 GiB/depth-256 probe,
-but Wine 10 marks the whole stack committed: it cannot validate Windows' moving
-guard commitment semantics. Its 64/100 GiB thread reservations fail with error 8.
-Native host access is being investigated; the current T3 environment identifies
-itself as Linux, and no native Windows executor or SSH destination is configured
-in the exposed tool catalog or SSH configuration.
+## Linux timing and memory
+
+Same host and profiles as the reserved-stack report: Ryzen 9 5900X, 24 logical
+cores, about 15 GiB RAM, Rust 1.99.0, LLVM 23.1.1. Release uses fat LTO and one
+codegen unit; debug is unoptimized. Shared builds/checks ran during collection;
+there is no CPU isolation. Nine fresh-process samples rotate the four modes.
+CV uses population standard deviation divided by mean. The input is the same
+preprocessed `lua-supported.i`: 241,784 tokens, 2,403 roots, no diagnostics.
+Preparation, stack setup/join, inspection, and destruction are outside phase 7.
+
+| Mode | Release median ms | Range ms | CV % | Debug median ms | Range ms | CV % |
+| --- | ---: | --- | ---: | ---: | --- | ---: |
+| Feature-disabled baseline | 36.553 | 36.114–42.546 | 6.11 | 161.014 | 157.611–169.071 | 1.92 |
+| Feature-matched machine | 39.734 | 35.953–44.794 | 6.66 | 165.574 | 163.051–173.417 | 2.36 |
+| Recursive | 24.476 | 22.713–27.866 | 6.48 | 122.351 | 118.182–126.334 | 2.16 |
+| Reserved recursive | 23.189 | 22.684–25.832 | 4.54 | 120.428 | 118.599–127.526 | 2.18 |
+
+Reserved/raw differences are within the observed variation; this batch does not
+establish a worker speed advantage. Reserved worker launch medians are 96.7 us
+release and 101.9 us debug, outside the parser timer. The saved feature-disabled
+baseline predates the recovery changes; those changes leave the default grammar
+behavior unchanged. The feature-matched control is also shown because compiler
+layout and study instrumentation affect comparisons.
+
+| Lua measurement | Baseline | Recursive / reserved recursive |
+| --- | ---: | ---: |
+| Parse scratch requested bytes | 616,016 | 593,552 |
+| Translation-unit arena requested bytes | 15,989,008 | 15,989,008 |
+| Phase-7 global allocation calls / bytes | 0 / 0 | 0 / 0 |
+| Release whole-process peak RSS, median MiB | 33.63 | 33.61 / 33.48 |
+| Debug whole-process peak RSS, median MiB | 38.81 | 38.98 / 38.63 |
+
+The scratch saving is 22,464 bytes (3.6%). RSS includes preprocessing and runtime
+memory; small differences here do not demonstrate a general memory advantage.
+Hardware performance counters remain unavailable as recorded in the original
+report; no new instruction/cycle/cache measurements are claimed.
+
+## Stack cost of recovery parity
+
+An intermediate recovery implementation kept a large `ExpressionFrame`
+temporary live in every recursive expression call. Stack sampling caught a
+regression to 1,152/2,848 B per parenthesis level release/debug. Completion is
+now outlined into `#[inline(never)] rd_finish_expression`, called after descent
+returns. It seeds the existing recovery frame without keeping its storage live
+through descent. This materially reduced that regression.
+
+| Input shape | Original release B/level | Final release | Original debug B/level | Final debug |
+| --- | ---: | ---: | ---: | ---: |
+| Parentheses | 704 | 736 | 1,952 | 2,240 |
+| Nested blocks | 1,008 | 1,024 | 8,176 | 8,512 |
+
+Final slopes use the address-span difference between depths 4,096 and 16,384,
+with separate instrumented runs. They measure parser grammar entry addresses,
+not an exact native-stack peak. At 16,384 levels, reserved-stack post-parse RSS
+is 11.52 MiB release / 35.04 MiB debug for parentheses and 16.02 / 133.04 MiB
+for blocks. Reservations are 100 GiB in these Linux samples; initial stack RSS
+is 16 KiB release / 48 KiB debug. All eight samples finish with no diagnostics,
+no hybrid fallbacks, no major faults, no swap, and no huge-page backing.
+
+Recovery parity therefore has a measurable native-stack cost, especially in
+debug. The Windows 1 MiB default stack remains unsuitable for unrestricted raw
+recursion. A large reserved worker or an explicitly bounded hybrid is required.
+The reservation is finite, and OS exhaustion remains a process/runtime failure,
+not a normal parser-limit diagnostic.
+
+## Windows evidence and its limits
+
+The probe at `examples/parser_stack_probe.rs` imports the actual study worker
+module, including `reserved_stack/windows.rs`. It gives each recursive call a
+live 4,096-byte array, queries the stack at maximum depth and after return, and
+checks panic propagation, borrowed callback data, and invalid reservations.
+The isolated manifest copies the repository's Rust/Clippy lint configuration.
+It avoids the full compiler build's `TARGET == HOST` requirement without
+changing that build contract. It does not contain the parser or LLVM.
+
+| Check | Result |
+| --- | --- |
+| x86_64 Windows GNU debug/release link | Pass |
+| GNU strict Clippy, all probe targets | Pass |
+| x86_64 Windows MSVC compile check / strict Clippy | Pass; no SDK/linker runtime test |
+| Wine 10 worker unit tests | 3/3 pass |
+| Wine 1 GiB stack, depths 0/256/4,096/16,384/65,536 | Both builds pass |
+| Wine 64 GiB / 100 GiB thread reservation | Both fail at creation, Windows error 8 |
+| Native Windows parser throughput / demand commit / overflow | Pending native host connection |
+
+The Wine page-probe slope is 4,208 B/level release and 4,336 B/level debug. These
+are Windows GNU ABI page-probe frames under Wine, not native parser frames.
+At depth 65,536 its spans are 275,779,695 / 284,168,511 bytes. Do not compare
+these numbers with the parser nesting slopes above.
+
+Wine reports 1,073,737,728 writable committed bytes for a 1 GiB reservation
+before recursion, at maximum depth, and after unwinding. This is commit state,
+not physical residency. Wine 10's
+[`virtual_alloc_thread_stack`](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/ntdll/unix/virtual.c#L3880)
+maps the whole reservation with `VPROT_COMMITTED` and enforces a minimum 1 MiB
+stack. It therefore does not exercise Windows' normal guard-driven commitment.
+Windows implementation uses `CreateThread` with
+`STACK_SIZE_PARAM_IS_A_RESERVATION`, leaving guard handling to the native OS.
+A native run must verify small initial commitment, commitment growth with depth,
+and the failure mode at the end of the reservation.
+
+The Wine collector deliberately rejects unexpected negative-probe outcomes.
+Three undersized-stack runs return the transported stack-overflow status 253
+(`0xC00000FD` on Windows). The 1 MiB release run instead prints a stack-overflow
+message and exits 101 when the joined worker supplies no result. Consequently
+the 22-run compatibility collection exits 1 with one unexpected outcome; it
+must not be described as an entirely passing Windows suite. Successful workloads
+are unaffected. Native behavior of this path remains unverified.
+
+Initial GNU linking with Rust's bundled startup objects and a different MinGW
+CRT crashed before `main` (recursive `atexit`/`_onexit`). The final build uses the
+matching extracted MinGW GCC driver and `link-self-contained=no`. This was a
+cross-tool setup failure, not evidence about parser performance. Pinned tool
+versions, URLs and checksums are archived.
+
+The current T3 environment reports Linux. Its exposed tools and SSH configuration
+provide no native Windows executor/destination. Forwarded SSH-agent and clipboard
+bridges alone do not establish command access. The owner has been asked for the
+configured host connection name/path; native execution is still outstanding.
+No host credentials or unrelated worktrees were modified.
+
+## Reproduction and saved evidence
+
+Run from `/home/agent/workspace/bcc-rust/worktrees/parser-recursive-descent-study`.
+Every Cargo invocation except nightly formatting stays inside the shared wrapper.
+For long jobs detach the entire wrapper invocation and retain its log, as in the
+original report. The final build/copy command is also retained in the build log.
+
+```sh
+python3 scripts/parser_study_inputs.py --lua
+python3 scripts/parser_study_cases.py
+# Build and copy both study and feature-disabled baselines within one slot.
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts/parser_study_build.sh reserved
+cp .scratch/parser-study/reserved-release .scratch/parser-study/recovery-final-release
+cp .scratch/parser-study/reserved-debug .scratch/parser-study/recovery-final-debug
+sh scripts/parser_study_recovery.sh
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py sh scripts/parser_study_build.sh checks
+cargo +nightly fmt --check
+git diff --check
+
+# Local cross tools and Wine; nothing installed globally.
+python3 scripts/parser_study_windows.py setup
+python3 scripts/parser_study_windows.py prepare
+# First fresh manifest only: generate the lock before the --locked builds.
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py cargo generate-lockfile --manifest-path .scratch/parser-study/windows/Cargo.toml
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py python3 scripts/parser_study_windows.py build
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py python3 scripts/parser_study_windows.py build --target x86_64-pc-windows-msvc
+python3 scripts/parser_study_windows.py collect --wine .scratch/parser-study/windows/root/usr/lib/x86_64-linux-gnu/wine/wine --repeats 1 --output .scratch/parser-study/windows/wine-results.json
+# Last command currently exits 1 for the documented negative-probe outcome.
+```
+
+[`parser_study_recovery.sh`](../../scripts/parser_study_recovery.sh) records exact
+inputs, labels, repetitions and differential assertions. The Linux input
+manifests/hashes are unchanged from the preceding reports. Both final build
+profiles and baseline binary hashes are included in each JSON's metadata.
+Full raw JSON and build/check logs are gzip archives in
+[`parser-recovery-windows-data/`](parser-recovery-windows-data/); decompress with
+`gzip -dc PATH`. Windows evidence and the standalone manifest/lock are archived
+there too. The probe sets error mode itself and all executions additionally use
+`scripts/cargo_runner.py` to suppress desktop crash dialogs.
+
+## Recommendation and remaining decisions
+
+Keep the default frame machine while evaluating reserved-worker integration;
+recovery parity is no longer a known blocker on the measured corpus. The Linux
+speed improvement survives the recovery fixes. The reserved stack remains a
+credible way to preserve simple recursive expression/statement control flow,
+with a large memory cost for pathological debug nesting. The bounded hybrid is
+still the option that limits native stack consumption.
+
+Before changing the default, run native Windows release and debug parser cases,
+commit-growth and overflow probes, and decide the reservation/failure policy.
+Also decide whether worker ownership of the full preparation/parse arena lifetime
+fits the production API, since existing arena/context values cannot simply be
+sent across threads. Reusing frame recovery and declaration/extension handoffs
+means the prototype still needs those frames; it does not yet justify deleting
+the production expression/statement machinery.
