@@ -72,6 +72,8 @@ def collect(args):
     batch("timing", "bench", ["baseline", "machine", "recursive", "growing", "hybrid:16",
                                "reserved:machine", "reserved:recursive"],
           ["lua-supported.i", "expression-mix.c", "statement-mix.c", "declaration-mix.c"], repeats=9)
+    batch("stdlib-100g", "bench", ["recursive"], ["lua-supported.i"],
+          extra=["--stack", str(100 * 1024**3)], repeats=3)
     deep = ["parentheses-16384.c", "blocks-16384.c", "parentheses-65536.c", "blocks-65536.c",
             "statements-65536.c", "declarator-65536.c", "initializer-65536.c"]
     batch("deep", "bench", ["machine", "growing", "hybrid:16", "reserved:recursive"], deep,

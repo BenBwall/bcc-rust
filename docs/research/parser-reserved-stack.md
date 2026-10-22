@@ -73,6 +73,11 @@ pages. Every smoke parse made zero global allocator calls during phase 7.
 The reservation is therefore demand-backed; active recursive frames still cost
 physical memory. Repeated measurements are running.
 
+A standard Rust worker requested with `--stack 107374182400` failed to start in
+all three release attempts (`EAGAIN`, resource temporarily unavailable). The
+explicit no-reserve mapping succeeds at the same usable size. This demonstrates
+why requesting a large ordinary worker is not equivalent on this host.
+
 ## Validation so far
 
 The study feature passes strict Clippy. All three native-stack tests pass:
