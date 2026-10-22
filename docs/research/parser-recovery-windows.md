@@ -69,3 +69,7 @@ The regression test also checks nested then-bodies through `while`, `for`,
 missing `while` with a visible parenthesized condition, and multiple missing
 call commas. It compares complete rendered AST/provenance/diagnostic output
 at every hybrid threshold 0 through 16, plus recursive and growing modes.
+
+Release grammar validation also passes all 1,050 runs. The isolated Windows
+probe builds in debug and release for GNU, and passes strict Clippy for GNU
+and MSVC. Windows execution remains pending Wine initialization.
