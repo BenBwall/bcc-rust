@@ -12,7 +12,7 @@ rust-version = "1.99.0"
 
 [features]
 # One demand-paged native stack for the complete command-line compilation.
-reserved-compilation-stack = []
+reserved-compilation-stack = ["windows-sys/Win32_Security"]
 # Experimental recursive lowering; the CLI runs on the reserved worker.
 recursive-lowering-study = ["reserved-compilation-stack"]
 benchmarking-internals = ["dep:coz"]
