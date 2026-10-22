@@ -4,9 +4,11 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import statistics
 import subprocess
+import sys
 import time
 
 
@@ -87,6 +89,8 @@ def main():
         if args.action == "diff":
             command += ["--inspect", str(destination)]
             destination.unlink(missing_ok=True)
+        if os.name == "nt":
+            command = [sys.executable, str(Path(__file__).with_name("cargo_runner.py")), *command]
         before = time.monotonic()
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=60)

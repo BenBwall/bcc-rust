@@ -29,7 +29,7 @@ def setup():
     downloads.mkdir(parents=True, exist_ok=True)
     pins = {
         "wine64": "10.0~repack-12ubuntu1", "libwine": "10.0~repack-12ubuntu1",
-        "wine-common": "10.0~repack-12ubuntu1", "libz-mingw-w64": None,
+        "wine-common": "10.0~repack-12ubuntu1", "libz-mingw-w64": "1.3.1+dfsg-2",
         "mingw-w64-x86-64-dev": "13.0.0-2ubuntu1", "mingw-w64-common": "13.0.0-2ubuntu1",
         "gcc-mingw-w64-x86-64-posix": "13.2.0-6ubuntu1+26.1",
         "gcc-mingw-w64-x86-64-posix-runtime": "13.2.0-6ubuntu1+26.1",
@@ -182,6 +182,9 @@ def collect(args):
                             "elapsed_s": time.monotonic() - before}
         except subprocess.TimeoutExpired:
             row = fields | {"returncode": "timeout", "elapsed_s": time.monotonic() - before}
+        metrics = next((line for line in row.get("stdout", "").splitlines() if line.startswith("reserve=")), None)
+        if metrics:
+            row["metrics"] = {key: int(value) for key, value in (part.split("=", 1) for part in metrics.split())}
         rows.append(row)
         args.output.write_text(json.dumps({"metadata": metadata, "rows": rows}, indent=2) + "\n")
         print(fields, row["returncode"], flush=True)
@@ -190,7 +193,26 @@ def collect(args):
     for reserve, depth in probes:
         for repeat in range(args.repeats):
             for profile, binary in binaries.items():
-                execute([binary, reserve, depth], profile=profile, reserve=reserve, depth=depth, repeat=repeat)
+                execute([binary, reserve, depth], profile=profile, reserve=reserve, depth=depth, repeat=repeat,
+                        expected_success=not (reserve == 1024**2 and depth == 4096
+                                              or reserve == 64 * 1024**2 and depth == 16384))
+    failures = []
+    for row in rows:
+        if row.get("expected_success", True):
+            m = row.get("metrics", {})
+            good = row["returncode"] == 0
+            if row.get("kind") != "unit-tests":
+                good &= (m.get("actual", 0) >= row["reserve"] and m.get("before", row["reserve"]) < 4 * 1024**2
+                         and m.get("span", row["reserve"]) < m.get("actual", 0)
+                         and "passed=3" in row.get("stdout", ""))
+                if row["depth"] > 0:
+                    good &= m.get("deepest", 0) > m.get("before", 0)
+            if not good:
+                failures.append(row)
+        elif row["returncode"] in (0, "timeout"):
+            failures.append(row)
+    if failures:
+        raise SystemExit(f"{len(failures)} unexpected probe outcomes; inspect {args.output}")
 
 
 def main():
