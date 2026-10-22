@@ -208,6 +208,47 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_visitors_fold_only_constant_automatic_initializers() {
+        for tag in ["struct", "union"] {
+            let prelude = format!(
+                "{tag} S{{int a;}};static {tag} S h(void){{STATIC return ({tag} S){{1}};}}static \
+                 {tag} S g={{2}};"
+            );
+            for body in [
+                format!("{tag} S s=0?h():g;return s.a-2;"),
+                format!("{tag} S a[]={{0?h():({tag} S){{2}},g}};return a[0].a-2;"),
+                format!("{tag} S s;s=0?h():({tag} S){{2}};return s.a-2;"),
+                format!("return (0?h():({tag} S){{2}}).a-2;"),
+                format!("return take(0?h():({tag} S){{2}})-2;"),
+                format!(
+                    "struct O{{{tag} S s;int x;}}o={{0?h():({tag} S){{2}},take(g)}};return \
+                     o.s.a-2;"
+                ),
+                "return make().a-2;".to_owned(),
+            ] {
+                let make = if body == "return make().a-2;" {
+                    format!("{tag} S make(void){{return 0?h():({tag} S){{2}};}}")
+                } else {
+                    String::new()
+                };
+                let template = format!(
+                    "{prelude}int take({tag} S s){{return s.a;}}{make}int main(void){{{body}}}"
+                );
+                assert_o0_static_emission(&template, true);
+                assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+            }
+            for body in [
+                format!("{tag} S a[]={{0?h():({tag} S){{2}}}};return a[0].a-2;"),
+                format!("const {tag} S c={{2}};{tag} S s=0?h():c;return s.a-2;"),
+            ] {
+                let template = format!("{prelude}int main(void){{{body}}}");
+                assert_o0_static_emission(&template, false);
+                assert_runs_like_clang(&template.replace("STATIC", "static int a;"));
+            }
+        }
+    }
+
+    #[test]
     fn omitted_scalar_statement_expression_tails_preserve_following_code() {
         for statement in ["for(;;);", "return 99;", "__builtin_unreachable();"] {
             for expression in [

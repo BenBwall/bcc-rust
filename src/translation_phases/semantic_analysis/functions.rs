@@ -612,7 +612,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // The selected visitor omits this arm. A value tail can have
                 // created an orphan block while its type was still unknown;
                 // it must not make a later emitted statement disappear.
-                if self.conditional_visitor_folds(owner, self.expression_info(arm).ty) {
+                let ty = self.expression_info(arm).ty;
+                let record = matches!(self.types.nodes[ty.index], TypeKind::Tag(id) if self.types.tags[id].kind != super::TagKind::Enum);
+                if record {
+                    self.record_aggregate_initializer_arm(owner);
+                }
+                if record || self.conditional_visitor_folds(owner, ty) {
                     self.functions.emission.orphan = orphan;
                 }
             },

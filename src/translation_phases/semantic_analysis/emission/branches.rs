@@ -193,9 +193,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Scalar visitors and aggregate visitors with a value destination fold
-    /// a conditional's unselected arm. Discarded aggregates and complex
-    /// visitors emit both operands.
+    /// Scalar visitors fold unselected arms. Aggregate visitors emit both;
+    /// automatic constant aggregate initialization can bypass the visitor.
     /// C99: §6.5.15p3-6, pp. 90-91; PDF pp. 102-103.
     pub(in crate::translation_phases::semantic_analysis) fn folded_conditional_emission(
         &self,
@@ -219,6 +218,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )
                 || (matches!(self.types.nodes[ty.index], TypeKind::Tag(id)
                     if self.types.tags[id].kind != super::super::TagKind::Enum)
+                    && self
+                        .functions
+                        .emission
+                        .constant_aggregate_arms
+                        .contains_key(&std::ptr::from_ref(expression).addr())
                     && !self
                         .functions
                         .emission

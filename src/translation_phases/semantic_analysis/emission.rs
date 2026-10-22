@@ -41,6 +41,7 @@
 // Rules
 mod branches;
 mod folding;
+mod initializers;
 mod insertion;
 mod noreturn;
 mod switches;
@@ -151,6 +152,10 @@ pub(super) struct State<'tu, 's> {
     /// Expressions whose results Clang discards, including transparent
     /// wrappers.
     pub(super) discarded_results: ArenaMap<'s, usize, ()>,
+    /// Aggregate arms in automatic initializers, resolved after planning.
+    pub(super) aggregate_initializer_arms: ArenaMap<'s, usize, ArenaVec<'s, &'tu Expression<'tu>>>,
+    pub(super) constant_aggregate_arms: ArenaMap<'s, usize, ()>,
+    pub(super) aggregate_constants: ArenaMap<'s, usize, Option<bool>>,
     /// Pure syntax that may need an unsupported constant fold.
     pub(super) potential_constants: ArenaMap<'s, usize, bool>,
     /// Syntactic array-literal reads, memoized across nested query operands.
@@ -223,6 +228,9 @@ impl<'s> State<'_, 's> {
             depth_cut: false,
             refolds: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             discarded_results: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            aggregate_initializer_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_aggregate_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            aggregate_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             potential_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             array_literal_reads: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             #[cfg(test)]

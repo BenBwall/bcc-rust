@@ -1075,9 +1075,12 @@ This is a retention capability boundary, not a new value or branch fold;
 required references and `used` storage remain checked. Parameters and
 ordinary runtime loads do not trigger it. The VLA-after-jump gap above
 instead omits code Clang revives.
-Scalar conditionals and aggregates with a value destination omit an
-unselected constant arm. Ignored-result aggregates and complex visitors emit
-both arms. A sparse discarded-result context follows parentheses, comma
+Scalar conditionals omit an unselected constant arm. Aggregate and complex
+visitors emit both arms, including member bases, arguments, assignments and
+return values. Clang can bypass the aggregate visitor for a constant automatic
+initializer; that decision waits for the complete typed initializer plan. A
+dynamic sibling member prevents the bypass. A sparse discarded-result context
+follows parentheses, comma
 results, selected-expression wrappers, statement-expression value tails and
 void casts; expression statements and for initializers/steps start it. Arm
 omission is resolved after typing, so nonvoid statement-expression tails stay
