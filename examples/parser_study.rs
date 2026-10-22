@@ -34,7 +34,7 @@ fn main() {
         args.len() >= 2,
         "usage: parser_study SOURCE [REPEATS] [--mode \
          machine|recursive|growing|hybrid:N|limited:N] [--inspect DEST] [--stack BYTES] \
-         [--reserve-stack BYTES] [--sample-stack]"
+         [--reserve-stack BYTES] [--sample-stack] [--stack-memory]"
     );
     let source = fs::read_to_string(&args[1]).expect("read study source");
     let repeats = args
@@ -60,6 +60,7 @@ fn main() {
     };
     let inspection = option("--inspect");
     let sample_stack = args.iter().any(|arg| arg == "--sample-stack");
+    let sample_stack_memory = args.iter().any(|arg| arg == "--stack-memory");
     let stack = option("--stack");
     if let Some(reserved) = option("--reserve-stack") {
         assert!(stack.is_none(), "choose --stack or --reserve-stack");
@@ -81,6 +82,7 @@ fn main() {
                 sample_stack,
                 inspection.as_deref(),
                 Some(bounds),
+                sample_stack_memory,
             );
         })
         .expect("run parser on reserved stack");
@@ -101,6 +103,7 @@ fn main() {
                     sample_stack,
                     inspection.as_deref(),
                     None,
+                    sample_stack_memory,
                 );
             })
             .expect("spawn parser thread")
@@ -114,6 +117,7 @@ fn main() {
             sample_stack,
             inspection.as_deref(),
             None,
+            sample_stack_memory,
         );
     }
 }
@@ -125,7 +129,9 @@ fn run(
     sample_stack: bool,
     inspection: Option<&str>,
     stack: Option<reserved_stack::Bounds>,
+    sample_stack_memory: bool,
 ) {
+    let memory_stack = stack.filter(|_| sample_stack_memory);
     for index in 0..repeats {
         let stack_before = Cell::new(reserved_stack::Snapshot::default());
         let stack_after = Cell::new(reserved_stack::Snapshot::default());
@@ -137,7 +143,7 @@ fn run(
                 sample_stack,
                 inspection.is_some(),
                 || {
-                    stack_before.set(stack.map_or_default(reserved_stack::Bounds::snapshot));
+                    stack_before.set(memory_stack.map_or_default(reserved_stack::Bounds::snapshot));
                     faults_before.set(reserved_stack::Faults::current());
                     CALLS.set(0);
                     BYTES.set(0);
@@ -146,7 +152,7 @@ fn run(
                 || {
                     ACTIVE.set(false);
                     faults_after.set(reserved_stack::Faults::current());
-                    stack_after.set(stack.map_or_default(reserved_stack::Bounds::snapshot));
+                    stack_after.set(memory_stack.map_or_default(reserved_stack::Bounds::snapshot));
                 },
             )
         });
@@ -156,7 +162,7 @@ fn run(
              statements={} compounds={} depth={} stack_span={} fallbacks={} limit_hits={} \
              rss_before={} rss_after={} stack_reserved={} stack_rss_before={} stack_rss_after={} \
              stack_swap_after={} stack_writable={} stack_noreserve={} minor_faults={} \
-             major_faults={}",
+             major_faults={} stack_sampled={}",
             result.nanoseconds,
             result.tokens,
             result.roots,
@@ -189,7 +195,8 @@ fn run(
             faults_after
                 .get()
                 .major
-                .saturating_sub(faults_before.get().major)
+                .saturating_sub(faults_before.get().major),
+            usize::from(sample_stack_memory)
         );
         if let Some(text) = &result.inspection {
             fs::write(inspection.expect("inspection destination"), text).expect("write inspection");

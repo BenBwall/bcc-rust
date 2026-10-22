@@ -22,12 +22,12 @@ where
         .map_err(|_| io::Error::last_os_error())?;
     let round = |value: usize| value.checked_add(page - 1).map(|n| n / page * page);
     let bytes = round(bytes)
-        .filter(|&n| n >= libc::PTHREAD_STACK_MIN && n <= isize::MAX as usize)
+        .filter(|&n| n >= libc::PTHREAD_STACK_MIN && isize::try_from(n).is_ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid stack reservation"))?;
     let guard_bytes = round(64 * 1024).expect("guard fits a page multiple");
     let total = bytes
         .checked_add(2 * guard_bytes)
-        .filter(|&n| n <= isize::MAX as usize)
+        .filter(|&n| isize::try_from(n).is_ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "stack reservation overflow"))?;
     // SAFETY: requests a fresh anonymous range, initially inaccessible. No
     // physical stack pages are prefaulted or reserved against Linux commit.
