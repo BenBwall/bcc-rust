@@ -1009,15 +1009,16 @@ retaining sequence points. A bounded evaluator runs after the frontend arena
 has been dropped. Copied provenance segments preserve file IDs, offsets, lines
 and columns; resolving file IDs to names/text remains the host's source-catalog
 responsibility. It has no dependency on today's scalar IR, optimizer, ABI or
-LLVM evaluator. The default build and pipeline do not use it.
+LLVM APIs. The default build and pipeline do not use it.
 
 The slice includes integer functions, automatic locals, conversions, loops,
 break/continue, direct calls and recursion. Execution reports source operations
 that overflow or violate simple unsequenced-access rules. Indeterminate reads
 have a separate policy-dependent outcome. Conflicts spanning nested sequencing,
-pointers, aggregates, globals, extensions and other unsupported constructs are
-refused. This is not the complete object/provenance or sequencing model proposed
-above, and does not replace the current scalar contract.
+pointer/aggregate operations, accesses to globals, semantic extension contracts
+and other unsupported constructs are refused. This is not the complete
+object/provenance or sequencing model proposed above, and does not replace the
+current scalar contract.
 
 Three new portable fixtures live in `test-programs/ir-design-study/`. Tests also
 select seven existing lowering programs and compare results against today's
@@ -1062,9 +1063,10 @@ This milestone validates an executable semantic snapshot, not the full design.
 It has no pointer, aggregate, effective-type or provenance semantics, and no
 general C sequencing graph. It refuses qualified objects, runtime type/VLA
 evaluation, unsupported statements, external/indirect/variadic/old-style calls
-and extensions. No LLVM/native backend consumes the new module yet. Removing
-poison from the shared scalar IR, a legacy-lowering adapter, a text round-trip
-and compilation-overhead measurements remain later acceptance gates.
+and semantic extension contracts. No LLVM/native backend consumes the new
+module yet. Removing poison from the shared scalar IR, a legacy-lowering
+adapter, a text round-trip and compilation-overhead measurements remain later
+acceptance gates.
 
 ### Reproduction and evidence
 
@@ -1074,20 +1076,34 @@ From this worktree root, run the focused experiment through the shared wrapper:
 python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py cargo test --lib c_ir_study -- --test-threads=2
 ```
 
-Initial validation: eight targeted tests passed, including ten defined programs
-on two target data models against four legacy execution arms each (80 legacy
-comparisons). The first compilation caught snapshot/evaluator borrow lifetime
-errors, which were corrected before that passing run. An initial Clippy check
-found 13 findings in the experiment (deliberate integer bit conversions,
-similar names and two action/initialization style issues); these were corrected
-with local conversion justifications and code changes. Additional provenance,
-type/reference and lexical CFG checks found an overbroad capability gate:
-ordinary direct calls can leave default symbol-attribute records. Three tests
-failed until that gate was restricted to non-default attributes; inherited
-extension attributes remain refusals. The corrected suite and canonical checks
-are being validated next. The original
-study's source/citation/link checks remain design evidence, not performance
-measurements; no compilation-overhead budget has been measured yet.
+Final validation on 2026-10-23, with implementation at `2eb37809`: all eight
+prototype tests passed within the full library suite. Ten defined programs
+agreed on two target data models with four legacy execution arms each (80
+legacy comparisons and 20 direct study-evaluator runs). The provenance,
+type/reference, lexical-CFG, lifetime, UB, indeterminate-state, capability and
+resource-limit checks passed as well.
+
+Every build/check below used the shared wrapper except the explicitly permitted
+nightly formatter and Git check. Local receipts remain under ignored `target/`.
+
+| Check | Final result | Receipt |
+| --- | --- | --- |
+| `cargo test --all-targets` | Pass: 2,312 library tests, 3 default allocation tests and 254 integration tests; 9 existing ignored tests across the suites | `target/ir-study-all-targets.log` |
+| `cargo test --features benchmarking-internals --test allocation_count` | Pass: 31 allocation checks | `target/ir-study-allocations.log` |
+| `cargo clippy --all-targets -- -D warnings` | Pass | `target/ir-study-clippy.log` |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | Pass | `target/ir-study-clippy-features.log` |
+| `cargo +nightly fmt --check` | Pass | `target/ir-study-fmt.log` |
+| `git diff --check` | Pass | Final working-tree check |
+
+Development checks caught snapshot/evaluator borrow lifetime errors, 13 lint
+findings and an overbroad capability gate, all corrected before the final
+passing checks. Ordinary direct calls can leave default symbol-attribute
+records; rejecting record presence caused three prototype tests to fail.
+The corrected gate rejects non-default attributes and includes an inherited
+weak-attribute refusal case. This history is not an outstanding baseline
+failure. The original study's source/citation/link checks remain design
+evidence, not performance measurements; no compilation-overhead budget has
+been measured yet.
 
 Pinned Clang 23.1.1 (`1b9c0d5ff9bbe7634aead059efe6b11a7eeba145`)
 independently compiled and executed the three new fixtures as C99 on Linux at
