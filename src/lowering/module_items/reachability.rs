@@ -21,7 +21,7 @@ use crate::{
     translation_phases::semantic_analysis::InitOperation,
     util::{
         bump::Bump,
-        interval_cover::last_writes,
+        interval_cover::Writers,
     },
 };
 
@@ -105,11 +105,21 @@ impl<'a> Unit<'a, '_, '_> {
             }
             canonical[owner]
         };
+        let mut referenced_owners =
+            ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
+        referenced_owners.extend(
+            self.sema
+                .references
+                .iter()
+                .filter(|r| !r.dead)
+                .map(|r| r.owner),
+        );
         let mut initializer_values =
             ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
         for definition in self.sema.definitions {
             let binding = definition.binding;
-            if owner_of(binding) != canonical[binding]
+            if referenced_owners.contains(&binding)
+                && owner_of(binding) != canonical[binding]
                 && let Some(values) = self.materialized_initializer_values(binding)
             {
                 drop(initializer_values.insert(binding, values));
@@ -309,10 +319,27 @@ impl<'a> Unit<'a, '_, '_> {
         let (leaves, _) =
             initializers::leaves(self.sema, plan.ty, initializer, Storage::Static, &scratch)
                 .ok()?;
-        let mut ranges: ArenaVec<'_, (u64, u64)> =
-            ArenaVec::with_capacity_in(leaves.len(), &scratch);
-        let mut writers: ArenaVec<'_, Option<usize>> =
-            ArenaVec::with_capacity_in(leaves.len(), &scratch);
+        let mut limit = 0;
+        for &leaf in &leaves {
+            let end = if let Leaf::Replicate {
+                offset,
+                size,
+                stride,
+                count,
+                ..
+            } = leaf
+            {
+                offset
+                    .checked_add(size)?
+                    .checked_add(stride.checked_mul(count)?)?
+                    .checked_mul(8)?
+            } else {
+                leaf.bits(&self.sema.types).ok()?.1
+            };
+            limit = limit.max(end);
+        }
+        let mut writers = Writers::new(limit, &scratch);
+        let mut replay = Bump::new();
         for &leaf in &leaves {
             if let Leaf::Replicate {
                 offset,
@@ -324,52 +351,43 @@ impl<'a> Unit<'a, '_, '_> {
             {
                 let start = offset.checked_mul(8)?;
                 let end = offset.checked_add(size)?.checked_mul(8)?;
-                let replay = Bump::new();
-                let mut source = ArenaVec::new_in(&replay);
-                // Snapshot only the source run. Never read the final source
-                // after a later initializer has replaced its original value.
-                let mut inside = ArenaVec::new_in(&replay);
-                let mut origins = ArenaVec::new_in(&replay);
-                for (index, &(low, high)) in ranges.iter().enumerate() {
-                    if low < end && high > start {
-                        inside.push((low.max(start), high.min(end)));
-                        origins.push(writers[index]);
-                    }
-                }
-                for (low, high, index) in last_writes(&inside, &replay) {
-                    source.push((low, high, origins[index]));
-                }
+                replay.reset();
+                let source = writers.source(start, end, &replay);
                 if let &[(low, high, writer)] = source.as_slice()
                     && low == start
                     && high == end
                     && size == stride
                 {
-                    ranges.push((
+                    writers.write(
                         end,
                         end.checked_add(count.checked_mul(stride)?.checked_mul(8)?)?,
-                    ));
-                    writers.push(writer);
+                        writer,
+                    );
                 } else {
                     for copy in 1..=count {
                         let shift = copy.checked_mul(stride)?.checked_mul(8)?;
                         for &(low, high, writer) in &source {
-                            ranges.push((low.checked_add(shift)?, high.checked_add(shift)?));
-                            writers.push(writer);
+                            writers.write(
+                                low.checked_add(shift)?,
+                                high.checked_add(shift)?,
+                                writer,
+                            );
                         }
                     }
                 }
             } else {
-                ranges.push(leaf.bits(&self.sema.types).ok()?);
-                writers.push(match leaf {
+                let (start, end) = leaf.bits(&self.sema.types).ok()?;
+                let writer = match leaf {
                     | Leaf::Scalar { expression, .. } | Leaf::Copy { expression, .. } =>
                         Some(std::ptr::from_ref(expression).addr()),
                     | _ => None,
-                });
+                };
+                writers.write(start, end, writer);
             }
         }
         let mut values = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
-        for (_, _, index) in last_writes(&ranges, &scratch) {
-            if let Some(value) = writers[index] {
+        for (_, _, writer) in writers.source(0, limit, &scratch) {
+            if let Some(value) = writer {
                 let rank = values.len();
                 _ = values.entry(value).or_insert(rank);
             }

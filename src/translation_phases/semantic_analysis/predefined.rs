@@ -432,7 +432,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                         "{kind} {}",
                                         tag.name.map_or("(unnamed)", |name| {
                                             match self.context.string_cache.at(name) {
-                                                // Clang names the SysV record so.
+                                                // Clang names the SysV record
+                                                // so.
                                                 | "__builtin_va_list" => "__va_list_tag",
                                                 | name => name,
                                             }

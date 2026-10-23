@@ -20,7 +20,9 @@ use crate::{
         OffsetMember,
         declaration_syntax::{
             Declaration,
+            Declarator,
             DesignatorType,
+            DirectDeclarator,
             Initializer,
             InitializerType,
         },
@@ -389,7 +391,7 @@ struct OpenSwitch<'tu, 's> {
 
 /// One step of the function walk.
 #[derive(Clone, Copy)]
-enum Step<'tu> {
+pub(super) enum Step<'tu> {
     Enter(&'tu Statement<'tu>),
     /// The body of this switch begins: case labels belong to it.
     EnterSwitch(&'tu Statement<'tu>),
@@ -401,7 +403,7 @@ enum Step<'tu> {
 /// substatements, expressions and the initializers of declarations. A
 /// nested function definition is not a child; a switch marks where its body
 /// begins.
-fn statement_children<'tu>(
+pub(super) fn statement_children<'tu>(
     scratch: &Bump,
     statement: &'tu Statement<'tu>,
     mut push: impl FnMut(Step<'tu>),
@@ -508,10 +510,37 @@ fn declaration_children<'tu>(
     push: &mut dyn FnMut(Step<'tu>),
 ) {
     for init in declaration.init_declarators {
+        declarator_bounds(scratch, init.declarator, &mut |expression| {
+            push(Step::Expression(expression));
+        });
         if let Some(initializer) = init.initializer {
             initializer_expressions(scratch, initializer, &mut |expression| {
                 push(Step::Expression(expression));
             });
+        }
+    }
+}
+
+/// Array size expressions are statement children, including bounds of
+/// pointer-to-array and typedef declarations, but not prototype parameters.
+/// C99: §6.7.5.2 paragraph 5, p. 117; PDF p. 129.
+fn declarator_bounds<'tu>(
+    scratch: &Bump,
+    declarator: Declarator<'tu>,
+    push: &mut dyn FnMut(&'tu Expression<'tu>),
+) {
+    let mut work = ArenaVec::new_in(scratch);
+    work.push(declarator);
+    while let Some(declarator) = work.pop() {
+        for direct in declarator.kind {
+            match *direct {
+                | DirectDeclarator::Array {
+                    assignment_expression: Some(bound),
+                    ..
+                } => push(bound),
+                | DirectDeclarator::Parenthesized(inner) => work.push(inner.declarator),
+                | _ => {},
+            }
         }
     }
 }
@@ -563,6 +592,10 @@ pub(in crate::translation_phases::semantic_analysis) fn expression_children<'tu>
     mut push: impl FnMut(&'tu Expression<'tu>),
 ) {
     match expression.kind {
+        | ExpressionType::SizeofType(name) =>
+            if let Some(declarator) = name.declarator {
+                declarator_bounds(scratch, declarator, &mut push);
+            },
         | ExpressionType::Parenthesized { expression }
         | ExpressionType::Unary {
             operand_expression: expression,
@@ -632,24 +665,5 @@ pub(in crate::translation_phases::semantic_analysis) fn expression_children<'tu>
             }
         },
         | _ => {},
-    }
-}
-
-/// The expressions a statement contains, including declaration initializers.
-/// Query-side-effect inspection follows Clang's `SideEffectFinder`.
-pub(super) fn statement_expressions<'tu>(
-    scratch: &Bump,
-    statement: &'tu Statement<'tu>,
-    mut push: impl FnMut(&'tu Expression<'tu>),
-) {
-    let mut work = ArenaVec::new_in(scratch);
-    work.push(Step::Enter(statement));
-    while let Some(step) = work.pop() {
-        match step {
-            | Step::Enter(statement) =>
-                statement_children(scratch, statement, |step| work.push(step)),
-            | Step::Expression(expression) => push(expression),
-            | _ => {},
-        }
     }
 }

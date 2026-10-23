@@ -469,7 +469,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     info = Self::expression_result(e, self.types.scalar(Scalar::Void));
                 }
             },
-            // Unmodeled extensions retain unknown results and suppress constraints.
+            // Unmodeled extensions retain unknown results and suppress
+            // constraints.
             | _ => {},
         }
         if info.unfolded_binary128 {

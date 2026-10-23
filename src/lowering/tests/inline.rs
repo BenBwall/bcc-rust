@@ -2073,3 +2073,149 @@ fn nested_static_initializer_ownership_stays_linear() {
     drop(lower_with(&source, CompilerConfiguration::default()).unwrap());
     assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
 }
+
+/// PR #117's final review: labels prevent operand omission, and implicit
+/// arithmetic conversions precede a conditional's enclosing integer cast.
+/// C99: §6.5.15 paragraph 5, p. 90; PDF p. 102.
+#[test]
+fn always_inline_order_follows_final_review_emission_boundaries() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (extra, probe, emitted) in [
+        ("", "if (!*(volatile char*)\"a\") h(0);", true),
+        ("", "if (!((volatile char*)\"a\")[0]) h(0);", true),
+        ("", "if (!*\"a\") h(0);", false),
+        ("", "(1 ? (die(),0) : ({ L: 0; })); h(0);", true),
+        ("", "0 && ({ L: die(); 0; }); h(0);", true),
+        ("", "1 || ({ L: die(); 0; }); h(0);", true),
+        ("", "die(), (1 ? 0 : ({ L:; 1; })); h(0);", true),
+        ("", "die(), (0 ? ({ L:; 1; }) : 0); h(0);", true),
+        (
+            "",
+            "switch(1) { case 0: h(0); break; case 1: break; int a[({ L: 1; })]; }",
+            true,
+        ),
+        (
+            "",
+            "switch(1) { case 0: h(0); break; case 1: break; typedef int A[({ L: 1; })]; }",
+            true,
+        ),
+        (
+            "",
+            "switch(1) { case 0: h(0); break; case 1: break; sizeof(int[({ L: 1; })]); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(_Generic(0, int:c, default:other()))) { case 0: break; \
+             case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(__builtin_choose_expr(1,c,other()))) { case 0: break; \
+             case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({int d;c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({if(c) c; c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({for(;c;){} c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "int pure(void) __attribute__((pure));",
+            "switch(__builtin_constant_p(pure())) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "int pure(void) __attribute__((const));",
+            "switch(__builtin_constant_p(pure())) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        ("", "if (!(1 ?: __builtin_constant_p(c))) h(0);", false),
+        (
+            "extern int w __attribute__((weak));",
+            "if (!(1 ?: w)) h(0);",
+            false,
+        ),
+        (
+            "extern const int k __attribute__((weak_import)); const int k=0;",
+            "if (k) h(0);",
+            false,
+        ),
+        (
+            "extern const int k __attribute__((weak)); const int k=0;",
+            "if (k) h(0);",
+            true,
+        ),
+        ("", "static long p=__builtin_constant_p(h); (void)p;", false),
+        (
+            "",
+            "static long p[1]={__builtin_classify_type(h)}; (void)p;",
+            false,
+        ),
+        ("", "static int (*p)(int)=h; (void)p;", true),
+    ] {
+        assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
+    }
+    for config in [c99, gnu] {
+        for (probe, emitted) in [
+            ("if ((int)(k ? 16777217 : 0.0f)==16777216) h(0);", true),
+            ("if ((int)(k ? 16777217 : 0.0f)==16777217) h(0);", false),
+            (
+                "if ((long long)(k ? 9007199254740993LL : 0.0)==9007199254740992LL) h(0);",
+                true,
+            ),
+            (
+                "if ((long long)(k ? 9007199254740993LL : 0.0)==9007199254740993LL) h(0);",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                h_first_after("const int k=1;", probe, config),
+                emitted,
+                "{probe}"
+            );
+        }
+    }
+}
+
+/// Many short copies must query only overlapping current writers, including
+/// when the copied values carry function addresses.
+#[test]
+fn short_static_range_copies_stay_linear() {
+    let count = 20_000;
+    let mut source = String::from(
+        "static inline __attribute__((always_inline)) int f(void) { return 1; } static inline \
+         __attribute__((always_inline)) int h(void) { return f(); } int main(void) { static int \
+         (*const p[])(void) = {",
+    );
+    for index in 0..count {
+        write!(source, "[{} ... {}]=h,", 2 * index, 2 * index + 1).unwrap();
+    }
+    source.push_str("}; return p[0](); }");
+    let start = std::time::Instant::now();
+    drop(
+        lower_with(
+            &source,
+            CompilerConfiguration::default().with_gnu_extensions(true),
+        )
+        .unwrap(),
+    );
+    assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
+}

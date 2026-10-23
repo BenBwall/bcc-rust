@@ -1065,11 +1065,20 @@ there when a block-scope typedef of the function may give it such a type, so
 that typedefs coming into scope later cannot change a kept answer. Floating
 object reads and explicit casts use the same target rounding as semantic
 constant evaluation, including narrowing, underflow and complex-to-real
-conversion; unsupported formats stay unfolded. Aggregate read coverage uses
-a sorted endpoint sweep, and constant-array `strlen` results are memoized
-with their evaluation-depth and weak-horizon dependencies. Bit-field and union
-reads and GNU ranges in `const` initializers remain unmodeled. Distinct-object address comparisons such as `&x1 == &x2` also remain
-unfolded. Constant queries still miss `(long)"a" + 1 - 1`, `(long)"a" - 0`,
+conversion; unsupported formats stay unfolded. Labels that prevent omission
+also preserve the arm's insertion effects and any merge. VLA bounds in
+declarations, typedefs and `sizeof` type operands take part in label
+collection. Conditional values, including GNU omitted-middle forms, convert to
+the result type before further folding. `__builtin_constant_p` checks only
+selected generic/choose operands for side effects, walks statement expressions
+and honors direct pure/const calls; its operands and those of
+`__builtin_classify_type` create no emitted reference. Aggregate read coverage
+uses a sorted endpoint sweep, and constant-array `strlen` results are memoized
+with their evaluation-depth and weak-horizon dependencies. Literal lengths
+reached through constant pointers reuse the decoded literal and offset.
+Bit-field and union reads, GNU ranges in `const` initializers and the
+unselected operand of `__builtin_choose_expr` remain unmodeled. Distinct-object
+address comparisons such as `&x1 == &x2` also remain unfolded. Constant queries still miss `(long)"a" + 1 - 1`, `(long)"a" - 0`,
 `(char *)8`, `!(long)"a"`, `(long)"a" == 0`, `(long)"a" != 0` and `__func__[0]`.
 These gaps can leave code emitted that Clang skips. For a pure condition
 built from constants, addresses and nonvolatile const-object reads whose
@@ -1133,7 +1142,9 @@ TLS objects in named sections it cannot support, and allows an unread internal
 initializer to hold a returns-twice function's address. Incoming global
 references from instructions, data and aliases are collected once per module
 and shared by native support and storage emission.
-The module-item planner
+Static creation-order provenance indexes current writers by bit position,
+snapshots only overlapping source runs for range copies, and skips replay for
+owners with no emitted symbol references. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.

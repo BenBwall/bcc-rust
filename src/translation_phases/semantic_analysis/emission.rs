@@ -141,6 +141,10 @@ pub(super) struct State<'tu, 's> {
     /// or `weak_import`, or that `#pragma weak` names, each with the
     /// output-token ordinal from which it is weak (`folding.rs`).
     weak_names: ArenaMap<'s, StringCacheId, usize>,
+    /// Weak value reads exclude `weak_import` once an initializer defines it.
+    weak_values: ArenaMap<'s, StringCacheId, usize>,
+    /// Direct calls annotated pure or const, inherited by redeclarations.
+    pure_functions: ArenaMap<'s, usize, ()>,
     /// The output-token ordinal past the root being analyzed.
     pub(super) root_end: usize,
     /// The weak names that apply to the code being analyzed: those before
@@ -185,6 +189,8 @@ pub(super) struct State<'tu, 's> {
     /// The elements of each string literal the evaluator reads, by literal
     /// and encoding.
     literal_units: ArenaMap<'s, (u32, u8), &'s [u32]>,
+    /// String length by decoded literal and starting element.
+    literal_lengths: ArenaMap<'s, (usize, usize), Option<usize>>,
     /// The block items on the work stack that a variably modified lookahead
     /// has seen: each one's position and address, and whether it or an
     /// item below it may declare something of a variably modified type.
@@ -206,7 +212,7 @@ pub(super) struct State<'tu, 's> {
     vm_typedefs: ArenaMap<'s, (usize, StringCacheId), ()>,
     /// The state [`State::orphan`] had where a call of a builtin that
     /// leaves its operands unemitted began, by the address of its callee.
-    unevaluated_calls: ArenaMap<'s, usize, Option<usize>>,
+    unevaluated_calls: ArenaMap<'s, usize, (Option<usize>, usize)>,
 }
 
 impl<'s> State<'_, 's> {
@@ -251,6 +257,8 @@ impl<'s> State<'_, 's> {
             array_scan_steps: 0,
             labeled_expressions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             weak_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            weak_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            pure_functions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             root_end: usize::MAX,
             weak_horizon: usize::MAX,
             weak_read: false,
@@ -259,6 +267,7 @@ impl<'s> State<'_, 's> {
             plan_covers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             array_lengths: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             literal_units: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            literal_lengths: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified: ArenaVec::new_in(scratch),
             work_low: 0,
             variably_modified_items: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

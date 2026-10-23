@@ -257,7 +257,8 @@ fn remap_inst(mut data: InstData, map: &impl Fn(Value) -> Value, slots: &[StackS
         | InstData::DynAlloca { size: arg, .. } => *arg = map(*arg),
         | InstData::Load { addr, .. } => *addr = map(*addr),
         | InstData::StackAddr { slot } => *slot = slots[slot.index()],
-        // Constants and calls get owned pool data in expand; symbol ids are module-wide.
+        // Constants and calls get owned pool data in expand; symbol ids are
+        // module-wide.
         | _ => {},
     }
     data

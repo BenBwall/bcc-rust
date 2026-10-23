@@ -1528,3 +1528,46 @@ fn fourth_pr_review_forms_preserve_generated_import_state() {
         }
     }
 }
+
+#[test]
+fn final_review_conditional_conversions_preserve_imports_in_iso_c99() {
+    for target in WINDOWS {
+        for (condition, imported) in [
+            ("(int)(k ? 16777217 : 0.0f)==16777216", false),
+            ("(int)(k ? 16777217 : 0.0f)==16777217", true),
+            (
+                "(long long)(k ? 9007199254740993LL : 0.0)==9007199254740992LL",
+                false,
+            ),
+            (
+                "(long long)(k ? 9007199254740993LL : 0.0)==9007199254740993LL",
+                true,
+            ),
+        ] {
+            let source = format!(
+                "__declspec(dllimport) extern int x; int g(void) {{ return x; }} extern int x; \
+                 const int k=1; int h(void) {{ if ({condition}) return x; return 0; }}"
+            );
+            let mut actual = None;
+            with_configuration(
+                &source,
+                microsoft(target).with_gnu_extensions(false),
+                |context, unit| {
+                    let binding = unit
+                        .bindings
+                        .iter()
+                        .rposition(|binding| context.string_cache.at(binding.name.name) == "x")
+                        .unwrap();
+                    actual = unit
+                        .entity_attributes(binding)
+                        .and_then(|attributes| attributes.dll);
+                },
+            );
+            assert_eq!(
+                actual,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {condition}"
+            );
+        }
+    }
+}

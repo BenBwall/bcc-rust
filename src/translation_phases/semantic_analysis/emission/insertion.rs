@@ -143,7 +143,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             let callee = unparenthesized(function_expression);
             let key = std::ptr::from_ref(callee).addr();
-            if let Some(before) = self.functions.emission.unevaluated_calls.remove(&key) {
+            if let Some((before, first)) = self.functions.emission.unevaluated_calls.remove(&key) {
+                if self.expression_info(callee).binding.is_some_and(|binding| {
+                    matches!(
+                        self.bindings[binding].origin,
+                        BindingOrigin::Intrinsic(BuiltinId::ConstantP | BuiltinId::ClassifyType)
+                    )
+                }) {
+                    self.skip_references(first..self.reference_count());
+                }
                 let classify = self.expression_info(callee).binding.is_some_and(|binding| {
                     self.bindings[binding].origin
                         == BindingOrigin::Intrinsic(BuiltinId::ClassifyType)
@@ -168,11 +176,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )
             })
         {
-            _ = self
-                .functions
-                .emission
-                .unevaluated_calls
-                .insert(std::ptr::from_ref(e).addr(), self.functions.emission.orphan);
+            _ = self.functions.emission.unevaluated_calls.insert(
+                std::ptr::from_ref(e).addr(),
+                (self.functions.emission.orphan, self.reference_count()),
+            );
         } else if self.joins_paths(e) {
             self.functions.emission.orphan = None;
         }
@@ -249,7 +256,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 conditional.then_expression
             };
-            if !self.expression_contains_label(skipped) {
+            if self.expression_contains_label(skipped) {
+                return;
+            }
+            {
                 let index = usize::from(taken);
                 self.skip_references(marks[index].0..marks[index + 1].0);
                 drop(
@@ -372,10 +382,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn joins_paths(&mut self, e: &'tu Expression<'tu>) -> bool {
         match e.kind {
             | ExpressionType::Binary {
-                operator: BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr,
+                operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
                 left_expression,
-                ..
-            } => self.folded_condition(left_expression).is_none(),
+                right_expression,
+            } => match self.folded_condition(left_expression) {
+                | None => true,
+                | Some(left) =>
+                    left == (operator == BinaryOperator::LogicalOr)
+                        && self.expression_contains_label(right_expression),
+            },
             | ExpressionType::Conditional(conditional) =>
                 self.conditional_joins(e, conditional, true),
             | ExpressionType::OmittedConditional(conditional) =>
@@ -449,11 +464,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self.conditional_has_scalar_emitter(e) {
             return true;
         }
-        if self
-            .folded_condition(conditional.condition_expression)
-            .is_some()
-        {
-            return false;
+        if let Some(taken) = self.folded_condition(conditional.condition_expression) {
+            let skipped = if taken {
+                conditional.else_expression
+            } else {
+                conditional.then_expression
+            };
+            if !self.expression_contains_label(skipped) {
+                return false;
+            }
         }
         !(middle
             && self.evaluatable(conditional.then_expression)

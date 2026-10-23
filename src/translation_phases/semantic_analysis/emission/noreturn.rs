@@ -319,6 +319,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         previous: Option<usize>,
     ) {
         let data = self.bindings[binding];
+        if data.kind == BindingKind::Function {
+            let pure = previous
+                .is_some_and(|b| self.functions.emission.pure_functions.contains_key(&b))
+                || self
+                    .declaration_attribute_lists(spec.extensions, Some(declarator))
+                    .iter()
+                    .any(|list| {
+                        super::super::attributes::known_names(list, self.context)
+                            .any(|(_, name)| matches!(name, "pure" | "const"))
+                    });
+            if pure {
+                _ = self.functions.emission.pure_functions.insert(binding, ());
+            }
+        }
         if data.kind == BindingKind::Typedef && self.scopes[data.scope].kind == ScopeKind::File {
             match self.context.string_cache.at(data.name.name) {
                 | "jmp_buf" => self.functions.emission.jmp_buf = true,
