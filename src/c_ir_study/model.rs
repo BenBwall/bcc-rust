@@ -9,7 +9,9 @@ use crate::{
         SourceVector,
         SourceVectors,
         semantic_analysis::{
+            EntityAttributes,
             FunctionRecord,
+            Inlining,
             SemanticTranslationUnit,
             TypeId,
             TypeKind,
@@ -277,7 +279,7 @@ impl<'ir> Signature<'ir> {
             || sema
                 .symbols
                 .entity(sema.correspondence.entity_of(binding, data))
-                .is_some()
+                .is_some_and(|attributes| !ordinary_symbol(attributes))
             || sema.function_extensions.function(binding).is_some()
         {
             return Err(fail());
@@ -297,6 +299,29 @@ impl<'ir> Signature<'ir> {
             origin: record.syntax.source_vectors,
         })
     }
+}
+
+/// Ordinary direct calls can create a default attributes record while sema
+/// checks `nonnull`. Record presence alone does not imply an extension.
+fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
+    matches!(
+        attributes,
+        EntityAttributes {
+            weak:               false,
+            section:            None,
+            used:               false,
+            code_alignment:     0,
+            visibility:         None,
+            returns_twice:      false,
+            nonnull:            None,
+            call_diagnostic:    None,
+            declared_alignment: false,
+            inlining:           Inlining::Default,
+            select_any:         false,
+            dll:                None,
+            inline_odr:         None,
+        }
+    )
 }
 
 impl Module<'_> {

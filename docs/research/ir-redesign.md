@@ -1000,6 +1000,8 @@ risk of two competing C models.
 
 ## 4. Prototype and validation status
 
+### Implemented milestone
+
 The first isolated slice is in `src/c_ir_study.rs` and `src/c_ir_study/`, behind
 `cfg(test)`. It snapshots existing typed syntax/sema facts into logical integer
 objects, explicit lexical lifetimes, a statement CFG and an expression graph
@@ -1025,6 +1027,53 @@ events, explicit capability refusals and execution limits. The new IR has a
 deterministic text dump and reference verifier; a text parser and the adapter
 back to legacy IR remain future work.
 
+| Implementation | Responsibility |
+| --- | --- |
+| `src/c_ir_study.rs` | Check capability gates, snapshot function signatures, lower bodies, copy source segments, verify the resulting module |
+| `src/c_ir_study/model.rs` | Closed integer/object/CFG contract, failure categories, reference/type checks and deterministic dump |
+| `src/c_ir_study/lowering.rs` | Iterative statement and expression work stacks consuming accepted sema facts; no frontend references escape |
+| `src/c_ir_study/arithmetic.rs` | Target-width arithmetic, conversions and explicit implementation policies, independently of the existing interpreter |
+| `src/c_ir_study/eval.rs` | Explicit action/frame/object stacks, bounded execution and source-linked events |
+| `src/c_ir_study/verify.rs` | Reachable CFG edges must agree on lexical scope stacks; jumps cannot silently invent nested lifetimes |
+| `src/c_ir_study/tests.rs` | Defined-program differential comparisons, semantic litmus cases and malformed-IR checks |
+
+The represented integer types keep C scalar identity/rank as well as bit width
+and signedness; `long` therefore remains distinct from `int` on Win64. Calls
+use logical parameters/results, with no ABI packing. Each block entry starts
+fresh object instances before declaration initialization; break, continue and
+return end the scopes they leave. The event stream contains activation and
+object-instance identities rather than optimizer value numbers. This provides
+a useful seam for the abstract-machine website, although source file names and
+text still need a host catalog and no browser/serialization interface is added.
+
+The evaluator chooses a left-to-right witness schedule. Expression nodes
+separately retain comma, logical and conditional sequence points; a compact
+activation-local access summary detects simple C99 unsequenced conflicts.
+Nested sequencing conflicts that this summary cannot prove are `Unsupported`,
+not asserted to be UB. Signed overflow, zero division and invalid shifts fail
+at the source operation even if its result is discarded. Indeterminate reads
+stop in their own category. Signed narrowing uses two's-complement low bits,
+and negative signed right shift uses arithmetic shift: these are explicit bcc
+policies, not universal C requirements. Default limits are 2,000,000 evaluator
+actions, 128 active calls and 1,000,000 retained events; the slice allows at most
+128 logical locals per function and integer widths through 64 bits.
+
+This milestone validates an executable semantic snapshot, not the full design.
+It has no pointer, aggregate, effective-type or provenance semantics, and no
+general C sequencing graph. It refuses qualified objects, runtime type/VLA
+evaluation, unsupported statements, external/indirect/variadic/old-style calls
+and extensions. No LLVM/native backend consumes the new module yet. Removing
+poison from the shared scalar IR, a legacy-lowering adapter, a text round-trip
+and compilation-overhead measurements remain later acceptance gates.
+
+### Reproduction and evidence
+
+From this worktree root, run the focused experiment through the shared wrapper:
+
+```sh
+python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py cargo test --lib c_ir_study -- --test-threads=2
+```
+
 Initial validation: eight targeted tests passed, including ten defined programs
 on two target data models against four legacy execution arms each (80 legacy
 comparisons). The first compilation caught snapshot/evaluator borrow lifetime
@@ -1032,7 +1081,17 @@ errors, which were corrected before that passing run. An initial Clippy check
 found 13 findings in the experiment (deliberate integer bit conversions,
 similar names and two action/initialization style issues); these were corrected
 with local conversion justifications and code changes. Additional provenance,
-type/reference and lexical CFG checks and the canonical checks are being
-validated next. The original
+type/reference and lexical CFG checks found an overbroad capability gate:
+ordinary direct calls can leave default symbol-attribute records. Three tests
+failed until that gate was restricted to non-default attributes; inherited
+extension attributes remain refusals. The corrected suite and canonical checks
+are being validated next. The original
 study's source/citation/link checks remain design evidence, not performance
 measurements; no compilation-overhead budget has been measured yet.
+
+Pinned Clang 23.1.1 (`1b9c0d5ff9bbe7634aead059efe6b11a7eeba145`)
+independently compiled and executed the three new fixtures as C99 on Linux at
+both `-O0` and `-O2`. All six exit statuses agreed with the experiment's expected
+results: `loops=34`, `calls=141`, `values=18`. This is an independent check on
+these defined programs, not evidence about unspecified or undefined executions,
+Windows machine-code ABI behavior, or the prototype's future lowering adapter.

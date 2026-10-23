@@ -347,6 +347,7 @@ fn unsupported_constructs_never_fall_back_to_the_scalar_pipeline() {
         "int main(void){volatile int a=0;return a;}",
         "int main(void){static int a;return a;}",
         "int f(int); int main(void){return f(1);}",
+        "int f(void) __attribute__((weak)); int f(void){return 1;} int main(void){return f();}",
         "int main(void){goto done;done:return 0;}",
         "int main(void){switch(1){default:return 0;}}",
     ] {
