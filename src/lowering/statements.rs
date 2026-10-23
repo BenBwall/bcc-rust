@@ -959,6 +959,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             name,
             draft,
             scratch,
+            #[cfg(feature = "recursive-lowering-study")]
+            recursion: super::recursive::State::new(false, false),
             tasks: ArenaVec::new_in(scratch),
             operands: ArenaVec::new_in(scratch),
             complex_values: ArenaVec::new_in(scratch),

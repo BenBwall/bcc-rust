@@ -22,6 +22,9 @@ mod input;
 
 // Compiler stages
 mod inspection;
+#[cfg(feature = "recursive-lowering-study")]
+mod lowering_study;
+mod parser_study;
 mod prepared;
 mod preprocessing;
 mod semantic;
@@ -42,6 +45,12 @@ pub use inspection::{
 pub use measurements::{
     ArenaUsage,
     arena_usage,
+};
+pub use parser_study::{
+    ParserStudyMode,
+    StudyMeasurement,
+    StudyPrepared,
+    with_study_source,
 };
 pub use prepared::{
     PreparedParse,
@@ -80,3 +89,9 @@ pub struct ParseBenchmarkSummary {
     pub external_declarations: usize,
     pub diagnostics:           usize,
 }
+
+#[cfg(feature = "recursive-lowering-study")]
+pub use lowering_study::{
+    LoweringMeasurement,
+    measure_lowering_source,
+};

@@ -213,7 +213,14 @@ fn ten_thousand_static_locals_use_linear_name_storage() {
     let functions = unit.declare_items(&syntax, &mut errors);
     let start = std::time::Instant::now();
     for (record, function) in functions {
-        FunctionLowerer::lower(&mut unit, record, function.unwrap(), &scratch).unwrap();
+        FunctionLowerer::lower(
+            &mut unit,
+            record,
+            function.unwrap(),
+            &scratch,
+            &mut LoweringOptions::default_for_build(true),
+        )
+        .unwrap();
     }
     assert!(errors.is_empty(), "{errors:?}");
     assert!(unit.module.symbol("main.x").is_some());
@@ -570,7 +577,14 @@ fn m2_many_functions_and_declarations_have_linear_correspondence_work() {
     let mut scratch = Bump::new();
     for &(record, function) in &functions {
         scratch.reset();
-        FunctionLowerer::lower(&mut unit, record, function.unwrap(), &scratch).unwrap();
+        FunctionLowerer::lower(
+            &mut unit,
+            record,
+            function.unwrap(),
+            &scratch,
+            &mut LoweringOptions::default_for_build(true),
+        )
+        .unwrap();
         assert!(
             unit.parameter_alias_visits <= 20_000,
             "parameter work grows with unrelated bindings: {} visits",

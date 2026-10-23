@@ -1664,7 +1664,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
         parser.scopes.enter_scope(kind);
     }
 
-    fn at_expression_boundary(token: Option<Token>, terminator: ExpressionTerminator) -> bool {
+    pub(in crate::translation_phases::parsing) fn at_expression_boundary(
+        token: Option<Token>,
+        terminator: ExpressionTerminator,
+    ) -> bool {
         token.is_none_or(|token| {
             SynchronizationKind::StatementExpression(terminator).stops_before(token.kind)
         })
@@ -1678,7 +1681,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
     /// following statement (a brace, a statement keyword, or a declaration
     /// starter outside parentheses), at the end of input, or after
     /// [`HEADER_RECOVERY_LOOKAHEAD`] tokens.
-    fn for_header_closer_distance(parser: &mut Parser<'_, 'tu, 'p>) -> Option<u16> {
+    pub(in crate::translation_phases::parsing) fn for_header_closer_distance(
+        parser: &mut Parser<'_, 'tu, 'p>,
+    ) -> Option<u16> {
         let mut depth = 0_usize;
         let mut token = parser.cursor.current();
         for distance in 0..HEADER_RECOVERY_LOOKAHEAD {
@@ -1907,7 +1912,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
         self
     }
 
-    fn with_else_ownership(
+    pub(in crate::translation_phases::parsing) fn with_else_ownership(
         starting_error_count: usize,
         implicit_scope: Option<ScopeKind>,
         leave_else_unconsumed: bool,
@@ -1944,4 +1949,17 @@ pub(in crate::translation_phases::parsing) fn is_statement_keyword(token: TokenT
                 | KeywordTokenType::While
         )
     )
+}
+
+#[cfg(feature = "parser-recursive-descent-study")]
+impl StatementFrame<'_> {
+    pub(in crate::translation_phases::parsing) fn study_parameters(
+        &self,
+    ) -> (Option<ScopeKind>, bool, bool) {
+        (
+            self.implicit_scope,
+            self.block_item,
+            self.leave_else_unconsumed,
+        )
+    }
 }

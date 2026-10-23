@@ -61,6 +61,12 @@ pub(super) struct TokenCursor<'tu, 'p> {
 }
 
 impl Upstream {
+    /// Number of phase-6 tokens available to parser benchmarks.
+    #[cfg(feature = "benchmarking-internals")]
+    pub(super) fn token_count(&self) -> usize {
+        self.tokens.len()
+    }
+
     /// Runs the whole of `preprocessor`, so parsing never interleaves with
     /// preprocessing.
     pub(super) fn preprocess_all<'tu>(
@@ -240,7 +246,16 @@ impl<'tu, 'p> TokenCursor<'tu, 'p> {
                     }
                 }
             }
-            self.alignment_closures = Some(arena.alloc_slice_copy(&matches));
+            // C99 §6.7, p. 97; PDF p. 109 (GNU aligned operand extension):
+            // both study paths retain the same delimiter matches for parsing.
+            #[cfg(feature = "parser-study-leak-alignment")]
+            {
+                self.alignment_closures = Some(matches.leak());
+            }
+            #[cfg(not(feature = "parser-study-leak-alignment"))]
+            {
+                self.alignment_closures = Some(arena.alloc_slice_copy(&matches));
+            }
         }
         self.alignment_closures
             .is_some_and(|matches| matches.get(self.position) == Some(&true))

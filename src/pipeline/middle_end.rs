@@ -48,6 +48,7 @@ use crate::{
 /// shared diagnostic interface; a case ABI lowering does not handle names
 /// its function.
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+#[cfg(any(test, not(feature = "recursive-lowering-study")))]
 pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
@@ -57,13 +58,92 @@ pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
     profile: Profile,
     copies: InlineCopies,
 ) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
+    lower_diagnosed(
+        context,
+        syntax,
+        sema,
+        arena,
+        optimizer,
+        profile,
+        LoweringControl {
+            copies,
+            #[cfg(feature = "recursive-lowering-study")]
+            recursive: false,
+        },
+    )
+}
+
+/// Experimental CLI seam, called only inside the reserved compilation worker.
+#[cfg(feature = "recursive-lowering-study")]
+pub(crate) fn lower_translation_unit_recursive_diagnosed<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    arena: &'ir Bump,
+    optimizer: Option<&OptimizerOptions<'_>>,
+    profile: Profile,
+    copies: InlineCopies,
+) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
+    lower_diagnosed(
+        context,
+        syntax,
+        sema,
+        arena,
+        optimizer,
+        profile,
+        LoweringControl {
+            copies,
+            recursive: true,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct LoweringControl {
+    copies:    InlineCopies,
+    #[cfg(feature = "recursive-lowering-study")]
+    recursive: bool,
+}
+
+fn lower_diagnosed<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    arena: &'ir Bump,
+    optimizer: Option<&OptimizerOptions<'_>>,
+    profile: Profile,
+    control: LoweringControl,
+) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
+    let copies = control.copies;
     let mut scratch = Bump::new();
     let target = context.configuration.target();
-    let crate::lowering::LoweredUnit {
-        mut module,
-        function_sources,
-        call_diagnostics,
-    } = crate::lowering::lower_with_sources(
+    #[cfg(feature = "recursive-lowering-study")]
+    let lowered = if control.recursive {
+        let mut options =
+            crate::lowering::LoweringOptions::default_for_build(copies == InlineCopies::Keep);
+        options.recursive = true;
+        crate::lowering::lower_with_options(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            &mut scratch,
+            &mut options,
+        )
+    } else {
+        crate::lowering::lower_with_sources(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            &mut scratch,
+            copies == InlineCopies::Keep,
+        )
+    };
+    #[cfg(not(feature = "recursive-lowering-study"))]
+    let lowered = crate::lowering::lower_with_sources(
         context,
         syntax,
         sema,
@@ -71,8 +151,12 @@ pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
         arena,
         &mut scratch,
         copies == InlineCopies::Keep,
-    )
-    .map_err(MiddleEndError::Lowering)?;
+    );
+    let crate::lowering::LoweredUnit {
+        mut module,
+        function_sources,
+        call_diagnostics,
+    } = lowered.map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {
         scratch.reset();
         _ = optimize(&mut module, options, &scratch);

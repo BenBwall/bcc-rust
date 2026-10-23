@@ -66,6 +66,14 @@ mod lowering;
 )]
 mod optimizer;
 
+#[cfg(feature = "reserved-compilation-stack")]
+#[expect(
+    dead_code,
+    unused_imports,
+    reason = "OS snapshots and faults also serve standalone stack study executables."
+)]
+mod compilation_stack;
+
 // Invocation and language choices
 mod builtins;
 mod cli;
@@ -97,7 +105,10 @@ pub use benchmarking::{
     ArenaUsage,
     BenchmarkInput,
     ParseBenchmarkSummary,
+    ParserStudyMode,
     PreparedParse,
+    StudyMeasurement,
+    StudyPrepared,
     arena_usage,
     lex,
     parse,
@@ -110,6 +121,7 @@ pub use benchmarking::{
     sema,
     sema_source,
     with_prepared_parse,
+    with_study_source,
 };
 pub use cli::{
     CompileStep,
@@ -122,6 +134,33 @@ pub use cli::{
 #[cfg(all(unix, feature = "benchmarking-internals"))]
 use coz as _;
 
+/// Runs a complete compilation callback on a demand-paged native stack.
+/// Create arenas and context inside the callback and keep all phases that
+/// borrow them there. Only sendable results may leave the joined worker.
+/// The reservation is finite; exhaustion is fatal, not a parser diagnostic.
+///
+/// # Errors
+/// Returns an OS error if the stack reservation or worker cannot be created.
+/// Only Linux and Windows implement the worker.
+///
+/// # Panics
+/// Resumes a callback panic on the caller after joining and freeing the stack.
+#[cfg(feature = "reserved-compilation-stack")]
+pub fn with_compilation_stack<R: Send>(
+    bytes: usize,
+    compile: impl FnOnce() -> R + Send,
+) -> std::io::Result<R> {
+    compilation_stack::run(bytes, |_| compile())
+}
+
+#[cfg(all(
+    feature = "benchmarking-internals",
+    feature = "recursive-lowering-study"
+))]
+pub use benchmarking::{
+    LoweringMeasurement,
+    measure_lowering_source,
+};
 #[cfg(test)]
 #[doc(hidden)]
 mod shut_up_clippy_about_unused_dev_dependencies {

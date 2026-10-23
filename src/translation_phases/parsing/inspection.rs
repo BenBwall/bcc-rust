@@ -916,6 +916,19 @@ impl ParsedTranslationUnit<'_> {
                         context,
                         options,
                     );
+                    #[cfg(feature = "parser-recursive-descent-study")]
+                    if options.show_locations
+                        && let Some(source) = expression.operator_source_vectors
+                    {
+                        Self::line(
+                            &mut output,
+                            indent + 1,
+                            "operator-source",
+                            Some(source),
+                            context,
+                            options,
+                        );
+                    }
                     Self::push_expression_children(&mut work, &expression.kind, indent + 1);
                 },
                 | Work::Missing(source, indent, role) => Self::line(
@@ -1542,6 +1555,16 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     let _ = write!(output, " @{}:{}", position.line, position.column);
                 },
             }
+        }
+        #[cfg(feature = "parser-recursive-descent-study")]
+        if options.show_locations
+            && let Some(source) = source
+        {
+            let _ = write!(
+                output,
+                " provenance={:?}",
+                context.get_source_vectors(source)
+            );
         }
         output.push('\n');
     }
