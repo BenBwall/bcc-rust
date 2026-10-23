@@ -89,7 +89,7 @@ struct Machine<'m, 'ir, 'a> {
     origin:          Option<SourceVectors>,
 }
 
-impl Machine<'_, '_, '_> {
+impl<'ir> Machine<'_, 'ir, '_> {
     fn run(&mut self) -> Result<Value, Failure> {
         while let Some(action) = self.tasks.pop() {
             if self.steps == self.limits.steps {
@@ -560,7 +560,7 @@ impl Machine<'_, '_, '_> {
         self.frames.last().ok_or(Failure::InvalidIr)
     }
 
-    fn function(&self) -> Result<&Function<'_>, Failure> {
+    fn function(&self) -> Result<&'ir Function<'ir>, Failure> {
         Ok(&self.module.functions[self.frame()?.function])
     }
 

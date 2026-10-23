@@ -41,9 +41,9 @@ use crate::{
 };
 
 /// Copies the supported C99 subset into `arena`; no syntax references escape.
-fn lower<'ir>(
-    context: &Context<'_>,
-    sema: &SemanticTranslationUnit<'_>,
+fn lower<'tu, 'ir>(
+    context: &Context<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
     arena: &'ir Bump,
 ) -> Result<Module<'ir>, Error> {
     if !sema.lowerable(context) || context.configuration.standard() != CStandard::C99 {
