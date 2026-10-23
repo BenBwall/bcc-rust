@@ -63,6 +63,10 @@ fn compile<'ir>(source: &str, target: Target, arena: &'ir Bump) -> Result<Module
     lower(&context, &sema, arena)
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "The legacy interpreter stores C int results in a wider bit container."
+)]
 fn legacy(source: &str, target: Target, optimized: bool, profile: Profile) -> i128 {
     let tu = Bump::new();
     let mut context =

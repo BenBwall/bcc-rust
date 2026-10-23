@@ -37,6 +37,11 @@ impl Value {
     }
 
     /// C99: §6.3.1.2-6.3.1.3, p. 43; PDF p. 55.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Integer conversion selects the low target-width bits, including for negative \
+                  values."
+    )]
     pub(super) fn cast(self, ty: IntType) -> Self {
         Self::new(
             ty,
@@ -65,6 +70,10 @@ pub(super) fn unary(op: Unary, value: Value, ty: IntType) -> Result<Value, Failu
 }
 
 /// Every partial C operation reports its own failure, even if unused later.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Signed results are encoded as low bits; Value::new applies the target-width mask."
+)]
 pub(super) fn binary(op: Binary, a: Value, b: Value, result: IntType) -> Result<Value, Failure> {
     use Binary as B;
     let (left, right) = (a.number(), b.number());
@@ -139,6 +148,10 @@ pub(super) fn binary(op: Binary, a: Value, b: Value, result: IntType) -> Result<
     Ok(Value::new(result, bits))
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "The checked signed value is encoded as low bits, including for negative values."
+)]
 fn checked(ty: IntType, value: i128) -> Result<Value, Failure> {
     if !(ty.minimum()..=ty.maximum()).contains(&value) {
         return Err(Failure::Undefined(Undefined::SignedOverflow));
