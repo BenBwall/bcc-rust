@@ -758,9 +758,3 @@ pub(super) fn declared_type_attribute(
 pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Context<'_>) -> bool {
     super::attributes::known_names(a, context).any(|(_, name)| name == "vector_size")
 }
-
-/// Clang `__builtin_shufflevector` implementation identity.
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-shufflevector>
-pub(super) fn named_builtin(name: &str) -> bool {
-    name == "__builtin_shufflevector"
-}

@@ -14,8 +14,9 @@
 //!   thread-local global is no leaf: it is computed where it is taken.
 //! - *Address folding*: a load or store through a leaf address or a `ptr_add`
 //!   of a register and a small constant uses one memory operand.
-//! - *Compare fusion*: an `icmp` whose only use is the `brif` or `select` of
-//!   its own block is emitted right before that user's `jcc` or `cmov`.
+//! - *Compare fusion*: an `icmp` whose every use is the condition of a `brif`
+//!   or `select`, in any block, is emitted again right before each user's `jcc`
+//!   or `cmov`; its operands dominate every user, so they are available there.
 //!
 //! [`select`] classifies every value first, in reverse post-order so that
 //! operands are classified before their users, then selects the blocks.
@@ -23,8 +24,13 @@
 //! block labels and the parallel copies that replace block parameters in
 //! `isel/edges.rs`; loads, stores, `copy`, `fill` and thread-local
 //! addresses in `isel/memory.rs`; `f32` and `f64` operations in
-//! `isel/float.rs`; `i128` register pairs in `isel/wide.rs`; dynamic stack
-//! allocation in `isel/stack.rs`.
+//! `isel/float.rs`; `i128` register pairs in `isel/wide.rs`; `f80` through
+//! the x87 unit in `isel/x87.rs`; `f128` through runtime routines in
+//! `isel/quad.rs`; dynamic stack allocation in `isel/stack.rs`.
+//!
+//! `i128`, `f80` and `f128` values all live in pairs of general registers,
+//! the low eight bytes first: block parameters, spills and copies treat them
+//! alike, and only the operations on them differ.
 //!
 //! Integer values narrower than 64 bits live in registers whose upper bits
 //! are unspecified, except `i1`, which is always 0 or 1 in the whole
@@ -36,8 +42,10 @@ mod calls;
 mod edges;
 mod float;
 mod memory;
+mod quad;
 mod stack;
 mod wide;
+mod x87;
 
 use super::{
     conv::CallConv,
@@ -47,6 +55,7 @@ use super::{
         Cond,
         FrameObject,
         FrameSlotData,
+        Index,
         MBlock,
         MFunction,
         MInst,
@@ -105,9 +114,18 @@ pub(crate) fn select<'a>(
     let tree = DominatorTree::compute(body, &cfg, arena);
     let mut selector = Selector::new(module, function, body, target, tls_model, arena);
     for (_, slot) in body.stack_slots() {
+        // An object aligned above the stack's 16 bytes gets room to round
+        // its address up at run time (see `over_aligned_address`).
+        let align = slot.align.bytes();
+        selector.func.slot_align = selector.func.slot_align.max(align);
+        let (size, align) = if align > 16 {
+            (u64::from(slot.size) + align - 16, 16)
+        } else {
+            (u64::from(slot.size), align)
+        };
         selector.func.slots.push(FrameSlotData {
-            size:  slot.size,
-            align: u32::try_from(slot.align.bytes()).expect("the support check bounds alignments"),
+            size:  u32::try_from(size).expect("the support check bounds frames"),
+            align: u32::try_from(align).expect("alignments are at most 16 here"),
         });
     }
     for &block in tree.reverse_post_order() {
@@ -121,6 +139,10 @@ pub(crate) fn select<'a>(
     for block in body.blocks() {
         if tree.is_reachable(block) {
             selector.find_fusions(block);
+        }
+    }
+    for block in body.blocks() {
+        if tree.is_reachable(block) {
             selector.block_map[block.index()] = Some(selector.func.block(arena));
         }
     }
@@ -145,6 +167,7 @@ pub(crate) fn select<'a>(
             }
         }
     }
+    selector.load_bases();
     Ok(selector.func)
 }
 
@@ -157,9 +180,11 @@ pub(super) enum ValueKind {
     Reg(VReg),
     /// A constant, masked to its type's width.
     Const(u64),
-    /// An `i128` in two virtual registers, low half first.
+    /// An `i128`, `f80` or `f128` in two virtual registers, low half
+    /// first; an `f80`'s high register holds its sign and exponent in the
+    /// low 16 bits.
     Pair(VReg, VReg),
-    /// An `i128` constant.
+    /// An `i128`, `f80` or `f128` constant.
     Wide(u128),
     /// An address: a frame slot or symbol plus a byte offset.
     Addr(AddrBase, i64),
@@ -174,40 +199,47 @@ pub(super) enum AddrBase {
 
 /// The selection state of one function.
 pub(super) struct Selector<'a, 'm, 'ir> {
-    pub(super) module:    &'m Module<'ir>,
-    pub(super) function:  &'m Function<'ir>,
-    pub(super) body:      &'m Body<'ir>,
-    pub(super) signature: Signature<'ir>,
-    pub(super) conv:      CallConv,
-    pub(super) target:    Target,
+    pub(super) module:     &'m Module<'ir>,
+    pub(super) function:   &'m Function<'ir>,
+    pub(super) body:       &'m Body<'ir>,
+    pub(super) signature:  Signature<'ir>,
+    pub(super) conv:       CallConv,
+    pub(super) target:     Target,
     /// The `-ftls-model`: local-exec also reaches declared thread-locals
     /// at a link-time offset.
-    pub(super) tls_model: TlsModel,
-    pub(super) arena:     &'a Bump,
-    pub(super) func:      MFunction<'a>,
+    pub(super) tls_model:  TlsModel,
+    pub(super) arena:      &'a Bump,
+    pub(super) func:       MFunction<'a>,
     /// Each value's representation.
-    pub(super) values:    ArenaVec<'a, ValueKind>,
+    pub(super) values:     ArenaVec<'a, ValueKind>,
     /// Each value's number of uses in reachable code.
-    pub(super) uses:      ArenaVec<'a, u32>,
+    pub(super) uses:       ArenaVec<'a, u32>,
+    /// How many of those are the condition of a `brif` or `select`.
+    pub(super) conditions: ArenaVec<'a, u32>,
     /// Instructions with nothing to emit at their position: leaves,
     /// aliases, and compares fused into their user.
-    pub(super) skipped:   ArenaVec<'a, bool>,
+    pub(super) skipped:    ArenaVec<'a, bool>,
     /// Compares fused into their user.
-    pub(super) fused:     ArenaVec<'a, bool>,
+    pub(super) fused:      ArenaVec<'a, bool>,
     /// Each reachable IR block's machine block.
-    pub(super) block_map: ArenaVec<'a, Option<MBlock>>,
+    pub(super) block_map:  ArenaVec<'a, Option<MBlock>>,
     /// The block instructions are appended to.
-    pub(super) current:   MBlock,
+    pub(super) current:    MBlock,
     /// How `return` hands back a structure result.
-    pub(super) result:    calls::ResultArea,
+    pub(super) result:     calls::ResultArea,
     /// What `va_start` stores, prepared by the entry sequence.
-    pub(super) va_start:  calls::VaStart,
+    pub(super) va_start:   calls::VaStart,
     /// For each labeled IR block, the block its address names and where
     /// its incoming registers start in [`Self::incoming`].
-    pub(super) labeled:   ArenaVec<'a, Option<edges::LabelTarget>>,
+    pub(super) labeled:    ArenaVec<'a, Option<edges::LabelTarget>>,
     /// The registers an `indirect_br` assigns a labeled block's parameters
     /// through, one per parameter, in block order.
-    pub(super) incoming:  ArenaVec<'a, ValueKind>,
+    pub(super) incoming:   ArenaVec<'a, ValueKind>,
+    /// The frame slot of [`Self::scratch`], once a sequence needs it.
+    pub(super) scratch:    Option<u32>,
+    /// The symbols indexed operands use as a base, with the register the
+    /// entry block loads each address into.
+    pub(super) bases:      ArenaVec<'a, (Symbol, Reg)>,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -231,6 +263,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             func: MFunction::new_in(arena),
             values: filled(arena, body.value_count(), ValueKind::Unknown),
             uses: filled(arena, body.value_count(), 0),
+            conditions: filled(arena, body.value_count(), 0),
             skipped: filled(arena, body.inst_count(), false),
             fused: filled(arena, body.inst_count(), false),
             block_map: filled(arena, body.block_count(), None),
@@ -239,6 +272,8 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             va_start: calls::VaStart::None,
             labeled: filled(arena, body.block_count(), None),
             incoming: ArenaVec::new_in(arena),
+            scratch: None,
+            bases: ArenaVec::new_in(arena),
         }
     }
 
@@ -276,9 +311,10 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         }
     }
 
-    /// Fresh registers for a value of `ty`: a pair for `i128`.
+    /// Fresh registers for a value of `ty`: a pair for `i128`, `f80` and
+    /// `f128`.
     fn fresh(&mut self, ty: Type) -> ValueKind {
-        if ty == Type::I128 {
+        if is_pair(ty) {
             ValueKind::Pair(self.func.vreg(), self.func.vreg())
         } else {
             ValueKind::Reg(self.func.vreg_of(class_of(ty)))
@@ -286,30 +322,29 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     }
 
     /// Whether [`Self::classify_wide`] classifies an instruction: one with
-    /// an `i128` result, or a conversion from an `i128`.
+    /// a pair result, or a conversion from a pair.
     fn is_wide(&self, ty: Type, data: InstData) -> bool {
-        ty == Type::I128
-            || matches!(data, InstData::Unary { arg, .. } if self.ty(arg) == Type::I128)
+        is_pair(ty) || matches!(data, InstData::Unary { arg, .. } if is_pair(self.ty(arg)))
     }
 
     /// [`Self::classify`] for the instructions [`Self::is_wide`] accepts.
     fn classify_wide(&self, ty: Type, data: InstData) -> Option<ValueKind> {
         match data {
-            | InstData::Const { bits, .. } if ty == Type::I128 =>
+            | InstData::Const { bits, .. } if is_pair(ty) =>
                 Some(ValueKind::Wide(u128::from(bits.get()))),
-            | InstData::WideConst { constant, .. } if ty == Type::I128 =>
+            | InstData::WideConst { constant, .. } if is_pair(ty) =>
                 Some(ValueKind::Wide(self.body.constant(constant))),
             | InstData::Nullary {
                 opcode: Opcode::Poison,
                 ..
-            } if ty == Type::I128 => Some(ValueKind::Wide(0)),
-            | InstData::Unary { opcode, arg, .. }
-                if ty == Type::I128 || self.ty(arg) == Type::I128 =>
-            {
+            } if is_pair(ty) => Some(ValueKind::Wide(0)),
+            | InstData::Unary { opcode, arg, .. } if is_pair(ty) || is_pair(self.ty(arg)) => {
                 let from = self.ty(arg);
                 match (opcode, self.kind(arg)) {
                     | (_, ValueKind::Unknown) => None,
                     | (Opcode::Freeze, kind) => Some(kind),
+                    // `i128` and `f128` bits in the same pair.
+                    | (Opcode::Bitcast, kind) if is_pair(ty) && is_pair(from) => Some(kind),
                     | (Opcode::Zext | Opcode::Ptrtoint, ValueKind::Const(bits)) =>
                         Some(ValueKind::Wide(wide::widen(bits, from, false))),
                     | (Opcode::Sext, ValueKind::Const(bits)) =>
@@ -346,6 +381,9 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 opcode: Opcode::Null | Opcode::Poison,
                 ..
             } => ValueKind::Const(0),
+            // An over-aligned object's address is computed.
+            | InstData::StackAddr { slot } if self.body.stack_slot(slot).align.bytes() > 16 =>
+                return None,
             | InstData::StackAddr { slot } => ValueKind::Addr(AddrBase::Slot(slot.as_u32()), 0),
             // A thread-local address differs per thread: it is computed.
             | InstData::GlobalAddr { global } if self.module.global(global).thread_local =>
@@ -425,31 +463,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             let uses = &mut self.uses;
             self.body
                 .visit_operands(inst, |value| uses[value.index()] += 1);
+            if let InstData::Brif { cond, .. }
+            | InstData::Select {
+                args: [cond, ..], ..
+            } = *self.body.inst(inst)
+            {
+                self.conditions[cond.index()] += 1;
+            }
         }
     }
 
-    /// Marks the compares of `block` whose only use is the block's `brif`
-    /// condition or a later `select` condition in the block.
+    /// Marks the compares of `block` whose every use is the condition of
+    /// a `brif` or `select`; each user emits the comparison itself.
     fn find_fusions(&mut self, block: Block) {
-        let insts = self.body.block_insts(block);
-        for &user in insts {
-            let (InstData::Brif { cond, .. }
-            | InstData::Select {
-                args: [cond, ..], ..
-            }) = *self.body.inst(user)
-            else {
-                continue;
-            };
-            if self.uses[cond.index()] != 1 {
+        for &compare in self.body.block_insts(block) {
+            if !matches!(self.body.inst(compare), InstData::IntCompare { .. })
+                || self.skipped[compare.index()]
+            {
                 continue;
             }
-            let ValueDef::Result(compare) = self.body.value_def(cond) else {
+            let Some(result) = self.body.inst_result(compare) else {
                 continue;
             };
-            if matches!(self.body.inst(compare), InstData::IntCompare { .. })
-                && !self.skipped[compare.index()]
-                && insts.contains(&compare)
-            {
+            let uses = self.uses[result.index()];
+            if uses > 0 && self.conditions[result.index()] == uses {
                 self.fused[compare.index()] = true;
                 self.skipped[compare.index()] = true;
             }
@@ -466,17 +503,48 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         let opcode = data.opcode();
         match data {
             | InstData::Binary {
+                ty: Type::F80,
+                args,
+                ..
+            } => {
+                let dst = self.result_pair(inst);
+                self.x87_binary(opcode, dst, args)?;
+            },
+            | InstData::Binary {
+                ty: Type::F128,
+                args,
+                ..
+            } => {
+                let dst = self.result_pair(inst);
+                self.quad_binary(opcode, dst, args)?;
+            },
+            | InstData::FloatCompare {
+                cond,
+                ty: Type::F80,
+                args,
+            } => {
+                let dst = self.result_reg(result);
+                self.x87_compare(cond, dst, args);
+            },
+            | InstData::FloatCompare {
+                cond,
+                ty: Type::F128,
+                args,
+            } => {
+                let dst = self.result_reg(result);
+                self.quad_compare(cond, dst, args);
+            },
+            | InstData::Binary {
                 ty: Type::I128,
                 args,
                 ..
             } => self.wide_binary(inst, opcode, args)?,
-            | InstData::Select {
-                ty: Type::I128,
-                args,
-            } => {
+            | InstData::Select { ty, args } if is_pair(ty) => {
                 let dst = self.result_pair(inst);
                 self.wide_select(dst, args);
             },
+            | InstData::Unary { opcode, ty, arg } if wide_float(ty, self.ty(arg)) =>
+                self.wide_float_unary(inst, opcode, ty, arg)?,
             | InstData::Unary { opcode, ty, arg }
                 if ty == Type::I128 || self.ty(arg) == Type::I128 =>
                 self.wide_conversion(inst, opcode, ty, arg)?,
@@ -534,7 +602,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                     | Opcode::Shl => self.shift(ShiftOp::Shl, ty, dst, args),
                     | Opcode::Lshr => self.shift(ShiftOp::Shr, ty, dst, args),
                     | Opcode::Ashr => self.shift(ShiftOp::Sar, ty, dst, args),
-                    | Opcode::PtrAdd => self.alu(AluOp::Add, Type::I64, dst, args, true),
+                    | Opcode::PtrAdd => self.pointer_add(inst, dst, args),
                     | Opcode::UaddOverflow => self.add_overflow(ty, dst, args),
                     | Opcode::UmulOverflow => self.mul_overflow(ty, dst, args),
                     | _ => return Err(Construct::Opcode(opcode)),
@@ -613,6 +681,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             | InstData::GlobalAddr { global } => {
                 let dst = self.result_reg(result);
                 self.thread_local_address(dst, global);
+            },
+            | InstData::StackAddr { slot } => {
+                let dst = self.result_reg(result);
+                let align = self.body.stack_slot(slot).align.bytes();
+                self.over_aligned_address(dst, slot.as_u32(), align);
             },
             | InstData::BlockAddr { label } => {
                 let dst = self.result_reg(result);
@@ -759,6 +832,17 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         }
     }
 
+    /// `dst = base + offset` for a `ptr_add`: one `lea` of the address its
+    /// chain folds into, else an addition.
+    fn pointer_add(&mut self, inst: Inst, dst: Reg, args: [Value; 2]) {
+        let value = self.body.inst_result(inst).expect("a ptr_add has a result");
+        if let Some(addr) = self.folded_address(value) {
+            self.emit(MInst::Lea { dst, addr });
+            return;
+        }
+        self.alu(AluOp::Add, Type::I64, dst, args, true);
+    }
+
     /// `dst = lhs * rhs`, with the three-operand form for a constant.
     fn multiply(&mut self, ty: Type, dst: Reg, [lhs, rhs]: [Value; 2]) {
         let width = op_width(ty);
@@ -778,6 +862,24 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 if ty == Type::I1 {
                     self.canonical_bool(dst);
                 }
+                return;
+            }
+            // A 64-bit product by 3, 5 or 9 is one `lea` of the value and
+            // its scaled self.
+            if width == Width::B64 && matches!(imm, 3 | 5 | 9) {
+                self.emit(MInst::Lea {
+                    dst,
+                    addr: Mem {
+                        base:  Base::Reg(src),
+                        index: Some(Index {
+                            reg:   src,
+                            #[expect(clippy::cast_possible_truncation, reason = "At most 8.")]
+                            #[expect(clippy::cast_sign_loss, reason = "The factor is positive.")]
+                            scale: (imm - 1) as u8,
+                        }),
+                        disp:  0,
+                    },
+                });
                 return;
             }
             self.emit(MInst::Imul3 {
@@ -801,6 +903,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         dst: Reg,
         [lhs, rhs]: [Value; 2],
     ) {
+        if let ValueKind::Const(bits) = self.kind(rhs)
+            && self.divide_by_power_of_two(signed, remainder, ty, dst, lhs, bits)
+        {
+            return;
+        }
         let width = op_width(ty);
         let lhs = self.extended(lhs, signed);
         let divisor = self.extended(rhs, signed);
@@ -825,6 +932,101 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         });
         let result = if remainder { PReg::Rdx } else { PReg::Rax };
         self.copy(dst, Reg::Phys(result));
+    }
+
+    /// Division and remainder by a positive power of two `2^k`, which need
+    /// no `div`: unsigned ones shift or mask; a signed one first adds `2^k -
+    /// 1` to a negative dividend (the sign shifted down), so the quotient
+    /// rounds toward zero as `sdiv` does, and its remainder subtracts the
+    /// rounded-down multiple. Whether it applied: an immediate that does
+    /// not fit falls back to `div`.
+    fn divide_by_power_of_two(
+        &mut self,
+        signed: bool,
+        remainder: bool,
+        ty: Type,
+        dst: Reg,
+        lhs: Value,
+        bits: u64,
+    ) -> bool {
+        let divisor = if signed {
+            sign_extend(bits, ty)
+        } else {
+            bits & mask(ty)
+        };
+        if ty == Type::I1 || divisor == 0 || !divisor.is_power_of_two() || divisor.cast_signed() < 0
+        {
+            return false;
+        }
+        let width = op_width(ty);
+        #[expect(clippy::cast_possible_truncation, reason = "The exponent is below 64.")]
+        let k = divisor.trailing_zeros() as u8;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Widths are at most 64 bits."
+        )]
+        let bits_of_width = width.bits() as u8;
+        let low_mask = i32::try_from(divisor - 1).ok();
+        let multiple_mask = i32::try_from(-divisor.cast_signed()).ok();
+        match (signed, remainder) {
+            | (false, false) => {
+                let x = self.extended(lhs, false);
+                self.copy(dst, x);
+                if k > 0 {
+                    self.shift_imm(ShiftOp::Shr, width, dst, k);
+                }
+            },
+            | (false, true) => {
+                let Some(low_mask) = low_mask else {
+                    return false;
+                };
+                let x = self.extended(lhs, false);
+                self.copy(dst, x);
+                self.emit(MInst::Alu {
+                    op: AluOp::And,
+                    width,
+                    dst,
+                    src: Operand::Imm(low_mask),
+                });
+            },
+            | (true, _) if k == 0 =>
+                if remainder {
+                    self.emit(MInst::Mov {
+                        width: Width::B32,
+                        dst,
+                        src: Operand::Imm(0),
+                    });
+                } else {
+                    let x = self.extended(lhs, true);
+                    self.copy(dst, x);
+                },
+            | (true, _) => {
+                if remainder && multiple_mask.is_none() {
+                    return false;
+                }
+                let x = self.extended(lhs, true);
+                // bias = 2^k - 1 for a negative dividend, else 0.
+                let biased = self.vreg();
+                self.copy(biased, x);
+                self.shift_imm(ShiftOp::Sar, width, biased, bits_of_width - 1);
+                self.shift_imm(ShiftOp::Shr, width, biased, bits_of_width - k);
+                self.alu_reg(AluOp::Add, width, biased, x);
+                if remainder {
+                    self.emit(MInst::Alu {
+                        op: AluOp::And,
+                        width,
+                        dst: biased,
+                        src: Operand::Imm(multiple_mask.expect("checked above")),
+                    });
+                    self.copy(dst, x);
+                    self.alu_reg(AluOp::Sub, width, dst, biased);
+                } else {
+                    self.shift_imm(ShiftOp::Sar, width, biased, k);
+                    self.copy(dst, biased);
+                }
+            },
+        }
+        true
     }
 
     /// The value in a register whose bits above its type are its sign
@@ -1191,6 +1393,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         });
     }
 
+    /// The address of a stack object aligned to `align` bytes, more than
+    /// the stack's 16: its slot's address rounded up, which the slot has
+    /// `align - 16` spare bytes for. Frame layout puts a slot aligned to 16
+    /// at a 16-byte boundary, so rounding moves it at most that far.
+    fn over_aligned_address(&mut self, dst: Reg, slot: u32, align: u64) {
+        let mask = i32::try_from(align - 1).expect("the support check bounds alignments");
+        self.emit(MInst::Lea {
+            dst,
+            addr: Mem::new(Base::Frame(FrameObject::Slot(slot)), 0),
+        });
+        self.emit(MInst::Alu {
+            op: AluOp::Add,
+            width: Width::B64,
+            dst,
+            src: Operand::Imm(mask),
+        });
+        self.emit(MInst::Alu {
+            op: AluOp::And,
+            width: Width::B64,
+            dst,
+            src: Operand::Imm(!mask),
+        });
+    }
+
     /// Keeps only the low bit of an `i1` result.
     pub(super) fn canonical_bool(&mut self, dst: Reg) {
         self.emit(MInst::Alu {
@@ -1219,9 +1445,24 @@ pub(super) const fn width(ty: Type) -> Width {
     }
 }
 
-/// The register class that holds a value of `ty`.
+/// Whether values of `ty` live in a pair of general registers.
+pub(super) const fn is_pair(ty: Type) -> bool {
+    matches!(ty, Type::I128 | Type::F80 | Type::F128)
+}
+
+/// Whether a unary operation from `from` to `ty` involves an `f80` or
+/// `f128`, or converts between an `i128` and a float.
+const fn wide_float(ty: Type, from: Type) -> bool {
+    matches!(ty, Type::F80 | Type::F128)
+        || matches!(from, Type::F80 | Type::F128)
+        || (matches!(ty, Type::I128) && from.is_float())
+        || (matches!(from, Type::I128) && ty.is_float())
+}
+
+/// The register class that holds a value of `ty`; a pair's halves are
+/// general registers.
 pub(super) const fn class_of(ty: Type) -> RegClass {
-    if ty.is_float() {
+    if matches!(ty, Type::F32 | Type::F64) {
         RegClass::Xmm
     } else {
         RegClass::Gpr

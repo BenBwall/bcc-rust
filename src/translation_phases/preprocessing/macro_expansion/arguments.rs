@@ -64,7 +64,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ) -> Option<MacroArguments<'x>> {
         match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
             // Argument tokens belong to the invocation's caller. Looking them
-            // up in the callee's map can make a same-named parameter expand itself.
+            // up in the callee's map can make a same-named parameter expand
+            // itself.
             | Some(TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }) =>
                 argument.enclosing_arguments,
             | Some(TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. }) =>

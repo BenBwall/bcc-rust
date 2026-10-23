@@ -14,6 +14,7 @@
 //! - Scalar types and layout tables: `model.rs`.
 //! - Frozen macro lookup: `predefined.rs`; its `.h` tables stay beside it.
 //! - Relocation and thread-local storage models: `code_options.rs`.
+//! - Shared ELF named-section classification: `sections.rs`.
 //!
 //! C99: implementation-defined representations, §6.2.5, pp. 33-37;
 //! PDF pp. 45-49. Record layout: §6.7.2.1 paragraphs 10-11, p. 102;
@@ -31,6 +32,9 @@ mod predefined;
 
 // Code generation options
 mod code_options;
+
+// ELF named-section policy shared by semantics and code generation
+pub(crate) mod sections;
 
 pub(crate) use code_options::{
     CodeOptions,

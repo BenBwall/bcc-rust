@@ -69,10 +69,10 @@ graph (`Types`, `TypeId`, `TypeKind`, `Tag`, `TagKind`, `Member`, `Field`,
 The semantic working arena (`'s`) owns continuations, value stacks, interning
 lookup, visible-binding lookup, linkage lookup and scope restoration lists. It
 is dropped before returning `SemanticTranslationUnit<'tu>`. Retained values have
-no destruction requirements. Lowering also receives vendor-modified declarators visited by
-type construction; it reads only their GNU assembler labels. Attribute and
-calling-convention meanings are retained as symbol facts and capability
-refusals (see [GNU entity attributes](#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
+no destruction requirements. Assembler labels are decoded and inherited in
+semantic completion; lowering receives finalized entity and symbol requests.
+Attribute and calling-convention meanings are retained as symbol facts and
+capability refusals (see [GNU entity attributes](#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
 Collections use the repository's arena-backed
 `ArenaMap`/`ArenaVec`; no compiler global allocator collections are introduced.
 
@@ -496,9 +496,18 @@ classic `offsetof` macro: the address of a member or element reached from an
 integer-valued pointer constant carries that integer plus the byte offset, and
 converting it to an integer type yields an arithmetic constant. Reading a
 static-duration, const, non-volatile integer object with a constant initializer
-also folds to that value. Strict modes
-keep the integer-constant-expression constraint, so such an array bound is
-variable length.
+also folds to that value. Absolute pointer-to-integer casts and address
+differences retain a separate non-ICE marker in every language mode, matching
+Clang's additional constant forms (§6.6p10). File-scope arrays, static local
+arrays, members and compound literals fold these bounds with
+`-Wgnu-folding-constant`; automatic local arrays and other abstract type names
+retain VLA bounds. Consequently a sizeof of such a type name is runtime-valued
+and cannot size a file-scope array. Integer casts preserve the non-ICE marker,
+including narrowing and `_Bool` conversions. Function declarations retain
+variably modified return bounds and reject them under §6.7.5.2p2.
+Switch cases retain the same folded values that ICE evaluation accepted,
+including their dispatch edges. Other folded arithmetic in strict modes keeps
+the integer-constant-expression constraint.
 
 `conversions` retains the syntax expression, destination type and conversion
 kind: lvalue conversion, array/function decay, arithmetic conversion, assignment
@@ -643,6 +652,44 @@ last element. Excess elements,
 incompatible scalar values and invalid designators have structured diagnostics.
 Narrow/wide strings initialize their matching character arrays, with optional
 braces and the permitted omitted terminator in an exactly sized array.
+
+#### Initializer placement plans
+
+**M8 is complete.** The same traversal emits the placement it accepts:
+`facts/initializer_plans.rs` retains one `InitializerPlan` per accepted
+initializer of an object definition, automatic declaration or compound
+literal, keyed by the initializer's syntax identity
+(`SemanticTranslationUnit::initializers.plan`); `initializers/plan.rs` builds
+it while the checker's cursors move. Each cursor carries its container's
+absolute offset, accumulated qualifiers and enclosing unions, so no layout is
+searched again. A plan lists, in source order:
+
+- `Zero` for each brace pair around an aggregate, with the exclusive index
+  where its list ends (omitted bytes are zero, §6.7.8p21, and the pair
+  replaces earlier writes, §6.7.8p19);
+- `Select` whenever an element enters a union member (designated, positional
+  or by brace elision), with the scope of the list containing the element;
+- `Store` (scalar, with its bit range), `Copy` (a whole structure or union,
+  §6.7.8p13, with the union types that contain it) and `String`;
+- `Repeat { count, stride, length }` for a GNU range designator, one per range
+  in a designation, over the operations of its element stored at the range's
+  first element; operations before the range step (selections of containing
+  unions) stay outside, so nested ranges repeat inside each other;
+- `EmptyScalar` for `{}` around a scalar and `Unmodeled` where brace elision
+  descends into a vector or an unanalyzable type, which lowering refuses.
+
+Values are `InitValueId`s of the initializer occurrence; a value inside a
+repeat with more than one element is marked `repeated`, so it is evaluated
+once. A root array of unknown size and the object's own flexible array member
+get their completed (respectively written) array types when the checker
+finishes; another flexible array member's empty list stores nothing. Rejected
+or unmodeled initializers retain no plan. A plan's size follows the written
+initializer and its designators, never an array's extent or a range's length
+(lowering copies a range's first element into the rest where it can; see
+`middle-end.md`);
+`tests/initializer_plans.rs` pins plan shapes and counts the producer's work
+(`review_steps[3]`) for deep, sparse and overlapping-range initializers. See
+the [M8 receipt](docs/research/semantic-facts-m8.md).
 
 An incomplete outer array records the greatest initialized top-level index and
 completes its canonical type before following expressions resolve its binding
@@ -1431,7 +1478,7 @@ reject Boolean operands.
 
 `__builtin_shufflevector`, `__builtin_convertvector`, `__builtin_bit_cast` and
 the overloaded elementwise/nontemporal builtins used by the resources have
-operand-dependent typing. `builtins/x86_builtin_table.rs` declares 384 x86 builtins and two population-count builtins from
+operand-dependent typing. The generated registry shard `src/builtins/x86.rs` declares 384 x86 builtins (two population-count calls merge into scalar descriptors) from
 canonical Clang call signatures, with constant-operand positions and immediate
 ranges (including gather scale choices). `scripts/generate_x86_builtins.py`
 derives the catalog from names called by the shipped headers, queries Clang's
@@ -1799,11 +1846,13 @@ the callee expression ordinal, or `Builtin` with its optional named binding,
 designation-preserving directness and checked instance. It retains the point-of-use
 function type, fixed prefix, prototype/ellipsis status and each argument's expression ordinal
 and converted type. Argument ordinals reference the existing conversion runs;
-later composite binding types never replace the written call's type. M4 now
-retains checked scalar/library/varargs instances; remaining family descriptors
-are M6 work. Overloaded builtins may lack an ordinary function type; ordinary lowerable calls require it.
-The existing known-definition/open-external ABI policy remains downstream until
-M7. Returns-twice and unsupported-builtin capability refusals are unchanged.
+later composite binding types never replace the written call's type. M4
+retains checked scalar/library/varargs instances; M6 registered the remaining
+families, whose calls retain no instance. Overloaded builtins may lack an
+ordinary function type; ordinary lowerable calls require it.
+M7 retains the entity's known definition; `unprototyped_external` combines it
+with the binding's point-of-use type. Returns-twice and unsupported-builtin
+capability refusals are unchanged.
 
 GNU implicit function declarations still precede identifier typing. Discovery
 forwards callee context through immediate parentheses/extension children on the
@@ -1844,8 +1893,8 @@ semantic types, IR opcodes, checker/lowerer callbacks or diagnostic messages.
 Constraint identities adapt to the existing `SemanticErrorKind` catalog.
 
 Lookup first respects a visible user binding. `BindingOrigin` then distinguishes
-`User`, `Intrinsic(BuiltinId)`, `ImplicitOrdinary`, the explicit temporary M6
-`LegacyIntrinsic` bridge and unknown reserved `OpaqueIntrinsic` bindings.
+`User`, `Intrinsic(BuiltinId)`, `ImplicitOrdinary` and unknown reserved
+`OpaqueIntrinsic` bindings.
 Unknown reserved names keep opaque signatures. Plain implicit alloca is GNU-only;
 ordinary implicit library names are hosted-only. Reserved library aliases keep
 their signatures in freestanding mode. The fabs/fabsf/fabsl aliases share the
@@ -1870,19 +1919,59 @@ width, including 128-bit immediates. Assignment compatibility precedes dependent
 constant diagnostics. Dedicated overflow, floating and varargs handlers keep their
 type/precision/layout rules. Existing semantic/diagnostic/IR goldens are unchanged.
 
-Atomic, generated x86, vector and type-generic recognition and keyword checking,
-plus reserved builtin type spellings, remain explicit M6 bridges. The named
-capability adapter in `builtins/names.rs` joins the registry with those families;
-`__has_builtin` still uses the existing keyword classifier/semantic capability
-adapter. Exhaustive scalar/library agreement tests cover all current targets,
+Exhaustive scalar/library agreement tests cover all current targets,
 strict/GNU modes and hosted/freestanding environments. M5 later consumed the
-registry's effect classes in the retained expression effects; the
-external/returns-twice symbol policy remains later work.
+registry's effect classes in the retained expression effects; M6 (below)
+registered the remaining families; M7 retains the effective external-symbol
+and returns-twice policy.
 
 C99 §6.5.2.2p7, p. 72 (PDF p. 84), §6.2.1p4, pp. 29-30
 (PDF pp. 41-42), §7.15.1, pp. 249-251 (PDF pp. 261-263),
 and §7.1.4, pp. 166-167 (PDF pp. 178-179); scalar intrinsics are GNU
 extensions. Validation and corpus evidence: [M4 receipt](docs/research/semantic-facts-m4.md).
+
+### Builtin families in the registry
+
+**M6 is complete.** Every builtin spelling and keyword form has exactly one
+registry descriptor: the atomic shard (already registered with atomic
+execution), the generated `src/builtins/x86.rs` shard, and the handwritten
+`vector.rs` and `type_generic.rs` shards, beside the scalar, library, math and
+checked shards. There is no other recognizer: `builtins/names.rs`, the
+`LegacyIntrinsic` origin and the family name predicates are deleted.
+`__has_builtin` reads the registry directly (keyword forms where the keyword
+is active, ordinary calls by naming policy) and never consults semantic
+analysis or a local binding.
+
+Family descriptors name a closed `TypeRule` (`X86Signature`, `VectorShuffle`,
+`VectorOverload(op)`, `ConvertVector`, `BitCast`, `TypesCompatible`,
+`ChooseExpr`, `TypeClassify`, `Math128(rule)`, `Atomic`) and the dedicated
+handler keeps its algorithm. `common_builtin_call` is the single named-call
+entry: it reads the binding's descriptor once and dispatches on the rule;
+`type_builtin` does the same for keyword forms through `registry::keyword_descriptor`,
+the adapter from the one keyword classifier. Overload, binary128 and
+classification handlers take their operation from the descriptor payload, not
+from the spelling. The x86 signature is projected from symbolic
+`Vector`/`VectorPointer` signature types; each immediate is an argument rule with
+`ConstantConstraint::Immediate(low, high, mask)`, checked after prototype
+conversion and reported through the `Immediate` diagnostic identity. Families
+whose calls have no single C type use the `Opaque` signature, so their
+undeclared bindings keep the unprototyped unknown-result type they had.
+
+Family operations are `BuiltinOperation::Semantic(_)` (classification, type
+compatibility, constant selection and binary128 primitives: checked and folded
+or selected here) or `Unsupported(X86 | Vector)`. Neither retains a
+`BuiltinCallFacts` instance (`BuiltinOperation::retains_instance`), so their
+effect summary stays `UNKNOWN` and lowering keeps its earlier refusal (an
+unsupported builtin, or the opaque binding's unanalyzed type); a keyword form's spelling that is an identifier because its keyword is
+disabled stays an opaque reserved name. Two header calls of the x86 generator,
+`__builtin_popcount` and `__builtin_popcountll`, are merged into the scalar
+descriptor after a test checks that the signatures agree.
+
+`tests/fixtures/semantic/builtin-names.snap` pins every recognized spelling's
+`__has_builtin` answer in four configurations and the binding origin, type and
+diagnostics of an undeclared call; the snapshot keeps its own names under test.
+The reserved builtin type names (`__builtin_va_list`, `__int128_t`) still have
+no type descriptor. Validation: [M6 receipt](docs/research/semantic-facts-m6.md).
 
 ## 2026-10-13: Torture representation types and constant forms
 
@@ -2087,25 +2176,74 @@ pass lives in `attributes.rs` and `attributes/`:
   could enter or leave one. Lowering marks cleanup variables address-taken and emits the
   calls from the same transitions that release VLA storage.
 
+On ELF targets, named BSS sections are checked before lowering, independently
+of the selected backend. `target/sections.rs` classifies BSS and TLS linkonce
+families for both semantic analysis and native emission. Externally emitted
+and explicitly used function definitions receive `BssFunction`; omitted static
+and inline-only bodies remain valid. After entity completion supplies inherited sections,
+`initializers/bss.rs` walks retained initializer operations backwards and
+reports each emitted object's first surviving nonzero or relocated leaf at its
+initializer. Semantic checks and lowering share entity reachability: evaluated
+references from emitted functions and object initializers retain internal
+objects, while references owned only by omitted functions do not. Unused
+function-local statics remain omitted at every optimization level. This differs
+from Clang at O0, which emits them with their enclosing function; matching that
+behavior requires changing emission policy rather than initializer validity.
+A fixed-depth interval radix tree records later writes; scalar GNU ranges remain periodic queries and one coverage interval, independent of their
+extent. Assignment conversion, negative floating zero, overwritten initializers,
+union selections and bit-fields affect the final contents. Complex ranges use
+sparse replay with a work budget linear in the written plan; budget exhaustion
+conservatively defers to backend final-content validation. Nonzero aggregate,
+string and bit-field GNU ranges commonly exhaust this budget from roughly
+32–128 elements onward; nested ranges and partly overwritten pointer ranges
+can do so too. These refusals lose the early source label, but cannot emit
+invalid BSS data. Unmodeled initializers retain their existing capability
+refusals; native emission also checks raw IR, and LLVM error diagnostics prevent
+output from being written.
+
 The constructor/destructor priority operand is parsed as an expression, as
 `aligned`'s is, so the ordinary constant evaluator checks it. GNU extension:
 GCC manual, "Common Function Attributes" and "Common Variable Attributes";
 Clang Attributes Reference. C99 §6.2.2p2, p. 30 (PDF p. 42); §6.2.4p5, p. 32
 (PDF p. 44); §6.8.6.1p1, p. 137 (PDF p. 149).
 
-**What remains of M7.** Assembler labels are still decoded and inherited in
-lowering (`extensions.rs::record_label`), and alias targets are resolved by C
-name, so aliases involving assembler labels are refused. The known-definition
-name set for open externals (`Unit::new`/`unprototyped_external`), the
-name-based `main` end policy, readonly/volatile object predicates and the
-shared external-signature catalog are unchanged. The returns-twice part of
-the external-symbol contract exists (`builtins/external.rs`, 2026-10-16):
-semantic analysis retains it as `EntityAttributes::returns_twice` for linked
-functions, merged with GNU `returns_twice`, and lowering consults the catalog
-itself only for an assembler label, which M7 moves into retained symbol
-requests. MSVC
-convention keywords other than `__vectorcall` remain accepted as the default
-convention without a retained `CallingConvention` on types.
+**M7 entity and symbol completion.** `facts/entities.rs` finalizes entities
+after definitions, DLL/inline attributes and overload ABI names. The retained
+record is sparse over functions and linked/static-duration objects; automatic
+objects and parameters have no record. It joins binding and occurrence IDs, final type, definition and
+initializer association and known function definition. Per-occurrence
+`FunctionPolicy` keeps body permission and end policy so a GNU inline body and
+its replacement definition can differ. Each binding keeps its point-of-use
+type; open-call policy queries that type and the entity's known definition.
+Lowering decides reachability and generated symbol names, and keys private inline bodies by semantic identity even when another
+entity's asm request names the same external symbol.
+
+Function values of GNU extern-inline fortify wrappers retain the external
+symbol; direct calls can still use the private inline body. For Clang-style
+`pass_object_size` overloads, value resolution selects the sole addressable
+declaration before an explicit function-pointer cast changes its type (C99
+§6.3.2.3p8, p. 48; PDF p. 60). Static relocations consume that same retained
+selection as runtime identifiers, including glibc `getcwd`/`read` wrappers and
+SQLite's generic syscall-pointer table (issue #81).
+
+Assembler labels retain decoded names and provenance, inherited by entity
+identity. Invalid requests retain capability refusals with the same lowering
+stage, text and function-emission filtering. Colliding IR definitions and
+aliases involving asm labels remain downstream refusals. `FunctionEnd` preserves
+the C-identifier-only `main` zero-result rule, including asm-renamed and private
+bodies; hosted and language-mode refinements are separate behavior changes.
+Convention occurrences retain the resolved target convention or unsupported
+request, source and owning function, including abstract callable type sites.
+Existing convention diagnostics and default C type identity are unchanged.
+
+The entity's effective returns-twice fact combines existing
+`EntityAttributes::returns_twice` with assembler requests through
+`builtins/external.rs`. That neutral catalog also exposes library signatures
+from the registry for independent host/textual-IR validation. `Types` provides
+whole-object readonly storage, retained VM classification and natural layout
+queries; `TypeId::is_volatile` is the canonical volatile-access predicate.
+Initializer placement and symbolic constant decomposition remain M8/M9 work.
+Validation and measurements: [M7 receipt](docs/research/semantic-facts-m7.md).
 
 #### Labels as values (2026-10-14)
 

@@ -60,6 +60,7 @@ use crate::{
         parse_pass_list,
     },
     pipeline::{
+        InlineCopies,
         MiddleEndError,
         analyze_translation_unit,
         lower_translation_unit_diagnosed,
@@ -121,8 +122,16 @@ pub(super) fn generate_code<'tu>(
     } else {
         Profile::PostAbi
     };
-    let lowered =
-        lower_translation_unit_diagnosed(context, &unit, &sema, &ir, optimizer.as_ref(), profile);
+    let copies = options.inline_copies();
+    let lowered = lower_translation_unit_diagnosed(
+        context,
+        &unit,
+        &sema,
+        &ir,
+        optimizer.as_ref(),
+        profile,
+        copies,
+    );
     let llvm_output =
         options.emit.is_none() && options.output_path.is_some() && options.backend == BackEnd::Llvm;
     let diagnosed = match lowered {
@@ -158,10 +167,6 @@ pub(super) fn generate_code<'tu>(
     let module = diagnosed.module;
     let target = context.configuration.target();
     let code = context.configuration.code_options();
-    if let Some(conflict) = options.back_end_conflict() {
-        report_stderr(format_args!("error: {conflict}"));
-        return FAILURE_STATUS;
-    }
     if llvm_output && !diagnosed.call_diagnostics.is_empty() {
         let output = options
             .output_path
@@ -290,9 +295,12 @@ pub(super) struct CodeGeneration {
     /// -no-pie), as code compiled with -fno-pic needs.
     #[arg(long, requires = "output_path", overrides_with = "pie")]
     pub(super) no_pie:               bool,
+    /// GCC optimization level (also accepts -O0, -O1, -O2, -O3, -Os, -Oz, -Og).
+    #[arg(long, value_enum, overrides_with = "optimization")]
+    pub(super) optimization:         Option<LlvmOpt>,
     /// Select the middle-end optimizer: none, or bcc's pass pipeline.
-    #[arg(long, value_enum, default_value = "none", requires = "back_end")]
-    pub(super) opt:                  MiddleEnd,
+    #[arg(long, value_enum, overrides_with = "opt")]
+    pub(super) opt:                  Option<MiddleEnd>,
     /// Run these bcc passes once each, in order, instead of the default
     /// pipeline (implies --opt=bcc), such as fold,simplify-cfg,dce.
     #[arg(long, value_name = "LIST", value_parser = pass_list, requires = "back_end")]
@@ -310,8 +318,8 @@ pub(super) struct CodeGeneration {
     #[arg(long, requires = "back_end")]
     pub(super) time_passes:          bool,
     /// Select the LLVM IR pipeline and code generation level; none means O0.
-    #[arg(long, value_enum, default_value = "none", requires = "back_end")]
-    pub(super) llvm_opt:             LlvmOpt,
+    #[arg(long, value_enum, overrides_with = "llvm_opt")]
+    pub(super) llvm_opt:             Option<LlvmOpt>,
     /// Run no LLVM IR pass, only the code generator at the --llvm-opt
     /// level.
     #[arg(long, requires = "back_end")]
@@ -321,6 +329,16 @@ pub(super) struct CodeGeneration {
     /// support yet.
     #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
     pub(super) backend:              BackEnd,
+    /// Encode the native back end's ELF or COFF objects in process, the
+    /// default for Windows targets, where a listing the encoder refuses is
+    /// assembled unless this flag is given; a module with file-scope assembly
+    /// is refused.
+    #[arg(long, requires = "back_end", overrides_with = "no_native_object")]
+    pub(super) native_object:        bool,
+    /// Assemble the native back end's listing with the bundled clang, the
+    /// default for Linux targets and for a module with file-scope assembly.
+    #[arg(long, requires = "back_end", overrides_with = "native_object")]
+    pub(super) no_native_object:     bool,
 }
 
 /// What `--emit` prints.
@@ -367,12 +385,33 @@ pub(super) enum LlvmOpt {
     O2,
     #[value(name = "O3")]
     O3,
+    #[value(name = "Os")]
+    Os,
+    #[value(name = "Oz")]
+    Oz,
+    #[value(name = "Og")]
+    Og,
+}
+
+impl LlvmOpt {
+    fn enabled(self) -> bool {
+        !matches!(self, Self::None | Self::O0)
+    }
 }
 
 impl CodeGeneration {
+    /// GNU implementation macros describe the effective optimizer selection.
+    pub(super) fn optimization_macros(&self) -> (bool, bool) {
+        let llvm = self.llvm_opt.or(self.optimization).unwrap_or(LlvmOpt::None);
+        (
+            self.bcc_enabled() || llvm.enabled(),
+            matches!(llvm, LlvmOpt::Os | LlvmOpt::Oz),
+        )
+    }
+
     /// Why the selected options do not fit the selected back end, if they
     /// do not.
-    fn back_end_conflict(&self) -> Option<&'static str> {
+    pub(super) fn back_end_conflict(&self) -> Option<&'static str> {
         let native = self.backend == BackEnd::Native;
         match self.emit {
             | Some(Emit::Asm) if !native =>
@@ -384,12 +423,18 @@ impl CodeGeneration {
             | _ => {},
         }
         if !native {
+            if self.native_object {
+                return Some("--native-object requires --backend=native");
+            }
+            if self.no_native_object {
+                return Some("--no-native-object requires --backend=native");
+            }
             return None;
         }
         if self.emit.is_none() && self.output_path.is_none() {
             return Some("--backend=native needs -o or --emit=asm; --interpret runs the IR");
         }
-        if self.llvm_opt != LlvmOpt::None || self.llvm_codegen_only {
+        if self.llvm_opt.is_some_and(|level| level != LlvmOpt::None) || self.llvm_codegen_only {
             return Some(
                 "--llvm-opt and --llvm-codegen-only configure the LLVM back end, not \
                  --backend=native",
@@ -409,11 +454,6 @@ impl CodeGeneration {
         &self,
         print_after_all: &'a RefCell<dyn fmt::Write + 'a>,
     ) -> Option<OptimizerOptions<'a>> {
-        let enabled = self.opt == MiddleEnd::Bcc
-            || self.passes.is_some()
-            || self.opt_bisect_limit.is_some()
-            || self.print_after_all
-            || self.time_passes;
         #[cfg_attr(
             not(test),
             expect(
@@ -422,7 +462,7 @@ impl CodeGeneration {
                           functional update syntax."
             )
         )]
-        enabled.then(|| {
+        self.bcc_enabled().then(|| {
             let mut options = OptimizerOptions::default();
             options.passes = self.passes;
             options.print_after_all = self.print_after_all.then_some(print_after_all);
@@ -430,6 +470,32 @@ impl CodeGeneration {
             options.bisect_limit = self.opt_bisect_limit;
             options
         })
+    }
+
+    fn bcc_enabled(&self) -> bool {
+        self.opt
+            .unwrap_or(if self.optimization.is_some_and(LlvmOpt::enabled) {
+                MiddleEnd::Bcc
+            } else {
+                MiddleEnd::None
+            })
+            == MiddleEnd::Bcc
+            || self.passes.is_some()
+            || self.opt_bisect_limit.is_some()
+            || self.print_after_all
+            || self.time_passes
+    }
+
+    /// The native object writer `--native-object` or `--no-native-object`
+    /// requests, whichever came last, or `None` for the target's default.
+    fn requested_object_writer(&self) -> Option<native::RequestedWriter> {
+        if self.native_object {
+            Some(native::RequestedWriter::Direct)
+        } else if self.no_native_object {
+            Some(native::RequestedWriter::Assembler)
+        } else {
+            None
+        }
     }
 
     /// What `-o` builds.
@@ -445,15 +511,36 @@ impl CodeGeneration {
         }
     }
 
+    /// What the middle end does with inline copies: the interpreter and the
+    /// native back end make LLVM's inlining choices themselves, and LLVM
+    /// gets the copies as `available_externally` bodies, the plain ones only
+    /// when its IR pipeline optimizes, as Clang emits them.
+    fn inline_copies(&self) -> InlineCopies {
+        if self.backend == BackEnd::Native || (self.emit.is_none() && self.output_path.is_none()) {
+            InlineCopies::Resolve
+        } else if !self.llvm_codegen_only
+            && matches!(
+                self.llvm_opt.or(self.optimization),
+                Some(LlvmOpt::O1 | LlvmOpt::O2 | LlvmOpt::O3)
+            )
+        {
+            InlineCopies::Keep
+        } else {
+            InlineCopies::KeepAlwaysInline
+        }
+    }
+
     /// LLVM IR passes and code generation for `target`.
     fn llvm_options(&self, target: Target, code: CodeOptions) -> LlvmOptions {
         LlvmOptions {
-            opt: match self.llvm_opt {
+            opt: match self.llvm_opt.or(self.optimization).unwrap_or(LlvmOpt::None) {
                 | LlvmOpt::None => None,
                 | LlvmOpt::O0 => Some(OptLevel::O0),
-                | LlvmOpt::O1 => Some(OptLevel::O1),
+                | LlvmOpt::O1 | LlvmOpt::Og => Some(OptLevel::O1),
                 | LlvmOpt::O2 => Some(OptLevel::O2),
                 | LlvmOpt::O3 => Some(OptLevel::O3),
+                | LlvmOpt::Os => Some(OptLevel::Os),
+                | LlvmOpt::Oz => Some(OptLevel::Oz),
             },
             disable_llvm_passes: self.llvm_codegen_only,
             target,
@@ -556,13 +643,32 @@ fn build_native(
         ));
         return FAILURE_STATUS;
     }
+    let writer = match native::object_writer(module, target, options.requested_object_writer()) {
+        | Ok(writer) => writer,
+        | Err(error) => {
+            report_stderr(format_args!("error: {error}"));
+            return FAILURE_STATUS;
+        },
+    };
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
     if let Err(error) = native::emit_assembly_with(module, target, code, &mut text) {
         report_stderr(format_args!("error: {error}"));
         return FAILURE_STATUS;
     }
-    match native::assemble(&text, output, target, options.output_kind()) {
+    // Clang's assembler driver may unlink an output it cannot open. Check
+    // existing regular files first, preserving the C driver's read-only policy.
+    let writable = if output.is_file() {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(output)
+            .map(drop)
+    } else {
+        Ok(())
+    };
+    let result =
+        writable.and_then(|()| native::build(&text, output, target, options.output_kind(), writer));
+    match result {
         | Ok(()) => 0,
         | Err(error) => {
             report_stderr(format_args!(
@@ -629,7 +735,7 @@ fn pass_list(value: &str) -> Result<PassList, String> {
 ///
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 (required diagnostics);
 /// handling a failed host write is a CLI policy.
-fn report_stderr(text: fmt::Arguments<'_>) {
+pub(super) fn report_stderr(text: fmt::Arguments<'_>) {
     drop(writeln!(io::stderr().lock(), "{text}"));
 }
 

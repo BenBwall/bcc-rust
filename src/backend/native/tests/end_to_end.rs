@@ -10,7 +10,15 @@ use std::{
     thread,
 };
 
-use super::programs::PROGRAMS;
+use super::{
+    programs::{
+        PROGRAMS,
+        SSE_UNSIGNED_CONVERSIONS,
+        SSE_UNSIGNED_CONVERSIONS_OUTPUT,
+        WIDE_FLOAT_PROGRAMS,
+    },
+    spilled_assembly,
+};
 use crate::{
     abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,
     backend::{
@@ -20,7 +28,11 @@ use crate::{
             RuntimeValue,
             Termination,
         },
-        llvm::OutputKind,
+        llvm::{
+            LlvmOptions,
+            OutputKind,
+            compile_module,
+        },
         native::{
             assemble,
             emit_assembly,
@@ -43,6 +55,7 @@ use crate::{
     test_support::{
         TempDir,
         native::run_native,
+        wsl::run_wsl,
     },
     translation_phases::Context,
     util::bump::Bump,
@@ -57,7 +70,7 @@ struct Run {
 
 /// Lowers `source` for `target` to the post-ABI IR, optionally through the
 /// bcc pipeline, and hands the module to `then`.
-fn with_module<R>(
+pub(super) fn with_module<R>(
     source: &str,
     target: Target,
     optimize: bool,
@@ -134,7 +147,7 @@ fn runner(target: Target) -> Option<Runner> {
 
 /// Whether WSL is installed with a clang to assemble and link.
 fn wsl_has_clang() -> bool {
-    run_native(Command::new("wsl.exe").args(["-e", "sh", "-c", "command -v clang"]))
+    run_wsl(Command::new("wsl.exe").args(["-e", "sh", "-c", "command -v clang"]))
         .is_ok_and(|output| output.status.success())
 }
 
@@ -156,7 +169,7 @@ fn run_assembly(
         | Runner::Wsl => {
             std::fs::write(directory.join(format!("{name}.s")), text)
                 .map_err(|error| error.to_string())?;
-            let build = run_native(
+            let build = run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", "clang", "-o", name, &format!("{name}.s")])
                     .current_dir(directory),
@@ -168,7 +181,7 @@ fn run_assembly(
                     String::from_utf8_lossy(&build.stderr)
                 ));
             }
-            run_native(
+            run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", &format!("./{name}")])
                     .current_dir(directory),
@@ -183,14 +196,16 @@ fn run_assembly(
     })
 }
 
-/// One compilation to check: a program, a target, and whether the bcc
-/// pipeline runs first.
+/// One compilation to check: a program, a target, whether the bcc
+/// pipeline runs first, and whether every value is spilled (see
+/// `spill_everything`).
 struct Job<'a> {
     name:     &'a str,
     source:   &'a str,
     target:   Target,
     runner:   Runner,
     optimize: bool,
+    spill:    bool,
 }
 
 /// What one job found.
@@ -207,10 +222,15 @@ enum Verdict {
 fn check(job: &Job<'_>, directory: &Path) -> Verdict {
     let compiled = with_module(job.source, job.target, job.optimize, |module| {
         let expected = interpret(module, job.target);
-        let mut text = String::new();
-        let assembly =
-            emit_assembly(module, job.target, &mut text).map_err(|error| error.to_string());
-        (expected, assembly.map(|()| text))
+        let assembly = if job.spill {
+            spilled_assembly(module, job.target)
+        } else {
+            let mut text = String::new();
+            emit_assembly(module, job.target, &mut text)
+                .map(|()| text)
+                .map_err(|error| error.to_string())
+        };
+        (expected, assembly)
     });
     let (expected, text) = match compiled {
         | (_, Err(refusal)) => return Verdict::Refused(refusal),
@@ -218,10 +238,11 @@ fn check(job: &Job<'_>, directory: &Path) -> Verdict {
         | (Ok(expected), Ok(text)) => (expected, text),
     };
     let name = format!(
-        "{}-{:?}-{}",
+        "{}-{:?}-{}{}",
         job.name,
         job.target,
-        if job.optimize { "bcc" } else { "none" }
+        if job.optimize { "bcc" } else { "none" },
+        if job.spill { "-spilled" } else { "" }
     );
     match run_assembly(&text, job.target, job.runner, directory, &name) {
         | Ok(actual) => {
@@ -292,6 +313,7 @@ fn native_programs_match_the_interpreter() {
                     target,
                     runner,
                     optimize,
+                    spill: false,
                 });
             }
         }
@@ -312,6 +334,105 @@ fn native_programs_match_the_interpreter() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// Every program again with every value in a spill slot for its whole
+/// life, so that every operand of every instruction the selector makes
+/// goes through the spill code: an indexed store or ALU operation then
+/// reads three spilled general registers, and its address goes through a
+/// `lea` into a scratch register.
+#[test]
+fn programs_with_every_value_spilled_match_the_interpreter() {
+    if crate::backend::llvm::Toolchain::bundled(Target::WindowsGnu).is_err() && cfg!(windows) {
+        eprintln!("skipping: no bundled toolchain");
+        return;
+    }
+    let directory = TempDir::new("native-spilled");
+    let mut jobs = Vec::new();
+    for (target, runner) in targets() {
+        for program in PROGRAMS {
+            for optimize in [false, true] {
+                jobs.push(Job {
+                    name: program.name,
+                    source: program.source,
+                    target,
+                    runner,
+                    optimize,
+                    spill: true,
+                });
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for (job, verdict) in jobs.iter().zip(check_all(&jobs, directory.path())) {
+        match verdict {
+            | Verdict::Passed => {},
+            | Verdict::Refused(refusal) =>
+                failures.push(format!("{} {:?}: refused: {refusal}", job.name, job.target)),
+            | Verdict::NoOracle => failures.push(format!(
+                "{} {:?}: the interpreter traps",
+                job.name, job.target
+            )),
+            | Verdict::Failed(failure) => failures.push(failure),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// Every program the native back end accepts compiles for both calling
+/// conventions with its own allocation and with every value spilled, and
+/// the allocation checker (on in debug builds) proves each function: the
+/// conventions this host cannot run are checked here too.
+#[test]
+fn every_value_spilled_passes_the_checker_under_both_conventions() {
+    let programs = PROGRAMS
+        .iter()
+        .chain(WIDE_FLOAT_PROGRAMS)
+        .chain([&SSE_UNSIGNED_CONVERSIONS])
+        .map(|program| (program.name, program.source))
+        .chain(
+            LOWERING_PROGRAMS
+                .iter()
+                .chain(BY_VALUE_PROGRAMS)
+                .map(|program| (program.name, program.source)),
+        )
+        .collect::<Vec<_>>();
+    let parallelism = thread::available_parallelism()
+        .map_or(4, usize::from)
+        .min(8);
+    let mut failures = Vec::new();
+    for chunk in programs.chunks(parallelism.div_ceil(2).max(1)) {
+        thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .flat_map(|&(name, source)| {
+                    [Target::LinuxGnu, Target::WindowsGnu].map(|target| {
+                        scope.spawn(move || {
+                            let mut failures = Vec::new();
+                            for optimize in [false, true] {
+                                with_module(source, target, optimize, |module| {
+                                    let mut text = String::new();
+                                    if emit_assembly(module, target, &mut text).is_err() {
+                                        // Refused before allocation.
+                                        return;
+                                    }
+                                    if let Err(error) = spilled_assembly(module, target) {
+                                        failures
+                                            .push(format!("{name} {target:?} {optimize}: {error}"));
+                                    }
+                                });
+                            }
+                            failures
+                        })
+                    })
+                })
+                .collect();
+            for handle in handles {
+                failures.extend(handle.join().expect("a compilation does not panic"));
+            }
+        });
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn accepted_lowering_programs_match_the_interpreter() {
     let directory = TempDir::new("native-lowering-programs");
@@ -325,6 +446,7 @@ fn accepted_lowering_programs_match_the_interpreter() {
                     target,
                     runner,
                     optimize,
+                    spill: false,
                 });
             }
         }
@@ -697,6 +819,14 @@ fn ir_programs_match_the_interpreter() {
                 "{target:?}
 {text}"
             );
+            let text = spilled_assembly(&module, target).unwrap();
+            let name = format!("ir{index}-{target:?}-spilled");
+            let actual = run_assembly(&text, target, runner, directory.path(), &name).unwrap();
+            assert_eq!(
+                actual, expected,
+                "{target:?}, every value spilled
+{text}"
+            );
         }
     }
 }
@@ -786,4 +916,326 @@ int start(void) { return shared_value + shared_list[3]; }";
         !linked && stderr.contains("requires pseudo relocations"),
         "{stderr}"
     );
+}
+
+/// `f80` and `f128` arithmetic, every comparison, conversions to and from
+/// every integer width, `i128` and the other floats, block parameters, and
+/// calls with more such arguments than registers. The interpreter does not
+/// run `f80` or `f128`, so the module's executable from the LLVM back end
+/// is the expected behaviour. The module is written before ABI lowering,
+/// since Win64 passes its `i128` arguments by reference.
+const WIDE_FLOAT_IR: &str = include_str!("wide_floats.ir");
+
+/// The line of [`WIDE_FLOAT_IR`] that computes an `frem.f128`, and an
+/// inline operation that replaces it where nothing links `fmodf128`. The
+/// parser wants dense value numbers, so the line is replaced, not removed.
+const WIDE_FLOAT_IR_FREM128: (&str, &str) = ("v10 = frem.f128 v0, v1", "v10 = fneg.f128 v1");
+
+/// Whether `target`'s C library defines `fmodf128`, which both back ends
+/// call for `frem.f128`, as Clang does for it and for `__builtin_fmodf128`.
+/// glibc has it since 2.26. MinGW-w64's runtime has no binary128 functions,
+/// and GCC's libquadmath names the routine `fmodq`.
+fn has_fmodf128(target: Target) -> bool {
+    !matches!(target, Target::WindowsGnu)
+}
+
+/// [`WIDE_FLOAT_IR`] lowered for `target`'s ABI and verified.
+fn wide_float_ir(arena: &Bump, target: Target) -> Module<'_> {
+    lowered_wide_float_ir(arena, target, WIDE_FLOAT_IR)
+}
+
+/// [`wide_float_ir`] without its `frem.f128` where nothing links it.
+fn linkable_wide_float_ir(arena: &Bump, target: Target) -> Module<'_> {
+    if has_fmodf128(target) {
+        return wide_float_ir(arena, target);
+    }
+    let (frem, replacement) = WIDE_FLOAT_IR_FREM128;
+    let count = WIDE_FLOAT_IR.matches(frem).count();
+    assert_eq!(count, 1, "{target:?}: wide_floats.ir has {count} `{frem}`");
+    lowered_wide_float_ir(arena, target, &WIDE_FLOAT_IR.replace(frem, replacement))
+}
+
+/// `text`, parsed, lowered for `target`'s ABI and verified.
+fn lowered_wide_float_ir<'ir>(arena: &'ir Bump, target: Target, text: &str) -> Module<'ir> {
+    let mut module = crate::ir::parse_module(arena, text).unwrap();
+    crate::abi::lower_abi(&mut module, target, &Bump::new()).unwrap();
+    let scratch = Bump::new();
+    let errors = crate::ir::verify_module(&module, Profile::PostAbi, &scratch)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{target:?}: {}", errors.join("\n"));
+    module
+}
+
+/// Builds `module` with the LLVM back end at `-O0` and runs it.
+fn run_llvm(
+    module: &Module<'_>,
+    target: Target,
+    directory: &Path,
+    name: &str,
+) -> Result<Run, String> {
+    let executable = directory.join(format!("{name}-llvm.exe"));
+    let options = LlvmOptions {
+        opt: None,
+        disable_llvm_passes: false,
+        target,
+        kind: OutputKind::Executable,
+        code: crate::target::CodeOptions::default(),
+    };
+    compile_module(module, &executable, options).map_err(|error| error.to_string())?;
+    let output = run_native(&mut Command::new(&executable)).map_err(|error| error.to_string())?;
+    Ok(Run {
+        status: output.status.code().ok_or("the program was killed")?,
+        stdout: String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+    })
+}
+
+/// Compiles `module` with both back ends, the native one also with every
+/// value spilled, and compares the runs.
+fn check_against_llvm(
+    module: &Module<'_>,
+    target: Target,
+    directory: &Path,
+    name: &str,
+) -> Result<(), String> {
+    let mut text = String::new();
+    emit_assembly(module, target, &mut text).map_err(|error| format!("{name}: {error}"))?;
+    let spilled =
+        spilled_assembly(module, target).map_err(|error| format!("{name}, spilled: {error}"))?;
+    let expected = run_llvm(module, target, directory, name)?;
+    if expected.stdout.trim().is_empty() {
+        return Err(format!("{name}: the program printed nothing: {expected:?}"));
+    }
+    for (text, name) in [
+        (text, name.to_owned()),
+        (spilled, format!("{name}-spilled")),
+    ] {
+        let actual = run_assembly(&text, target, Runner::Native, directory, &name)?;
+        if actual != expected {
+            return Err(format!(
+                "{name}: the LLVM back end's executable did {expected:?}, the native one \
+                 {actual:?}\n{text}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every target's native back end compiles the wide-float programs,
+/// whichever targets the host runs.
+#[test]
+fn wide_float_programs_compile_for_every_target() {
+    for target in [Target::WindowsGnu, Target::LinuxGnu] {
+        for program in WIDE_FLOAT_PROGRAMS {
+            for optimize in [false, true] {
+                with_module(program.source, target, optimize, |module| {
+                    let mut text = String::new();
+                    emit_assembly(module, target, &mut text).unwrap_or_else(|error| {
+                        panic!("{}-{target:?}-{optimize}: {error}", program.name)
+                    });
+                });
+            }
+        }
+        let arena = Bump::new();
+        let module = wide_float_ir(&arena, target);
+        let mut text = String::new();
+        emit_assembly(&module, target, &mut text)
+            .unwrap_or_else(|error| panic!("wide-ir-{target:?}: {error}"));
+        // Clang's spelling, even where the C library lacks it.
+        assert!(text.contains("fmodf128"), "wide-ir-{target:?}:\n{text}");
+        let module = linkable_wide_float_ir(&arena, target);
+        let mut text = String::new();
+        emit_assembly(&module, target, &mut text)
+            .unwrap_or_else(|error| panic!("linkable wide-ir-{target:?}: {error}"));
+        assert_eq!(
+            text.contains("fmodf128"),
+            has_fmodf128(target),
+            "linkable wide-ir-{target:?}:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn wide_float_programs_match_the_llvm_back_end() {
+    let directory = TempDir::new("native-wide-floats");
+    let mut failures = Vec::new();
+    for (target, runner) in targets() {
+        if runner != Runner::Native {
+            eprintln!("skipping {target:?}: the LLVM back end's executables run only natively");
+            continue;
+        }
+        for program in WIDE_FLOAT_PROGRAMS {
+            for optimize in [false, true] {
+                let name = format!("{}-{target:?}-{optimize}", program.name);
+                let result = with_module(program.source, target, optimize, |module| {
+                    check_against_llvm(module, target, directory.path(), &name)
+                });
+                if let Err(failure) = result {
+                    failures.push(failure);
+                }
+            }
+        }
+        let arena = Bump::new();
+        let module = linkable_wide_float_ir(&arena, target);
+        let name = format!("wide-ir-{target:?}");
+        if let Err(failure) = check_against_llvm(&module, target, directory.path(), &name) {
+            failures.push(failure);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// `double` and `float` values at or above 2^63 convert to unsigned
+/// without the "invalid" exception that converting them signed would
+/// raise, with its own allocation and with every value spilled. The links
+/// name `fetestexcept`, which WSL's link has no `-lm` for.
+#[test]
+fn sse_unsigned_conversions_raise_no_invalid_exception() {
+    let directory = TempDir::new("native-unsigned-conversions");
+    let program = SSE_UNSIGNED_CONVERSIONS;
+    for (target, runner) in targets() {
+        if runner != Runner::Native {
+            eprintln!("skipping {target:?}: the program links with the C library's fenv");
+            continue;
+        }
+        for (optimize, spill) in [(false, false), (true, false), (false, true), (true, true)] {
+            let name = format!(
+                "{}-{target:?}-{optimize}{}",
+                program.name,
+                if spill { "-spilled" } else { "" }
+            );
+            let run = with_module(program.source, target, optimize, |module| {
+                let text = if spill {
+                    spilled_assembly(module, target)
+                } else {
+                    let mut text = String::new();
+                    emit_assembly(module, target, &mut text)
+                        .map(|()| text)
+                        .map_err(|error| error.to_string())
+                }
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+                run_assembly(&text, target, runner, directory.path(), &name)
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                run,
+                Run {
+                    status: 0,
+                    stdout: SSE_UNSIGNED_CONVERSIONS_OUTPUT.to_owned(),
+                },
+                "{name}"
+            );
+        }
+    }
+}
+
+/// A System V leaf with its frame in the red zone, interrupted by `SIGPROF`
+/// over and over while its frame is live. The handler unwinds through the
+/// signal frame and the leaf to its caller and `main` with the C library's
+/// unwinder, which reads the `.eh_frame` the back end describes, and the
+/// leaf then checks that its frame survived the handlers, which the kernel
+/// runs below the red zone (psABI §3.2.2). The program declares what it
+/// needs from glibc and libgcc itself.
+const RED_ZONE_UNWINDING: &str = r#"
+typedef void (*handler_t)(int);
+handler_t signal(int, handler_t);
+struct timeval_ { long sec; long usec; };
+struct itimerval_ { struct timeval_ interval, value; };
+int setitimer(int, const struct itimerval_ *, struct itimerval_ *);
+int printf(const char *, ...);
+typedef int (*trace_fn)(void *, void *);
+int _Unwind_Backtrace(trace_fn, void *);
+unsigned long _Unwind_GetIP(void *);
+void *_Unwind_FindEnclosingFunction(void *);
+
+int spin(int seed);
+int run(int seed);
+int main(void);
+
+static volatile int hits, total, broken;
+
+struct found { int leaf, caller, entry; };
+
+static int step(void *context, void *data) {
+    struct found *found = data;
+    void *start = _Unwind_FindEnclosingFunction((void *)_Unwind_GetIP(context));
+    if (start == (void *)spin) found->leaf = 1;
+    else if (start == (void *)run) found->caller = 1;
+    else if (start == (void *)main) found->entry = 1;
+    return 0;
+}
+
+static void on_profile(int number) {
+    struct found found = {0, 0, 0};
+    _Unwind_Backtrace(step, &found);
+    total++;
+    if (found.leaf) {
+        if (found.caller && found.entry) hits++;
+        else broken++;
+    }
+}
+
+__attribute__((noinline)) int spin(int seed) {
+    volatile int a[16];
+    for (int i = 0; i < 16; i++) a[i] = seed * i;
+    long rounds = 0;
+    while (hits < 20 && total < 100000 && rounds < 3000000000L) {
+        int k = rounds++ & 15;
+        a[k] = a[k];
+    }
+    int ok = 1;
+    for (int i = 0; i < 16; i++) ok &= a[i] == seed * i;
+    return ok;
+}
+
+__attribute__((noinline)) int run(int seed) {
+    struct itimerval_ every = {{0, 1000}, {0, 1000}};
+    struct itimerval_ off = {{0, 0}, {0, 0}};
+    setitimer(2, &every, 0);
+    int ok = spin(seed);
+    setitimer(2, &off, 0);
+    return ok;
+}
+
+int main(void) {
+    signal(27, on_profile);
+    int ok = run(7);
+    printf("%d %d %d\n", ok, hits >= 20, broken);
+    return ok && hits >= 20 && broken == 0 ? 0 : 1;
+}
+"#;
+
+#[test]
+fn unwinding_through_a_red_zone_leaf_in_a_signal_handler() {
+    let directory = TempDir::new("native-red-zone-unwinding");
+    for (target, runner) in targets() {
+        if target != Target::LinuxGnu || runner != Runner::Native {
+            eprintln!("skipping {target:?}: the red zone and SIGPROF are System V's");
+            continue;
+        }
+        for optimize in [false, true] {
+            let name = format!("red-zone-unwinding-{optimize}");
+            let text = with_module(RED_ZONE_UNWINDING, target, optimize, |module| {
+                let mut text = String::new();
+                emit_assembly(module, target, &mut text).unwrap();
+                text
+            });
+            let spin = super::function_text(&text, "spin");
+            assert!(
+                !spin.contains("subq") && spin.contains("(%rsp"),
+                "{name}: the leaf keeps its frame in the red zone:\n{spin}"
+            );
+            let run = run_assembly(&text, target, runner, directory.path(), &name)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                run,
+                Run {
+                    status: 0,
+                    stdout: "1 1 0\n".to_owned(),
+                },
+                "{name}:\n{text}"
+            );
+        }
+    }
 }

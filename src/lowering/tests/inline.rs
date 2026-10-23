@@ -470,4 +470,431 @@ fn private_inline_bodies_do_not_capture_redirected_symbols() {
         .expect("main is defined");
     let main = main.split("\nfunction ").next().unwrap_or(main);
     assert!(main.contains("call @read.always_inline("), "{text}");
+    // A wrapper of its own symbol is no `available_externally` body of it
+    // (#89): as that body, its call to `read` would call itself. Clang emits
+    // no body for it (its `isTriviallyRecursive`).
+    let header = private.lines().next().unwrap_or_default();
+    assert!(!header.contains("inline_copy_of"), "{text}");
+    let arena = Bump::new();
+    let module = parse_module(&arena, &text).unwrap();
+    let Some(crate::ir::Symbol::Function(copy)) = module.symbol("read.always_inline") else {
+        panic!("{text}");
+    };
+    assert_eq!(module.function(copy).inline_copy_of, None, "{text}");
+}
+
+/// GNU extern-inline bodies supply direct-call implementations while values
+/// keep the external symbol, including Clang's size-annotated fortify overload.
+/// C99: §6.3.2.1p4, p. 46; PDF p. 58; §6.5.3.2p1, p. 78; PDF p. 90.
+#[test]
+fn fortify_wrapper_values_keep_external_symbols() {
+    for clang_fortify in [false, true] {
+        let (attributes, size1, size0) = if clang_fortify {
+            (
+                ", overloadable",
+                "__attribute__((pass_object_size(1)))",
+                "__attribute__((pass_object_size(0)))",
+            )
+        } else {
+            ("", "", "")
+        };
+        let source = format!(
+            r#"
+extern char *getcwd(char *, unsigned long);
+extern char *__getcwd_alias(char *, unsigned long) __asm__("getcwd");
+extern char *__getcwd_chk(char *, unsigned long, unsigned long);
+extern long read(int, void *, unsigned long);
+extern long __read_alias(int, void *, unsigned long) __asm__("read");
+extern long __read_chk(int, void *, unsigned long, unsigned long);
+extern inline __attribute__((always_inline, gnu_inline{attributes}))
+char *getcwd(char *const buf {size1}, unsigned long size) {{
+    unsigned long bos = __builtin_object_size(buf, 1);
+    return bos == (unsigned long)-1 ? __getcwd_alias(buf, size) : __getcwd_chk(buf, size, bos);
+}}
+extern inline __attribute__((always_inline, gnu_inline{attributes}))
+long read(int fd, void *const buf {size0}, unsigned long size) {{
+    unsigned long bos = __builtin_object_size(buf, 0);
+    return bos == (unsigned long)-1 ? __read_alias(fd, buf, size) : __read_chk(fd, buf, size, bos);
+}}
+char *(*cwd_value)(char *, unsigned long) = getcwd;
+char *(*cwd_address)(char *, unsigned long) = &getcwd;
+long (*read_value)(int, void *, unsigned long) = read;
+long (*read_address)(int, void *, unsigned long) = &read;
+int values(void) {{
+    static char *(*cwd_static)(char *, unsigned long) = getcwd;
+    static long (*read_static)(int, void *, unsigned long) = &read;
+    char *(*cwd_local)(char *, unsigned long) = getcwd;
+    long (*read_local)(int, void *, unsigned long) = &read;
+    return cwd_local == cwd_static && read_local == read_static;
+}}
+int calls(char *buf, unsigned long size) {{
+    return getcwd(buf, size) != 0 && read(0, buf, size) >= 0;
+}}
+"#
+        );
+        let text = lowered(&source);
+        for (global, symbol) in [
+            ("cwd_value", "getcwd"),
+            ("cwd_address", "getcwd"),
+            ("read_value", "read"),
+            ("read_address", "read"),
+        ] {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&format!("global @{global} ")))
+                .unwrap();
+            assert!(line.ends_with(&format!("relocs [0: @{symbol}]")), "{text}");
+        }
+        let relocations: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("relocs ["))
+            .collect();
+        assert_eq!(relocations.len(), 6, "{text}");
+        assert!(
+            relocations
+                .iter()
+                .all(|line| line.ends_with("relocs [0: @getcwd]")
+                    || line.ends_with("relocs [0: @read]")),
+            "{text}"
+        );
+        let values = text
+            .split("function @values(")
+            .nth(1)
+            .unwrap()
+            .split("\nfunction ")
+            .next()
+            .unwrap();
+        assert!(values.contains("func_addr @getcwd\n"), "{text}");
+        assert!(values.contains("func_addr @read\n"), "{text}");
+        assert!(!values.contains("always_inline"), "{text}");
+        let calls = text
+            .split("function @calls(")
+            .nth(1)
+            .unwrap()
+            .split("\nfunction ")
+            .next()
+            .unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|line| line.contains("call @") && line.contains(".always_inline("))
+                .count(),
+            2,
+            "{text}"
+        );
+        assert!(text.contains("call @getcwd("), "{text}");
+        assert!(text.contains("call @read("), "{text}");
+    }
+}
+
+/// Multiple addressable overloads need the pointer target to select the symbol,
+/// including static relocations when another overload has a private inline
+/// body.
+#[test]
+fn overload_addresses_follow_the_target_type() {
+    let source = include_str!("../../../tests/fixtures/overloadable/address.c");
+    for target in [Target::LinuxGnu, Target::WindowsMsvc] {
+        let (int_symbol, double_symbol) = if target == Target::WindowsMsvc {
+            ("\"?o@@$$J0YAHH@Z\"", "\"?o@@$$J0YAHN@Z\"")
+        } else {
+            ("_Z1oi", "_Z1od")
+        };
+        let text = lower_for(source, target).unwrap();
+        for (global, symbol) in [
+            ("global_int", int_symbol),
+            ("global_double", double_symbol),
+            ("global_decay_double", double_symbol),
+        ] {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&format!("global @{global} ")))
+                .unwrap();
+            assert!(line.ends_with(&format!("relocs [0: @{symbol}]")), "{text}");
+        }
+        for (suffix, symbol) in [("int", int_symbol), ("double", double_symbol)] {
+            let static_global = text
+                .lines()
+                .find(|line| {
+                    line.starts_with("global @") && line.contains(&format!("static_{suffix}"))
+                })
+                .unwrap();
+            assert!(
+                static_global.ends_with(&format!("relocs [0: @{symbol}]")),
+                "{text}"
+            );
+            for form in ["automatic", "assignment", "cast", "argument"] {
+                let body = text
+                    .split(&format!("function @{form}_{suffix}("))
+                    .nth(1)
+                    .unwrap()
+                    .split("\nfunction ")
+                    .next()
+                    .unwrap();
+                let addresses: Vec<_> = body
+                    .lines()
+                    .filter(|line| line.contains("func_addr @"))
+                    .collect();
+                assert_eq!(addresses.len(), 1, "{text}");
+                assert!(
+                    addresses[0].ends_with(&format!("func_addr @{symbol}")),
+                    "{text}"
+                );
+            }
+        }
+    }
+}
+
+/// SQLite stores fortify wrappers in a generic syscall table using an explicit
+/// function-pointer cast. Resolve the sole addressable overload before casting.
+#[test]
+fn fortify_wrapper_cast_initializers_keep_external_symbols() {
+    let text = lowered(
+        r"
+extern char *getcwd(char *, unsigned long);
+extern inline __attribute__((always_inline, gnu_inline, overloadable))
+char *getcwd(char *const buf __attribute__((pass_object_size(1))), unsigned long size) { return buf; }
+void (*syscalls[])(void) = { (void (*)(void))getcwd, (void (*)(void))&getcwd };
+void (*value(void))(void) { return (void (*)(void))getcwd; }
+",
+    );
+    assert!(text.contains("relocs [0: @getcwd, 8: @getcwd]"), "{text}");
+    assert!(text.contains("func_addr @getcwd\n"), "{text}");
+    assert!(!text.contains("function @_Z"), "{text}");
+}
+
+#[test]
+fn gnu_extern_inline_void_values_keep_external_symbol() {
+    let text = lowered(
+        r"
+extern inline __attribute__((always_inline, gnu_inline)) void f(void) {}
+void (*p)() = f;
+void (*q)() = &f;
+void (*value(void))() { return f; }
+void call(void) { f(); }
+",
+    );
+    assert_eq!(text.matches("relocs [0: @f]").count(), 2, "{text}");
+    assert!(text.contains("func_addr @f\n"), "{text}");
+    assert!(text.contains("call @f.always_inline("), "{text}");
+}
+
+/// A plain inline-only body is lowered as a copy that names its external
+/// function and that nothing calls: calls keep naming the external
+/// function, and the LLVM back end makes the copy its
+/// `available_externally` body, as Clang emits it when optimizing (#109).
+/// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+#[test]
+fn plain_inline_only_bodies_are_unreferenced_copies() {
+    let text = lowered(
+        "inline int f(int x) { return x ? x * f(x - 1) : 1; } int u(int x) { return f(x); }",
+    );
+    let copy = text
+        .split("function @f.inline(")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the copy is defined\n{text}"));
+    assert!(
+        copy.lines()
+            .next()
+            .is_some_and(|header| header.ends_with("internal inline_copy_of @f {")),
+        "{text}"
+    );
+    // Its own recursive call names the external function too.
+    assert!(!text.contains("call @f.inline("), "{text}");
+    assert!(text.contains("call @f("), "{text}");
+    assert!(
+        text.contains("function @f(i32 noundef) -> i32 external\n"),
+        "{text}"
+    );
+}
+
+/// An `always_inline` wrapper that calls its own symbol through an
+/// assembler label, like glibc's fortify wrappers before 2.40, keeps a
+/// private copy that is not its external function's body: as that body,
+/// LLVM would inline its call to the symbol into itself.
+#[test]
+fn always_inline_wrappers_of_their_own_symbol_stay_private() {
+    let text = lowered(
+        "extern int real(int) __asm__(\"f\"); extern inline __attribute__((always_inline, \
+         gnu_inline)) int f(int x) { return real(x) + 1; } int u(int x) { return f(x); }",
+    );
+    let copy = text
+        .split("function @f.always_inline(")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the copy is defined\n{text}"));
+    assert!(
+        copy.lines()
+            .next()
+            .is_some_and(|header| !header.contains("inline_copy_of")),
+        "{text}"
+    );
+    assert!(text.contains("call @f.always_inline("), "{text}");
+}
+
+/// No copy where Clang emits no `available_externally` body: an unused,
+/// `noinline` or assembly body, or one that calls its own symbol through
+/// another entity (an assembler label or a builtin's library name).
+#[test]
+fn plain_inline_copies_follow_clang_emission() {
+    for source in [
+        "inline int f(int x) { return x + 1; } int u(int x) { return x; }",
+        "inline __attribute__((noinline)) int f(int x) { return x + 1; } int u(int x) { return \
+         f(x); }",
+        "inline int f(int x) { __asm__(\"\"); return x + 1; } int u(int x) { return f(x); }",
+        "extern int real(int) __asm__(\"f\"); inline int f(int x) { return real(x); } int u(int \
+         x) { return f(x); }",
+        "inline int abs(int x) { return __builtin_abs(x); } int u(int x) { return abs(x); }",
+    ] {
+        let text = lowered(source);
+        assert!(!text.contains(".inline("), "{source}\n{text}");
+    }
+}
+
+/// Plain inline-only bodies were not lowered before #109: a construct that
+/// lowering refuses in one keeps calling the external definition instead
+/// of refusing the unit.
+#[test]
+fn a_refused_plain_inline_body_keeps_the_external_call() {
+    let text = lowered(
+        "extern inline __attribute__((gnu_inline)) int readgs(void) { return *(int \
+         __attribute__((address_space(256))) *)0; } inline int f(int x) { return x + 1; } int \
+         main(void) { return readgs() + f(1); }",
+    );
+    assert!(!text.contains("readgs.inline"), "{text}");
+    assert!(text.contains("call @readgs("), "{text}");
+    // Only the refused body is dropped (#109 review).
+    assert!(text.contains("function @f.inline("), "{text}");
+}
+
+/// The `always_inline` bodies are declared in the order Clang creates
+/// their LLVM functions, from the first reference, not in definition
+/// order: LLVM's always-inliner visits them in module order, and the
+/// order decides which recursive calls stay calls (#109 review).
+#[test]
+fn always_inline_bodies_follow_clang_creation_order() {
+    let text = lowered(
+        "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); inline \
+         __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) int \
+         h(int); inline __attribute__((always_inline)) int f(int x) { return x ? 2 * g(x - 1) : \
+         1; } inline __attribute__((always_inline)) int h(int x) { return x ? 4 * f(x - 1) : 1; } \
+         inline __attribute__((always_inline)) int g(int x) { return x ? 3 * h(x - 1) : 1; } int \
+         main(void) { printf(\"%d\\n\", f(5)); return 0; }",
+    );
+    let position = |name: &str| {
+        text.find(&format!("function @{name}.always_inline("))
+            .unwrap_or_else(|| panic!("{name}\n{text}"))
+    };
+    assert!(
+        position("f") < position("g") && position("g") < position("h"),
+        "{text}"
+    );
+    // Code generation skips dead code, so a call there creates nothing:
+    // the unreachable `h` call, the code after `return`, and the
+    // constant-false operand leave Clang's order f, g, h (#109 review).
+    for dead in [
+        "if (0) h(0);",
+        "(void)(0 && h(0));",
+        "(void)(1 || h(0));",
+        "(void)(0 ? h(0) : 0);",
+    ] {
+        let text = lowered(&format!(
+            "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); \
+             inline __attribute__((always_inline)) int g(int); inline \
+             __attribute__((always_inline)) int h(int); inline __attribute__((always_inline)) int \
+             f(int x) {{ return x ? 2 * g(x - 1) : 1; }} inline __attribute__((always_inline)) \
+             int g(int x) {{ return x ? 3 * h(x - 1) : 1; }} inline \
+             __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : 1; }} int \
+             main(void) {{ {dead} printf(\"%d\\n\", f(6)); return 0; h(1); }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(
+            position("f") < position("g") && position("g") < position("h"),
+            "{dead}\n{text}"
+        );
+    }
+    // In an ordinary function before `main`, the forms whose skipped
+    // references a review found counted: a generic selection's controlling
+    // operand and unselected association, a comma condition that folds, and
+    // the code after `__builtin_unreachable()` (#109 review, round 3).
+    for dead in [
+        "(void)_Generic(h(0), int: 0, default: 1);",
+        "(void)_Generic(0, int: 0, default: h(0));",
+        "if ((0, 0)) h(0);",
+        "__builtin_unreachable(); h(0);",
+    ] {
+        let text = lowered(&format!(
+            "int printf(const char *, ...); inline __attribute__((always_inline)) int f(int); \
+             inline __attribute__((always_inline)) int g(int); inline \
+             __attribute__((always_inline)) int h(int); inline __attribute__((always_inline)) int \
+             f(int x) {{ return x ? 2 * g(x - 1) : 1; }} inline __attribute__((always_inline)) \
+             int g(int x) {{ return x ? 3 * h(x - 1) : 1; }} inline \
+             __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : 1; }} int \
+             probe(void) {{ {dead} return 0; }} int main(void) {{ printf(\"%d\\n\", f(6)); return \
+             0; }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(
+            position("f") < position("g") && position("g") < position("h"),
+            "{dead}\n{text}"
+        );
+    }
+    // The selected association and a live comma condition still count.
+    for live in [
+        "(void)_Generic(0, int: h(0), default: 0);",
+        "if ((0, 1)) h(0);",
+    ] {
+        let text = lowered(&format!(
+            "inline __attribute__((always_inline)) int f(int); inline \
+             __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) int \
+             h(int); inline __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - \
+             1) : 1; }} inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x \
+             - 1) : 1; }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * \
+             f(x - 1) : 1; }} int probe(void) {{ {live} return 0; }} int main(void) {{ return \
+             f(6); }}"
+        ));
+        let position = |name: &str| {
+            text.find(&format!("function @{name}.always_inline("))
+                .unwrap_or_else(|| panic!("{name}\n{text}"))
+        };
+        assert!(position("h") < position("f"), "{live}\n{text}");
+    }
+}
+
+/// A weak inline definition is a weak definition, emitted where it is
+/// referenced, as Clang emits it; a strong definition elsewhere wins. A
+/// GNU89 plain inline definition is an external definition anyway.
+#[test]
+fn weak_inline_definitions_are_weak_definitions_when_referenced() {
+    for gnu89 in [false, true] {
+        let config = CompilerConfiguration::default().with_gnu89_inline(gnu89);
+        for (source, referenced) in [
+            (
+                "inline __attribute__((weak)) int f(int x) { return x ? x * f(x - 1) : 1; } int \
+                 u(int x) { return f(x); }",
+                true,
+            ),
+            (
+                "inline __attribute__((weak, always_inline)) int f(int x) { return x; } int u(int \
+                 x) { return f(x); }",
+                true,
+            ),
+            (
+                "inline __attribute__((weak)) int f(int x) { return x; }",
+                false,
+            ),
+        ] {
+            let text = lower_with(source, config).unwrap_or_else(|error| panic!("{error:?}"));
+            assert_eq!(
+                text.contains("function @f(i32 noundef) -> i32 weak"),
+                referenced || gnu89,
+                "gnu89={gnu89}: {source}\n{text}"
+            );
+            assert!(!text.contains("@f.always_inline"), "{text}");
+        }
+    }
 }

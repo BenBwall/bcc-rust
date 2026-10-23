@@ -66,6 +66,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let selected = selected.or(default);
+        self.skip_unselected_generic(generic, selected);
         if invalid || selected.is_none() {
             self.error(
                 SemanticErrorKind::InvalidGenericSelection,

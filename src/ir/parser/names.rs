@@ -1,5 +1,5 @@
-//! Decodes quoted symbol names into parser scratch; module declarations
-//! copy their decoded names into the IR arena.
+//! Decodes quoted symbol names and `module asm` text into parser scratch;
+//! module declarations copy their decoded names into the IR arena.
 
 use super::{
     ParseError,
@@ -24,6 +24,20 @@ impl<'t> Token<'t> {
                 | _ => self.text,
             });
         };
+        self.decode(name, scratch)
+    }
+
+    /// A `module asm` string's decoded text, with the escapes of a quoted
+    /// symbol name.
+    pub(super) fn asm_text<'a>(&'a self, scratch: &'a Bump) -> Result<&'a str, ParseError<'t>> {
+        let TokenKind::String(text) = self.kind else {
+            return Err(self.expected("a string"));
+        };
+        self.decode(text, scratch)
+    }
+
+    /// Decodes `\\`, `\"` and `\u{...}` escapes; NUL is never valid.
+    fn decode<'a>(&self, name: &str, scratch: &'a Bump) -> Result<&'a str, ParseError<'t>> {
         let mut decoded = ArenaString::new_in(scratch);
         let mut chars = name.chars();
         let bad_escape = || self.error(ParseErrorKind::BadSymbolEscape);

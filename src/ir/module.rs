@@ -155,9 +155,41 @@ impl<'ir> Module<'ir> {
             align: None,
             returns_twice: false,
             inlining: InlineControl::Default,
+            inline_copy_of: None,
         });
         self.add_symbol(name, Symbol::Function(id));
         id
+    }
+
+    /// Records that `func` is the private inline copy of the external
+    /// function named `external` ([`Function::inline_copy_of`]).
+    pub(crate) fn set_inline_copy_of(&mut self, func: FuncId, external: &str) {
+        let external = self.arena.alloc_str(external);
+        self.functions[func].inline_copy_of = Some(external);
+    }
+
+    /// The external function whose inline definition the copy `func`
+    /// supplies, as Clang emits a C99 inline definition as that function's
+    /// `available_externally` body: an ordinary external declaration of the
+    /// same signature that this module neither defines nor aliases, and
+    /// that `noinline` does not forbid expanding. A call that keeps naming
+    /// such a copy after inlining reaches the external definition. `None`
+    /// for anything else, which keeps an `always_inline` copy an ordinary
+    /// internal function. C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+    pub(crate) fn inline_copy_target(&self, func: FuncId) -> Option<FuncId> {
+        let function = &self.functions[func];
+        let Some(Symbol::Function(external)) = self.symbol(function.inline_copy_of?) else {
+            return None;
+        };
+        let declaration = &self.functions[external];
+        (function.body.is_some()
+            && declaration.body.is_none()
+            && declaration.attributes.alias.is_none()
+            && declaration.inline_copy_of.is_none()
+            && declaration.linkage == Linkage::External
+            && declaration.inlining != InlineControl::Never
+            && declaration.signature == function.signature)
+            .then_some(external)
     }
 
     /// Declares a global without an initializer. Panics if the name is
@@ -217,6 +249,19 @@ impl<'ir> Module<'ir> {
         &self.init_functions
     }
 
+    /// Appends a file-scope assembly block, copying its text into the
+    /// module's arena. Back ends emit the blocks in this order.
+    /// GNU extension: GCC manual, "Basic Asm", at file scope.
+    pub(crate) fn add_module_asm(&mut self, text: &str) {
+        let text = self.arena.alloc_str(text);
+        self.asm_blocks.push(text);
+    }
+
+    /// The file-scope assembly blocks in source order.
+    pub(crate) fn module_asm(&self) -> &[&'ir str] {
+        &self.asm_blocks
+    }
+
     /// Gives a global its initializer, copying the bytes and relocations
     /// into the module's arena.
     pub(crate) fn define_global(&mut self, global: GlobalId, init: GlobalInit<'_>) {
@@ -263,6 +308,7 @@ impl<'ir> Module<'ir> {
             signature_ids: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             symbols: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             init_functions: ArenaVec::new_in(arena),
+            asm_blocks: ArenaVec::new_in(arena),
         }
     }
 
@@ -417,6 +463,7 @@ impl fmt::Debug for Module<'_> {
             .field("functions", &self.functions)
             .field("globals", &self.globals)
             .field("signatures", &self.signatures)
+            .field("asm_blocks", &self.asm_blocks)
             .finish_non_exhaustive()
     }
 }

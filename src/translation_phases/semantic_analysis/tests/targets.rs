@@ -375,3 +375,79 @@ fn msvc_inline_functions_are_discardable_external_definitions() {
         );
     }
 }
+
+/// MSVC `__forceinline` is `inline` plus `always_inline` on every target, as
+/// in Clang (#89): the definition keeps the target's inline linkage, the
+/// function asks to be inlined, `noinline` still prevails, and a
+/// redeclaration after the definition is ignored with Clang's warning.
+/// MSVC extension: Microsoft Learn, "inline, __inline, __forceinline".
+/// C99: §6.7.4 paragraphs 5-7, pp. 112-113; PDF pp. 124-125.
+#[test]
+fn msvc_forceinline_is_inline_and_always_inline() {
+    let source = "__forceinline int k(int x) { return x; } static __forceinline int s(int x) { \
+                  return x; } extern __forceinline int e(int x) { return x; } __forceinline \
+                  __attribute__((noinline)) int n(int x) { return x; } __forceinline int d(int); \
+                  int d(int x) { return x; } int a(int x) { return x; } __forceinline int a(int);";
+    for target in TARGETS {
+        with_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_msvc_extensions(true)
+                .with_target(target),
+            |context, unit| {
+                let errors: Vec<_> = context
+                    .take_pending_errors()
+                    .into_iter()
+                    .map(|error| match error {
+                        | TranslationError::Semantic(error) => error.kind,
+                        | other => panic!("unexpected {other:?}"),
+                    })
+                    .collect();
+                assert_eq!(
+                    errors,
+                    [SemanticErrorKind::AttributeAfterDefinition],
+                    "{}",
+                    target.triple()
+                );
+                let binding = |name: &str| {
+                    unit.bindings
+                        .iter()
+                        .position(|binding| context.string_cache.at(binding.name.name) == name)
+                        .unwrap()
+                };
+                for (name, inlining) in [
+                    ("k", Inlining::Always),
+                    ("s", Inlining::Always),
+                    ("e", Inlining::Always),
+                    ("n", Inlining::Never),
+                    ("d", Inlining::Always),
+                    ("a", Inlining::Default),
+                ] {
+                    assert_eq!(
+                        unit.entity_attributes(binding(name))
+                            .map_or(Inlining::Default, |attributes| attributes.inlining),
+                        inlining,
+                        "{} {name}",
+                        target.triple()
+                    );
+                    assert!(
+                        !unit.types.unanalyzed(unit.bindings[binding(name)].ty),
+                        "{} {name}",
+                        target.triple()
+                    );
+                }
+                // Only the Microsoft ABI makes inline-only bodies external
+                // discardable definitions; elsewhere `k` and `n` are C99
+                // inline definitions.
+                let inline = unit
+                    .definitions
+                    .iter()
+                    .filter(|d| d.kind == DefinitionKind::Inline)
+                    .count();
+                let msvc = target == Target::WindowsMsvc;
+                assert_eq!(inline, if msvc { 0 } else { 2 }, "{}", target.triple());
+            },
+        );
+    }
+}

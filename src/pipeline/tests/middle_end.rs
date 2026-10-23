@@ -31,6 +31,7 @@ mod flexible_initializers;
 mod inline_control;
 mod math_builtins;
 mod predefined_identifiers;
+mod range_initializers;
 mod record_layout;
 mod resolved;
 mod runtime_calls;

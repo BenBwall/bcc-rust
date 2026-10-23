@@ -111,8 +111,8 @@ address structures `may_alias` (bcc's optimizer makes no type-based alias
 assumptions) and turns `__glibc_macro_warning` into `#pragma GCC warning`;
 `math.h` uses the type-generic classification builtins, `complex.h` defines
 `CMPLX` with `__builtin_complex`, and `bits/floatn.h` enables binary128, as
-described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__`, which bcc never
-defines itself, glibc selects Clang's fortify wrappers, which need the
+described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__` (defined when
+optimization is enabled), glibc selects Clang's fortify wrappers, which need the
 `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`,
 `enable_if` and `unavailable` attributes. `__has_attribute` reports them as
 Clang does. Semantic analysis retains overload identities and call selection,
@@ -327,6 +327,16 @@ modifiable static objects. An imported inline body defines nothing, so an
 alias may not target it. Explicit `gnu_inline` retains its separate GNU
 rules.
 
+MSVC `__forceinline` (Windows SDK `FORCEINLINE`) is `inline` plus
+`always_inline` on every target, as in Clang: the definition takes the
+inline linkage above (`linkonce_odr`, or `weak_odr` with `extern`, on MSVC;
+a C99 inline definition elsewhere, whose `always_inline` body reaches LLVM
+as Clang's `available_externally` definition, so a recursive one calls the
+external definition at `-O0` as Clang's does), `static __forceinline` stays
+internal, and `extern __forceinline` defines the external symbol. `noinline`
+still prevails, and `__forceinline` on a redeclaration after the body is
+ignored with Clang's warning.
+
 BCC's target selection leaves Microsoft compatibility opt-in; Clang enables
 it by default for the MSVC target. Compare inline emission with matching
 compatibility flags on both compilers.
@@ -405,9 +415,9 @@ duplicate reports from the parser.
 
 `KeywordClassification` also records whether the written assembly introducer is
 the ambiguous reserved __asm alias. Grammar owners use that metadata to choose
-GNU parentheses or MSVC instructions/blocks. __has_builtin takes keyword identity
-from classify and implementation support from `semantic_analysis::implemented_builtin`;
-ordinary-call builtins use their implementation owners' named predicates.
+GNU parentheses or MSVC instructions/blocks. __has_builtin queries the builtin
+registry (`src/builtins.rs`): a keyword form is advertised where `classify`
+makes its spelling a keyword, an ordinary-call spelling by its naming policy.
 
 ## Feature matrix
 
@@ -760,7 +770,7 @@ before the parser sees the resulting tokens.
   pointer level owns its qualifier set. Calling conventions keep their
   declaration or declarator position, including nested function pointers,
   parameters and abstract declarators. `__forceinline` keeps its modifier and
-  inline property.
+  inline property; semantic analysis adds `always_inline`.
 - `MsvcFrame` owns SEH: `__try` guarded compounds, `__except` expression
   filters, `__finally` compounds and `__leave;`. Children use the machine's
   compound and expression frames and ordinary scope restoration. Missing
@@ -863,7 +873,10 @@ Microsoft's `__debugbreak` with Microsoft extensions),
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
-`__atomic_*` and `__sync_*` names, and the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12).
+`__atomic_*` and `__sync_*` names, the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12),
+the generated x86 builtins, the vector shuffle, conversion, bit-cast,
+elementwise and non-temporal builtins, and the binary128 primitives
+(`__builtin_inff128` and its family), whatever their lowering status.
 Unmodeled names return 0. Clang's `__has_feature` and `__has_extension` share
 `__has_attribute`'s gate: `c_alignas`, `c_alignof`, `c_atomic`,
 `c_generic_selections`, `c_static_assert` and `c_thread_local` are features
@@ -1159,7 +1172,9 @@ backend work before they can be enabled.
 | `__MEMORY_SCOPE_SYSTEM` | Scoped atomic operations and memory scopes are not implemented. |
 | `__MEMORY_SCOPE_WRKGRP` | Scoped atomic operations and memory scopes are not implemented. |
 | `__MEMORY_SCOPE_WVFRNT` | Scoped atomic operations and memory scopes are not implemented. |
-| `__NO_INLINE__` | Code generation, relocation and optimization policy are not implemented. |
+| `__OPTIMIZE__` | Defined by the identity macro builder when optimization is enabled. |
+| `__OPTIMIZE_SIZE__` | Defined by the identity macro builder for `-Os` and `-Oz`. |
+| `__NO_INLINE__` | Defined by the identity macro builder when optimization is disabled. |
 | `__NO_MATH_ERRNO__` | Code generation, relocation and optimization policy are not implemented. |
 | `__OBJC_BOOL_IS_BOOL` | Objective-C and CoreFoundation string intrinsics are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Scoped atomic operations and memory scopes are not implemented. |
@@ -1239,7 +1254,7 @@ alignment 16. MSVC rejects the explicit type spelling, matching the pinned Clang
 but still accepts binary128 literals and their internal types through `typeof`.
 Clang's target definitions now retain `__SIZEOF_FLOAT128__` on the three GNU
 triples and `__FLOAT128__` on Linux. Clang defines no `__FLT128_*__` macros;
-none are invented. The macro oracle has 80 documented exclusions.
+none are invented. The macro oracle has 82 documented exclusions.
 
 The pinned Clang rejects native `_Float128`, `_Float32`, `_Float64`,
 `_Float32x`, `_Float64x`, and `f128`/`F128` suffixes in C11, C17, GNU17,
@@ -1760,3 +1775,14 @@ replay its original reproducer, retain a function relocation in the static table
 and call through the stored address in interpreter and native execution.
 `tests/integration/diagnostic_parity.rs` compares constraints, warnings, modes
 and locations with the pinned Clang; semantic and pipeline tests cover the retained facts.
+
+## Folded pointer constants (issues #83 / #88, 2026-10-19)
+
+Absolute pointer arithmetic retains its byte value for static initializers,
+including zero-valued BSS data without relocations. Pointer-to-integer casts
+and address differences remain non-ICEs. As in Clang 23.1.1, file-scope, static
+local and member array bounds fold with `-Wgnu-folding-constant`; automatic
+arrays and abstract type names remain variably modified. Cases accept the
+folded values, with the same warning group enabled explicitly or by pedantic.
+Addition to a null pointer uses `-Wgnu-null-pointer-arithmetic`, off by default
+and enabled by pedantic. Both groups support suppression and error promotion.

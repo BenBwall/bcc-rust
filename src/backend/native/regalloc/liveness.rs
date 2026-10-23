@@ -6,9 +6,11 @@
 //! instructions whose results are dead, which can make more instructions
 //! dead, so the two repeat until no instruction is removed.
 
-use super::{
+use super::intervals::{
     FixedRanges,
     Interval,
+    Range,
+    push_range,
 };
 use crate::{
     backend::native::mir::{
@@ -33,7 +35,9 @@ pub(super) struct Liveness<'a> {
     words:    usize,
     /// The live-out set of each block, `words` words each.
     live_out: ArenaVec<'a, u64>,
-    /// The number of the first instruction of each block.
+    /// The live-in set of each block.
+    live_in:  ArenaVec<'a, u64>,
+    /// The number of the first instruction of each block, then the total.
     first:    ArenaVec<'a, u32>,
 }
 
@@ -110,14 +114,19 @@ impl<'a> Liveness<'a> {
                 }
             }
         }
+        first.push(count);
         Self {
             words,
             live_out,
+            live_in,
             first,
         }
     }
 
-    /// Removes pure instructions whose results are dead; whether any was.
+    /// Removes pure instructions whose results are dead, and arithmetic
+    /// whose results and flags are; whether any was. (A load folds a
+    /// constant `ptr_add` into its address, leaving the `mov` and `add`
+    /// that computed it dead.)
     fn remove_dead(&self, func: &mut MFunction<'_>, arena: &Bump) -> bool {
         let mut removed = false;
         let mut live = ArenaVec::with_capacity_in(self.words, arena);
@@ -126,9 +135,12 @@ impl<'a> Liveness<'a> {
             live.extend_from_slice(self.out(block));
             let mut keep = ArenaVec::with_capacity_in(data.insts.len(), arena);
             keep.resize(data.insts.len(), true);
+            // Whether an instruction after this point reads the flags
+            // before one overwrites them; never across blocks.
+            let mut flags_read = false;
             for (index, inst) in data.insts.iter().enumerate().rev() {
                 let mut inst = *inst;
-                if inst.is_pure() {
+                if inst.is_pure() || (!flags_read && inst.is_pure_but_flags()) {
                     let mut dead = true;
                     inst.visit_registers(|reg, role| {
                         if let Reg::Virt(vreg) = *reg
@@ -144,6 +156,8 @@ impl<'a> Liveness<'a> {
                         continue;
                     }
                 }
+                let (reads, writes) = inst.flags();
+                flags_read = reads || (flags_read && !writes);
                 transfer(&mut inst, &mut live);
             }
             let mut index = 0;
@@ -160,65 +174,87 @@ impl<'a> Liveness<'a> {
         &self.live_out[block * self.words..(block + 1) * self.words]
     }
 
-    /// Each virtual register's interval: every position where it is
-    /// defined, used, or live across a block boundary.
+    /// Each virtual register's live interval, indexed by register, with
+    /// its lifetime holes, and the fixed ranges of the physical registers.
+    /// Built backward over the blocks (Wimmer and Franz, "Linear Scan
+    /// Register Allocation on SSA Form", CGO 2010, `BuildIntervals`): a
+    /// register live out of a block is live through it until a definition
+    /// shortens it, and each use extends it back to the block's start.
     pub(super) fn intervals(
         &self,
         func: &MFunction<'_>,
         arena: &'a Bump,
-    ) -> ArenaVec<'a, Interval> {
+    ) -> (ArenaVec<'a, Interval<'a>>, FixedRanges<'a>) {
         let count = func.vreg_count();
-        let mut bounds = ArenaVec::with_capacity_in(count, arena);
-        bounds.resize(count, (u32::MAX, 0_u32));
-        let mut extend = |vreg: VReg, position: u32| {
-            let (start, end) = &mut bounds[vreg.index()];
-            *start = (*start).min(position);
-            *end = (*end).max(position);
-        };
-        let mut live = ArenaVec::with_capacity_in(self.words, arena);
-        for (block, data) in func.blocks.iter().enumerate() {
+        let mut intervals = ArenaVec::with_capacity_in(count, arena);
+        for (index, &class) in func.classes.iter().enumerate() {
+            intervals.push(Interval::new(VReg::new(index), class, arena));
+        }
+        // Ranges and uses are collected latest first, then reversed.
+        let add =
+            |interval: &mut Interval<'_>, start: u32, end: u32| match interval.ranges.last_mut() {
+                | Some(last) if last.0 <= end => last.0 = last.0.min(start),
+                | _ => interval.ranges.push((start, end)),
+            };
+        for (block, data) in func.blocks.iter().enumerate().rev() {
             let first = self.first[block];
             let start = 2 * first;
-            let end = 2 * (first + u32::try_from(data.insts.len()).expect("fits")) - 1;
-            live.clear();
-            live.extend_from_slice(self.out(block));
-            members(&live, |vreg| extend(vreg, end));
+            let end = 2 * (first + u32::try_from(data.insts.len()).expect("fits"));
+            members(self.out(block), |vreg| {
+                add(&mut intervals[vreg.index()], start, end);
+            });
             for (index, inst) in data.insts.iter().enumerate().rev() {
                 let position = 2 * (first + u32::try_from(index).expect("fits"));
                 let mut inst = *inst;
                 inst.visit_registers(|reg, role| {
-                    if let Reg::Virt(vreg) = *reg {
-                        if role.writes() {
-                            extend(vreg, position + 1);
+                    if let Reg::Virt(vreg) = *reg
+                        && role.writes()
+                    {
+                        let interval = &mut intervals[vreg.index()];
+                        let def = position + 1;
+                        match interval.ranges.last_mut() {
+                            // Live after the definition: it starts here.
+                            | Some(last) if last.0 <= def && def < last.1 => last.0 = def,
+                            // A definition nobody reads.
+                            | _ => interval.ranges.push((def, def + 1)),
                         }
-                        if role.reads() {
-                            extend(vreg, position);
+                        interval.uses.push(def);
+                    }
+                });
+                // A value the instruction can read from its spill slot does
+                // not need a register there.
+                let in_memory = inst.memory_source_vreg();
+                inst.visit_registers(|reg, role| {
+                    if let Reg::Virt(vreg) = *reg
+                        && role.reads()
+                    {
+                        let interval = &mut intervals[vreg.index()];
+                        add(interval, start, position + 1);
+                        if in_memory == Some(vreg) {
+                            interval.weak.push(position);
+                        } else {
+                            interval.uses.push(position);
                         }
                     }
                 });
-                transfer(&mut inst, &mut live);
-            }
-            members(&live, |vreg| extend(vreg, start));
-        }
-        let mut intervals = ArenaVec::new_in(arena);
-        for (index, &(start, end)) in bounds.iter().enumerate() {
-            if start <= end {
-                intervals.push(Interval {
-                    vreg: VReg::new(index),
-                    start,
-                    end,
-                });
             }
         }
-        intervals
+        for interval in &mut intervals {
+            interval.ranges.reverse();
+            interval.uses.reverse();
+            interval.uses.dedup();
+            interval.weak.reverse();
+        }
+        (intervals, self.fixed_ranges(func, arena))
     }
 
     /// The ranges of each physical register: from a precolored definition
-    /// to its last use in the block, or a single position for a definition
-    /// nobody reads (a clobber). A register read at a block's start without
-    /// a definition (an incoming argument) is live from the block's start.
-    pub(super) fn fixed_ranges(&self, func: &MFunction<'_>, arena: &'a Bump) -> FixedRanges<'a> {
-        let mut ranges: [ArenaVec<'a, (u32, u32)>; PReg::COUNT] =
+    /// to its last use in the block, or the definition's position alone
+    /// when nothing reads it (a clobber). A register read in a block before
+    /// any definition there (an incoming argument) is live from the
+    /// block's start.
+    fn fixed_ranges(&self, func: &MFunction<'_>, arena: &'a Bump) -> FixedRanges<'a> {
+        let mut ranges: [ArenaVec<'a, Range>; PReg::COUNT] =
             std::array::from_fn(|_| ArenaVec::new_in(arena));
         for (block, data) in func.blocks.iter().enumerate() {
             let first = self.first[block];
@@ -230,7 +266,7 @@ impl<'a> Liveness<'a> {
                     if let Reg::Phys(register) = *reg
                         && role.writes()
                     {
-                        let end = live_end[register.index()].take().unwrap_or(position + 1);
+                        let end = live_end[register.index()].take().unwrap_or(position + 2);
                         ranges[register.index()].push((position + 1, end));
                     }
                 });
@@ -238,7 +274,7 @@ impl<'a> Liveness<'a> {
                     if let Reg::Phys(register) = *reg
                         && role.reads()
                     {
-                        _ = live_end[register.index()].get_or_insert(position);
+                        _ = live_end[register.index()].get_or_insert(position + 1);
                     }
                 });
             }
@@ -250,20 +286,24 @@ impl<'a> Liveness<'a> {
         }
         for ranges in &mut ranges {
             ranges.sort_unstable();
-            // Merge overlapping ranges so the lookup's binary search holds.
-            let mut merged = 0;
-            for index in 0..ranges.len() {
-                let range = ranges[index];
-                if merged > 0 && range.0 <= ranges[merged - 1].1 + 1 {
-                    ranges[merged - 1].1 = ranges[merged - 1].1.max(range.1);
-                } else {
-                    ranges[merged] = range;
-                    merged += 1;
-                }
+            let mut merged = ArenaVec::with_capacity_in(ranges.len(), arena);
+            for &range in ranges.iter() {
+                push_range(&mut merged, range);
             }
-            ranges.truncate(merged);
+            *ranges = merged;
         }
         FixedRanges { ranges }
+    }
+
+    /// The live-in set of `block`.
+    pub(super) fn live_in(&self, block: usize) -> &[u64] {
+        &self.live_in[block * self.words..(block + 1) * self.words]
+    }
+
+    /// The position of the first instruction of `block`, and of the end of
+    /// the last block for `block` equal to the number of blocks.
+    pub(super) fn block_start(&self, block: usize) -> u32 {
+        2 * self.first[block]
     }
 }
 
@@ -299,7 +339,7 @@ fn remove(set: &mut [u64], vreg: VReg) {
 }
 
 /// Calls `visit` with each member of a set.
-fn members(set: &[u64], mut visit: impl FnMut(VReg)) {
+pub(super) fn members(set: &[u64], mut visit: impl FnMut(VReg)) {
     for (word, &bits) in set.iter().enumerate() {
         let mut bits = bits;
         while bits != 0 {

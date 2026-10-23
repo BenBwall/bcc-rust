@@ -264,10 +264,23 @@ fn gnu89_inline_bodies_reach_llvm_on_the_msvc_target() {
                         let mut llvm = String::new();
                         crate::backend::llvm::emit_module(module, target, &mut llvm).unwrap();
                         let defined = target == Target::WindowsMsvc && !attribute;
+                        let definition =
+                            |line: &str| line.starts_with("define") && line.contains("@f(");
                         assert_eq!(
                             llvm.lines()
-                                .any(|line| line.starts_with("define") && line.contains("@f(")),
+                                .any(|line| definition(line)
+                                    && !line.contains("available_externally")),
                             defined,
+                            "{llvm}"
+                        );
+                        // An inline-only body is the external function's
+                        // `available_externally` definition, as Clang emits
+                        // it when optimizing (#109).
+                        assert_eq!(
+                            llvm.lines()
+                                .any(|line| definition(line)
+                                    && line.contains("available_externally")),
+                            !defined,
                             "{llvm}"
                         );
                         if defined {

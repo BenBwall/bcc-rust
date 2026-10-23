@@ -15,7 +15,9 @@
 //! are saved with `movaps` after the allocation (`.seh_savexmm`). A function
 //! whose stack moves sets `%rbp` to `%rsp` after the allocation
 //! (`.cfi_def_cfa_register`, `.seh_setframe %rbp, 0`) and its epilogue
-//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form.
+//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form. A
+//! System V leaf frame in the red zone (`frame.rs`) needs neither the `sub`
+//! nor the `add`, and its CFA stays where the pushes left it.
 //!
 //! Each function's read-only constants follow it in `.rodata` (`.rdata` on
 //! COFF), 16 bytes each so that `xorps` may read them.
@@ -76,12 +78,23 @@ use crate::{
         Symbol,
         Visibility,
     },
-    target::Target,
+    target::{
+        Target,
+        sections::{
+            ElfSectionKind,
+            family as elf_section_family,
+        },
+    },
     util::bump::{
         ArenaSet,
+        ArenaVec,
         Bump,
     },
 };
+
+/// The comment that opens the file-scope assembly in a listing, as Clang
+/// writes it.
+pub(crate) const MODULE_ASM_START: &str = "# Start of file scope inline assembly";
 
 /// Writes one module's assembly.
 pub(crate) struct Emitter<'o, 'm, 'ir> {
@@ -110,18 +123,64 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
     }
 
-    /// The file header.
-    pub(crate) fn header(&mut self) -> fmt::Result {
-        writeln!(self.out, "\t.text")
+    /// Validate named BSS contents before either output path writes a file.
+    /// GNU extension: GCC Common Variable Attributes, `section`.
+    pub(crate) fn header(&mut self) -> Result<(), super::NativeError<'m>> {
+        if self.elf {
+            for (_, function) in self.module.functions() {
+                if function.body.is_some()
+                    && let Some(section) = function.attributes.section
+                    && elf_section_type(section) == "nobits"
+                {
+                    return Err(SectionError {
+                        section,
+                        fixups: false,
+                    }
+                    .into());
+                }
+            }
+            for (_, global) in self.module.globals() {
+                if let Some(section) = global.attributes.section
+                    && elf_section_type(section) == "nobits"
+                    && let Some(GlobalInit::Bytes { bytes, relocations }) = global.init
+                    && (!relocations.is_empty() || bytes.iter().any(|&byte| byte != 0))
+                {
+                    return Err(SectionError {
+                        section,
+                        fixups: !relocations.is_empty(),
+                    }
+                    .into());
+                }
+            }
+        }
+        writeln!(self.out, "\t.text")?;
+        // File-scope assembly follows verbatim, in source order and before
+        // every function and object as Clang places it, then AT&T syntax
+        // again. GNU extension: GCC manual, "Basic Asm".
+        let blocks = self.module.module_asm();
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        writeln!(self.out, "{MODULE_ASM_START}")?;
+        for text in blocks {
+            self.out.write_str(text)?;
+            if !text.ends_with('\n') {
+                writeln!(self.out)?;
+            }
+        }
+        writeln!(self.out, "# End of file scope inline assembly")?;
+        writeln!(self.out, "\t.att_syntax")?;
+        Ok(())
     }
 
     /// One function: label, prologue, blocks, and the end of its unwind
-    /// information.
+    /// information. `arena` holds the function's scratch data.
     pub(crate) fn function(
         &mut self,
         id: FuncId,
         func: &MFunction<'_>,
         frame: &Frame<'_>,
+        arena: &Bump,
     ) -> fmt::Result {
         let function = self.module.function(id);
         let name = Name(function.name);
@@ -134,8 +193,15 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 false,
                 name,
             )?,
-            | Some(section) if self.elf =>
-                writeln!(self.out, "\t.section\t{},\"ax\",@progbits", Name(section))?,
+            | Some(section) if self.elf => {
+                let kind = elf_section_type(section);
+                let flags = elf_section_flags(section, true, false);
+                writeln!(
+                    self.out,
+                    "\t.section\t{},\"{flags}\",@{kind}",
+                    Name(section)
+                )?;
+            },
             | Some(section) => writeln!(self.out, "\t.section\t{},\"xr\"", Name(section))?,
             | None => writeln!(self.out, "\t.text")?,
         }
@@ -156,8 +222,12 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             self.stubs.extend(func.indirect_symbols.iter().copied());
         }
         self.prologue(frame)?;
+        let aligned = aligned_blocks(func, arena);
         for (index, block) in func.blocks.iter().enumerate() {
             let block_id = MBlock::new(index);
+            if aligned[index] {
+                writeln!(self.out, "{LOOP_ALIGNMENT}")?;
+            }
             writeln!(self.out, "{}:", Label(id, block_id))?;
             for &(label, _) in func.labels.iter().filter(|&&(_, at)| at == block_id) {
                 writeln!(self.out, "{}:", BlockLabel(id, label))?;
@@ -223,7 +293,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             | None => write!(self.out, "\"{base}{suffix}{}\"", name.0)?,
         }
         if self.elf {
-            let kind = if nobits { "nobits" } else { "progbits" };
+            let kind = section.map_or(if nobits { "nobits" } else { "progbits" }, elf_section_type);
+            let flags = section.map_or(flags, |section| {
+                elf_section_flags(section, flags.contains('x'), !flags.contains('w'))
+            });
             writeln!(self.out, ",\"{flags}G\",@{kind},{name},comdat")
         } else {
             writeln!(self.out, ",\"{flags}\",discard,{name}")
@@ -261,6 +334,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     fn prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let size = frame.allocation();
         let mut cfa = 8;
         for &register in &frame.saved {
             writeln!(self.out, "\tpushq\t%{}", register.name(Width::B64))?;
@@ -276,23 +350,23 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "\t.seh_pushreg %{}", register.name(Width::B64))?;
             }
         }
-        if frame.size > 0 {
-            if !self.elf && frame.size >= 4096 {
+        if size > 0 {
+            if !self.elf && size >= 4096 {
                 let probe = if self.target == Target::WindowsMsvc {
                     "__chkstk"
                 } else {
                     "___chkstk_ms"
                 };
-                writeln!(self.out, "\tmovl\t${}, %eax", frame.size)?;
+                writeln!(self.out, "\tmovl\t${size}, %eax")?;
                 writeln!(self.out, "\tcallq\t{probe}")?;
                 writeln!(self.out, "\tsubq\t%rax, %rsp")?;
             } else {
-                writeln!(self.out, "\tsubq\t${}, %rsp", frame.size)?;
+                writeln!(self.out, "\tsubq\t${size}, %rsp")?;
             }
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_offset {}", frame.cfa_offset())?;
             } else {
-                writeln!(self.out, "\t.seh_stackalloc {}", frame.size)?;
+                writeln!(self.out, "\t.seh_stackalloc {size}")?;
             }
         }
         for &(register, offset) in &frame.saved_xmm {
@@ -318,6 +392,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     fn epilogue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let size = frame.allocation();
         if self.elf {
             writeln!(self.out, "\t.cfi_remember_state")?;
         }
@@ -331,14 +406,14 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             )?;
         }
         if frame.rbp_based {
-            writeln!(self.out, "\tleaq\t{}(%rbp), %rsp", frame.size)?;
-            cfa -= frame.size;
+            writeln!(self.out, "\tleaq\t{size}(%rbp), %rsp")?;
+            cfa -= size;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa %rsp, {cfa}")?;
             }
-        } else if frame.size > 0 {
-            writeln!(self.out, "\taddq\t${}, %rsp", frame.size)?;
-            cfa -= frame.size;
+        } else if size > 0 {
+            writeln!(self.out, "\taddq\t${size}, %rsp")?;
+            cfa -= size;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_offset {cfa}")?;
             }
@@ -719,6 +794,27 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     reg(dst, Width::B64)
                 )
             },
+            | MInst::X87Load { format, mem } => writeln!(
+                out,
+                "\t{}\t{}",
+                format.load(),
+                at(Operand::Mem(mem), Width::B64)
+            ),
+            | MInst::X87Store { format, mem } => writeln!(
+                out,
+                "\t{}\t{}",
+                format.store(),
+                at(Operand::Mem(mem), Width::B64)
+            ),
+            | MInst::X87Arith { op } => writeln!(out, "\t{}\t%st(1), %st", op.name()),
+            | MInst::X87Pop => writeln!(out, "\tfstp\t%st(0)"),
+            | MInst::X87Compare => writeln!(out, "\tfucomip\t%st(1), %st"),
+            | MInst::X87ControlWord { store, mem } => writeln!(
+                out,
+                "\t{}\t{}",
+                if store { "fnstcw" } else { "fldcw" },
+                at(Operand::Mem(mem), Width::B16)
+            ),
             | MInst::Ret { .. } => self.epilogue(frame),
             | MInst::Ud2 => writeln!(out, "\tud2"),
             | MInst::Int3 => writeln!(out, "\tint3"),
@@ -798,13 +894,13 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     && global.attributes.section.is_none();
                 self.comdat_section(global.attributes.section, base, flags, nobits, name)?;
             } else if let Some(section) = global.attributes.section {
+                let kind = elf_section_type(section);
+                let flags = elf_section_flags(section, false, global.constant && !relocated);
                 let section = Name(section);
                 // A position-independent executable relocates addresses at
                 // load time, so a relocated constant needs a writable section.
                 match (self.elf, global.constant && !relocated) {
-                    | (true, true) => writeln!(self.out, "\t.section\t{section},\"a\",@progbits")?,
-                    | (true, false) =>
-                        writeln!(self.out, "\t.section\t{section},\"aw\",@progbits")?,
+                    | (true, _) => writeln!(self.out, "\t.section\t{section},\"{flags}\",@{kind}")?,
                     | (false, true) => writeln!(self.out, "\t.section\t{section},\"dr\"")?,
                     | (false, false) => writeln!(self.out, "\t.section\t{section},\"dw\"")?,
                 }
@@ -1094,6 +1190,36 @@ impl fmt::Display for Stub<'_> {
     }
 }
 
+/// The directive that starts a loop header: the next 16-byte boundary,
+/// padded with multi-byte `nop`s, as LLVM aligns loops on x86-64
+/// (`X86TargetLowering` prefers 16-byte loop alignment and sets no limit on
+/// the padding). A limit, as GCC's `.p2align 4,,10`, measured slower on
+/// `benches/c`: a loop it leaves unaligned loses what alignment gained.
+const LOOP_ALIGNMENT: &str = "\t.p2align\t4";
+
+/// Which blocks of `func` are loop headers in its final layout: targets of
+/// an edge from a later block or from themselves. Every loop the layout
+/// keeps has one, entered from the block before it once per run of the loop
+/// and from its back edge on every iteration, so its padding runs once per
+/// run of the loop. Other blocks inside loops stay where they fall: LLVM
+/// also aligns those its block frequencies call hot, but without them that
+/// would align, for example, every case of an interpreter's dispatch, which
+/// on `benches/c` cost as much as it saved. The entry block is aligned with
+/// the function.
+fn aligned_blocks<'a>(func: &MFunction<'_>, arena: &'a Bump) -> ArenaVec<'a, bool> {
+    let blocks = func.blocks.len();
+    let mut aligned = ArenaVec::with_capacity_in(blocks, arena);
+    aligned.resize(blocks, false);
+    for block in 0..blocks {
+        for successor in func.successors(MBlock::new(block)) {
+            if successor.index() <= block && successor.index() > 0 {
+                aligned[successor.index()] = true;
+            }
+        }
+    }
+    aligned
+}
+
 /// Whether the module defines `symbol`; runtime symbols never are.
 fn defined(module: &Module<'_>, symbol: SymbolRef) -> bool {
     match symbol {
@@ -1108,6 +1234,45 @@ fn symbol_name<'m>(module: &Module<'m>, symbol: SymbolRef) -> Name<'m> {
         | SymbolRef::Ir(symbol) => Name(module.symbol_name(symbol)),
         | SymbolRef::Runtime(name) => Name(name),
     }
+}
+
+// LLVM's ELF lowering gives explicitly named array and BSS families their
+// semantic types too, so section attributes agree with constructor emission.
+fn elf_section_type(name: &str) -> &'static str {
+    ElfSectionKind::named(name).asm_type()
+}
+
+// LLVM's named-section kind overrides the source entity kind for BSS/TLS;
+// large data is an x86-64 flag, not a request to make `.lbss` NOBITS.
+fn elf_section_flags(name: &str, function: bool, read_only: bool) -> &'static str {
+    if ElfSectionKind::named(name).is_thread_local() {
+        "awT"
+    } else if elf_section_type(name) == "nobits" {
+        "aw"
+    } else if function {
+        if elf_section_family(name, ".ltext") {
+            "axl"
+        } else {
+            "ax"
+        }
+    } else if [".ldata", ".lbss", ".lrodata"]
+        .iter()
+        .any(|stem| elf_section_family(name, stem))
+    {
+        if read_only { "al" } else { "awl" }
+    } else if read_only {
+        "a"
+    } else {
+        "aw"
+    }
+}
+
+/// LLVM MC's BSS diagnostic, shared by text and direct object emission.
+#[derive(Debug, thiserror::Error)]
+#[error("BSS section '{section}' cannot have {}", if *.fixups { "fixups" } else { "non-zero bytes" })]
+pub(crate) struct SectionError<'m> {
+    section: &'m str,
+    fixups:  bool,
 }
 
 /// A symbol name, quoted unless it is a plain identifier.
@@ -1203,19 +1368,28 @@ impl fmt::Display for Op<'_, '_, '_> {
         match self.operand {
             | Operand::Reg(reg) => write!(f, "{}", RegName(reg.phys(), self.width)),
             | Operand::Imm(imm) => write!(f, "${imm}"),
-            | Operand::Mem(Mem { base, disp }) => {
+            | Operand::Mem(Mem { base, index, disp }) => {
                 let module = self.module;
+                let index = fmt::from_fn(|f| match index {
+                    | Some(index) => write!(
+                        f,
+                        ",{},{}",
+                        RegName(index.reg.phys(), Width::B64),
+                        index.scale
+                    ),
+                    | None => Ok(()),
+                });
                 match base {
                     | Base::Reg(reg) => {
                         if disp != 0 {
                             write!(f, "{disp}")?;
                         }
-                        write!(f, "({})", RegName(reg.phys(), Width::B64))
+                        write!(f, "({}{index})", RegName(reg.phys(), Width::B64))
                     },
                     | Base::Frame(object) => {
                         let (base, offset) = self.frame.address(object);
                         let offset = offset + i64::from(disp);
-                        write!(f, "{offset}({})", RegName(base, Width::B64))
+                        write!(f, "{offset}({}{index})", RegName(base, Width::B64))
                     },
                     | Base::Constant(index) => {
                         write!(f, "{}", ConstantLabel(self.func, index as usize))?;

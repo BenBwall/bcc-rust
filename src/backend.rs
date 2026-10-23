@@ -10,8 +10,9 @@
 //!   turn it into objects and executables. The module map there shows how the
 //!   optimizer comparison arms map onto its options.
 //! - `native.rs` and `native/`: bcc's own x86-64 code generator, which writes
-//!   assembly for the bundled clang to assemble and link
-//!   (`docs/design/native-backend.md`).
+//!   assembly for the bundled clang to assemble, or encodes ELF and COFF
+//!   objects itself (the default for Windows targets), and links with the
+//!   bundled clang (`docs/design/native-backend.md`).
 //! - `interpreter.rs` and `interpreter/`: execute a module directly with exact
 //!   poison and undefined-behaviour tracking. It is the reference semantics of
 //!   the IR and the oracle for differential tests. It also accepts pre-ABI

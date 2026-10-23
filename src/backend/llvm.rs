@@ -137,6 +137,9 @@ fn build_module<'m>(
     if uses_pre_abi_signature(module) {
         return Err(EmitError::NotAbiLowered);
     }
+    for text in module.module_asm() {
+        api.append_module_asm(text);
+    }
     let (functions, globals) = symbols::declare(module, api, target, arena)?;
     symbols::special_arrays(module, api, target, arena, &functions, &globals);
     let emitter = Emitter {

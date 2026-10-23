@@ -56,7 +56,6 @@ use super::{
     BindingKind,
     Duration,
     SemanticErrorKind,
-    builtins::atomics,
     constants::Floating,
     integer::Integer,
     scopes::Namespace,
@@ -411,28 +410,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .expression_info(vector_callee)
                     .binding
                     .is_some_and(|id| self.bindings[id].origin.is_intrinsic());
-                info = if !intrinsic {
-                    self.type_call(e, self.expression_info(function_expression), arguments)
-                } else if let Some(info) =
-                    self.common_builtin_call(e, function_expression, arguments)
+                info = if intrinsic
+                    && let Some(info) = self.common_builtin_call(e, function_expression, arguments)
                 {
-                    info
-                } else if let ExpressionType::Identifier(name) = vector_callee.kind
-                    && super::vectors::named_builtin(self.context.string_cache.at(name.name))
-                {
-                    self.context.report_extension(
-                        crate::configuration::Feature::VectorBuiltins,
-                        "__builtin_shufflevector",
-                        name.source_vectors,
-                    );
-                    self.shuffle_vector_builtin(e, arguments)
-                } else if let Some(info) = self.vector_overload(e, vector_callee, arguments) {
-                    info
-                } else if let Some(info) = self.atomic_call(e, vector_callee, arguments) {
-                    info
-                } else if self.classify_type_callee(vector_callee) {
-                    self.classify_type(e, &arguments)
-                } else if let Some(info) = self.math128_builtin(e, vector_callee, &arguments) {
                     info
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)
@@ -489,7 +469,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     info = Self::expression_result(e, self.types.scalar(Scalar::Void));
                 }
             },
-            // Unmodeled extensions retain unknown results and suppress constraints.
+            // Unmodeled extensions retain unknown results and suppress
+            // constraints.
             | _ => {},
         }
         if info.unfolded_binary128 {
@@ -549,6 +530,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // GNU-folded address difference through enclosing arithmetic;
             // evaluate reports it through the existing extension policy.
             let folded_address = match e.kind {
+                | E::Cast {
+                    operand_expression, ..
+                }
                 | E::Unary {
                     operand_expression, ..
                 } => self.expression_info(operand_expression).folded_address(),
@@ -567,7 +551,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => false,
             };
             if folded_address {
-                info.folding = ConstantFolding::AddressDifference;
+                info.folding = ConstantFolding::Address;
             }
         }
         if let E::StatementExpression(block) = e.kind {
@@ -591,6 +575,7 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) expression: &'tu Expression<'tu>,
     /// Selected operand identity for address decomposition.
     /// C11: §6.5.1.1p4, p. 79; PDF p. 97; GNU `choose_expr` follows it.
+    /// Constant address conditionals: C99 §6.5.15p4, p. 90; PDF p. 102.
     pub(crate) selected_expression: Option<&'tu Expression<'tu>>,
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.

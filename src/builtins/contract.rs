@@ -31,7 +31,7 @@ pub(crate) struct Availability {
     pub(crate) naming:  NamingPolicy,
 }
 
-/// All M4 entries apply to all four current x86-64 targets. Reserved aliases
+/// Every entry applies to all four current x86-64 targets. Reserved aliases
 /// keep their contracts in freestanding mode; ordinary library lookup is
 /// hosted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +48,14 @@ pub(crate) enum SyntaxForm {
     OrdinaryCall,
     VaArg,
     Offsetof,
+    /// GNU `__builtin_types_compatible_p(type, type)`.
+    TypesCompatible,
+    /// GNU `__builtin_choose_expr(constant, expression, expression)`.
+    ChooseExpr,
+    /// Clang `__builtin_convertvector(expression, type)`.
+    ConvertVector,
+    /// Clang `__builtin_bit_cast(type, expression)`.
+    BitCast,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +87,24 @@ pub(crate) enum SignatureType {
     /// `FILE *`, naming the program's own `<stdio.h>` typedef.
     /// C99: §7.19.1p2, p. 262; PDF p. 274.
     File,
+    /// A GNU vector of `count` lanes of `Scalar`, aligned to its size.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+    Vector(Scalar, u8),
+    /// A pointer to such a vector, `true` for a `const` vector.
+    VectorPointer(Scalar, u8, bool),
+    /// No C type: the family's type rule computes each call's result, and
+    /// an undeclared use binds an unprototyped function of unknown result.
+    Opaque,
 }
+
+/// The signature of a family whose type rule types every call.
+pub(crate) const OPAQUE_SIGNATURE: Signature = Signature {
+    result:     SignatureType::Opaque,
+    parameters: &[],
+    prototype:  false,
+    variadic:   false,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TypeRule {
@@ -91,6 +116,58 @@ pub(crate) enum TypeRule {
     Atomic,
     /// Every argument is a wide string literal (Microsoft `__annotation`).
     WideStrings,
+    /// A generated x86 prototype whose immediates carry
+    /// [`ConstantConstraint::Immediate`].
+    X86Signature,
+    /// Two vectors of one type, then constant lane indices.
+    VectorShuffle,
+    /// One operand-overloaded elementwise or non-temporal operation.
+    VectorOverload(VectorOverload),
+    ConvertVector,
+    BitCast,
+    TypesCompatible,
+    ChooseExpr,
+    /// GNU type classification of an unevaluated operand.
+    TypeClassify,
+    Math128(Math128),
+}
+
+/// Clang's operand-overloaded vector builtins; the operand types select the
+/// result. Clang extension: Clang Language Extensions, "Builtin Functions".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-functions>
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VectorOverload {
+    Abs,
+    Sqrt,
+    AddSat,
+    SubSat,
+    Min,
+    Max,
+    NondeterministicValue,
+    NontemporalLoad,
+    NontemporalStore,
+}
+
+impl VectorOverload {
+    pub(crate) const fn arity(self) -> usize {
+        match self {
+            | Self::Abs | Self::Sqrt | Self::NondeterministicValue | Self::NontemporalLoad => 1,
+            | Self::AddSat | Self::SubSat | Self::Min | Self::Max | Self::NontemporalStore => 2,
+        }
+    }
+}
+
+/// A binary128 math primitive: its result type, argument count, whether
+/// each argument is a `const char *` NaN tag, and whether each is an
+/// arithmetic operand converted to the result.
+/// GNU extension: GCC manual, "Floating Types".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Math128 {
+    pub(crate) result:     Scalar,
+    pub(crate) arguments:  usize,
+    pub(crate) tag:        bool,
+    pub(crate) arithmetic: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +181,9 @@ pub(crate) struct ArgumentRule {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConversionRule {
     Parameter(SignatureType),
+    /// The descriptor signature's parameter at the operand's position, as
+    /// a prototyped call converts it. C99: §6.5.2.2p7, p. 72; PDF p. 84.
+    Prototype,
     Value,
     Unconverted,
     Type,
@@ -128,6 +208,9 @@ pub(crate) enum ConstantConstraint {
     OriginalIntegerRange(u64),
     ConvertedPowerOfTwo,
     ConvertedProbability,
+    /// An x86 immediate: after prototype conversion, an integer constant in
+    /// `[low, high]` that, with a nonzero mask, names a set bit of the mask.
+    Immediate(i32, i32, u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,6 +225,8 @@ pub(crate) enum ConstraintDiagnostic {
     FrameLevel,
     VaList,
     VaArgType,
+    /// An x86 immediate operand outside its constraint.
+    Immediate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +237,9 @@ pub(crate) enum BuiltinEffectClass {
     Control,
     Allocate,
     Library,
+    /// Not modeled: a family whose calls retain no checked instance, so
+    /// their effects stay unknown.
+    Unknown,
 }
 
 /// The checker and lowerer each match this closed vocabulary in their own
@@ -198,6 +286,37 @@ pub(crate) enum BuiltinOperation {
     /// with no effect on execution. MSVC extension: Microsoft Learn,
     /// "__annotation". <https://learn.microsoft.com/en-us/cpp/intrinsics/annotation>
     Annotation,
+    /// Checked and folded or selected by semantic analysis; lowering reads
+    /// the retained constant or selected operand and otherwise refuses.
+    Semantic(SemanticOperation),
+    /// Semantic-only support: lowering refuses the call as an unsupported
+    /// builtin, never as an external symbol.
+    Unsupported(UnsupportedReason),
+}
+
+impl BuiltinOperation {
+    /// Whether semantic analysis retains a checked `BuiltinCallFacts`
+    /// instance for lowering to execute. Family operations keep their result
+    /// in the expression record instead.
+    pub(crate) const fn retains_instance(self) -> bool {
+        !matches!(self, Self::Semantic(_) | Self::Unsupported(_))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SemanticOperation {
+    ClassifyType,
+    TypesCompatible,
+    ChooseExpr,
+    Math128,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnsupportedReason {
+    /// x86 SIMD and system intrinsics have no lowering.
+    X86,
+    /// Vector shuffles, conversions, bit casts and overloads.
+    Vector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

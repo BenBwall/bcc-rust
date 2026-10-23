@@ -53,7 +53,8 @@ block2:
         Target::LinuxGnu,
     );
     let f = function_text(&text, "f");
-    assert!(f.contains("addl\t$5, "), "{f}");
+    // `v0` lives on, so the addition is a `lea` rather than `mov` and `add`.
+    assert!(f.contains("leaq\t5(%rdi), "), "{f}");
     assert!(f.contains("cmpl\t$100, "), "{f}");
     assert!(f.contains("\tjl\t") || f.contains("\tjge\t"), "{f}");
     assert!(!f.contains("setl"), "the branch compare is fused:\n{f}");
@@ -139,7 +140,8 @@ block0(v0: i64):
 fn addresses_fold_into_memory_operands() {
     let text = assembly(MEMORY, Target::LinuxGnu);
     let f = function_text(&text, "f");
-    assert!(f.contains("movq\t%rdi, 8(%rsp)"), "{f}");
+    // The leaf's slot is in the red zone.
+    assert!(f.contains("movq\t%rdi, -8(%rsp)"), "{f}");
     assert!(
         f.contains("counter(%rip)"),
         "a defined global is RIP-relative:\n{f}"
@@ -511,16 +513,22 @@ fn returns_twice_calls_and_addresses_are_refused() {
 fn unsupported_constructs_are_refused_with_their_function() {
     let message = refusal(
         "abi lowered
-function @f(f128) -> f128 external {
-block0(v0: f128):
-    return v0
+function @s(i128) -> i32 external {
+block0(v0: i128):
+    switch v0, block1, [1: block2]
+block1:
+    v1 = iconst.i32 0
+    return v1
+block2:
+    v2 = iconst.i32 1
+    return v2
 }
 ",
         Target::LinuxGnu,
     );
     assert_eq!(
         message,
-        "not yet supported by the native back end: f128 values (in @f)"
+        "not yet supported by the native back end: a switch on an i128 value (in @s)"
     );
     let message = refusal(
         "abi lowered
@@ -795,9 +803,11 @@ block0(v0: i64):
         f.contains("callq\t___chkstk_ms\n\tsubq\t"),
         "dynamic pages are probed:\n{f}"
     );
-    // The block starts 16-byte aligned above the outgoing arguments; the
-    // address rounds up into its 16 spare bytes, never down below it.
-    let round_up = f.find("addq\t$16, %").expect(f);
+    // The block starts 16-byte aligned above the outgoing arguments (32
+    // bytes of home area here); the address rounds up into its 16 spare
+    // bytes, never down below it. The `lea` of the block's start and the
+    // `add` of 16 combine.
+    let round_up = f.find("leaq\t48(%rsp), %").expect(f);
     assert!(f[round_up..].contains("andq\t$-32, "), "{f}");
     assert!(
         f.contains("(%rbp)"),
@@ -954,4 +964,590 @@ block3:
     assert!(f[landing..].contains("\tjmp\t"), "{f}");
     assert!(text.contains("\t.quad\t.LBA0_0+2\n"), "{text}");
     assert!(text.contains("\t.long\t.LBA0_1-.LBA0_0\n"), "{text}");
+}
+
+/// The instructions from the previous call (or the function's start) up to
+/// and including the call of `callee`: where its arguments are placed.
+fn call_setup<'a>(function: &'a str, callee: &str) -> &'a str {
+    let end = function
+        .find(&format!("callq\t{callee}"))
+        .unwrap_or_else(|| panic!("no call of {callee} in\n{function}"));
+    let start = function[..end].rfind("callq").map_or(0, |start| start + 5);
+    &function[start..end + 6 + callee.len()]
+}
+
+/// `long double` arithmetic, comparisons and conversions on System V: the
+/// operands pushed from memory, the results popped, the integer
+/// conversion under a truncating control word, and the result returned in
+/// `%st0`, as Clang's code does.
+#[test]
+fn long_double_uses_x87_memory_sequences() {
+    let ir = "abi lowered
+function @f(f80, f80, ptr) -> f80 external {
+block0(v0: f80, v1: f80, v2: ptr):
+    v3 = fadd.f80 v0, v1
+    v4 = fcmp.f80 olt v3, v1
+    v5 = zext.i32 v4
+    store.i32 v5, v2, align 4
+    v6 = fptosi.i64 v3
+    v7 = iconst.i64 4
+    v8 = ptr_add v2, v7
+    store.i64 v6, v8, align 8
+    v9 = fneg.f80 v3
+    return v9
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    for expected in [
+        "fadd\t%st(1), %st",
+        "fucomip\t%st(1), %st",
+        "fstp\t%st(0)",
+        "fnstcw",
+        "fldcw",
+        "fistpll",
+        "xorl\t$32768",
+    ] {
+        assert!(f.contains(expected), "{expected}:\n{f}");
+    }
+    // The two arguments come from their 16-byte stack slots.
+    assert!(f.contains("8(%rsp)") || f.contains("(%rsp)"), "{f}");
+    // The result is pushed last and left on the x87 stack.
+    let last_push = f.rfind("fldt").unwrap();
+    let last_pop = f.rfind("fstp").unwrap();
+    assert!(last_pop < last_push, "{f}");
+    assert!(f[last_push..].contains("retq"), "{f}");
+}
+
+/// Win64 passes `long double` by reference and returns it through a
+/// hidden pointer in `%rcx`, returned in `%rax`, as `clang
+/// --target=x86_64-w64-windows-gnu -S` writes `long double f(long double a,
+/// long double b)`: `movq %rcx, %rax; fldt (%rdx); fldt (%r8); ...; fstpt
+/// (%rcx)`. A caller passes the addresses of copies and of the result area.
+#[test]
+fn win64_passes_long_double_by_reference() {
+    let ir = "abi lowered
+function @f(f80, f80) -> f80 external {
+block0(v0: f80, v1: f80):
+    v2 = fadd.f80 v0, v1
+    return v2
+}
+function @g() -> f80 external {
+block0:
+    v0 = fconst.f80 0x3FFF8000000000000000
+    v1 = fconst.f80 0x40008000000000000000
+    v2 = call @f(v0, v1)
+    v3 = fmul.f80 v2, v2
+    return v3
+}
+";
+    let text = assembly(ir, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    for expected in [
+        "(%rdx)",
+        "8(%rdx)",
+        "(%r8)",
+        "8(%r8)",
+        "movq\t%rcx, %rax",
+        "fldt",
+    ] {
+        assert!(f.contains(expected), "{expected}:\n{f}");
+    }
+    assert!(f.contains("movw\t") && f.contains(", 8(%rcx)"), "{f}");
+    let g = function_text(&text, "g");
+    let setup = call_setup(g, "f");
+    for register in ["%rcx", "%rdx", "%r8"] {
+        assert!(
+            setup.contains("leaq\t") && setup.contains(&format!(", {register}\n")),
+            "{register}:\n{g}"
+        );
+    }
+    assert!(
+        g.contains("movq\t%rcx, %rax") || g.contains(", %rax\n"),
+        "{g}"
+    );
+}
+
+/// Conversions between `i128` and `f64` call the runtime as Clang does:
+/// `__floattidf` and `__fixunsdfti` take the `i128` in `%rsi:%rdi` and
+/// return it in `%rdx:%rax` on System V; on Win64 the `i128` argument is a
+/// pointer to a copy in `%rcx` and the result comes back in `%xmm0`, as
+/// `clang --target=x86_64-w64-windows-gnu -S` calls them.
+#[test]
+fn int128_float_conversions_call_the_runtime() {
+    let ir = "abi lowered
+function @to_float(ptr) -> f64 external {
+block0(v0: ptr):
+    v1 = load.i128 v0, align 16
+    v2 = sitofp.f64 v1
+    return v2
+}
+function @to_int(f32, ptr) external {
+block0(v0: f32, v1: ptr):
+    v2 = fptoui.i128 v0
+    store.i128 v2, v1, align 16
+    return
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let to_float = function_text(&text, "to_float");
+    assert!(to_float.contains("callq\t__floattidf@PLT"), "{to_float}");
+    let setup = call_setup(to_float, "__floattidf");
+    assert!(
+        setup.contains(", %rdi\n") && setup.contains(", %rsi\n"),
+        "{to_float}"
+    );
+    let to_int = function_text(&text, "to_int");
+    assert!(to_int.contains("callq\t__fixunssfti@PLT"), "{to_int}");
+    assert!(
+        to_int.contains("%rax, (%") && to_int.contains("%rdx, 8(%"),
+        "{to_int}"
+    );
+    let text = assembly(ir, Target::WindowsGnu);
+    let to_float = function_text(&text, "to_float");
+    let setup = call_setup(to_float, "__floattidf");
+    assert!(
+        setup.contains("leaq\t") && setup.contains(", %rcx\n"),
+        "{to_float}"
+    );
+    let to_int = function_text(&text, "to_int");
+    assert!(to_int.contains("callq\t__fixunssfti"), "{to_int}");
+    assert!(to_int.contains("movups\t%xmm0, "), "{to_int}");
+}
+
+/// `f128` operations call the soft-float routines: on System V with the
+/// operands in whole SSE registers and the result in `%xmm0`; on Win64 as
+/// `clang --target=x86_64-w64-windows-gnu -S` calls `__addtf3`, with the
+/// result area's address in `%rcx` and the operands' addresses in `%rdx`
+/// and `%r8`.
+#[test]
+fn quad_operations_call_soft_float_routines() {
+    let ir = "abi lowered
+function @f(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = load.f128 v0, align 16
+    v2 = iconst.i64 16
+    v3 = ptr_add v0, v2
+    v4 = load.f128 v3, align 16
+    v5 = fadd.f128 v1, v4
+    store.f128 v5, v0, align 16
+    v6 = fcmp.f128 ueq v1, v4
+    v7 = zext.i32 v6
+    return v7
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    let setup = call_setup(f, "__addtf3@PLT");
+    assert!(
+        setup.contains(", %xmm0\n") && setup.contains(", %xmm1\n"),
+        "{f}"
+    );
+    assert!(f.contains("movups\t%xmm0, "), "{f}");
+    assert!(
+        f.contains("callq\t__eqtf2@PLT") && f.contains("callq\t__unordtf2@PLT"),
+        "{f}"
+    );
+    let text = assembly(ir, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    let setup = call_setup(f, "__addtf3");
+    for register in ["%rcx", "%rdx", "%r8"] {
+        assert!(
+            setup.contains(&format!(", {register}\n")),
+            "{register}:\n{f}"
+        );
+    }
+    assert!(setup.matches("leaq").count() >= 3, "{f}");
+    let compare = call_setup(f, "__eqtf2");
+    assert!(
+        compare.contains(", %rcx\n") && compare.contains(", %rdx\n"),
+        "{f}"
+    );
+}
+
+/// A stack object aligned above the stack's 16 bytes gets spare room and
+/// an address rounded up at run time, in place of a refusal.
+#[test]
+fn over_aligned_slots_round_their_address_up() {
+    let ir = "abi lowered
+function @f(i32) -> i32 external {
+    slot0 = stack_slot 40, align 64
+block0(v0: i32):
+    v1 = stack_addr slot0
+    v2 = iconst.i64 8
+    v3 = ptr_add v1, v2
+    store.i32 v0, v3, align 8
+    v4 = load.i32 v3, align 8
+    return v4
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let f = function_text(&text, "f");
+        // The slot's address plus 63, in one `lea`, then rounded down.
+        assert!(
+            f.contains("63(%rsp), ") && f.contains("andq\t$-64, "),
+            "{f}"
+        );
+        // 40 bytes and 48 spare, after the 16-byte-aligned frame.
+        assert!(
+            f.contains("subq\t$88, %rsp") || f.contains("subq\t$96, %rsp"),
+            "{f}"
+        );
+    }
+}
+
+/// Unsigned 64-bit conversions compare with 2^63 and pick the adjustment
+/// before their only truncating conversion, so that an in-range value is
+/// never converted out of the signed range, which raises "invalid" (C99
+/// §F.4p1). The `long double` one matches Clang's `fcmov` sequence and
+/// leaves the x87 stack as it found it.
+#[test]
+fn unsigned_conversions_compare_before_their_only_conversion() {
+    let ir = "abi lowered
+function @from_wide(ptr) -> i64 external {
+block0(v0: ptr):
+    v1 = load.f80 v0, align 16
+    v2 = fptoui.i64 v1
+    return v2
+}
+function @from_double(f64) -> i64 external {
+block0(v0: f64):
+    v1 = fptoui.i64 v0
+    return v1
+}
+function @from_float(f32) -> i64 external {
+block0(v0: f32):
+    v1 = fptoui.i64 v0
+    return v1
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let wide = function_text(&text, "from_wide");
+        assert_eq!(wide.matches("fistpll").count(), 1, "{target:?}:\n{wide}");
+        let compare = wide.find("fucomip").expect("a comparison");
+        let pick = wide.find("cmovbeq").expect("a pick of the adjustment");
+        let convert = wide.find("fistpll").unwrap();
+        assert!(compare < pick && pick < convert, "{target:?}:\n{wide}");
+        assert!(
+            wide[pick..convert].contains("fildll") && wide[pick..convert].contains("fadd"),
+            "the adjustment is added before converting, {target:?}:\n{wide}"
+        );
+        assert!(wide[convert..].contains("xorq"), "{target:?}:\n{wide}");
+        let pushes = wide.matches("\tfldt\t").count() + wide.matches("\tfildll\t").count();
+        let pops = wide.matches("\tfucomip\t").count()
+            + wide.matches("\tfistpll\t").count()
+            + wide.matches("\tfstp\t%st(0)").count();
+        assert_eq!(pushes, 3, "{target:?}:\n{wide}");
+        assert_eq!(pops, pushes, "{target:?}:\n{wide}");
+        for (name, conversion, comparison, adjustment) in [
+            ("from_double", "cvttsd2si", "ucomisd", "cvtsi2sdq"),
+            ("from_float", "cvttss2si", "ucomiss", "cvtsi2ssq"),
+        ] {
+            let f = function_text(&text, name);
+            assert_eq!(f.matches(conversion).count(), 1, "{target:?}:\n{f}");
+            let compare = f.find(comparison).expect("a comparison");
+            let pick = f.find("cmovaeq").expect("a pick of the adjustment");
+            let convert = f.find(conversion).unwrap();
+            assert!(compare < pick && pick < convert, "{target:?}:\n{f}");
+            assert!(f[pick..convert].contains(adjustment), "{target:?}:\n{f}");
+            assert!(f[convert..].contains("xorq"), "{target:?}:\n{f}");
+        }
+    }
+}
+
+#[test]
+fn division_by_a_power_of_two_shifts() {
+    let text = assembly(
+        "abi lowered
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iconst.i32 4
+    v3 = sdiv.i32 v0, v2
+    v4 = srem.i32 v1, v2
+    v5 = udiv.i32 v0, v2
+    v6 = urem.i32 v1, v2
+    v7 = iadd.i32 v3, v4
+    v8 = iadd.i32 v5, v6
+    v9 = iadd.i32 v7, v8
+    return v9
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(!f.contains("div"), "{f}");
+    assert!(f.contains("sarl\t$2, "), "{f}");
+    assert!(f.contains("shrl\t$2, "), "{f}");
+    assert!(f.contains("andl\t$3, "), "{f}");
+    assert!(f.contains("andl\t$-4, "), "{f}");
+}
+
+#[test]
+fn scaled_offsets_fold_into_indexed_operands() {
+    let text = assembly(
+        "abi lowered
+function @f(ptr, i32) -> i32 external {
+block0(v0: ptr, v1: i32):
+    v2 = sext.i64 v1
+    v3 = iconst.i64 4
+    v4 = imul.i64 v2, v3
+    v5 = ptr_add v0, v4
+    v6 = iconst.i64 8
+    v7 = ptr_add v5, v6
+    v8 = load.i32 v7, align 4
+    store.i32 v8, v5, align 4
+    return v8
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("8(%rdi,%rax,4)") || f.contains("8(%rdi,%rcx,4)"),
+        "{f}"
+    );
+    assert!(!f.contains("shl"), "{f}");
+    assert!(!f.contains("imul"), "{f}");
+}
+
+#[test]
+fn indexed_symbol_bases_are_loaded_once() {
+    let text = assembly(
+        "abi lowered
+global @table internal size 64, align 4 = zero
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 slt v2, v0
+    brif v4, block2, block3
+block2:
+    v5 = sext.i64 v2
+    v6 = iconst.i64 4
+    v7 = imul.i64 v5, v6
+    v8 = global_addr @table
+    v9 = ptr_add v8, v7
+    v10 = load.i32 v9, align 4
+    v11 = iadd.i32 v3, v10
+    v12 = iconst.i32 1
+    v13 = iadd.i32 v2, v12
+    jump block1(v13, v11)
+block3:
+    return v3
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert_eq!(f.matches("leaq\ttable(%rip)").count(), 1, "{f}");
+    assert!(f.contains(",4), %e"), "{f}");
+}
+
+#[test]
+fn small_products_and_offsets_become_lea() {
+    let text = assembly(
+        "abi lowered
+function @f(i64, i64) -> i64 external {
+block0(v0: i64, v1: i64):
+    v2 = iconst.i64 3
+    v3 = imul.i64 v0, v2
+    v4 = iconst.i64 1
+    v5 = iadd.i64 v3, v4
+    v6 = iadd.i64 v1, v4
+    v7 = imul.i64 v6, v1
+    v8 = iadd.i64 v5, v7
+    return v8
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("leaq\t1(%rdi,%rdi,2), %"), "{f}");
+    assert!(f.contains("leaq\t1(%rsi), %"), "{f}");
+    assert!(!f.contains("imulq\t$3"), "{f}");
+}
+
+#[test]
+fn copies_and_32_bit_additions_become_lea() {
+    // `i + 1` while `i` lives on: one `lea` in place of `mov` and `add`.
+    let text = assembly(
+        "abi lowered
+function @f(i32, ptr) -> i32 external {
+block0(v0: i32, v1: ptr):
+    v2 = iconst.i32 1
+    v3 = iadd.i32 v0, v2
+    store.i32 v3, v1, align 4
+    v4 = imul.i32 v0, v3
+    return v4
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("leaq\t1(%rdi), %"), "{f}");
+}
+
+#[test]
+fn compares_fuse_into_every_user_in_any_block() {
+    let text = assembly(
+        "abi lowered
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = icmp.i32 slt v0, v1
+    v3 = iconst.i32 7
+    v4 = iadd.i32 v0, v3
+    jump block1
+block1:
+    v5 = select.i32 v2, v4, v1
+    brif v2, block2, block3
+block2:
+    return v5
+block3:
+    v6 = select.i32 v2, v1, v0
+    return v6
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(
+        !f.contains("set"),
+        "no compare result is materialized:\n{f}"
+    );
+    assert!(f.matches("cmpl\t").count() >= 2, "{f}");
+}
+
+/// A leaf function's frame of `size` bytes, one 8-byte value stored at its
+/// top and read back.
+fn leaf_frame(size: u32, align: u32) -> String {
+    format!(
+        "abi lowered
+function @f(i64) -> i64 external {{
+    slot0 = stack_slot {size}, align {align}
+block0(v0: i64):
+    v1 = stack_addr slot0
+    v2 = iconst.i64 {}
+    v3 = ptr_add v1, v2
+    store.i64 v0, v3, align 8
+    v4 = load.i64 v3, align 8
+    return v4
+}}
+",
+        size - 8
+    )
+}
+
+#[test]
+fn system_v_leaf_frames_live_in_the_red_zone() {
+    // A 16-byte-aligned slot keeps its alignment: 8 bytes of padding put
+    // it at `entry %rsp - 24`, a multiple of 16, and its top 8 bytes 16
+    // bytes below the return address.
+    for (size, align, top) in [(64, 8, -8), (128, 8, -8), (16, 16, -16)] {
+        let text = assembly(&leaf_frame(size, align), Target::LinuxGnu);
+        let f = function_text(&text, "f");
+        assert!(
+            !f.contains("subq") && !f.contains("addq") && !f.contains(".cfi_def_cfa_offset"),
+            "the frame stays below %rsp:\n{f}"
+        );
+        assert!(
+            f.contains(&format!("movq\t%rdi, {top}(%rsp)")),
+            "the slot's top is just below the return address:\n{f}"
+        );
+        // Windows has no red zone.
+        let text = assembly(&leaf_frame(size, align), Target::WindowsGnu);
+        let f = function_text(&text, "f");
+        assert!(
+            f.contains("subq\t$") && f.contains(".seh_stackalloc"),
+            "{f}"
+        );
+    }
+}
+
+#[test]
+fn frames_outside_the_red_zone_move_rsp() {
+    // More than 128 bytes.
+    let text = assembly(&leaf_frame(136, 8), Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("subq\t$136, %rsp\n\t.cfi_def_cfa_offset 144"),
+        "{f}"
+    );
+    assert!(f.contains("movq\t%rdi, 128(%rsp)"), "{f}");
+    // A call, whose return address would land in the frame.
+    let text = assembly(
+        "abi lowered
+function @g(ptr) external
+function @f() external {
+    slot0 = stack_slot 8, align 8
+block0:
+    v0 = stack_addr slot0
+    call @g(v0)
+    return
+}
+",
+        Target::LinuxGnu,
+    );
+    assert!(function_text(&text, "f").contains("subq\t$"), "{text}");
+    // `stack_save` reads `%rsp`, which would then point into the frame.
+    let text = assembly(
+        "abi lowered
+function @f(i64) -> i64 external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = stack_addr slot0
+    store.i64 v0, v1, align 8
+    v2 = stack_save
+    v3 = ptrtoint.i64 v2
+    return v3
+}
+",
+        Target::LinuxGnu,
+    );
+    assert!(function_text(&text, "f").contains("subq\t$"), "{text}");
+}
+
+#[test]
+fn loop_tops_are_aligned_to_16_bytes() {
+    let ir = "abi lowered
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1, v1)
+block1(v2: i32, v3: i32):
+    v4 = icmp.i32 slt v2, v0
+    brif v4, block2, block3
+block2:
+    v5 = iadd.i32 v3, v2
+    v6 = iconst.i32 1
+    v7 = iadd.i32 v2, v6
+    jump block1(v7, v5)
+block3:
+    return v3
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let f = function_text(&text, "f");
+        let aligned: Vec<&str> = f
+            .split("\t.p2align\t4\n")
+            .skip(1)
+            .map(|rest| rest.split_once(":\n").expect("a label follows").0)
+            .collect();
+        assert!(!aligned.is_empty(), "{f}");
+        for label in aligned {
+            let at = f.find(&format!("{label}:\n")).unwrap();
+            assert!(
+                f[at..].contains(&format!("\t{label}\n")),
+                "{label} is the target of a back edge:\n{f}"
+            );
+        }
+    }
+    let text = assembly(ADD, Target::LinuxGnu);
+    assert!(
+        !function_text(&text, "add").contains(".p2align"),
+        "straight-line code is not aligned:\n{text}"
+    );
 }

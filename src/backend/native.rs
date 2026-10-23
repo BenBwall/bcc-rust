@@ -1,7 +1,8 @@
-//! The native x86-64 back end: post-ABI bcc IR to AT&T assembly, which the
-//! bundled clang assembles and links. Stage 1 of
-//! `docs/design/native-backend.md`: integer and pointer code under the
-//! System V and Win64 conventions.
+//! The native x86-64 back end: post-ABI bcc IR to AT&T assembly, or to ELF
+//! and COFF objects encoded in process (the default for Windows targets,
+//! opt-in for Linux). Bundled clang assembles the text path and links both
+//! paths. See `docs/design/native-backend.md` for the System V and Win64
+//! conventions and the staged implementation.
 //!
 //! [`emit_assembly`] first checks that the back end supports everything
 //! the module uses (`support.rs`), so a module is compiled whole or refused
@@ -25,7 +26,9 @@
 //! - Machine IR: `mir.rs`.
 //! - Passes: `isel.rs` with `isel/`, `regalloc.rs` with `regalloc/`,
 //!   `frame.rs`.
-//! - Output: `emit.rs` (text), `driver.rs` (assembling and linking).
+//! - Output: `emit.rs` (shared listing), `object.rs` with `object/` (ELF and
+//!   COFF encoding, relaxation and unwind), `driver.rs` (the object writer
+//!   choice, output and linking).
 //! - `tests.rs` and `tests/`: selection, allocation and end-to-end tests.
 //!
 //! The back end is not a C translation phase; it implements the target ABIs
@@ -46,10 +49,18 @@ mod regalloc;
 // Output
 mod driver;
 mod emit;
+mod object;
 
 use std::fmt;
 
-pub(crate) use driver::assemble;
+pub(crate) use driver::{
+    ObjectWriter,
+    RequestedWriter,
+    assemble,
+    build,
+    build_object,
+    object_writer,
+};
 pub(crate) use support::Unsupported;
 
 use self::{
@@ -76,17 +87,60 @@ use crate::{
 /// Symbols the back end calls or reads on its own (`_tls_index` is the
 /// Windows image's TLS index); a module may not define them internally,
 /// since those references would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 11] = [
+pub(crate) const RUNTIME_SYMBOLS: [&str; 54] = [
     "memmove",
     "__main",
     "___chkstk_ms",
     "__chkstk",
     "fmod",
     "fmodf",
+    "fmodl",
+    "fmodf128",
     "__divti3",
     "__udivti3",
     "__modti3",
     "__umodti3",
+    "__floattisf",
+    "__floattidf",
+    "__floattixf",
+    "__floattitf",
+    "__floatuntisf",
+    "__floatuntidf",
+    "__floatuntixf",
+    "__floatuntitf",
+    "__fixsfti",
+    "__fixdfti",
+    "__fixxfti",
+    "__fixtfti",
+    "__fixunssfti",
+    "__fixunsdfti",
+    "__fixunsxfti",
+    "__fixunstfti",
+    "__addtf3",
+    "__subtf3",
+    "__multf3",
+    "__divtf3",
+    "__eqtf2",
+    "__netf2",
+    "__lttf2",
+    "__letf2",
+    "__gttf2",
+    "__getf2",
+    "__unordtf2",
+    "__extendsftf2",
+    "__extenddftf2",
+    "__extendxftf2",
+    "__trunctfsf2",
+    "__trunctfdf2",
+    "__trunctfxf2",
+    "__floatsitf",
+    "__floatunsitf",
+    "__floatditf",
+    "__floatunditf",
+    "__fixtfsi",
+    "__fixunstfsi",
+    "__fixtfdi",
+    "__fixunstfdi",
     "_tls_index",
 ];
 
@@ -174,6 +228,19 @@ pub(crate) fn emit_assembly_with<'m>(
     code: CodeOptions,
     out: &mut dyn fmt::Write,
 ) -> Result<(), NativeError<'m>> {
+    emit(module, target, code, out, |_, _| {})
+}
+
+/// Writes the module's assembly as [`emit_assembly_with`] does, letting
+/// `adjust` change each function's allocation before the rewrite: the tests
+/// put every value in a spill slot this way.
+fn emit<'m>(
+    module: &'m Module<'_>,
+    target: Target,
+    code: CodeOptions,
+    out: &mut dyn fmt::Write,
+    adjust: impl Fn(&mir::MFunction<'_>, &mut regalloc::Allocation<'_>),
+) -> Result<(), NativeError<'m>> {
     if !module.triple().is_empty() && Target::parse(module.triple()) != Some(target) {
         return Err(NativeError::TargetMismatch {
             module:    module.triple(),
@@ -200,7 +267,8 @@ pub(crate) fn emit_assembly_with<'m>(
                     function: Some(function.name),
                     construct,
                 })?;
-            let allocation = regalloc::allocate(&mut func, conv, arena);
+            let mut allocation = regalloc::allocate(&mut func, conv, arena);
+            adjust(&func, &mut allocation);
             regalloc::rewrite(&mut func, &allocation, arena);
             let frame = Frame::layout(&func, &allocation, conv, arena).map_err(|construct| {
                 Unsupported {
@@ -208,7 +276,7 @@ pub(crate) fn emit_assembly_with<'m>(
                     construct,
                 }
             })?;
-            emitter.function(id, &func, &frame)?;
+            emitter.function(id, &func, &frame, arena)?;
         }
         scratch.reset();
     }
@@ -219,6 +287,8 @@ pub(crate) fn emit_assembly_with<'m>(
 /// Why the back end produced no assembly.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum NativeError<'m> {
+    #[error("{0}")]
+    Section(emit::SectionError<'m>),
     #[error("{0}")]
     Unsupported(Unsupported<'m>),
     #[error("the output refused the assembly text")]
@@ -235,11 +305,25 @@ pub(crate) enum NativeError<'m> {
          --backend=llvm"
     )]
     SharedLibraryCode,
+    /// `--native-object` encodes only the emitter's own listing; file-scope
+    /// assembly is arbitrary assembler input. Without the flag such a module
+    /// is assembled, on every target.
+    #[error(
+        "--native-object cannot encode file-scope assembly yet; omit it to assemble the native \
+         listing with clang"
+    )]
+    ObjectModuleAsm,
 }
 
 impl<'m> From<Unsupported<'m>> for NativeError<'m> {
     fn from(unsupported: Unsupported<'m>) -> Self {
         Self::Unsupported(unsupported)
+    }
+}
+
+impl<'m> From<emit::SectionError<'m>> for NativeError<'m> {
+    fn from(error: emit::SectionError<'m>) -> Self {
+        Self::Section(error)
     }
 }
 

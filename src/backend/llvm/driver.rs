@@ -171,6 +171,8 @@ pub(crate) enum OptLevel {
     O1,
     O2,
     O3,
+    Os,
+    Oz,
 }
 
 impl OptLevel {
@@ -180,6 +182,8 @@ impl OptLevel {
             | Self::O1 => "-O1",
             | Self::O2 => "-O2",
             | Self::O3 => "-O3",
+            | Self::Os => "-Os",
+            | Self::Oz => "-Oz",
         }
     }
 }

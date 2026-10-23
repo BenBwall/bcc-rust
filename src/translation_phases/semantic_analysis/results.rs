@@ -13,7 +13,6 @@ use super::{
     types::{
         Field,
         TypeId,
-        TypeKind,
         Types,
     },
 };
@@ -23,7 +22,6 @@ use crate::{
         parsing::{
             declaration_syntax::{
                 Declaration,
-                Declarator,
                 TypeName,
             },
             syntax::{
@@ -42,63 +40,56 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
-    /// Function owners of declarators with assembler labels, in the order
-    /// of `declarators`; None is outside any function definition.
-    /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125 (emission).
-    pub(crate) declarator_functions: &'tu [Option<usize>],
+    pub(crate) entities:            super::EntityFacts<'tu>,
     /// Evaluated entity references, owned by a function or object initializer.
-    pub(crate) references:           &'tu [EntityReference],
-    pub(crate) resolved:             super::ResolvedFacts<'tu>,
-    pub(crate) correspondence:       super::CorrespondenceFacts<'tu>,
-    pub(crate) sizes:                super::SizeFacts<'tu>,
-    pub(crate) runtime_bounds:       &'tu [super::RuntimeBound<'tu>],
-    pub(crate) control:              super::ControlFacts<'tu>,
-    pub(crate) effects:              super::EffectFacts<'tu>,
-    pub(super) expression_actions:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    /// Declarators with vendor modifiers visited by the explicit type stack,
-    /// including abstract declarators; lowering reads their assembler labels.
-    /// C99: §6.7.5-6.7.6, pp. 114-122; PDF pp. 126-134 (extensions).
-    pub(crate) declarators:          &'tu [Declarator<'tu>],
+    pub(crate) references:          &'tu [EntityReference],
+    pub(crate) resolved:            super::ResolvedFacts<'tu>,
+    pub(crate) correspondence:      super::CorrespondenceFacts<'tu>,
+    pub(crate) sizes:               super::SizeFacts<'tu>,
+    pub(crate) runtime_bounds:      &'tu [super::RuntimeBound<'tu>],
+    pub(crate) control:             super::ControlFacts<'tu>,
+    pub(crate) effects:             super::EffectFacts<'tu>,
+    pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Validated entity attributes, aliases, constructors, destructors and
     /// attribute capability refusals.
-    pub(crate) symbols:              super::SymbolFacts<'tu>,
-    pub(crate) function_extensions:  super::FunctionExtensions<'tu>,
-    pub(crate) types:                Types<'tu>,
-    pub(crate) bindings:             &'tu [Binding],
-    pub(crate) definitions:          &'tu [Definition],
+    pub(crate) symbols:             super::SymbolFacts<'tu>,
+    pub(crate) function_extensions: super::FunctionExtensions<'tu>,
+    pub(crate) types:               Types<'tu>,
+    pub(crate) bindings:            &'tu [Binding],
+    pub(crate) definitions:         &'tu [Definition],
     /// Every function definition in traversal order, nested GNU definitions
     /// included, with its binding, body and parameter bindings.
-    pub(crate) functions:            &'tu [FunctionRecord<'tu>],
-    pub(crate) scopes:               &'tu [Scope],
-    pub(crate) type_names:           &'tu [super::TypeNameFacts<'tu>],
-    pub(super) type_name_indices:    ArenaMap<'tu, usize, super::TypeNameId>,
-    pub(super) declaration_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    pub(super) size_query_sites:     ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
+    pub(crate) functions:           &'tu [FunctionRecord<'tu>],
+    pub(crate) scopes:              &'tu [Scope],
+    pub(crate) type_names:          &'tu [super::TypeNameFacts<'tu>],
+    pub(super) type_name_indices:   ArenaMap<'tu, usize, super::TypeNameId>,
+    pub(super) declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) size_query_sites:    ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
-    pub(crate) expressions:          &'tu [ExpressionInfo<'tu>],
+    pub(crate) expressions:         &'tu [ExpressionInfo<'tu>],
     /// Syntax identity (the node's address) to its ordinal in
     /// `expressions`; see [`Self::expression_index`].
-    pub(super) expression_indices:   ArenaMap<'tu, usize, usize>,
-    /// String initializer syntax to its destination element type, independent
-    /// of array completion. C99: §6.7.8p14-15, p. 126; PDF p. 138.
-    pub(super) string_initializers:  ArenaMap<'tu, usize, TypeId>,
+    pub(super) expression_indices:  ArenaMap<'tu, usize, usize>,
     /// A static object's binding to the flexible array member its
     /// initializer initializes, which extends the object past its structure
     /// (GNU extension; C99 §6.7.2.1p16, p. 103; PDF p. 115). See
     /// [`Self::flexible_array`].
-    pub(super) flexible_arrays:      ArenaMap<'tu, usize, FlexibleArray>,
+    pub(super) flexible_arrays:     ArenaMap<'tu, usize, FlexibleArray>,
+    /// Accepted initializers' placement plans, which lowering stores by.
+    /// C99: §6.7.8 paragraphs 17-22, pp. 126-127; PDF pp. 138-139.
+    pub(crate) initializers:        super::InitializerFacts<'tu>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
-    pub(crate) conversions:          &'tu [Conversion<'tu>],
+    pub(crate) conversions:         &'tu [Conversion<'tu>],
     /// `conversions[conversion_starts[i]..conversion_starts[i + 1]]` is the
     /// run of expression `i`. Records for an operand without a retained
     /// result follow the last run.
-    pub(super) conversion_starts:    &'tu [usize],
-    pub(crate) tag_declarations:     &'tu [(usize, usize)],
+    pub(super) conversion_starts:   &'tu [usize],
+    pub(crate) tag_declarations:    &'tu [(usize, usize)],
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
-    pub(crate) errors:               usize,
+    pub(crate) errors:              usize,
 }
 
 /// A resolved use needed by module emission. Owners and targets are binding
@@ -110,6 +101,10 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 pub(crate) struct EntityReference {
     pub(crate) owner:   usize,
     pub(crate) binding: usize,
+    /// The reference is in code that Clang's code generation skips (an
+    /// unreachable statement or a constant-false operand): it still keeps
+    /// what it names reachable, but creates no LLVM value there.
+    pub(crate) dead:    bool,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than
@@ -366,18 +361,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         Some(size.max(end))
     }
 
-    /// Whether analysis classified this expression as initializing the whole
-    /// array, including braced literals and arrays completed from the string.
-    /// C99: §6.7.8p14-15, p. 126; PDF p. 138.
-    pub(crate) fn string_initializes(&self, expression: &Expression<'tu>, ty: TypeId) -> bool {
-        let TypeKind::Array(element, _) = self.types.kind(ty) else {
-            return false;
-        };
-        self.string_initializers
-            .get(&std::ptr::from_ref(expression).addr())
-            == Some(&element.unqualified())
-    }
-
     /// The ordinal of an expression's record, in expected O(1). Parentheses
     /// have their own record, a copy of the inner one; an expression that
     /// analysis never typed, such as one inside unmodeled syntax, has none.
@@ -476,19 +459,13 @@ pub(crate) enum BindingOrigin {
     User,
     Intrinsic(crate::builtins::BuiltinId),
     ImplicitOrdinary,
-    /// Temporary M6 recognition bridge: atomic/x86/vector/type-generic
-    /// families.
-    LegacyIntrinsic,
     /// Unknown reserved names retain opaque signatures and bounded refusals.
     OpaqueIntrinsic,
 }
 
 impl BindingOrigin {
     pub(crate) fn is_intrinsic(self) -> bool {
-        matches!(
-            self,
-            Self::Intrinsic(_) | Self::LegacyIntrinsic | Self::OpaqueIntrinsic
-        )
+        matches!(self, Self::Intrinsic(_) | Self::OpaqueIntrinsic)
     }
 
     pub(crate) fn descriptor(self) -> Option<&'static crate::builtins::BuiltinDescriptor> {

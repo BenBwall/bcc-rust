@@ -22,6 +22,14 @@
 //! 16-byte-aligned object or allocates dynamically, the size subtracted
 //! after the pushes makes `%rsp` a multiple of 16: at entry `%rsp + 8` is one
 //! (psABI §3.2.2; Microsoft Learn, "x64 stack usage").
+//!
+//! A System V leaf function whose frame fits the 128-byte red zone below
+//! `%rsp` keeps it there and never moves `%rsp` (psABI §3.2.2): the frame is
+//! laid out as usual, but its objects sit `size` bytes lower relative to the
+//! `%rsp` the function runs with, and the prologue and epilogue neither
+//! subtract nor add. A function that calls, moves `%rsp`, reads or writes
+//! `%rsp` itself, saves a register area for `va_start` or has a slot aligned
+//! above 16 keeps the ordinary frame, as does every Win64 function.
 
 use super::{
     conv::CallConv,
@@ -56,10 +64,14 @@ pub(crate) struct Frame<'a> {
     pub(crate) saved:     ArenaVec<'a, PReg>,
     /// The callee-saved SSE registers (Win64) and their offsets.
     pub(crate) saved_xmm: ArenaVec<'a, (PReg, u32)>,
-    /// Bytes the prologue subtracts from `%rsp` after the pushes.
+    /// Bytes of the frame below the pushes: what the prologue subtracts from
+    /// `%rsp`, unless the frame is in the red zone.
     pub(crate) size:      u32,
     /// Whether `%rbp` addresses the fixed frame.
     pub(crate) rbp_based: bool,
+    /// Whether the frame lies in the System V red zone, so the prologue
+    /// leaves `%rsp` where the pushes put it.
+    pub(crate) red_zone:  bool,
     slots:                ArenaVec<'a, u32>,
     spills:               u32,
     outgoing_end:         u32,
@@ -140,6 +152,18 @@ impl<'a> Frame<'a> {
         if reach > MAX_DISPLACEMENT {
             return Err(Construct::FrameSize(reach));
         }
+        // A leaf frame in the red zone: no call can push into it, and no
+        // instruction moves `%rsp` under it or takes `%rsp` as a value. A
+        // function with a slot aligned above 16 keeps the ordinary frame, as
+        // LLVM's do: they realign `%rsp` through a frame pointer.
+        let red_zone = size > 0
+            && size <= u64::from(conv.red_zone)
+            && !func.calls
+            && !frame_pointer
+            && !func.register_save
+            && func.slot_align <= 16
+            && saved_xmm.is_empty()
+            && leaf(func);
         let narrow = |offset: u64| u32::try_from(offset).expect("bounded by the reach");
         let mut saved_xmm_offsets = ArenaVec::with_capacity_in(saved_xmm.len(), arena);
         saved_xmm_offsets.extend(saved_xmm.into_iter().map(|(r, at)| (r, narrow(at))));
@@ -151,6 +175,7 @@ impl<'a> Frame<'a> {
             saved_xmm: saved_xmm_offsets,
             size: narrow(size),
             rbp_based: frame_pointer,
+            red_zone,
             slots: slot_offsets,
             spills: narrow(spills),
             outgoing_end: narrow(outgoing_end),
@@ -176,14 +201,43 @@ impl<'a> Frame<'a> {
             | FrameObject::FrameAddress => self.home - 16,
         };
         let base = if self.rbp_based { PReg::Rbp } else { PReg::Rsp };
-        (base, i64::from(offset))
+        (base, i64::from(offset) - i64::from(self.allocated_below()))
+    }
+
+    /// The bytes of the frame below `%rsp` as the function runs: the frame's
+    /// size in the red zone, otherwise none.
+    fn allocated_below(&self) -> u32 {
+        if self.red_zone { self.size } else { 0 }
+    }
+
+    /// The bytes the prologue subtracts from `%rsp` after the pushes, and
+    /// the epilogue adds back.
+    pub(crate) fn allocation(&self) -> u32 {
+        self.size - self.allocated_below()
     }
 
     /// The distance from `%rsp` after the prologue to the canonical frame
     /// address (the caller's `%rsp` before the call).
     pub(crate) fn cfa_offset(&self) -> u32 {
-        self.size + 8 * u32::try_from(self.saved.len()).expect("at most 16 registers") + 8
+        self.allocation() + 8 * u32::try_from(self.saved.len()).expect("at most 16 registers") + 8
     }
+}
+
+/// Whether `func` neither calls nor names `%rsp` in any instruction, so
+/// nothing but its own frame accesses touch the stack below the pushes.
+fn leaf(func: &MFunction<'_>) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .all(|inst| {
+            if matches!(inst, MInst::Call { .. }) {
+                return false;
+            }
+            let mut inst = *inst;
+            let mut touches = false;
+            inst.visit_registers(|reg, _| touches |= *reg == Reg::Phys(PReg::Rsp));
+            !touches
+        })
 }
 
 /// Every physical register an instruction other than a call writes, after

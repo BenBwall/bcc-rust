@@ -131,6 +131,15 @@ impl CompilerConfiguration {
         self
     }
 
+    pub(crate) const fn with_optimization(mut self, optimization: (bool, bool)) -> Self {
+        self.optimization = optimization;
+        self
+    }
+
+    pub(crate) const fn optimization(self) -> (bool, bool) {
+        self.optimization
+    }
+
     pub(crate) const fn with_hosted(mut self, hosted: bool) -> Self {
         self.hosted = hosted;
         self
@@ -237,6 +246,7 @@ impl CompilerConfiguration {
             repeated_specifier_warnings: true,
             source_date_epoch: None,
             hosted: true,
+            optimization: (false, false),
             gnu89_inline: None,
             suppress_warnings: false,
             warnings_as_errors: false,

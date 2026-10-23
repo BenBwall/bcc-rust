@@ -1,0 +1,265 @@
+record bytes: entity=136 function=2 symbol=24 convention=32
+LinuxGnu case=0 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=1 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=2 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 151 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=3 errors=0 refusals=0
+  0: a identity=a abi=a asm=Some("b") definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: p identity=p abi=p asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: b identity=b abi=b asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(3)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 158 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=4 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=Some("b") definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+LinuxGnu case=5 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=6 errors=0 refusals=0
+  0: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=7 errors=0 refusals=1
+  0: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=8 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((0, Inline)) function=Some(0) body=PrivateInline end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 153 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=9 errors=0 refusals=0
+  0: target identity=target abi=target asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+LinuxGnu case=10 errors=0 refusals=0
+  0: f identity=_Z1fi abi=_Z1fi asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: f identity=_Z1fd abi=_Z1fd asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=11 errors=0 refusals=0
+  0: a identity=a abi=a asm=None definition=Some((0, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[OccurrenceId(0)]
+  1: b identity=b abi=b asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: c identity=c abi=c asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+LinuxGnu case=12 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxGnu case=13 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: main identity=main abi=main asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  5: __func__ identity=__func__ abi=__func__ asm=None definition=Some((5, FunctionName(StringCacheId { id: 152 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=0 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=1 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=2 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 151 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=3 errors=0 refusals=0
+  0: a identity=a abi=a asm=Some("b") definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: p identity=p abi=p asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: b identity=b abi=b asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(3)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 158 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=4 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=Some("b") definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+LinuxMusl case=5 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=6 errors=0 refusals=0
+  0: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=7 errors=0 refusals=1
+  0: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=8 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((0, Inline)) function=Some(0) body=PrivateInline end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 153 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=9 errors=0 refusals=0
+  0: target identity=target abi=target asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+LinuxMusl case=10 errors=0 refusals=0
+  0: f identity=_Z1fi abi=_Z1fi asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: f identity=_Z1fd abi=_Z1fd asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=11 errors=0 refusals=0
+  0: a identity=a abi=a asm=None definition=Some((0, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[OccurrenceId(0)]
+  1: b identity=b abi=b asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: c identity=c abi=c asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+LinuxMusl case=12 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+LinuxMusl case=13 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: main identity=main abi=main asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  5: __func__ identity=__func__ abi=__func__ asm=None definition=Some((5, FunctionName(StringCacheId { id: 152 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=0 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=1 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=2 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 151 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=3 errors=0 refusals=0
+  0: a identity=a abi=a asm=Some("b") definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: p identity=p abi=p asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: b identity=b abi=b asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(3)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 158 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=4 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=Some("b") definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+WindowsGnu case=5 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=6 errors=0 refusals=0
+  0: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=7 errors=0 refusals=1
+  0: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=8 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((0, Inline)) function=Some(0) body=PrivateInline end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 153 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=9 errors=0 refusals=0
+  0: target identity=target abi=target asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+WindowsGnu case=10 errors=0 refusals=0
+  0: f identity=_Z1fi abi=_Z1fi asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: f identity=_Z1fd abi=_Z1fd asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=11 errors=0 refusals=0
+  0: a identity=a abi=a asm=None definition=Some((0, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[OccurrenceId(0)]
+  1: b identity=b abi=b asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: c identity=c abi=c asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+WindowsGnu case=12 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsGnu case=13 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: main identity=main abi=main asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  5: __func__ identity=__func__ abi=__func__ asm=None definition=Some((5, FunctionName(StringCacheId { id: 152 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=0 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: f identity=f abi=f asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(2)]
+  6: __func__ identity=__func__ abi=__func__ asm=None definition=Some((6, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=1 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=None function=None body=Declaration end=Indeterminate open=true twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: g identity=g abi=g asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 147 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=2 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("g") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 151 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=3 errors=0 refusals=0
+  0: a identity=a abi=a asm=Some("b") definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: p identity=p abi=p asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: b identity=b abi=b asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: main identity=main abi=main asm=None definition=Some((3, Function)) function=Some(3) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(3)]
+  4: __func__ identity=__func__ abi=__func__ asm=None definition=Some((4, FunctionName(StringCacheId { id: 158 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=4 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=Some("b") definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+WindowsMsvc case=5 errors=0 refusals=0
+  0: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=Some("main") definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=6 errors=0 refusals=0
+  0: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: main identity=main abi=main asm=Some("other") definition=Some((1, Function)) function=Some(1) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=7 errors=0 refusals=1
+  0: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: f identity=f abi=f asm=None definition=Some((1, Function)) function=Some(1) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  2: __func__ identity=__func__ abi=__func__ asm=None definition=Some((2, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=8 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((0, Inline)) function=Some(0) body=PrivateInline end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 153 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=9 errors=0 refusals=0
+  0: target identity=target abi=target asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: a identity=a abi=a asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+WindowsMsvc case=10 errors=0 refusals=0
+  0: f identity=_Z1fi abi=?f@@$$J0YAHH@Z asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: f identity=_Z1fd abi=?f@@$$J0YAHN@Z asm=None definition=None function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: g identity=g abi=g asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 148 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=11 errors=0 refusals=0
+  0: a identity=a abi=a asm=None definition=Some((0, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[OccurrenceId(0)]
+  1: b identity=b abi=b asm=None definition=Some((1, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(1)]
+  2: c identity=c abi=c asm=None definition=Some((2, Object)) function=None body=Declaration end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+WindowsMsvc case=12 errors=0 refusals=0
+  0: main identity=main abi=main asm=None definition=Some((0, Function)) function=Some(0) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(0)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 143 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+WindowsMsvc case=13 errors=0 refusals=0
+  0: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  1: __func__ identity=__func__ abi=__func__ asm=None definition=Some((1, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  2: f identity=f abi=f asm=None definition=Some((2, Function)) function=Some(2) body=Definition end=Indeterminate open=false twice=false readonly=false occurrences=[OccurrenceId(0), OccurrenceId(1)]
+  3: __func__ identity=__func__ abi=__func__ asm=None definition=Some((3, FunctionName(StringCacheId { id: 146 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]
+  4: main identity=main abi=main asm=None definition=Some((4, Function)) function=Some(4) body=Definition end=MainZero open=false twice=false readonly=false occurrences=[OccurrenceId(2)]
+  5: __func__ identity=__func__ abi=__func__ asm=None definition=Some((5, FunctionName(StringCacheId { id: 152 }))) function=None body=Declaration end=Indeterminate open=false twice=false readonly=true occurrences=[]

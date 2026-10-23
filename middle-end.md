@@ -53,7 +53,8 @@ The research behind the decisions lives in `docs/research/`:
    │
    ├──► LLVM back end (src/backend/llvm)        textual .ll → bundled clang
    ├──► interpreter (src/backend/interpreter)   reference semantics, test oracle
-   └──► native back end (src/backend/native)    x86-64 assembly → bundled clang
+   └──► native back end (src/backend/native)    x86-64 assembly → bundled clang,
+                                                or objects encoded in process
 ```
 
 One IR serves every stage. The analyzed syntax tree is already the C-aware high
@@ -448,6 +449,21 @@ section, `used` retention and `hidden`/`protected` visibility. Constructors
 and destructors are parameterless defined functions with a 16-bit priority,
 kept in registration order. See [GNU entity attributes](#gnu-entity-attributes-2026-10-14).
 
+File-scope GNU basic assembly (`__asm__("...")` outside a function) is kept as
+module assembly: one text block per `asm`, in source order. It prints as
+`module asm "text"` lines after the target lines, with backslashes, quotes
+(`\u{22}`) and controls such as newlines (`\u{a}`) escaped so each block stays
+on one line. Lowering reports qualifiers, operands and wide or Unicode
+templates as invalid, in Clang's words, and refuses a template with NUL or
+bytes that are not UTF-8 as unsupported, each at its syntax. The LLVM back end appends each block to the module's inline
+assembly; the native listing writes the blocks verbatim after its first
+`.text`, before every function and object, as Clang's output places them, then
+`.att_syntax`. Direct object encoding reads only the emitter's own
+vocabulary, so the native back end assembles such a module with the bundled
+clang even where direct objects are its default (Windows), and
+`--native-object` refuses it. The interpreter refuses to run it, since the
+assembly may define code or data it cannot see.
+
 A `thread_local` global (`global @g external thread_local size 4, align 4`)
 has one copy per thread, initialized from its initializer when the thread
 starts; `global_addr` yields the evaluating thread's copy. Its address is
@@ -561,7 +577,31 @@ C99 inline-only bodies and GNU89 `extern inline` bodies remain external
 declarations in IR, so uninlined calls and addresses refer to the external
 symbol. An `always_inline` one (without inline assembly) is also lowered as
 an internal `name.always_inline` function, marked `alwaysinline`, that
-direct calls name; addresses keep the external symbol. Functions carry
+direct calls name; addresses keep the external symbol. The copy records the
+external function it stands for (`inline_copy_of @name`): the LLVM back end
+emits its body as that function's `available_externally` definition and
+points the copy's uses at it, as Clang emits the inline definition, so
+LLVM's always-inliner makes Clang's choices (a recursive body is not inline
+viable, and its calls reach the external definition). bcc's optimizer
+expands the copy where it can; for the interpreter and the native back end,
+`optimizer/always_inline.rs` then repeats the always-inliner's walk (module
+order, with a copy in its external function's place, and inline viability
+rechecked as each expansion can make a body call itself) and points every
+call that still names a copy at the external function, so every back end
+reaches the same definition: a recursive `__forceinline` function calls the
+external definition at O0 on all of them (#109). The interpreter links
+nothing else, so such a call stops it with an undefined-function trap, as
+the program alone fails to link with Clang; it stops plain inline-only
+calls the same way. A plain inline-only body (without inline assembly,
+`noinline`, or a call of its own symbol through an assembler label or a
+builtin, Clang's `isTriviallyRecursive`) is lowered too, as a copy named
+`name.inline` that nothing calls: LLVM emits it as the external function's
+`available_externally` body, so LLVM's inliner can expand it at O1 and above
+as Clang's does and drops it at O0, while the other back ends drop it.
+Lowering refuses nothing for these bodies: if the unit does not lower with
+them it is lowered again without. A GNU `weak` inline definition is a weak
+definition, emitted where it is referenced, as Clang gives it weak linkage
+before inline-only emission. Functions carry
 their inline control in IR (`noinline` for GNU `noinline`/`noipa`,
 `alwaysinline`), which the inliner and the LLVM back end honor. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
 The interpreter and LLVM therefore share the same decision. Internal functions
@@ -626,10 +666,56 @@ modes and dispatches the checked operation. Scalar name redispatch, the syntheti
 varargs `Builtin` AST adapters and varargs storage rediscovery are deleted. ABI
 classification and cursor movement remain downstream. Atomic builtins now use
 the neutral registry and retain object types and memory-order operands for
-execution. The x86, vector and type-generic recognition/keyword handlers remain
-explicit temporary M6 bridges;
-preprocessing retains its capability adapter until that migration. Scalar/library
-support is tested against the registry on every current target and environment.
+execution. Scalar/library support is tested against the registry on every
+current target and environment.
+
+**M7 is complete.** Lowering queries finalized entity records for effective
+symbol requests, known definitions/open calls, inline-body permission,
+returns-twice and `FunctionEnd`. It retains IR symbol collision checks,
+reachability and ABI projection. Host signature validation shares neutral
+builtin contracts and continues to reject malformed textual IR independently.
+See the [M7 receipt](docs/research/semantic-facts-m7.md).
+
+**M6 is complete.** The x86, vector and type-generic families are registry
+descriptors too, and `__has_builtin` queries the registry. Their operations are
+`Semantic` (folded or selected by semantic analysis) or `Unsupported`; neither
+retains a checked instance, so `schedule_builtin` lets the call reach the same
+refusal as before (an unsupported builtin, or an opaque binding's unanalyzed
+type), never an external symbol. Lowering's
+keyword scheduling still matches the keyword of a varargs, offsetof or
+`choose_expr` form.
+
+**M8 is complete.** Automatic and static initializers store by the
+`InitializerPlan` semantic analysis retained for each accepted initializer
+(`sema.initializers.plan`). `initializers/plan.rs` replays its operations as
+source-ordered leaves at absolute offsets: a range `Repeat` runs once per
+element with an explicit cursor, a changed union `Select` becomes the reset
+zero leaf `CoverageIndex` expects, and a whole `Copy` forgets the selections
+inside it. Automatic emission keeps the coverage-indexed zero gaps and
+evaluates each ranged `InitValueId` once, remembering its converted value;
+static emission maps the same leaves to bytes and relocations. The second
+current-object machine (`Walker`, `leaves`, its field-name designator search,
+braced-scalar and whole-copy classification) and the expression-address
+counting that chose which range values to remember are deleted. Lowering
+refuses a plan operation whose destination it cannot represent (a vector,
+binary128, an unmodeled type, an empty scalar brace pair) with the refusal
+the walker gave.
+
+A range's later elements copy its first (issue #82) when the first
+element's leaves select no union member and write one run of whole bytes:
+every later element would get the same bytes and relocations from them.
+Replay then ends with one `Leaf::Replicate` instead of a leaf per element,
+so `{ [0 ... 999][0 ... 999] = 0 }` is one store and two replications.
+Static emission copies the run's bytes and relocations into the buffer,
+doubling adjacent copies, and an all-zero object still becomes `zero`. An
+automatic range of at least 16 elements whose run is the whole element and
+is not volatile becomes one `fill` of zero, or `copy` instructions that
+double the initialized elements (at most 64); shorter or volatile automatic
+ranges, ranges that select a union member, a whole copy that would forget a
+later element's selection, and partial-byte runs are still replayed element
+by element. Copied ranges keep exactly the bytes, relocations and effects
+of element stores; `lowering/tests/ranges.rs` compares both forms and
+counts the replay work of 2^20-element ranges.
 
 **M5 is complete.** Effects-only evaluation (an overflow predicate's third operand
 and the statements of a GNU block inside it) interprets retained
@@ -642,15 +728,17 @@ block, the same shape short circuits already had; an omitted conditional, or a
 conditional with one effect-free arm, now takes that shape too. A missing summary
 or recipe is a provenance-bearing `MissingFact`.
 
-Initializer placement plans, symbolic constants, remaining builtin families and
-final symbol/function policies remain later migration work.
+Symbolic constants and final symbol/function policies remain later migration
+work.
 Some consumers therefore still inspect syntax in those families. See
 [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and the
 [M1 receipt](docs/research/semantic-facts-m1.md),
 [M2 receipt](docs/research/semantic-facts-m2.md),
 [M3 receipt](docs/research/semantic-facts-m3.md),
-[M4 receipt](docs/research/semantic-facts-m4.md), and
-[M5 receipt](docs/research/semantic-facts-m5.md) for checks and corpus comparisons.
+[M4 receipt](docs/research/semantic-facts-m4.md),
+[M5 receipt](docs/research/semantic-facts-m5.md),
+[M6 receipt](docs/research/semantic-facts-m6.md) and
+[M8 receipt](docs/research/semantic-facts-m8.md) for checks and corpus comparisons.
 
 ### Atomic execution
 
@@ -717,7 +805,9 @@ rather than producing wrong code.
 
 GNU assembler labels select the IR symbol name of functions and static-duration
 objects, and propagate across linked declarations. Labels must be nonempty,
-NUL-free UTF-8; automatic register labels are unsupported. Lowering checks
+NUL-free UTF-8; automatic register labels are unsupported. Semantic completion
+retains decoded requests and their inheritance; lowering checks IR symbol
+collisions and reports retained capability refusals. Semantic analysis resolves
 calling-convention modifiers on every declaration and type name, including
 typedefs and abstract function-pointer types. It accepts the target's default
 (`ms_abi` on Windows, `sysv_abi` on Linux) and the conventions bundled Clang
@@ -1035,6 +1125,13 @@ execution retains the existing unsupported-operation trap. `%f` output uses
 the default six fractional digits. Guest errno and floating-environment APIs
 remain outside the host implementation.
 
+The interpreter runs one translation unit and links nothing else. A call
+that reaches the external definition of an inline-only function, because
+the always-inliner walk did not expand it (#109) or the function is plain
+`inline`, stops with an undefined-function trap, matching the link failure
+of that unit alone, rather than running the inline definition, which no
+linked program would run there.
+
 ### Native back end
 
 bcc's own x86-64 code generator is designed in
@@ -1042,12 +1139,17 @@ bcc's own x86-64 code generator is designed in
 macro-expansion instruction selector over the post-ABI IR, a machine IR over
 virtual registers, linear-scan register allocation with fixed-register
 ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
-and AT&T assembly assembled and linked by the bundled clang. It compiles
+and AT&T assembly, which the bundled clang assembles, or ELF and COFF
+objects it encodes itself; the bundled clang links executables. It compiles
 integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
 stack allocation, computed `goto`, thread-local globals and the GNU symbol
 attributes, and refuses everything else (`f80`, `f128`, `i128` float
 conversions) before writing any output.
 `--backend=native` selects it for `-o`, and `--emit=asm` prints its assembly.
+For `-o` it encodes COFF objects directly on the Windows targets and has the
+bundled clang assemble its listing on Linux; `--native-object` and
+`--no-native-object` choose either path on any target, and the last of the
+two wins. By default a listing the encoder refuses is assembled.
 
 ## Source layout
 
@@ -1074,14 +1176,17 @@ bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
     [--interpret-step-limit=N]      instruction limit; default 100000000, 0 unlimited
 bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
+    [-O0|-O1|-O2|-O3|-Os|-Oz|-Og] GCC optimization level; bare -O means -O1
     [--opt=none|bcc]                the bcc optimizer; none is the default
     [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)
     [--opt-bisect-limit=N]          apply only the first N rewrites (implies bcc)
     [--print-after-all]             each function after every pass, to stderr
     [--time-passes]                 per-pass runs, rewrites and times, to stderr
-    [--llvm-opt=none|O0|O1|O2|O3]   LLVM pipeline and machine level; none means O0
+    [--llvm-opt=none|O0|O1|O2|O3|Os|Oz|Og]   LLVM pipeline and machine level; none means O0
     [--llvm-codegen-only]           skip LLVM IR passes; retain machine level
     [--backend=llvm|native]         code generator for -o; native refuses what it lacks
+    [--native-object|--no-native-object]  native objects encoded in process (the
+                                    Windows default) or assembled by clang (Linux)
     [-fpic|-fPIC|-fpie|-fPIE|-fno-pic]  relocation model; Linux defaults to -fPIE
     [-ftls-model=MODEL]             least specific ELF TLS model: global-dynamic,
                                     local-dynamic, initial-exec or local-exec
@@ -1092,9 +1197,19 @@ bcc-rust x.c --backend=native --emit=asm   print the native back end's assembly
 bcc-rust --print-default-passes     print the default pass list and exit
 ```
 
+`-O0` disables optimization; the other `-O` levels enable bcc's pass
+pipeline and select the corresponding LLVM pipeline (`-Og` uses `O1`).
+The native back end uses the bcc pipeline. The last `-O` wins. Explicit
+`--opt` and `--llvm-opt` override their respective settings from `-O`,
+regardless of order. These selections also work during preprocessing and
+semantic inspection: `__OPTIMIZE__` is 1 when either optimizer is enabled,
+and `__OPTIMIZE_SIZE__` is 1 for an effective LLVM `Os` or `Oz` selection.
+Both macros are ordinary predefined macros, so `-D` and `-U` can override
+them. Explicit pass controls continue to imply the bcc optimizer.
+
 The back-end modes exclude one another and the inspection views
 (`--tokens`, `--syntax-tree`, `--raw-syntax`, `--semantic-types`); the other
-options require a back-end mode. `--emit` and `--interpret` print to stdout and
+options require a back-end mode, except `-O`, `--opt` and `--llvm-opt`. `--emit` and `--interpret` print to stdout and
 the diagnostics, `--print-after-all` and interpreter traps to stderr.
 `--emit=ir`, `--emit=ir-abi` and `--interpret` verify the module first, as the
 LLVM back end does for `--emit=llvm` and `-o`, and report an internal error
@@ -1137,7 +1252,7 @@ library is left to the linker to reject.
   A0-A3 for the host, running them side by side and comparing status and
   output with the interpreter. `tests/integration/code_generation_cli.rs`
   covers the command line.
-  Native test programs run with captured stdout/stderr and a 20-second
+  Native test programs run with captured stdout/stderr and a 120-second
   deadline; `BCC_TEST_TIMEOUT_MS` overrides it with a positive millisecond
   count. On timeout the shared runner kills the process tree (Windows) or
   process group (Unix), reaps the direct child and reports its command and
@@ -1391,9 +1506,9 @@ VLA declarations retain their element and declaration alignment (C11
 
 Packed member reads, writes and aggregate initializers use their guaranteed
 alignment. GNU union casts materialize a temporary union and write the selected
-member. Range initializers use explicit Cartesian cursors and save each selected
-initializer expression once, including aggregate values. The runtime and static
-walkers share the same flattened initializer leaves.
+member. Range initializers save each selected initializer expression once, including
+aggregate values. The runtime and static paths share the same flattened
+initializer leaves (since M8, replayed from the retained semantic plan).
 
 Static file-scope compound literals are memoized as internal globals and filled
 from an iterative queue. Constant pointer values emit bytes; addresses of compound
@@ -1418,7 +1533,7 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
 `lowering/cleanup.rs`):
 
 - **Textual form.** Function headers end in
-  `linkage [align N] [returns_twice] [hidden|protected] [section "name"] [used] [alias @target]`,
+  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [hidden|protected] [section "name"] [used] [alias @target]`,
   global headers in `linkage [thread_local] [constant] size N, align N
   [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
   `destructor @f priority N` follow the globals. The verifier checks alias
@@ -1558,14 +1673,15 @@ environment (`longjmp`, `_longjmp`, `siglongjmp`, `__longjmp_chk`,
 `__mingw_longjmp`) or return MinGW-w64's stack pointer (`mingw_getsp`). No
 other phase matches these spellings.
 
-- **Semantic analysis.** `EntityAttributes::returns_twice` is the retained
-  fact: GNU `returns_twice` on any declaration of the entity, or a linked
+- **Semantic analysis.** The finalized entity retains its effective contract:
+  `EntityAttributes::returns_twice` for GNU `returns_twice` or a linked
   function whose C name the catalog lists (glibc declares `_setjmp` without
-  the attribute). An internal or local function of that name is not marked.
+  the attribute), combined with cataloged assembler requests. An internal or
+  local C function of that name alone is not marked.
 - **IR.** `Function::returns_twice`, printed and parsed as the header keyword
-  `returns_twice` after `align`. Lowering sets it from the fact (and, until
-  M7 retains assembler labels, from the catalog for a label naming a listed
-  symbol); the textual parser also sets it for an unmarked non-internal
+  `returns_twice` after `align`. Lowering sets it from the retained entity
+  contract, including cataloged assembler requests; the textual parser also
+  sets it for an unmarked non-internal
   function the catalog lists. Calls are ordinary `call`s. Every safeguard
   asks `Module::returns_twice`, which adds an alias's canonical target's
   flag to its own, and `Module::returns_twice_escapes`, which says whether a

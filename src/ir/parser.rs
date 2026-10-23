@@ -107,6 +107,10 @@ fn declare_items<'t>(
         match token.kind {
             | TokenKind::End => return Ok(()),
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
+            | TokenKind::Ident("module") => {
+                let text = parse_module_asm(cursor)?;
+                module.add_module_asm(text.asm_text(scratch)?);
+            },
             | TokenKind::Ident("global") => {
                 let (name, declaration, _) = parse_global_header(cursor)?;
                 if module.symbol(name.text_name(scratch)?).is_some() {
@@ -139,6 +143,9 @@ fn declare_items<'t>(
                     || (header.linkage != Linkage::Internal
                         && crate::builtins::returns_twice(name.text_name(scratch)?));
                 module.function_mut(func).inlining = header.inlining;
+                if let Some(external) = header.inline_copy_of {
+                    module.set_inline_copy_of(func, external.text_name(scratch)?);
+                }
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
                         _ = cursor.next();
@@ -151,7 +158,8 @@ fn declare_items<'t>(
     }
 }
 
-const EXPECTED_ITEM: &str = "`target`, `abi`, `global`, `constructor`, `destructor` or `function`";
+const EXPECTED_ITEM: &str =
+    "`target`, `module`, `abi`, `global`, `constructor`, `destructor` or `function`";
 
 /// The second pass: parses initializers and bodies.
 fn define_items<'t>(
@@ -164,6 +172,7 @@ fn define_items<'t>(
         match token.kind {
             | TokenKind::End => return Ok(()),
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
+            | TokenKind::Ident("module") => _ = parse_module_asm(cursor)?,
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
             | TokenKind::Ident("global") => {
                 let (name, _, attributes) = parse_global_header(cursor)?;
@@ -211,6 +220,19 @@ fn define_items<'t>(
             | _ => return Err(token.expected(EXPECTED_ITEM)),
         }
     }
+}
+
+/// `module asm "..."`: one file-scope assembly block, returned as its
+/// string token. The first pass decodes it into the module, so blocks keep
+/// their order; the second skips it.
+fn parse_module_asm<'t>(cursor: &mut Cursor<'_, 't>) -> Result<Token<'t>, ParseError<'t>> {
+    _ = cursor.next();
+    cursor.expect(TokenKind::Ident("asm"), "`asm`")?;
+    let text = cursor.next();
+    if !matches!(text.kind, TokenKind::String(_)) {
+        return Err(text.expected("a string"));
+    }
+    Ok(text)
 }
 
 /// `abi lowered`: the module is post-ABI.
@@ -488,7 +510,8 @@ fn parse_relocation_target<'t>(
 }
 
 /// `function @name(params) [-> ty] linkage [align N] [returns_twice]
-/// [noinline | alwaysinline]` and its symbol attributes, up to the body.
+/// [noinline | alwaysinline] [inline_copy_of @name]` and its symbol
+/// attributes, up to the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
@@ -511,6 +534,11 @@ fn parse_function_header<'t, 's>(
                 .is_some_and(|keyword| cursor.eat(TokenKind::Ident(keyword)))
         })
         .unwrap_or_default();
+    let inline_copy_of = if cursor.eat(TokenKind::Ident("inline_copy_of")) {
+        Some(cursor.symbol()?)
+    } else {
+        None
+    };
     let attributes = WrittenAttributes::parse(cursor)?;
     Ok(FunctionHeader {
         name,
@@ -519,18 +547,20 @@ fn parse_function_header<'t, 's>(
         align,
         returns_twice,
         inlining,
+        inline_copy_of,
         attributes,
     })
 }
 
 struct FunctionHeader<'t, 's> {
-    name:          Token<'t>,
-    signature:     Signature<'s>,
-    linkage:       Linkage,
-    align:         Option<Align>,
-    returns_twice: bool,
-    inlining:      InlineControl,
-    attributes:    WrittenAttributes<'t>,
+    name:           Token<'t>,
+    signature:      Signature<'s>,
+    linkage:        Linkage,
+    align:          Option<Align>,
+    returns_twice:  bool,
+    inlining:       InlineControl,
+    inline_copy_of: Option<Token<'t>>,
+    attributes:     WrittenAttributes<'t>,
 }
 
 /// Parses a body after its `{`, through its `}`.

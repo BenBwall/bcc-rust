@@ -1,8 +1,9 @@
 //! The textual form, as the printer writes it.
 //!
-//! A module prints its target lines, then its globals one per line, then its
-//! constructors and destructors one per line, then each function, with a
-//! blank line between these sections. Entities print as their raw numbers
+//! A module prints its target lines, then its file-scope assembly blocks one
+//! per line, then its globals one per line, then its constructors and
+//! destructors one per line, then each function, with a blank line between
+//! these sections. Entities print as their raw numbers
 //! (`v3`, `block1`, `slot0`, `label0`), so verifier errors and printed text
 //! name the same things. The parser reads this form back unchanged.
 
@@ -50,6 +51,13 @@ impl fmt::Display for Module<'_> {
             writeln!(f, "abi lowered")?;
             separator = "\n";
         }
+        if !self.module_asm().is_empty() {
+            f.write_str(separator)?;
+            for text in self.module_asm() {
+                writeln!(f, "module asm {}", display_asm_text(text))?;
+            }
+            separator = "\n";
+        }
         if self.globals().next().is_some() {
             f.write_str(separator)?;
             for (global, _) in self.globals() {
@@ -94,6 +102,9 @@ impl<'ir> Module<'ir> {
             }
             if let Some(keyword) = function.inlining.keyword() {
                 write!(f, " {keyword}")?;
+            }
+            if let Some(external) = function.inline_copy_of {
+                write!(f, " inline_copy_of {}", display_name(external))?;
             }
             write!(f, "{}", self.display_symbol_attributes(function.attributes))?;
             let Some(body) = &function.body else {
@@ -456,6 +467,25 @@ fn display_name(name: &str) -> impl fmt::Display + '_ {
             match c {
                 | '"' => f.write_str("\\\"")?,
                 | '\\' => f.write_str("\\\\")?,
+                | c if c.is_control() => write!(f, "\\u{{{:x}}}", u32::from(c))?,
+                | c => f.write_char(c)?,
+            }
+        }
+        f.write_char('"')
+    })
+}
+
+/// A file-scope assembly block as one quoted line. Backslashes, quotes and
+/// controls (such as the block's newlines) become escapes, and a quote is
+/// written as `\u{22}` so the string token never contains one; the parser
+/// decodes the same escapes as in quoted symbol names.
+fn display_asm_text(text: &str) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        f.write_char('"')?;
+        for c in text.chars() {
+            match c {
+                | '\\' => f.write_str("\\\\")?,
+                | '"' => f.write_str("\\u{22}")?,
                 | c if c.is_control() => write!(f, "\\u{{{:x}}}", u32::from(c))?,
                 | c => f.write_char(c)?,
             }

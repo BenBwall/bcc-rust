@@ -129,6 +129,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.error(kind, attribute.source, Some(name), None);
                 continue;
             };
+            if let catalog::Rule::Convention(convention) = rule {
+                use super::CallingConvention as C;
+                let resolved = match convention {
+                    | catalog::Convention::Microsoft if !windows => C::Unsupported,
+                    | catalog::Convention::SystemV if windows => C::Unsupported,
+                    | catalog::Convention::Other => C::Unsupported,
+                    | _ if windows => C::Microsoft,
+                    | _ => C::SystemV,
+                };
+                self.retain_convention(resolved, specifier.source_vectors);
+            }
             let refusal = match rule {
                 | catalog::Rule::CallDiagnostic => {
                     self.check_call_diagnostic(specifier, attribute);
@@ -235,8 +246,38 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// MSVC extension: Microsoft Learn, "Argument Passing and Naming
     /// Conventions". <https://learn.microsoft.com/en-us/cpp/cpp/argument-passing-and-naming-conventions>
     fn check_ms_modifier(&mut self, keyword: KeywordTokenType, source: SourceVectors) {
-        if keyword == KeywordTokenType::Vectorcall {
+        use super::CallingConvention as C;
+        let convention = if keyword == KeywordTokenType::Vectorcall {
             self.refuse(UnsupportedAttribute::CallingConvention, source);
+            C::Unsupported
+        } else if matches!(
+            keyword,
+            KeywordTokenType::Cdecl
+                | KeywordTokenType::Stdcall
+                | KeywordTokenType::Fastcall
+                | KeywordTokenType::Thiscall
+        ) {
+            if matches!(
+                self.context.configuration.target(),
+                Target::WindowsGnu | Target::WindowsMsvc
+            ) {
+                C::Microsoft
+            } else {
+                C::SystemV
+            }
+        } else {
+            return;
+        };
+        self.retain_convention(convention, source);
+    }
+
+    fn retain_convention(&mut self, convention: super::CallingConvention, source: SourceVectors) {
+        if !self.tainted {
+            self.attributes.conventions.push(super::ConventionFacts {
+                convention,
+                source,
+                owner: self.functions.reference_function,
+            });
         }
     }
 
@@ -279,6 +320,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if alignment.is_some_and(|alignment| alignment != 0) {
                     self.declares_alignment(binding);
                 }
+            }
+            if item.kind == SpecifierExtensionKind::MsModifier(KeywordTokenType::Forceinline) {
+                self.forceinline(subject, item.source_vectors);
             }
             chain = item.next;
         }

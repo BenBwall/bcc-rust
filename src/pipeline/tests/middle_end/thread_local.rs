@@ -642,7 +642,7 @@ fn the_interpreter_stops_programs_that_create_threads() {
 #[test]
 fn linux_threads_keep_their_own_copies_under_wsl() {
     if !cfg!(windows)
-        || !crate::test_support::native::run_native(Command::new("wsl.exe").args(["-e", "true"]))
+        || !crate::test_support::wsl::run_wsl(Command::new("wsl.exe").args(["-e", "true"]))
             .is_ok_and(|o| o.status.success())
     {
         eprintln!("skipping Linux thread-local execution: WSL runner unavailable");
@@ -694,9 +694,9 @@ fn linux_threads_keep_their_own_copies_under_wsl() {
             .args(["-e", "cc", "-pthread", "-o", &name])
             .args(objects.iter().map(|object| object.file_name().unwrap()))
             .current_dir(directory.path());
-        let linked = crate::test_support::native::run_native(&mut link).unwrap();
+        let linked = crate::test_support::wsl::run_wsl(&mut link).unwrap();
         assert!(linked.status.success(), "{name}: {linked:?}");
-        let ran = crate::test_support::native::run_native(
+        let ran = crate::test_support::wsl::run_wsl(
             Command::new("wsl.exe")
                 .args(["-e", &format!("./{name}")])
                 .current_dir(directory.path()),

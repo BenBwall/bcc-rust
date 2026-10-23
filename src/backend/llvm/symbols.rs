@@ -52,8 +52,13 @@ pub(super) fn declare<'id, 'a, 'm>(
     for (id, function) in module.functions() {
         let signature = module.signature(function.signature);
         let ty = function::signature_type(api, signature, arena);
-        if function.attributes.alias.is_some() {
-            // Placeholder until the alias exists; nothing reads it before.
+        if function.attributes.alias.is_some()
+            || module.inline_copy_target(id).is_some()
+            || (function.inline_copy_of.is_some() && function.body.is_none())
+        {
+            // Placeholder until the alias or the external function exists;
+            // nothing reads it before. A plain inline copy whose body did
+            // not lower is never named.
             functions.push(api.null(api.ty(Type::Ptr)));
             continue;
         }
@@ -77,6 +82,18 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         sections(api, value, function.attributes);
         functions.push(value);
+    }
+    // A private inline copy becomes its external function's
+    // `available_externally` body, and its uses name that function.
+    for (id, function) in module.functions() {
+        if let Some(external) = module.inline_copy_target(id) {
+            let value = functions[external.index()];
+            api.linkage(value, Linkage::AvailableExternally);
+            if let Some(keyword) = function.inlining.keyword() {
+                api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
+            }
+            functions[id.index()] = value;
+        }
     }
     let mut globals = ArenaVec::new_in(arena);
     // Declare every global before constructing any relocated initializer.

@@ -991,6 +991,16 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION"),
     );
     out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
+    // GNU optimization macros (reserved implementation names, C99 §7.1.3p1).
+    let (optimized, size) = configuration.optimization();
+    if optimized {
+        out.push_str("#define __OPTIMIZE__ 1\n");
+    } else {
+        out.push_str("#define __NO_INLINE__ 1\n");
+    }
+    if size {
+        out.push_str("#define __OPTIMIZE_SIZE__ 1\n");
+    }
     // Identity follows the effective inline mode, including flag overrides.
     out.push_str(if configuration.gnu89_inline() {
         "#define __GNUC_GNU_INLINE__ 1\n"
@@ -1074,17 +1084,28 @@ pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
     })
 }
 
-/// Uses keyword identity and the implementation owners' predicates.
+/// Queries the builtin registry, independently of local bindings and of
+/// backend support. A keyword form is advertised where the keyword is
+/// active; a reserved call spelling always, a Microsoft one with Microsoft
+/// compatibility, and a plain GNU library name never.
 /// Clang Language Extensions, Feature Checking Macros:
 /// <https://clang.llvm.org/docs/LanguageExtensions.html#has-builtin>
 /// Extension to C99 §6.10.1p4, p. 148; PDF p. 160.
 fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
-    let id = context.string_cache.intern(spelling);
-    KeywordTokenType::classify(id, context.configuration).is_some_and(|keyword| {
-        crate::translation_phases::semantic_analysis::implemented_builtin(keyword.kind)
-    }) || crate::translation_phases::semantic_analysis::named_builtin(spelling)
-        || crate::builtins::lookup(spelling).is_some_and(|descriptor| {
-            descriptor.availability.naming == crate::builtins::NamingPolicy::Microsoft
-                && context.configuration.msvc_compatibility()
-        })
+    use crate::builtins::{
+        NamingPolicy,
+        SyntaxForm,
+    };
+    let Some(descriptor) = crate::builtins::lookup(spelling) else {
+        return false;
+    };
+    if descriptor.syntax != SyntaxForm::OrdinaryCall {
+        let id = context.string_cache.intern(spelling);
+        return KeywordTokenType::classify(id, context.configuration).is_some();
+    }
+    match descriptor.availability.naming {
+        | NamingPolicy::Reserved => true,
+        | NamingPolicy::Microsoft => context.configuration.msvc_compatibility(),
+        | NamingPolicy::GnuOrdinary => false,
+    }
 }

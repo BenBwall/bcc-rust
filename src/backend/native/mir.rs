@@ -15,6 +15,8 @@
 //! Registers come in two classes: general-purpose registers for integers
 //! and pointers, and SSE registers (`%xmm0`-`%xmm15`) for `f32` and `f64`.
 //! Each virtual register has one class, recorded in [`MFunction::classes`].
+//! `i128`, `f80` and `f128` values live in pairs of general registers; the
+//! x87 instructions that compute on `f80` read and write memory only.
 
 use std::fmt;
 
@@ -56,6 +58,9 @@ pub(crate) struct MFunction<'a> {
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
     pub(crate) register_save:    bool,
+    /// The largest alignment an IR stack slot asks for; a slot aligned
+    /// above 16 bytes rounds its address up from `%rsp` at run time.
+    pub(crate) slot_align:       u64,
     /// A callee-saved register the prologue pushes first, written or not:
     /// `%rbp` when the function takes its frame address, so the caller's
     /// `%rbp` is where a frame pointer would save it.
@@ -83,6 +88,7 @@ impl<'a> MFunction<'a> {
             calls:            false,
             dynamic:          false,
             register_save:    false,
+            slot_align:       1,
             first_push:       None,
             indirect:         ArenaVec::new_in(arena),
             labels:           ArenaVec::new_in(arena),
@@ -374,7 +380,7 @@ impl fmt::Debug for PRegSet {
 }
 
 /// A register operand: physical (precolored) or virtual.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 #[expect(
     variant_size_differences,
     reason = "Both variants fit eight bytes; packing them into one word would obscure every match \
@@ -425,17 +431,40 @@ impl Width {
     }
 }
 
-/// A memory operand, `disp(base)`.
+/// A memory operand, `disp(base)` or `disp(base, index, scale)`. Only a
+/// register or frame base takes an index; RIP-relative operands cannot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Mem {
-    pub(crate) base: Base,
-    pub(crate) disp: i32,
+    pub(crate) base:  Base,
+    pub(crate) index: Option<Index>,
+    pub(crate) disp:  i32,
 }
 
 impl Mem {
     pub(crate) const fn new(base: Base, disp: i32) -> Self {
-        Self { base, disp }
+        Self {
+            base,
+            index: None,
+            disp,
+        }
     }
+
+    /// The same operand `disp` bytes further on.
+    #[must_use]
+    pub(crate) const fn offset(self, disp: i32) -> Self {
+        Self {
+            disp: self.disp + disp,
+            ..self
+        }
+    }
+}
+
+/// The scaled index register of a memory operand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Index {
+    pub(crate) reg:   Reg,
+    /// 1, 2, 4 or 8.
+    pub(crate) scale: u8,
 }
 
 /// What a memory operand is relative to.
@@ -664,6 +693,64 @@ impl XOp {
     }
 }
 
+/// The memory format of an x87 load or store.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum X87Format {
+    F32,
+    F64,
+    /// The 80-bit extended format, ten bytes.
+    F80,
+    I16,
+    I32,
+    I64,
+}
+
+impl X87Format {
+    /// The mnemonic that pushes a value of this format.
+    pub(crate) const fn load(self) -> &'static str {
+        match self {
+            | Self::F32 => "flds",
+            | Self::F64 => "fldl",
+            | Self::F80 => "fldt",
+            | Self::I16 => "filds",
+            | Self::I32 => "fildl",
+            | Self::I64 => "fildll",
+        }
+    }
+
+    /// The mnemonic that stores `%st(0)` in this format and pops it.
+    pub(crate) const fn store(self) -> &'static str {
+        match self {
+            | Self::F32 => "fstps",
+            | Self::F64 => "fstpl",
+            | Self::F80 => "fstpt",
+            | Self::I16 => "fistps",
+            | Self::I32 => "fistpl",
+            | Self::I64 => "fistpll",
+        }
+    }
+}
+
+/// An x87 arithmetic operation, `%st(0) ← %st(0) op %st(1)`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum X87Op {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl X87Op {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            | Self::Add => "fadd",
+            | Self::Sub => "fsub",
+            | Self::Mul => "fmul",
+            | Self::Div => "fdiv",
+        }
+    }
+}
+
 /// A shift count: an immediate or `%cl`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ShiftAmount {
@@ -711,8 +798,10 @@ impl Role {
     }
 }
 
-/// One machine instruction. The two-address forms (`Alu`, `Shift`,
-/// `Unary`, `Cmov`) read and write `dst`.
+/// One machine instruction. The two-address forms (`Alu`, `XAlu`, `Shift`,
+/// `Unary`, `Cmov`, `ShiftDouble`) read and write `dst`; the register
+/// allocator relies on that, and `tests/operands.rs` checks every form's
+/// operands and flags against x86.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MInst {
     /// `dst ← src`. A 64-bit move between registers is a copy, which the
@@ -857,7 +946,8 @@ pub(crate) enum MInst {
         src:   Operand,
     },
     /// `movups`: all 16 bytes of an SSE register loaded from or stored to
-    /// memory (Win64 `__int128` results in `%xmm0`).
+    /// memory: Win64 `__int128` results and System V `__float128` values in
+    /// whole registers, and the System V register save area.
     Move128 {
         load: bool,
         reg:  Reg,
@@ -924,6 +1014,34 @@ pub(crate) enum MInst {
     RepMovsb,
     /// `rep stosb`: stores `%al` into `%rcx` bytes from `(%rdi)`.
     RepStosb,
+    /// Pushes a value from memory onto the x87 stack (`fld`, `fild`).
+    /// The x87 stack is not allocated: every sequence that pushes pops
+    /// everything again before anything else runs, except the `%st(0)`
+    /// result that a `Ret` returns.
+    X87Load {
+        format: X87Format,
+        mem:    Mem,
+    },
+    /// Stores `%st(0)` to memory and pops it (`fstp`, `fistp`, which
+    /// rounds by the control word's rounding mode).
+    X87Store {
+        format: X87Format,
+        mem:    Mem,
+    },
+    /// `%st(0) ← %st(0) op %st(1)`.
+    X87Arith {
+        op: X87Op,
+    },
+    /// `fstp %st(0)`: pops the x87 stack.
+    X87Pop,
+    /// `fucomip %st(1), %st`: ZF, PF and CF from comparing `%st(0)` with
+    /// `%st(1)`, as `ucomis*` sets them, then pops `%st(0)`.
+    X87Compare,
+    /// `fnstcw` (`store`) or `fldcw` of the x87 control word.
+    X87ControlWord {
+        store: bool,
+        mem:   Mem,
+    },
     /// Returns, after the epilogue; reads the result registers.
     Ret {
         uses: PRegSet,
@@ -1053,11 +1171,20 @@ impl MInst {
                 phys(PReg::Rcx, Role::UseDef, &mut visit);
                 phys(PReg::Rax, Role::Use, &mut visit);
             },
+            | Self::X87Load { mem, .. }
+            | Self::X87Store { mem, .. }
+            | Self::X87ControlWord { mem, .. } => memory(mem, &mut visit),
             | Self::Ret { uses } =>
                 for register in uses.iter() {
                     phys(register, Role::Use, &mut visit);
                 },
-            | Self::Jmp { .. } | Self::Jcc { .. } | Self::Ud2 | Self::Int3 => {},
+            | Self::X87Arith { .. }
+            | Self::X87Pop
+            | Self::X87Compare
+            | Self::Jmp { .. }
+            | Self::Jcc { .. }
+            | Self::Ud2
+            | Self::Int3 => {},
         }
     }
 
@@ -1096,6 +1223,126 @@ impl MInst {
             | _ => false,
         }
     }
+
+    /// The source operand the instruction may read from memory instead of
+    /// a register: where a spilled value can be used in its slot without a
+    /// reload. (`xorps` would need 16 aligned bytes.)
+    pub(crate) const fn memory_source(&mut self) -> Option<&mut Operand> {
+        match self {
+            | Self::Mov { src, .. }
+            | Self::Extend { src, .. }
+            | Self::XMov { src, .. }
+            | Self::Alu { src, .. }
+            | Self::Cmp { rhs: src, .. } => Some(src),
+            | Self::XAlu { op, src, .. } if !matches!(op, XOp::Xor) => Some(src),
+            | _ => None,
+        }
+    }
+
+    /// The instruction's memory operand, if it has one; no instruction has
+    /// two.
+    pub(crate) const fn memory_operand(&mut self) -> Option<&mut Mem> {
+        match self {
+            | Self::Mov {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Extend {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::XMov {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Alu {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::XAlu {
+                src: Operand::Mem(mem),
+                ..
+            }
+            | Self::Cmp {
+                rhs: Operand::Mem(mem),
+                ..
+            }
+            | Self::Store { dst: mem, .. }
+            | Self::XStore { dst: mem, .. }
+            | Self::Lea { addr: mem, .. }
+            | Self::Move128 { mem, .. }
+            | Self::X87Load { mem, .. }
+            | Self::X87Store { mem, .. }
+            | Self::X87ControlWord { mem, .. } => Some(mem),
+            | _ => None,
+        }
+    }
+
+    /// The virtual register the memory source reads, when the instruction
+    /// names it nowhere else.
+    pub(crate) fn memory_source_vreg(&self) -> Option<VReg> {
+        let mut inst = *self;
+        let Some(&mut Operand::Reg(Reg::Virt(vreg))) = inst.memory_source() else {
+            return None;
+        };
+        let mut count = 0;
+        inst.visit_registers(|reg, _| count += usize::from(*reg == Reg::Virt(vreg)));
+        (count == 1).then_some(vreg)
+    }
+
+    /// Whether removing the instruction changes nothing but the virtual
+    /// register it defines and the flags: integer arithmetic on registers
+    /// and immediates.
+    pub(crate) fn is_pure_but_flags(&self) -> bool {
+        match self {
+            | Self::Alu { dst, src, .. } =>
+                matches!(dst, Reg::Virt(_)) && !matches!(src, Operand::Mem(_)),
+            | Self::Shift { dst, .. } | Self::Unary { dst, .. } | Self::BitScan { dst, .. } =>
+                matches!(dst, Reg::Virt(_)),
+            | _ => false,
+        }
+    }
+
+    /// Whether the instruction reads the flags, and whether it certainly
+    /// overwrites all of them. The CPU masks a shift count to five bits (six
+    /// for a 64-bit operand, and always six for `shld`/`shrd` here) and a
+    /// masked count of zero leaves every flag alone, so `shlq $64` or
+    /// `shlb $32` overwrites nothing. A shift by `%cl` may likewise leave
+    /// them alone, and a rotate writes only CF and OF. The selector already
+    /// masks its counts, but this does not rely on it.
+    pub(crate) const fn flags(&self) -> (bool, bool) {
+        match self {
+            | Self::Jcc { .. } | Self::Setcc { .. } | Self::Cmov { .. } => (true, false),
+            | Self::Alu {
+                op: AluOp::Adc | AluOp::Sbb,
+                ..
+            } => (true, true),
+            | Self::Alu { .. }
+            | Self::Imul3 { .. }
+            | Self::Cmp { .. }
+            | Self::Test { .. }
+            | Self::Ucomi { .. }
+            | Self::BitScan { .. }
+            | Self::Div { .. }
+            | Self::MulWide { .. }
+            | Self::Call { .. }
+            | Self::X87Compare
+            | Self::Unary {
+                op: UnaryOp::Neg, ..
+            } => (false, true),
+            | Self::Shift {
+                op: ShiftOp::Shl | ShiftOp::Shr | ShiftOp::Sar,
+                width,
+                amount: ShiftAmount::Imm(count),
+                ..
+            } if (*count & if matches!(width, Width::B64) { 63 } else { 31 }) != 0 => (false, true),
+            | Self::ShiftDouble {
+                amount: ShiftAmount::Imm(count),
+                ..
+            } if (*count & 63) != 0 => (false, true),
+            | _ => (false, false),
+        }
+    }
 }
 
 /// Visits the registers of a source operand, which are all read.
@@ -1107,9 +1354,12 @@ fn operand(operand: &mut Operand, visit: &mut impl FnMut(&mut Reg, Role)) {
     }
 }
 
-/// Visits the base register of a memory operand, if it has one.
+/// Visits the base and index registers of a memory operand.
 fn memory(mem: &mut Mem, visit: &mut impl FnMut(&mut Reg, Role)) {
     if let Base::Reg(reg) = &mut mem.base {
         visit(reg, Role::Use);
+    }
+    if let Some(index) = &mut mem.index {
+        visit(&mut index.reg, Role::Use);
     }
 }

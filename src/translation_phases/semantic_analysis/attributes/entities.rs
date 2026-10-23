@@ -100,12 +100,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         subject: Subject,
         specifier: &'tu AttributeSpecifier<'tu>,
     ) {
-        let linked = match subject {
-            | Subject::Function { binding, .. } | Subject::Object { binding, .. }
-                if self.bindings[binding].linkage != Linkage::None =>
-                Some((self.entity_of(binding), self.earlier_definition(binding))),
-            | _ => None,
-        };
+        let linked = self.attribute_entity(subject);
         for attribute in self.written_attributes(specifier) {
             let Some(rule) = rule(
                 specifier.syntax,
@@ -115,28 +110,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ) else {
                 continue;
             };
-            if let Some((entity, definition)) = linked
-                && follows_definition(rule, attribute.name)
+            if follows_definition(rule, attribute.name)
+                && self.ignored_after_definition(linked, attribute.name, attribute.source)
             {
-                let name = self.context.string_cache.intern(attribute.name);
-                match definition {
-                    | Some(definition)
-                        if !self
-                            .attributes
-                            .before_definition
-                            .contains_key(&(entity, name)) =>
-                    {
-                        self.error(
-                            SemanticErrorKind::AttributeAfterDefinition,
-                            attribute.source,
-                            None,
-                            Some(definition),
-                        );
-                        continue;
-                    },
-                    | Some(_) => {},
-                    | None => _ = self.attributes.before_definition.insert((entity, name), ()),
-                }
+                continue;
             }
             match rule {
                 | Rule::CallDiagnostic => self.apply_call_diagnostic(subject, specifier, attribute),
@@ -179,6 +156,80 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | _ => {},
             }
+        }
+    }
+
+    /// MSVC `__forceinline` on a function: the parser already records it as
+    /// the `inline` function specifier, so the definition takes the inline
+    /// linkage of the target (C99 inline definitions on GNU targets, the
+    /// Microsoft ABI's COMDAT linkage on MSVC); this adds the
+    /// `always_inline` request, as Clang's `AlwaysInlineAttr` spelled
+    /// `__forceinline` does. Like that attribute it is ignored with a
+    /// warning on a redeclaration after the definition, `noinline` still
+    /// prevails, and on anything but a function it adds nothing to the
+    /// diagnostic that `inline` there already gets.
+    /// C99: §6.7.4 paragraphs 5-7, pp. 112-113; PDF pp. 124-125.
+    /// MSVC extension: Microsoft Learn, "inline, __inline, __forceinline".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/inline-functions-cpp>
+    pub(super) fn forceinline(&mut self, subject: Subject, source: SourceVectors) {
+        let Subject::Function { binding, .. } = subject else {
+            return;
+        };
+        let linked = self.attribute_entity(subject);
+        if self.ignored_after_definition(linked, "always_inline", source) {
+            return;
+        }
+        let entity = self.entity_of(binding);
+        let attributes = self.attributes.entity(entity);
+        if attributes.inlining != Inlining::Never {
+            attributes.inlining = Inlining::Always;
+        }
+    }
+
+    /// The linked entity a function or object declaration names, with the
+    /// source of its definition when an earlier declaration supplied one.
+    fn attribute_entity(&mut self, subject: Subject) -> Option<(EntityId, Option<SourceVectors>)> {
+        match subject {
+            | Subject::Function { binding, .. } | Subject::Object { binding, .. }
+                if self.bindings[binding].linkage != Linkage::None =>
+                Some((self.entity_of(binding), self.earlier_definition(binding))),
+            | _ => None,
+        }
+    }
+
+    /// Whether an attribute named `name` (underscores trimmed) is ignored,
+    /// with Clang's warning, because a redeclaration adds it after the
+    /// definition; before the definition it is recorded as written there.
+    fn ignored_after_definition(
+        &mut self,
+        linked: Option<(EntityId, Option<SourceVectors>)>,
+        name: &str,
+        source: SourceVectors,
+    ) -> bool {
+        let Some((entity, definition)) = linked else {
+            return false;
+        };
+        let name = self.context.string_cache.intern(name);
+        match definition {
+            | Some(definition)
+                if !self
+                    .attributes
+                    .before_definition
+                    .contains_key(&(entity, name)) =>
+            {
+                self.error(
+                    SemanticErrorKind::AttributeAfterDefinition,
+                    source,
+                    None,
+                    Some(definition),
+                );
+                true
+            },
+            | Some(_) => false,
+            | None => {
+                _ = self.attributes.before_definition.insert((entity, name), ());
+                false
+            },
         }
     }
 
@@ -1028,6 +1079,33 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 continue;
             }
             let entity = self.entity_of(definition.binding);
+            let attributes = self
+                .attributes
+                .entities
+                .get(&entity)
+                .copied()
+                .unwrap_or_default();
+            // Diagnose emitted definitions after redeclarations have supplied
+            // their final section. Unused static and inline-only bodies may
+            // never be emitted; the native emitter checks any it does emit.
+            // GNU extension: section attributes on ELF.
+            if matches!(
+                self.context.configuration.target(),
+                crate::target::Target::LinuxGnu | crate::target::Target::LinuxMusl
+            ) && matches!(definition.kind, super::super::DefinitionKind::Function)
+                && (self.bindings[definition.binding].linkage == Linkage::External
+                    || attributes.used)
+                && let Some(section) = attributes.section
+                && crate::target::sections::ElfSectionKind::named(section).is_bss()
+            {
+                let name = self.context.string_cache.intern(section);
+                self.error(
+                    SemanticErrorKind::BssFunction,
+                    self.bindings[definition.binding].name.source_vectors,
+                    Some(name),
+                    None,
+                );
+            }
             let Some(&(constructor, destructor)) = self.attributes.initializers.get(&entity) else {
                 continue;
             };
@@ -1061,6 +1139,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         entities.extend(self.attributes.entities.iter().map(|(&k, &v)| (k, v)));
         SymbolFacts {
             entities,
+            conventions: tu.alloc_slice_copy(&self.attributes.conventions),
             init_functions: init_functions.leak(),
             aliases: &[],
             refusals: tu.alloc_slice_copy(&self.attributes.refusals),
@@ -1261,6 +1340,8 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Specifier lists already checked by name, by address.
     pub(in crate::translation_phases::semantic_analysis) checked: ArenaMap<'s, usize, ()>,
     pub(in crate::translation_phases::semantic_analysis) refusals: ArenaVec<'s, AttributeRefusal>,
+    pub(in crate::translation_phases::semantic_analysis) conventions:
+        ArenaVec<'s, super::super::ConventionFacts>,
     pub(super) entities: ArenaMap<'s, EntityId, EntityAttributes<'tu>>,
     pub(super) call_diagnostics:
         ArenaMap<'s, (usize, usize), super::call_diagnostics::ParsedDiagnostic>,
@@ -1291,6 +1372,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
         Self {
             checked:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             refusals:           ArenaVec::new_in(scratch),
+            conventions:        ArenaVec::new_in(scratch),
             entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             call_diagnostics:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             sections:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),

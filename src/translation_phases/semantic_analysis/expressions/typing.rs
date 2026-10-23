@@ -300,6 +300,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if op == B::Comma {
             let mut result = Self::expression_result(e, rt);
             result.promotion_width = right.promotion_width;
+            // Extension permitted by C99 §6.6p10 (p. 96; PDF p. 108):
+            // fold a comma only when neither operand requires evaluation.
+            // It remains ineligible as an integer constant expression.
+            if left.constant == ConstantClass::Arithmetic
+                && right.constant == ConstantClass::Arithmetic
+            {
+                result.constant = ConstantClass::Arithmetic;
+                result.integer = right.integer;
+                result.floating = right.floating;
+                result.unfolded_binary128 = right.unfolded_binary128;
+            }
             return result;
         }
         let mut info = Self::expression_result(e, self.types.unknown());
@@ -368,7 +379,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.report_void_arithmetic(e, target);
                         info.ty = lt;
                         if self.address_value(left) && right.ice && right.integer.is_some() {
+                            if op == B::Addition && Self::pointer_value(left) == Some(0) {
+                                self.error(
+                                    SemanticErrorKind::NullPointerArithmetic,
+                                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                                    None,
+                                    None,
+                                );
+                            }
                             info.constant = ConstantClass::Address;
+                            info.integer = self.absolute_pointer_offset(
+                                left,
+                                right,
+                                target,
+                                op == B::Subtraction,
+                            );
                         }
                     } else if op == B::Subtraction
                         && self.pointer_target(rt).is_some_and(|t| {
@@ -381,7 +406,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         info.integer = self.address_difference(left, right, target);
                         if info.integer.is_some() {
                             info.constant = ConstantClass::Arithmetic;
-                            info.folding = ConstantFolding::AddressDifference;
+                            info.folding = ConstantFolding::Address;
                         } else if let Some(labels) = self.label_difference(left, right) {
                             info.constant = ConstantClass::LabelDifference;
                             self.control.record_difference(e, labels);
@@ -401,7 +426,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                     info.ty = rt;
                     if self.address_value(right) && left.ice && left.integer.is_some() {
+                        if Self::pointer_value(right) == Some(0) {
+                            self.error(
+                                SemanticErrorKind::NullPointerArithmetic,
+                                e.operator_source_vectors.unwrap_or(e.source_vectors),
+                                None,
+                                None,
+                            );
+                        }
                         info.constant = ConstantClass::Address;
+                        info.integer = self.absolute_pointer_offset(
+                            right,
+                            left,
+                            self.pointer_target(rt).expect("validated pointer target"),
+                            false,
+                        );
                     }
                 } else {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
@@ -679,6 +718,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     info.constant = ConstantClass::Address;
                     info.integer = selected.integer.map(|v| v.cast(64, false));
                 }
+            }
+            if info.constant == ConstantClass::Address {
+                info.selected_expression = Some(selected.expression);
             }
         }
         info
@@ -1167,13 +1209,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.constant = ConstantClass::Address;
         }
-        // GNU modes fold an integer-valued address constant converted to an
-        // integer type, which C99 does not count as arithmetic (§6.6p8).
-        if self.context.configuration.gnu_extensions()
-            && self.integer_type(target).is_some()
-            && Self::pointer_value(operand).is_some()
-        {
+        // Clang folds integer-valued pointer casts as an additional constant
+        // form, including in ISO modes (§6.6p10). Preserve their non-ICE
+        // status so array and integer-constant contexts apply their own policy.
+        if self.integer_type(target).is_some() && Self::pointer_value(operand).is_some() {
             info.constant = ConstantClass::Arithmetic;
+            info.folding = ConstantFolding::Address;
+            info.ice = false;
         }
         // GNU extension: GCC "Labels as Values". A label difference
         // converted to an integer of 32 to 64 bits, no wider than the value
@@ -2022,13 +2064,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
+            // A keyword form's spelling is an identifier only where its
+            // keyword is disabled; it stays an opaque reserved name there.
             let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name))
+                .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
-            let ty = if let Some(ty) = descriptor
-                .map(|descriptor| self.descriptor_type(descriptor))
-                .or_else(|| self.x86_builtin_type(name))
+            if let Some(descriptor) = descriptor
+                && descriptor.type_rule == crate::builtins::TypeRule::X86Signature
+                && let Some(feature) = descriptor.availability.feature
             {
-                ty
+                self.context
+                    .report_extension(feature, "x86 builtin", name.source_vectors);
+            }
+            let ty = if let Some(descriptor) = descriptor {
+                self.descriptor_type(descriptor)
             } else {
                 let result = self.types.unknown();
                 self.types.intern(TypeKind::Function {
@@ -2047,15 +2096,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
-            self.bindings[index].origin = if let Some(descriptor) = descriptor {
-                super::super::BindingOrigin::Intrinsic(descriptor.id)
-            } else if super::super::builtins::legacy_named_builtin(
-                self.context.string_cache.at(name.name),
-            ) {
-                super::super::BindingOrigin::LegacyIntrinsic
-            } else {
-                super::super::BindingOrigin::OpaqueIntrinsic
-            };
+            self.bindings[index].origin = descriptor
+                .map_or(super::super::BindingOrigin::OpaqueIntrinsic, |descriptor| {
+                    super::super::BindingOrigin::Intrinsic(descriptor.id)
+                });
             return;
         }
         if let ExpressionType::Identifier(name) = e.kind
@@ -2111,12 +2155,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | crate::builtins::NamingPolicy::Microsoft =>
                     self.context.configuration.msvc_compatibility(),
             }
-        }) || super::atomics::modeled(self.context.string_cache.at(name.name))
-            || self
-                .context
-                .string_cache
-                .at(name.name)
-                .starts_with("__builtin_")
+        }) || self
+            .context
+            .string_cache
+            .at(name.name)
+            .starts_with("__builtin_")
     }
 
     /// Checks integer switch expressions and scalar selection/iteration

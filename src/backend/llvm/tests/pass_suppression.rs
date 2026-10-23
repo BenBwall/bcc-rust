@@ -84,3 +84,33 @@ fn codegen_only_preserves_memory_that_o2_ir_passes_remove() {
         }
     }
 }
+
+#[test]
+fn size_levels_emit_objects_with_llvm23_size_attributes() {
+    let arena = Bump::new();
+    let module = parse_module(
+        &arena,
+        "abi lowered\nfunction @answer() -> i32 external {\nblock0:\n v0 = iconst.i32 42\n return \
+         v0\n}\n",
+    )
+    .unwrap();
+    for level in [OptLevel::Os, OptLevel::Oz] {
+        for disable_llvm_passes in [false, true] {
+            let scratch = Bump::new();
+            Session::with(&scratch, Target::LinuxGnu, |api| {
+                build_module(&module, Target::LinuxGnu, api, &scratch).unwrap();
+                let _buffer = api
+                    .emit(Target::LinuxGnu, Some(level), disable_llvm_passes, false)
+                    .unwrap();
+                let optimized = api.print();
+                assert!(optimized.text().contains("optsize"), "{}", optimized.text());
+                assert_eq!(
+                    optimized.text().contains("minsize"),
+                    level == OptLevel::Oz,
+                    "{}",
+                    optimized.text()
+                );
+            });
+        }
+    }
+}

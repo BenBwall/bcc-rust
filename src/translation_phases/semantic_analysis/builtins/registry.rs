@@ -69,7 +69,33 @@ impl Analyzer<'_, '_, '_> {
             },
             | SignatureType::VaList => self.va_list_parameter(),
             | SignatureType::File => self.file_parameter(),
+            | SignatureType::Vector(scalar, count) => self.signature_vector(scalar, count),
+            | SignatureType::VectorPointer(scalar, count, constant) => {
+                let mut ty = self.signature_vector(scalar, count);
+                if constant {
+                    ty = ty.qualified(TypeQualifiers::CONST);
+                }
+                self.types.intern(TypeKind::Pointer(ty))
+            },
+            | SignatureType::Opaque => self.types.unknown(),
         }
+    }
+
+    /// A GNU vector aligned to its size, as `vector_size` declares one.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+    fn signature_vector(&mut self, scalar: Scalar, count: u8) -> TypeId {
+        let element = self.types.scalar(scalar);
+        let count = u64::from(count);
+        let align = self
+            .types
+            .layout(element)
+            .map_or(0, |layout| layout.size * count);
+        self.types.intern(TypeKind::Vector {
+            element,
+            count,
+            align,
+        })
     }
 }
 
@@ -84,11 +110,11 @@ pub(super) fn diagnostic(identity: ConstraintDiagnostic) -> SemanticErrorKind {
         | ConstraintDiagnostic::FrameLevel => SemanticErrorKind::InvalidFrameLevel,
         | ConstraintDiagnostic::VaList => SemanticErrorKind::InvalidVaList,
         | ConstraintDiagnostic::VaArgType => SemanticErrorKind::InvalidVaArgType,
+        | ConstraintDiagnostic::Immediate => SemanticErrorKind::InvalidImmediate,
     }
 }
 
 /// Adapter from the parser's sole keyword classifier to neutral special forms.
-/// Type-generic and vector keyword contracts remain explicit M6 bridges.
 pub(in crate::translation_phases::semantic_analysis) fn keyword_descriptor(
     keyword: crate::translation_phases::preprocessing::KeywordTokenType,
 ) -> Option<&'static BuiltinDescriptor> {
@@ -103,6 +129,10 @@ pub(in crate::translation_phases::semantic_analysis) fn keyword_descriptor(
             | K::BuiltinVaCopy => I::VaCopy,
             | K::BuiltinVaArg => I::VaArg,
             | K::BuiltinOffsetof => I::Offsetof,
+            | K::BuiltinTypesCompatible => I::TypesCompatible,
+            | K::BuiltinChooseExpr => I::ChooseExpr,
+            | K::BuiltinConvertVector => I::Convertvector,
+            | K::BuiltinBitCast => I::BitCast,
             | _ => return None,
         }
         .descriptor(),

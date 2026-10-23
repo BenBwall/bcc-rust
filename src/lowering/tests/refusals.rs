@@ -204,3 +204,102 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     let message = refusal("_Thread_local int tls; __typeof__(int) ordinary; _BitInt(9) value;");
     assert!(message.ends_with("_BitInt types"), "{message}");
 }
+
+/// File-scope basic assembly reaches the module in source order, with
+/// concatenated literals joined, between whatever functions and objects
+/// surround it (GCC manual, "Basic Asm").
+#[test]
+fn file_scope_asm_reaches_the_module_in_source_order() {
+    let ir = lowered(
+        "__asm__(\".globl s\\ns: ret\");\nint f(void) { return 1; }\n__asm__(\"# two\" \" \
+         joined\");\nint x = 3;\n__asm__(\"# \\\"three\\\"\");",
+    );
+    let lines: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("module asm"))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "module asm \".globl s\\u{a}s: ret\"",
+            "module asm \"# two joined\"",
+            "module asm \"# \\u{22}three\\u{22}\"",
+        ],
+        "{ir}"
+    );
+}
+
+/// Clang rejects qualifiers, operands and wide or Unicode templates at file
+/// scope; lowering reports each in Clang's words, as invalid rather than as
+/// valid C it cannot translate. A template with NUL or bytes that are not
+/// UTF-8 is valid but cannot reach the assembler as written, so it is
+/// unsupported. None is dropped.
+#[test]
+fn file_scope_asm_that_cannot_be_carried_is_reported() {
+    for (source, message) in [
+        (
+            "__asm__ volatile(\"nop\");",
+            "meaningless 'volatile' on asm outside function",
+        ),
+        (
+            "__asm__ inline(\"nop\");",
+            "meaningless 'inline' on asm outside function",
+        ),
+        (
+            "__asm__(\"nop\" : );",
+            "file-scope asm cannot have operands, clobbers or labels",
+        ),
+        (
+            "__asm__(L\"nop\");",
+            "cannot use wide string literal in 'asm'",
+        ),
+        (
+            "__asm__(\"a\\0b\");",
+            "not yet supported by lowering: file-scope assembly templates containing NUL or bytes \
+             that are not UTF-8",
+        ),
+        (
+            "__asm__(\"\\xff\");",
+            "not yet supported by lowering: file-scope assembly templates containing NUL or bytes \
+             that are not UTF-8",
+        ),
+    ] {
+        assert_eq!(lower(source), Err(vec![message.to_owned()]), "{source}");
+    }
+}
+
+/// An invalid file-scope asm renders as an error at its syntax without the
+/// note that calls unsupported code valid C.
+#[test]
+fn invalid_file_scope_asm_does_not_claim_to_be_valid_c() {
+    let tu = Bump::new();
+    let source = tu.alloc_str("__asm__ volatile(\"nop\");\n");
+    let mut context = Context::new(&tu);
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        source,
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    let arena = Bump::new();
+    let mut scratch = Bump::new();
+    let errors = lower_translation_unit(
+        &context,
+        &unit,
+        &sema,
+        Target::LinuxGnu,
+        &arena,
+        &mut scratch,
+    )
+    .expect_err("volatile file-scope asm is invalid");
+    let error = errors.errors[0];
+    let span = error.source.expect("the error has a source");
+    let diagnostic = error.to_diagnostic(&context, span);
+    assert_eq!(
+        diagnostic.message,
+        "meaningless 'volatile' on asm outside function"
+    );
+    let rendered = format!("{diagnostic:?}");
+    assert!(!rendered.contains("valid C"), "{rendered}");
+}

@@ -58,6 +58,16 @@ target is `x86_64-unknown-linux-gnu`). `--opt=bcc` runs the bcc optimizer
 each function to stderr after every pass, each implying `--opt=bcc`.
 `bcc-rust --print-default-passes` prints the default pass list in `--passes`
 syntax (it needs no input file), so scripts need not keep a copy.
+
+`-O`/`-O1`, `-O2`, `-O3`, `-Os`, `-Oz` and `-Og` enable bcc's optimizer
+and select the corresponding LLVM pipeline (`-Og` uses O1). `-O0` disables
+both by default. The last `-O` wins; explicit `--opt` and `--llvm-opt`
+override their respective defaults. Numeric levels accept leading zeros;
+`-O4` and larger levels use O3 with Clang-compatible warning text.
+`__OPTIMIZE__` is 1 when either optimizer is enabled, `__OPTIMIZE_SIZE__`
+is 1 for size optimization, and `__NO_INLINE__` is 1 when optimization is
+disabled. `-Ofast` and fast-math policy remain unsupported.
+
 `--llvm-opt=none|O0|O1|O2|O3` selects the LLVM IR pipeline and code-generation level and `--llvm-codegen-only`
 runs no LLVM IR passes, so `--opt=bcc --llvm-opt=O2
 --llvm-codegen-only` is comparison arm A1 of
@@ -75,12 +85,18 @@ generates executable code only and refuses `-fpic`, `-fPIC` and `-shared`.
 
 `--backend=native` replaces LLVM with bcc's own x86-64 code generator
 ([design](docs/design/native-backend.md)): it writes AT&T assembly for System V
-or Win64, which the bundled clang assembles and links, and `--emit=asm` prints
-that assembly. It compiles integer, pointer, `__int128`, `float` and `double`
-code, variadic definitions and variable length arrays; a module that uses
-anything else (x87 `long double`, `__float128`, `__int128` conversions to
-floats) is refused with `error: not yet supported by the native back end: ...`
-and status 1 before any output is written.
+or Win64, which `--emit=asm` prints. For `-o` it encodes COFF objects itself on
+the Windows targets, while on Linux the bundled clang assembles that assembly;
+`--native-object` asks for direct objects on any target (ELF on Linux) and
+`--no-native-object` for the assembler, and the last of the two wins. A module
+with file-scope `asm`, or a listing the encoder cannot represent (such as a
+section name outside `[A-Za-z0-9_.$-]`), is assembled by default, and
+`--native-object` refuses it. The bundled clang links executables. It
+compiles integer, pointer, `__int128`, `float` and `double` code, variadic
+definitions and variable length arrays; a module that uses anything else (x87
+`long double`, `__float128`, `__int128` conversions to floats) is refused with
+`error: not yet supported by the native back end: ...` and status 1 before any
+output is written.
 
 Diagnostics are rendered like `rustc`'s: a lowercase message, the
 `file:line:column` location, the quoted source line with `^` under the problem

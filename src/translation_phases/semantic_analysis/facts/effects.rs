@@ -337,6 +337,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | BuiltinEffectClass::Control => EffectSet::CONTROL,
             | BuiltinEffectClass::Allocate => EffectSet::LIFETIME,
             | BuiltinEffectClass::Library => EffectSet::CALL,
+            | BuiltinEffectClass::Unknown => EffectSet::UNKNOWN,
         };
         for operand in instance.operands {
             let Some(expression) = operand.expression else {

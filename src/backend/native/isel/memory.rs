@@ -1,8 +1,10 @@
 //! Addresses, loads, stores, `copy` and `fill`.
 //!
 //! An address operand folds a frame slot, a symbol the module defines (any
-//! symbol on COFF but a weak declaration), or a register plus a constant
-//! `ptr_add` offset into one memory operand. On ELF a symbol the module does
+//! symbol on COFF but a weak declaration), or a chain of `ptr_add`s of a
+//! base, constants and one scaled register offset into one memory operand
+//! (`disp(base, index, scale)`). A symbol base with an index is loaded into
+//! a register once, at the function's entry. On ELF a symbol the module does
 //! not define is reached through its GOT entry, since executables are
 //! position-independent; on COFF a weak declaration, whose address may be
 //! null, through a `.refptr` stub holding its address, as Clang does.
@@ -31,6 +33,7 @@ use super::{
     Selector,
     ValueKind,
     calls::Passed,
+    is_pair,
     width,
 };
 use crate::{
@@ -41,6 +44,8 @@ use crate::{
             Base,
             Callee,
             FrameObject,
+            Index,
+            MBlock,
             MInst,
             Mem,
             Operand,
@@ -54,6 +59,7 @@ use crate::{
         through_stub,
     },
     ir::{
+        Entity,
         GlobalId,
         Inst,
         InstData,
@@ -68,6 +74,7 @@ use crate::{
         Target,
         TlsModel,
     },
+    util::bump::ArenaVec,
 };
 
 /// The Windows image's TLS index, which the CRT's TLS directory names.
@@ -201,7 +208,7 @@ impl Selector<'_, '_, '_> {
                     i32::try_from(disp).expect("the displacement was bounded"),
                 ),
             | ValueKind::Reg(_) =>
-                if let Some(mem) = self.offset_address(value) {
+                if let Some(mem) = self.folded_address(value) {
                     return mem;
                 },
             | _ => {},
@@ -209,35 +216,144 @@ impl Selector<'_, '_, '_> {
         Mem::new(Base::Reg(self.reg(value)), 0)
     }
 
-    /// `base + offset` for a value defined by a `ptr_add` of a register and
-    /// a constant that fits a displacement.
-    fn offset_address(&self, value: Value) -> Option<Mem> {
-        let ValueDef::Result(inst) = self.body.value_def(value) else {
+    /// The address a `ptr_add` chain computes, as one operand: `disp(base,
+    /// index, scale)` from a base register or frame slot, at most one
+    /// register offset (scaled when an `imul` or `shl` by 1, 2, 4 or 8
+    /// computed it) and constant offsets. A symbol base with an index is
+    /// loaded into a register first, since a RIP-relative operand has no
+    /// index. `None` when `value` is no such chain.
+    pub(super) fn folded_address(&mut self, value: Value) -> Option<Mem> {
+        let mut current = value;
+        let mut index = None;
+        let mut disp = 0_i64;
+        // The chains the optimizer leaves are short; the bound keeps the
+        // walk finite on any input.
+        for _ in 0..4 {
+            let ValueDef::Result(inst) = self.body.value_def(current) else {
+                break;
+            };
+            let InstData::Binary {
+                opcode: Opcode::PtrAdd,
+                args: [base, offset],
+                ..
+            } = *self.body.inst(inst)
+            else {
+                break;
+            };
+            match self.kind(offset) {
+                | ValueKind::Const(bits) => disp = disp.checked_add(bits.cast_signed())?,
+                | ValueKind::Reg(_) if index.is_none() => index = Some(self.scaled(offset)),
+                | _ => break,
+            }
+            current = base;
+        }
+        if current == value {
             return None;
+        }
+        let (base, disp) = match self.kind(current) {
+            | ValueKind::Reg(base) => (Base::Reg(Reg::Virt(base)), disp),
+            | ValueKind::Addr(AddrBase::Slot(slot), offset) => (
+                Base::Frame(FrameObject::Slot(slot)),
+                disp.checked_add(offset)?,
+            ),
+            | ValueKind::Addr(AddrBase::Symbol(symbol), offset)
+                if index.is_none() && self.direct(symbol) =>
+                (
+                    Base::Symbol(SymbolRef::Ir(symbol)),
+                    disp.checked_add(offset)?,
+                ),
+            | ValueKind::Addr(AddrBase::Symbol(symbol), offset) if index.is_some() => (
+                Base::Reg(self.symbol_base(symbol)),
+                disp.checked_add(offset)?,
+            ),
+            | _ => return None,
+        };
+        if disp.abs() >= MAX_DISP {
+            return None;
+        }
+        Some(Mem {
+            base,
+            index,
+            disp: i32::try_from(disp).expect("the displacement was bounded"),
+        })
+    }
+
+    /// A register holding `symbol`'s address, loaded once at the
+    /// function's entry: an indexed operand needs its base in a register,
+    /// and a loop would otherwise recompute it at every access. The
+    /// allocator splits or spills it like any other value where registers
+    /// are scarce.
+    fn symbol_base(&mut self, symbol: Symbol) -> Reg {
+        if let Some(&(_, reg)) = self.bases.iter().find(|&&(other, _)| other == symbol) {
+            return reg;
+        }
+        let reg = self.vreg();
+        self.bases.push((symbol, reg));
+        reg
+    }
+
+    /// Puts the loads of [`Self::symbol_base`]'s registers at the start of
+    /// the entry block, which dominates every use.
+    pub(super) fn load_bases(&mut self) {
+        if self.bases.is_empty() {
+            return;
+        }
+        let entry = MBlock::new(0);
+        let rest = std::mem::replace(
+            &mut self.func.blocks[entry.index()].insts,
+            ArenaVec::new_in(self.arena),
+        );
+        self.current = entry;
+        for index in 0..self.bases.len() {
+            let (symbol, reg) = self.bases[index];
+            self.address_into(reg, AddrBase::Symbol(symbol), 0);
+        }
+        self.func.blocks[entry.index()].insts.extend(rest);
+    }
+
+    /// An `i64` offset as a scaled index: the multiplicand of an `imul` by
+    /// 1, 2, 4 or 8 or of a `shl` by at most 3, else the offset itself.
+    fn scaled(&self, offset: Value) -> Index {
+        let ValueKind::Reg(reg) = self.kind(offset) else {
+            unreachable!("only a register offset is an index");
+        };
+        let plain = Index {
+            reg:   Reg::Virt(reg),
+            scale: 1,
+        };
+        let ValueDef::Result(inst) = self.body.value_def(offset) else {
+            return plain;
         };
         let InstData::Binary {
-            opcode: Opcode::PtrAdd,
-            args: [base, offset],
+            opcode,
+            ty: Type::I64,
+            args: [lhs, rhs],
             ..
         } = *self.body.inst(inst)
         else {
-            return None;
+            return plain;
         };
-        match (self.kind(base), self.kind(offset)) {
-            | (ValueKind::Reg(base), ValueKind::Const(offset))
-                if offset.cast_signed().abs() < MAX_DISP =>
-                Some(Mem::new(
-                    Base::Reg(Reg::Virt(base)),
-                    i32::try_from(offset.cast_signed()).expect("the offset was bounded"),
-                )),
-            | _ => None,
+        let (value, factor) = match (opcode, self.kind(lhs), self.kind(rhs)) {
+            | (Opcode::Imul, ValueKind::Reg(value), ValueKind::Const(factor))
+            | (Opcode::Imul, ValueKind::Const(factor), ValueKind::Reg(value)) => (value, factor),
+            | (Opcode::Shl, ValueKind::Reg(value), ValueKind::Const(count)) if count <= 3 =>
+                (value, 1 << count),
+            | _ => return plain,
+        };
+        match factor {
+            | 1 | 2 | 4 | 8 => Index {
+                reg:   Reg::Virt(value),
+                #[expect(clippy::cast_possible_truncation, reason = "The factor is at most 8.")]
+                scale: factor as u8,
+            },
+            | _ => plain,
         }
     }
 
     /// Loads, stores, `copy` and `fill`.
     pub(super) fn memory(&mut self, inst: Inst, data: InstData) -> Result<(), Construct> {
         match data {
-            | InstData::Load { ty, addr, .. } if ty != Type::I128 => {
+            | InstData::Load { ty, addr, .. } if !is_pair(ty) => {
                 let Some(ValueKind::Reg(dst)) =
                     self.body.inst_result(inst).map(|value| self.kind(value))
                 else {
@@ -246,22 +362,18 @@ impl Selector<'_, '_, '_> {
                 let mem = self.address(addr);
                 self.load(ty, Reg::Virt(dst), mem);
             },
-            | InstData::Load {
-                ty: Type::I128,
-                addr,
-                ..
-            } => {
+            | InstData::Load { ty, addr, .. } => {
                 let dst = self.result_pair(inst);
                 let mem = self.address(addr);
-                self.wide_load(dst, mem);
+                self.pair_load(ty, dst, mem);
             },
             | InstData::Store {
-                ty: Type::I128,
+                ty,
                 args: [value, addr],
                 ..
-            } => {
+            } if is_pair(ty) => {
                 let mem = self.address(addr);
-                self.wide_store(value, mem);
+                self.pair_store(ty, value, mem);
             },
             | InstData::Store {
                 ty,
@@ -368,7 +480,7 @@ impl Selector<'_, '_, '_> {
             );
             return;
         }
-        let mut pieces = [(0_i32, Width::B8, Reg::Virt(crate::ir::Entity::new(0))); 16];
+        let mut pieces = [(0_i32, Width::B8, Reg::Virt(Entity::new(0))); 16];
         let mut count = 0;
         let mut offset = 0;
         for width in [Width::B64, Width::B32, Width::B16, Width::B8] {
@@ -470,7 +582,7 @@ impl Selector<'_, '_, '_> {
 
 /// `mem` moved by `disp` bytes; callers keep the sum small.
 fn shifted(mem: Mem, disp: i32) -> Mem {
-    Mem::new(mem.base, mem.disp + disp)
+    mem.offset(disp)
 }
 
 /// The integer type a piece of `width` is loaded as.

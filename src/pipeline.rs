@@ -35,6 +35,7 @@ use std::path::Path;
 #[cfg(test)]
 pub(crate) use middle_end::lower_translation_unit;
 pub(crate) use middle_end::{
+    InlineCopies,
     MiddleEndError,
     lower_translation_unit_diagnosed,
 };

@@ -269,6 +269,9 @@ pub(crate) enum EntryError {
     Arguments,
     /// A global is larger than the interpreter allows an object to be.
     GlobalTooLarge,
+    /// The module has file-scope assembly, which may define symbols or
+    /// code the interpreter cannot see.
+    ModuleAsm,
 }
 
 impl fmt::Display for EntryError {
@@ -278,6 +281,9 @@ impl fmt::Display for EntryError {
             | Self::NotDefined => "it has no body",
             | Self::Arguments => "the arguments do not match its parameters",
             | Self::GlobalTooLarge => "a global is larger than the interpreter allows",
+            | Self::ModuleAsm =>
+                "the module has file-scope assembly, which the interpreter cannot run; compile it \
+                 with -o instead",
         })
     }
 }

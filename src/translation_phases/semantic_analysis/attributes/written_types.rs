@@ -129,7 +129,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
                 | Step::Expression(expression) => {
                     let info = self.expression_info(expression);
-                    if let Some(selected) = info.selected_expression {
+                    // A conditional's value can select one address, but its
+                    // composite function type still depends on both arms
+                    // (C99 §6.5.15p6, pp. 90-91; PDF pp. 102-103).
+                    if let Some(selected) = info.selected_expression
+                        && !matches!(
+                            expression.kind,
+                            ExpressionType::Conditional(_) | ExpressionType::OmittedConditional(_)
+                        )
+                    {
                         work.push(Step::Expression(selected));
                         continue;
                     }

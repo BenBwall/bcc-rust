@@ -67,3 +67,55 @@ fn m4_missing_checked_instances_and_operands_report_provenance() {
         }
     }
 }
+
+/// Registered families without lowering keep their refusal; none becomes a
+/// call to an external symbol of its spelling or a missing-fact error. A
+/// prototyped x86 call is an unsupported builtin; an overload or binary128
+/// binding keeps the opaque type it had before M6, which stops at its
+/// unanalyzed callee type.
+#[test]
+fn m6_family_calls_remain_unsupported_builtins() {
+    for (source, refusal) in [
+        (
+            "unsigned f(unsigned a,unsigned b){return __builtin_ia32_crc32si(a,b);}",
+            LoweringErrorKind::Unsupported(Construct::Builtin),
+        ),
+        (
+            "int f(int *p){return __builtin_nontemporal_load(p);}",
+            LoweringErrorKind::UnanalyzedType,
+        ),
+        (
+            "double f(const char *tag){return __builtin_nans(tag);}",
+            LoweringErrorKind::UnanalyzedType,
+        ),
+    ] {
+        let tu = Bump::new();
+        let mut context = Context::new(&tu);
+        let syntax = parse_translation_unit(
+            &mut context,
+            Path::new("<m6>"),
+            tu.alloc_str(source),
+            HeaderSearch::default(),
+        );
+        let sema = analyze_translation_unit(&mut context, &syntax);
+        assert!(sema.lowerable(&context), "{source}");
+        let arena = Bump::new();
+        let mut scratch = Bump::new();
+        let errors = lower_translation_unit(
+            &context,
+            &syntax,
+            &sema,
+            Target::LinuxGnu,
+            &arena,
+            &mut scratch,
+        )
+        .unwrap_err();
+        assert!(
+            errors
+                .errors
+                .iter()
+                .all(|error| error.kind == refusal && error.source.is_some()),
+            "{source}: {errors:?}"
+        );
+    }
+}

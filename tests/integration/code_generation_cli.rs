@@ -22,13 +22,133 @@ mod tests {
         },
     };
 
-    use crate::native::{
-        run_native,
-        run_native_with_timeout,
+    use crate::{
+        native::{
+            run_native,
+            run_native_with_timeout,
+        },
+        native_runner::run_until_timeout,
     };
 
     const SUM: &str = "int main(void) {\n  int s = 0;\n  for (int i = 1; i <= 4; i++)\n    s += \
                        i;\n  return s;\n}\n";
+
+    /// Real glibc fortify wrappers must keep libc addresses in syscall tables.
+    #[test]
+    fn glibc_fortify_wrapper_addresses_match_clang_and_run() {
+        if host() != Some("x86_64-unknown-linux-gnu")
+            || !Path::new("/usr/include/unistd.h").is_file()
+        {
+            eprintln!("skipping glibc fortify test: no Linux GNU host headers");
+            return;
+        }
+        let source = r"
+#include <unistd.h>
+#include <string.h>
+#if __USE_FORTIFY_LEVEL != 2
+#error fortify wrappers must be enabled
+#endif
+char *(*cat_value)(char *, const char *) = strcat;
+char *(*cat_indirect)(char *, const char *) = *strcat;
+char *(*cat_twice)(char *, const char *) = **strcat;
+char *(*cat_conditional)(char *, const char *) = 1 ? strcat : strcpy;
+char *(*cwd_value)(char *, size_t) = getcwd;
+char *(*cwd_address)(char *, size_t) = &getcwd;
+ssize_t (*read_value)(int, void *, size_t) = read;
+ssize_t (*read_address)(int, void *, size_t) = &read;
+void (*syscalls[])(void) = { (void (*)(void))getcwd, (void (*)(void))&read };
+int main(void) {
+    static char *(*cwd_static)(char *, size_t) = getcwd;
+    char *(*cwd_local)(char *, size_t) = &getcwd;
+    ssize_t (*read_local)(int, void *, size_t) = read;
+    char buf[4096];
+    if (cat_value != strcat || cat_indirect != strcat
+        || cat_twice != strcat || cat_conditional != strcat) return 3;
+    if (cwd_value != cwd_address || cwd_local != cwd_static || cwd_local != getcwd
+        || read_value != read_address || read_local != read
+        || syscalls[0] != (void (*)(void))getcwd || syscalls[1] != (void (*)(void))read)
+        return 1;
+    if (!cwd_local(buf, sizeof buf) || !getcwd(buf, sizeof buf)) return 2;
+    return read_local(-1, buf, 0) != -1 || read(-1, buf, 0) != -1;
+}
+";
+        let flags = [
+            "--target=x86_64-unknown-linux-gnu",
+            "-D_FORTIFY_SOURCE=2",
+            "-D__OPTIMIZE__",
+            "--idirafter",
+            "/usr/include/x86_64-linux-gnu",
+            "--idirafter",
+            "/usr/include",
+        ];
+        let input = temporary("fortify.c");
+        std::fs::write(&input, source).unwrap();
+        let reference = Command::new("target/llvm/bin/clang")
+            .arg(&input)
+            .args([
+                "-D_FORTIFY_SOURCE=2",
+                "-D__OPTIMIZE__",
+                "-S",
+                "-emit-llvm",
+                "-o",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(reference.status.success(), "{}", text(&reference.stderr));
+        let output = bcc(source, &[&flags[..], &["--emit=llvm"]].concat());
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        for llvm in [text(&reference.stdout), text(&output.stdout)] {
+            for (global, symbol) in [
+                ("cat_value", "strcat"),
+                ("cat_indirect", "strcat"),
+                ("cat_twice", "strcat"),
+                ("cat_conditional", "strcat"),
+                ("cwd_value", "getcwd"),
+                ("cwd_address", "getcwd"),
+                ("read_value", "read"),
+                ("read_address", "read"),
+            ] {
+                let line = llvm
+                    .lines()
+                    .find(|line| line.starts_with(&format!("@{global} =")))
+                    .unwrap();
+                assert!(line.contains(&format!("ptr @{symbol}")), "{line}");
+            }
+            let table = llvm
+                .lines()
+                .find(|line| line.starts_with("@syscalls ="))
+                .unwrap();
+            assert!(
+                table.contains("ptr @getcwd") && table.contains("ptr @read"),
+                "{table}"
+            );
+        }
+        let executable = temporary("fortify.exe");
+        for options in [
+            &["--opt=none", "--llvm-opt=O0"][..],
+            &["--opt=bcc", "--llvm-opt=O2"][..],
+        ] {
+            let built = bcc(
+                source,
+                &[&flags[..], options, &["-o", executable.to_str().unwrap()]].concat(),
+            );
+            assert!(
+                built.status.success(),
+                "{options:?}: {}",
+                text(&built.stderr)
+            );
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{options:?}: {}",
+                text(&output.stderr)
+            );
+        }
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(executable).unwrap();
+    }
 
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
@@ -1155,8 +1275,6 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     #[test]
     fn back_end_options_need_a_back_end() {
         for flags in [
-            &["--opt=bcc"][..],
-            &["--llvm-opt=O2"][..],
             &["-c"][..],
             &["--emit=ir", "--interpret"][..],
             &["--emit=ir", "--syntax-tree"][..],
@@ -1344,7 +1462,16 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let target = format!("--target={target}");
         let path = |path: &Path| path.to_str().unwrap().to_owned();
         let executable = temporary("native-hello.exe");
-        for flags in [&[][..], &["--opt=bcc"][..]] {
+        // The default is direct objects on Windows and the assembler on
+        // Linux; each flag selects one path on every host.
+        for flags in [
+            &[][..],
+            &["--opt=bcc"][..],
+            &["--native-object"][..],
+            &["--native-object", "--opt=bcc"][..],
+            &["--no-native-object"][..],
+            &["--no-native-object", "--opt=bcc"][..],
+        ] {
             let built = bcc(
                 HELLO,
                 &[
@@ -1367,30 +1494,132 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert!(built.status.success(), "{}", text(&built.stderr));
         let run = run_native(&mut Command::new(&pair)).unwrap();
         assert_eq!(run.status.code(), Some(42));
-        let object = temporary("native-hello.o");
-        let compiled = bcc(
-            HELLO,
-            &[&target, "--backend=native", "-c", "-o", &path(&object)],
+        // On Windows the default assembles a listing the encoder refuses, here
+        // for its section name, and links that object as it links its own.
+        let refused = temporary("native-refused.exe");
+        let built = bcc(
+            "__attribute__((section(\"my data\"))) int x = 42;\nint main(void) { return x; }\n",
+            &[&target, "--backend=native", "-o", &path(&refused)],
         );
-        assert!(compiled.status.success(), "{}", text(&compiled.stderr));
-        assert!(object.is_file());
-        for file in [executable, pair, object] {
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&refused)).unwrap();
+        assert_eq!(run.status.code(), Some(42));
+        for flags in [
+            &[][..],
+            &["--native-object"][..],
+            &["--no-native-object"][..],
+        ] {
+            let object = temporary("native-hello.o");
+            let linked = temporary("native-object-hello.exe");
+            assert!(!object.exists());
+            let compiled = bcc(
+                HELLO,
+                &[
+                    &[&target[..], "--backend=native", "-c", "-o", &path(&object)][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            assert!(compiled.status.success(), "{}", text(&compiled.stderr));
+            let bytes = std::fs::read(&object).unwrap();
+            if target.contains("linux") {
+                assert!(bytes.starts_with(b"\x7fELF\x02\x01\x01"));
+                assert!(bytes.windows(6).any(|s| s == b".text\0"));
+                assert!(bytes.windows(5).any(|s| s == b"main\0"));
+            } else {
+                assert!(
+                    bytes.starts_with(&[0x64, 0x86]),
+                    "{flags:?}: not x86-64 COFF"
+                );
+                assert!(bytes.windows(5).any(|s| s == b".text"), "{flags:?}");
+                assert!(bytes.windows(4).any(|s| s == b"main"), "{flags:?}");
+            }
+            let clang = Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+                "target/llvm/bin/clang.exe"
+            } else {
+                "target/llvm/bin/clang"
+            });
+            let result = Command::new(clang)
+                .arg(&target)
+                .arg(&object)
+                .arg("-o")
+                .arg(&linked)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{}", text(&result.stderr));
+            let run = run_native(&mut Command::new(&linked)).unwrap();
+            assert_eq!(run.status.code(), Some(3));
+            assert_eq!(text(&run.stdout), "answer 42\n");
+            std::fs::remove_file(object).unwrap();
+            std::fs::remove_file(linked).unwrap();
+        }
+        for file in [executable, pair, refused] {
             drop(std::fs::remove_file(file));
         }
 
-        // Unsupported code is refused before anything is written.
+        // `long double` goes through the x87 unit.
         let float = temporary("native-float.exe");
-        let refused = bcc(
+        let built = bcc(
             "long double half(long double x) { return x / 2; }\nint main(void) { return half(4) \
              != 2; }\n",
+            &[&target, "--backend=native", "-o", &path(&float)],
+        );
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&float)).unwrap();
+        assert_eq!(run.status.code(), Some(0));
+        drop(std::fs::remove_file(&float));
+
+        // Unsupported code is refused before anything is written.
+        let refused = bcc(
+            "int pick(__int128 x) { switch (x) { case 1: return 2; default: return 3; } }\nint \
+             main(void) { return pick(1) != 2; }\n",
             &[&target, "--backend=native", "-o", &path(&float)],
         );
         assert_eq!(refused.status.code(), Some(1));
         assert_eq!(
             text(&refused.stderr).trim(),
-            "error: not yet supported by the native back end: f80 values (in @half)"
+            "error: not yet supported by the native back end: a switch on an i128 value (in @pick)"
         );
         assert!(!float.exists());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn native_named_array_and_bss_sections_run() {
+        let source = r#"int printf(const char *, ...);
+static void hello(void) { printf("ctor\n"); }
+static void goodbye(void) { printf("fini\n"); }
+__attribute__((section(".init_array"), used)) static void (*p)(void) = hello;
+__attribute__((section(".fini_array.101"), used)) static void (*q)(void) = goodbye;
+__attribute__((section(".bss.foo"))) int zero;
+int main(void) { printf("main\n"); return zero; }
+"#;
+        for flags in [
+            &[][..],
+            &["--opt=bcc"][..],
+            &["--native-object"][..],
+            &["--native-object", "--opt=bcc"][..],
+        ] {
+            let executable = temporary("native-named-sections.exe");
+            let built = bcc(
+                source,
+                &[
+                    &[
+                        "--target=x86_64-unknown-linux-gnu",
+                        "--backend=native",
+                        "-o",
+                        executable.to_str().unwrap(),
+                    ][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0));
+            assert_eq!(text(&run.stdout), "ctor\nmain\nfini\n");
+            std::fs::remove_file(executable).unwrap();
+        }
     }
 
     #[test]
@@ -1418,6 +1647,18 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert!(text(&asm.stdout).contains(".seh_proc\tmain"));
         for (flags, message) in [
             (
+                &["--native-object", "--emit=ir"][..],
+                "error: --native-object requires --backend=native",
+            ),
+            (
+                &["--no-native-object", "--emit=ir"][..],
+                "error: --no-native-object requires --backend=native",
+            ),
+            (
+                &["--no-native-object", "--native-object", "--emit=ir"][..],
+                "error: --native-object requires --backend=native",
+            ),
+            (
                 &["--emit=asm"][..],
                 "error: --emit=asm prints the native back end's assembly; add --backend=native",
             ),
@@ -1443,20 +1684,707 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     }
 
     #[test]
+    fn llvm_diagnostic_errors_fail_cli_without_an_output_file() {
+        // This static body is retained by a call, rather than `used`, so it
+        // reaches LLVM's MC diagnostics instead of the early semantic check.
+        let source = "static __attribute__((noinline,section(\".bss.z\"))) int f(int x) { return \
+                      x+1; }\nstatic __attribute__((noinline,section(\".bss.second\"))) int h(int \
+                      x) { return x+2; }\nint g(int x) { return f(x) + h(x); }\n";
+        let object = temporary("llvm-diagnostic-refused.o");
+        std::fs::write(&object, b"stale object").unwrap();
+        let output = bcc(
+            source,
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--opt=none",
+                "--llvm-opt=O0",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        assert!(
+            text(&output.stderr).contains("BSS section '.bss.z' cannot have non-zero bytes"),
+            "{}",
+            text(&output.stderr)
+        );
+        assert!(
+            text(&output.stderr).contains("BSS section '.bss.second' cannot have non-zero bytes"),
+            "{}",
+            text(&output.stderr)
+        );
+        assert!(!object.exists(), "an LLVM error wrote an object");
+        // Installing the diagnostic callback must preserve LLVM's filtering
+        // of optimization remarks on ordinary successful compilations.
+        let valid = bcc(
+            "int value(void) { return 3; }",
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--opt=none",
+                "--llvm-opt=O0",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ],
+        );
+        assert!(valid.status.success(), "{}", text(&valid.stderr));
+        assert!(valid.stderr.is_empty(), "{}", text(&valid.stderr));
+        assert!(object.exists());
+        std::fs::remove_file(object).unwrap();
+    }
+
+    #[test]
+    fn bss_initializer_errors_fail_all_backends_without_an_output_file() {
+        let source = "int a __attribute__((section(\".bss.z\"))) = 4;\nint b \
+                      __attribute__((section(\".gnu.linkonce.tb.z\"))) = 5;\n";
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let object = temporary("bss-refused.o");
+            std::fs::write(&object, b"stale object").unwrap();
+            let output_path = object.to_str().unwrap();
+            let mut flags = vec!["--target=x86_64-unknown-linux-gnu", "-c", "-o", output_path];
+            flags.extend_from_slice(backend);
+            let output = bcc(source, &flags);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{backend:?}: {}",
+                text(&output.stderr)
+            );
+            assert!(
+                !object.exists(),
+                "a failed compilation wrote an object: {backend:?}"
+            );
+            let stderr = text(&output.stderr);
+            assert!(
+                stderr.contains("BSS section '.bss.z' cannot have non-zero bytes"),
+                "{stderr}"
+            );
+            assert!(
+                stderr.contains("BSS section '.gnu.linkonce.tb.z' cannot have non-zero bytes"),
+                "{stderr}"
+            );
+            assert!(stderr.contains(":1:") && stderr.contains(":2:"), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn bss_static_objects_are_checked_only_when_emitted() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for optimize in [false, true] {
+                for (source, emitted) in [
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\"))) = {1}; int \
+                         f(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\"))) = {1}; int \
+                         *f(void){return b;}",
+                        true,
+                    ),
+                    (
+                        "static int b[4] __attribute__((used,section(\".bss.t\"))) = {1}; int \
+                         f(void){return 0;}",
+                        true,
+                    ),
+                    (
+                        "struct P {int a,b;}; static struct P p[1000] \
+                         __attribute__((section(\".bss.t\"))) = {[0 ... 999]={0,1}}; int \
+                         f(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "int f(void){static int b[4] \
+                         __attribute__((section(\".bss.t\")))={1};return b[0];}",
+                        true,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\")))={1}; static int \
+                         f(void){return b[0];} int g(void){return 0;}",
+                        false,
+                    ),
+                    (
+                        "static int b[4] __attribute__((section(\".bss.t\")))={1}; int *p=b;",
+                        true,
+                    ),
+                ] {
+                    let object = temporary("bss-static.o");
+                    let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+                    flags.extend_from_slice(backend);
+                    if optimize {
+                        flags.push(if backend.is_empty() {
+                            "--llvm-opt=O2"
+                        } else {
+                            "--opt=bcc"
+                        });
+                    }
+                    let output = bcc(source, &flags);
+                    assert_eq!(
+                        output.status.success(),
+                        !emitted,
+                        "{backend:?} optimize={optimize}: {}",
+                        text(&output.stderr)
+                    );
+                    assert_eq!(object.exists(), !emitted);
+                    if emitted {
+                        assert!(
+                            text(&output.stderr).contains("-->"),
+                            "{}",
+                            text(&output.stderr)
+                        );
+                        assert!(
+                            text(&output.stderr)
+                                .contains("BSS section '.bss.t' cannot have non-zero bytes"),
+                            "{}",
+                            text(&output.stderr)
+                        );
+                    } else {
+                        assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+                        std::fs::remove_file(object).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_compilation_removes_stale_object_files() {
+        let cases = [
+            ("preprocessing", "#error deliberate failure\n"),
+            ("parsing", "int value = ;\n"),
+            ("semantics", "int value = not_declared;\n"),
+            ("lowering", "int value(void) { __asm__(\"\"); return 0; }\n"),
+            (
+                "backend",
+                "static __attribute__((noinline,section(\".bss.fn\"))) int f(int x) { return x+1; \
+                 } int g(int x) { return f(x); }\n",
+            ),
+        ];
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for (kind, source) in cases {
+                let object = temporary("stale-object.o");
+                std::fs::write(&object, b"stale object").unwrap();
+                let mut flags = vec![
+                    "--target=x86_64-unknown-linux-gnu",
+                    "-c",
+                    "-o",
+                    object.to_str().unwrap(),
+                ];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert_eq!(
+                    output.status.code(),
+                    Some(1),
+                    "{kind} {backend:?}: {}",
+                    text(&output.stderr)
+                );
+                assert!(!object.exists(), "{kind} {backend:?} left stale output");
+            }
+        }
+    }
+
+    #[test]
+    fn driver_conflicts_preserve_stale_object_files() {
+        for conflict in [
+            &["--native-object"][..],
+            &["--no-native-object"][..],
+            &["--backend=native", "--llvm-opt=O2"][..],
+            &["--backend=native", "--llvm-codegen-only"][..],
+        ] {
+            let object = temporary("driver-conflict.o");
+            std::fs::write(&object, b"existing object").unwrap();
+            let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+            flags.extend_from_slice(conflict);
+            // A usage error must precede even invalid source diagnostics.
+            let output = bcc("int value = not_declared;", &flags);
+            assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+            assert!(text(&output.stderr).contains("--backend=native"));
+            assert!(!text(&output.stderr).contains("not_declared"));
+            assert_eq!(std::fs::read(&object).unwrap(), b"existing object");
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_compilation_preserves_read_only_object_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // Root's access(W_OK) succeeds even for mode 0444, as it does in LLVM.
+        // SAFETY: getuid has no preconditions.
+        if unsafe { libc::getuid() } == 0 {
+            return;
+        }
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for source in ["int value;", "int value = not_declared;"] {
+                let object = temporary("read-only-object.o");
+                std::fs::write(&object, b"existing object").unwrap();
+                std::fs::set_permissions(&object, std::fs::Permissions::from_mode(0o444)).unwrap();
+                let mut flags = vec!["-c", "-o", object.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+                assert_eq!(std::fs::read(&object).unwrap(), b"existing object");
+                std::fs::remove_file(object).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn front_end_failure_preserves_stale_executable_like_clang() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let executable = temporary("stale-executable");
+            std::fs::write(&executable, b"existing executable").unwrap();
+            let mut flags = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-o",
+                executable.to_str().unwrap(),
+            ];
+            flags.extend_from_slice(backend);
+            let output = bcc("int value = not_declared;", &flags);
+            assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+            assert_eq!(std::fs::read(&executable).unwrap(), b"existing executable");
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn folded_pointer_cases_retain_switch_dispatch_on_all_backends() {
+        let source = "struct S {int a,b;};
+            int f1(int x){switch(x){case (long)((char *)0 + 1):return 11;default:return 0;}}
+            int f2(int x){switch(x){case (long)&((struct S *)0)->b:return 12;default:return 0;}}
+            int f3(int x){switch(x){case (int)(long)(char *)4:return 13;default:return 0;}}
+            int f4(int x){switch(x){case (unsigned char)((char *)8 - (char *)0):return \
+                      14;default:return 0;}}
+            int f5(int x){switch(x){case (unsigned char)(long)(char *)260:return 15;default:return \
+                      0;}}
+            int f6(int x){switch(x){case (long)(_Bool)(char *)4:return 16;default:return 0;}}
+            int main(void){return !(f5(4)==15 && f5(5)==0 && f6(1)==16 && f6(0)==0 && f1(1)==11 && \
+                      f1(2)==0 && f2(4)==12 && f2(5)==0
+                && f3(4)==13 && f3(5)==0 && f4(8)==14 && f4(9)==0);}";
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            for mode in ["-std=gnu17", "-std=c99"] {
+                let executable = temporary("folded-pointer-cases");
+                let mut flags = vec![mode, "-o", executable.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(source, &flags);
+                assert!(
+                    output.status.success(),
+                    "{backend:?}: {}",
+                    text(&output.stderr)
+                );
+                assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+                assert_eq!(
+                    run_native(&mut Command::new(&executable))
+                        .unwrap()
+                        .status
+                        .code(),
+                    Some(0)
+                );
+                std::fs::remove_file(executable).unwrap();
+                let object = temporary("folded-pointer-duplicate.o");
+                let mut flags = vec![mode, "-c", "-o", object.to_str().unwrap()];
+                flags.extend_from_slice(backend);
+                let output = bcc(
+                    "int f(int x){switch(x){case 4:return 0;case (unsigned char)(long)(char \
+                     *)260:return 1;}return 2;}",
+                    &flags,
+                );
+                assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+                assert!(
+                    text(&output.stderr).contains("case value repeated"),
+                    "{}",
+                    text(&output.stderr)
+                );
+                assert!(!text(&output.stderr).contains("internal error"));
+                assert!(!object.exists());
+            }
+        }
+        let object = temporary("folded-pointer-sizeof.o");
+        let output = bcc(
+            "int f2[sizeof(char[(unsigned char)(long)(char *)260])];",
+            &["-std=c99", "-c", "-o", object.to_str().unwrap()],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        assert!(!object.exists());
+    }
+
+    #[test]
+    fn null_pointer_arithmetic_emits_zero_data_without_fixups() {
+        for backend in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--native-object"][..],
+        ] {
+            let object = temporary("null-pointer-arithmetic.o");
+            let mut flags = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-c",
+                "-o",
+                object.to_str().unwrap(),
+            ];
+            flags.extend_from_slice(backend);
+            let output = bcc(
+                "char *a __attribute__((section(\".bss.a\"))) = (char *)0 + 0;\nint *b \
+                 __attribute__((section(\".bss.b\"))) = 0 + (int *)0;\nchar *c = (char *)0 - 0;\n",
+                &flags,
+            );
+            assert!(
+                output.status.success(),
+                "{backend:?}: {}",
+                text(&output.stderr)
+            );
+            assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+            assert!(object.exists());
+            if cfg!(target_os = "linux") {
+                let relocations = Command::new("readelf")
+                    .arg("-r")
+                    .arg(&object)
+                    .output()
+                    .unwrap();
+                assert!(relocations.status.success());
+                assert!(
+                    text(&relocations.stdout).contains("There are no relocations"),
+                    "{}",
+                    text(&relocations.stdout)
+                );
+            }
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    /// Neither LLVM's objects nor the native back end's direct COFF objects,
+    /// its Windows default, involve the MinGW installation.
+    #[test]
     fn windows_gnu_object_output_needs_no_mingw() {
-        let object = temporary("no-mingw.o");
+        for flags in [
+            &[][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
+            let object = temporary("no-mingw.o");
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(["--target=x86_64-pc-windows-gnu", "-c", "--input", SUM, "-o"])
+                .arg(&object)
+                .args(flags)
+                .env_remove("MINGW_ROOT")
+                .env("PATH", "")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{flags:?}: {}",
+                text(&output.stderr)
+            );
+            let bytes = std::fs::read(&object).unwrap();
+            assert!(bytes.len() > 20, "{flags:?}: object has no COFF header");
+            assert_eq!(
+                &bytes[..2],
+                &[0x64, 0x86],
+                "{flags:?}: object is x86-64 COFF"
+            );
+            std::fs::remove_file(object).unwrap();
+        }
+    }
+
+    /// GitHub issue #87: the native back end encodes COFF objects in process
+    /// by default on both Windows targets, and Linux keeps the assembler.
+    /// `--native-object` selects the encoder and `--no-native-object` the
+    /// bundled clang's assembly of the listing, the last of the two winning.
+    #[test]
+    fn native_objects_are_direct_by_default_on_windows_only() {
+        let clang = bundled_clang();
+        if !clang.is_file() {
+            eprintln!("skipping: no bundled clang at {}", clang.display());
+            return;
+        }
+        for target in [
+            "x86_64-w64-windows-gnu",
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+        ] {
+            for optimize in [&[][..], &["--opt=bcc"][..]] {
+                let target_flag = format!("--target={target}");
+                let common = [&[&target_flag[..], "--backend=native"][..], optimize].concat();
+                let object = |flags: &[&str]| {
+                    let path = temporary("native-default.o");
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                    _ = command
+                        .args(&common)
+                        .args(flags)
+                        .args(["-c", "--input", HELLO, "-o"])
+                        .arg(&path)
+                        .env("NO_COLOR", "1");
+                    if target.ends_with("windows-gnu") {
+                        // bcc's toolchain lookup asks for a MinGW root before
+                        // clang assembles even an object, on every host; this
+                        // header-free source needs none.
+                        _ = command.env("MINGW_ROOT", env::temp_dir());
+                    }
+                    let output = command.output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{target} {optimize:?} {flags:?}: {}",
+                        text(&output.stderr)
+                    );
+                    let bytes = std::fs::read(&path).unwrap();
+                    std::fs::remove_file(path).unwrap();
+                    bytes
+                };
+                // The assembler path is exactly clang's object for the listing.
+                let listing = bcc(HELLO, &[&common[..], &["--emit=asm"]].concat());
+                assert!(listing.status.success(), "{}", text(&listing.stderr));
+                let assembly = temporary("native-default.s");
+                let reference = temporary("native-default-reference.o");
+                std::fs::write(&assembly, &listing.stdout).unwrap();
+                let assembled = Command::new(&clang)
+                    .arg(&target_flag)
+                    .arg("-c")
+                    .arg(&assembly)
+                    .arg("-o")
+                    .arg(&reference)
+                    .output()
+                    .unwrap();
+                assert!(assembled.status.success(), "{}", text(&assembled.stderr));
+                let clang_object = std::fs::read(&reference).unwrap();
+                std::fs::remove_file(assembly).unwrap();
+                std::fs::remove_file(reference).unwrap();
+
+                let direct = object(&["--native-object"]);
+                let text_path = object(&["--no-native-object"]);
+                let context = format!("{target} {optimize:?}");
+                assert!(text_path == clang_object, "{context}: not clang's object");
+                assert!(
+                    object(&["--no-native-object", "--native-object"]) == direct,
+                    "{context}: the last flag must win"
+                );
+                assert!(
+                    object(&["--native-object", "--no-native-object"]) == text_path,
+                    "{context}: the last flag must win"
+                );
+                let (default, path) = if target.contains("windows") {
+                    (&direct, "direct")
+                } else {
+                    (&text_path, "assembler")
+                };
+                assert!(
+                    object(&[]) == *default,
+                    "{context}: the default is not the {path} path"
+                );
+            }
+        }
+    }
+
+    /// The default direct COFF writer assembles a listing its encoder
+    /// refuses, as every Windows default object was assembled before direct
+    /// objects became the default; only `--native-object` keeps the refusal.
+    #[test]
+    fn default_windows_native_objects_assemble_what_the_encoder_refuses() {
+        if !bundled_clang().is_file() {
+            eprintln!("skipping: no bundled clang to assemble the listing");
+            return;
+        }
+        let cases = [
+            (
+                "__attribute__((section(\"my data\"))) int x = 1;\n",
+                "unsupported COFF section name",
+            ),
+            (
+                "__attribute__((section(\".pdata\"))) const int x = 1;\n",
+                "user section conflicts with generated COFF unwind section",
+            ),
+            (
+                "__attribute__((dllexport)) int caf\\u00e9(void) { return 3; }\n",
+                "unsupported COFF string character",
+            ),
+        ];
+        for target in [
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            for (source, refusal) in cases {
+                let compile = |flags: &[&str]| {
+                    let object = temporary("native-refused.o");
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                    _ = command
+                        .args([target, "--backend=native", "-c", "-o"])
+                        .arg(&object)
+                        .args(flags)
+                        .args(["--input", source])
+                        .env("NO_COLOR", "1");
+                    if target.ends_with("windows-gnu") {
+                        // bcc's toolchain lookup asks for a MinGW root before
+                        // clang assembles even an object, on every host; this
+                        // header-free source needs none.
+                        _ = command.env("MINGW_ROOT", env::temp_dir());
+                    }
+                    let output = command.output().unwrap();
+                    let bytes = std::fs::read(&object).ok();
+                    if bytes.is_some() {
+                        std::fs::remove_file(object).unwrap();
+                    }
+                    (output, bytes)
+                };
+                let (refused, object) = compile(&["--native-object"]);
+                assert_eq!(refused.status.code(), Some(1), "{target} {source}");
+                assert!(
+                    text(&refused.stderr).contains(refusal),
+                    "{target} {source}: {}",
+                    text(&refused.stderr)
+                );
+                assert!(object.is_none(), "{target} {source}");
+                let (built, default) = compile(&[]);
+                assert!(
+                    built.status.success(),
+                    "{target} {source}: {}",
+                    text(&built.stderr)
+                );
+                let (built, assembled) = compile(&["--no-native-object"]);
+                assert!(built.status.success(), "{}", text(&built.stderr));
+                assert!(
+                    default.is_some() && default == assembled,
+                    "{target} {source}: the default is not the assembler's object"
+                );
+            }
+        }
+    }
+
+    /// When the default writer cannot assemble a listing its encoder refused,
+    /// here because only the assembler needs MinGW, the error gives the
+    /// refusal as well as the assembler's failure: an encodable listing would
+    /// have built without MinGW.
+    #[test]
+    fn default_windows_native_objects_report_the_refusal_when_assembly_fails() {
+        let object = temporary("native-refused-no-mingw.o");
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
-            .args(["--target=x86_64-pc-windows-gnu", "-c", "--input", SUM, "-o"])
+            .args(["--target=x86_64-w64-windows-gnu", "--backend=native", "-c"])
+            .args([
+                "--input",
+                "__attribute__((section(\"my data\"))) int x = 1;\n",
+            ])
+            .arg("-o")
             .arg(&object)
             .env_remove("MINGW_ROOT")
             .env("PATH", "")
+            .env("NO_COLOR", "1")
             .output()
             .unwrap();
-        assert!(output.status.success(), "{}", text(&output.stderr));
-        let bytes = std::fs::read(&object).unwrap();
-        assert!(bytes.len() > 20, "object has no COFF header");
-        assert_eq!(&bytes[..2], &[0x64, 0x86], "object is x86-64 COFF");
-        std::fs::remove_file(object).unwrap();
+        let stderr = text(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        // Without the bundled clang the assembler fails before it looks for
+        // MinGW, and the refusal must still be given.
+        assert!(
+            stderr.contains(
+                "native object emission: unsupported COFF section name; assembling the listing \
+                 instead failed: cannot find "
+            ),
+            "{stderr}"
+        );
+        if bundled_clang().is_file() {
+            assert!(stderr.contains("cannot find MinGW"), "{stderr}");
+        }
+        assert!(!object.exists(), "{} was written", object.display());
+    }
+
+    /// The default writer gives the encoder's refusal only when assembling
+    /// the refused listing fails. A missing output directory, the MinGW an
+    /// executable links with, and a link error fail an encodable listing as
+    /// well, so a refused one reports them in the same words, without the
+    /// refusal.
+    #[test]
+    fn default_windows_native_fallback_reports_shared_failures_plainly() {
+        const PROGRAM: &str =
+            "extern int missing(void);\nint main(void) { return x + missing(); }\n";
+        if !bundled_clang().is_file() {
+            eprintln!("skipping: no bundled clang to assemble or link");
+            return;
+        }
+        let refused = format!("__attribute__((section(\"my data\"))) int x = 1;\n{PROGRAM}");
+        let encodable = format!("int x = 1;\n{PROGRAM}");
+        let unwritable = temporary("native-refused-missing-directory").join("x.o");
+        let executable = temporary("native-refused-shared-failure.exe");
+        let cases: [(&str, &[&str], &Path, &str); 3] = [
+            ("--target=x86_64-pc-windows-msvc", &["-c"], &unwritable, ""),
+            (
+                "--target=x86_64-w64-windows-gnu",
+                &[],
+                &executable,
+                "cannot find MinGW",
+            ),
+            (
+                "--target=x86_64-pc-windows-msvc",
+                &[],
+                &executable,
+                "lld-link: error:",
+            ),
+        ];
+        for (target, flags, output, cause) in cases {
+            let build = |source: &str| {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                _ = command
+                    .args([target, "--backend=native"])
+                    .args(flags)
+                    .arg("-o")
+                    .arg(output)
+                    .args(["--input", source])
+                    .env_remove("MINGW_ROOT")
+                    .env("NO_COLOR", "1");
+                if target.ends_with("windows-gnu") {
+                    // No MinGW on `PATH` either; clang never starts, since
+                    // the toolchain lookup fails first.
+                    _ = command.env("PATH", "");
+                }
+                let built = command.output().unwrap();
+                assert_eq!(built.status.code(), Some(1), "{target} {flags:?}");
+                assert!(!output.exists(), "{} was written", output.display());
+                text(&built.stderr)
+            };
+            let (refused, encodable) = (build(&refused), build(&encodable));
+            assert!(
+                !refused.contains("native object emission") && refused.contains(cause),
+                "{target} {flags:?}: {refused}"
+            );
+            assert_eq!(
+                refused.lines().next(),
+                encodable.lines().next(),
+                "{target} {flags:?}"
+            );
+        }
+    }
+
+    /// The bundled clang, which assembles the native listing.
+    fn bundled_clang() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "target/llvm/bin/clang.exe"
+        } else {
+            "target/llvm/bin/clang"
+        })
     }
 
     /// The MinGW-w64 installation root and its C library include directory,
@@ -1564,23 +2492,9 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             ],
         );
         assert!(built.status.success(), "{}", text(&built.stderr));
-        let start = std::time::Instant::now();
-        let error = run_native_with_timeout(
-            &mut Command::new(&executable),
-            std::time::Duration::from_millis(100),
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(
-            error.to_string().contains("native execution timed out"),
-            "{error}"
-        );
-        assert!(error.to_string().contains("loop.exe"), "{error}");
-        assert!(error.to_string().contains("loop started"), "{error}");
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(5),
-            "{error}"
-        );
+        let report = run_until_timeout(&mut Command::new(&executable), "loop started");
+        assert!(report.contains("native execution timed out"), "{report}");
+        assert!(report.contains("loop.exe"), "{report}");
         std::fs::remove_file(executable).unwrap();
     }
 

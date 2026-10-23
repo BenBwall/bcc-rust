@@ -945,3 +945,214 @@ __attribute__((always_inline, gnu_inline)) extern inline int twice(int x) { retu
         assert_eq!(kinds(source, target), [], "{target:?}");
     }
 }
+
+#[test]
+fn bss_function_checks_only_definitions_that_must_be_emitted() {
+    for section in [
+        ".bss.z",
+        ".sbss.z",
+        ".tbss.z",
+        ".gnu.linkonce.sb.z",
+        ".llvm.linkonce.tb.z",
+    ] {
+        for (declaration, expected) in [
+            (
+                "extern int f(void) { return 1; }",
+                &[SemanticErrorKind::BssFunction][..],
+            ),
+            (
+                "__attribute__((used)) static int f(void) { return 1; }",
+                &[SemanticErrorKind::BssFunction][..],
+            ),
+            ("static int f(void) { return 1; }", &[][..]),
+            ("inline int f(void) { return 1; }", &[][..]),
+            ("extern int f(void);", &[][..]),
+        ] {
+            let source = format!("__attribute__((section(\"{section}\"))) {declaration}");
+            assert_eq!(kinds(&source, Target::LinuxGnu), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn bss_initializers_report_every_object_with_source_locations() {
+    use std::fmt::Write;
+
+    use SemanticErrorKind as K;
+    let sections = [
+        ".bss",
+        ".bss.z",
+        ".sbss",
+        ".sbss.z",
+        ".tbss",
+        ".tbss.z",
+        ".gnu.linkonce.b.z",
+        ".llvm.linkonce.b.z",
+        ".gnu.linkonce.sb.z",
+        ".llvm.linkonce.sb.z",
+        ".gnu.linkonce.tb.z",
+        ".llvm.linkonce.tb.z",
+    ];
+    let mut source = String::new();
+    for (index, section) in sections.iter().enumerate() {
+        writeln!(
+            source,
+            "int a{index} __attribute__((section(\"{section}\"))) = 4;"
+        )
+        .unwrap();
+    }
+    for target in [Target::LinuxGnu, Target::LinuxMusl] {
+        with_configuration(&source, gnu(target), |context, sema| {
+            assert_eq!(sema.errors, sections.len());
+            assert!(!sema.lowerable(context));
+            let errors: Vec<_> = context
+                .take_pending_errors()
+                .into_iter()
+                .filter_map(|error| {
+                    if let TranslationError::Semantic(error) = error {
+                        Some(error)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(errors.len(), sections.len());
+            for (error, section) in errors.iter().zip(sections) {
+                assert_eq!(error.kind, K::BssInitializer);
+                assert!(error.source_vectors.length() > 0);
+                assert_eq!(context.string_cache.at(error.name.unwrap()), section);
+            }
+        });
+    }
+    for (declaration, expected) in [
+        ("int a = 4;", Some(K::BssInitializer)),
+        ("double a = -0.0;", Some(K::BssInitializer)),
+        ("double _Complex a = -0.0;", Some(K::BssInitializer)),
+        ("int *a = &other;", Some(K::BssFixups)),
+        ("int *a = &other + 1;", Some(K::BssFixups)),
+        ("_Bool a = &other;", Some(K::BssInitializer)),
+        ("_Bool a = (int *)0;", None),
+        ("_Bool a = (int *)1;", Some(K::BssInitializer)),
+        ("int a[2] = {[0] = 5, [0] = 0};", None),
+        ("int *a[1] = {[0] = &other, [0] = 0};", None),
+        ("unsigned char a = 256;", None),
+        ("int a = 0.5;", None),
+        ("float a = 0x1p-200;", None),
+        ("char *a = (char *)0 + 0;", None),
+        ("char *a = 0 + (char *)0;", None),
+        ("char *a = (char *)0 - 0;", None),
+        ("char *a = (char *)4 - 4;", None),
+        ("int *a = (int *)4 - 1;", None),
+        ("_Bool a = (char *)0 + 0;", None),
+        ("char *a = (char *)0 + 1;", Some(K::BssInitializer)),
+        ("int *a = &other + 0;", Some(K::BssFixups)),
+        ("int *a = 0;", None),
+        ("double a = 0.0;", None),
+        ("char a[3] = \"hi\";", Some(K::BssInitializer)),
+        ("char a[3] = \"\\0\";", None),
+        ("int a[8] = {[0 ... 7] = 5, [0 ... 7] = 0};", None),
+        (
+            "int a[8] = {[0 ... 7] = 0, [3] = 5};",
+            Some(K::BssInitializer),
+        ),
+        ("struct { unsigned a:1, b:1; } a = {.a=2, .b=0};", None),
+        (
+            "struct { unsigned a:1, b:1; } a = {.a=2, .b=1};",
+            Some(K::BssInitializer),
+        ),
+        ("union { int a; long b; } a = {.a=5, .b=0};", None),
+        (
+            "struct { int n; int a[]; } a = {0, {5}};",
+            Some(K::BssInitializer),
+        ),
+        ("int a[1000000000] = {0};", None),
+    ] {
+        let source =
+            format!("extern int other; __attribute__((section(\".bss.z\"))) {declaration}");
+        let errors: Vec<_> = kinds(&source, Target::LinuxGnu)
+            .into_iter()
+            .filter(|k| matches!(k, K::BssInitializer | K::BssFixups))
+            .collect();
+        assert_eq!(errors, expected.into_iter().collect::<Vec<_>>(), "{source}");
+    }
+    assert_eq!(
+        kinds(
+            "void f(void) { static int a __attribute__((section(\".bss.z\"))) = 4; }",
+            Target::LinuxGnu
+        ),
+        []
+    );
+    assert_eq!(
+        kinds(
+            "static int a __attribute__((used,section(\".bss.z\"))) = 4;",
+            Target::LinuxGnu
+        ),
+        [K::BssInitializer]
+    );
+    // A prior section declaration is inherited by the initialized definition.
+    assert_eq!(
+        kinds(
+            "extern int a __attribute__((section(\".sbss.z\"))); int a = 4;",
+            Target::LinuxGnu
+        ),
+        [K::BssInitializer]
+    );
+}
+
+#[test]
+fn bss_initializers_scale_with_written_operations_not_range_extent() {
+    use super::super::initializers::bss::measured_contents;
+
+    let measure = |initializer: &str, expected: Option<bool>| {
+        let source =
+            format!("unsigned a[] __attribute__((section(\".bss.a\"))) = {{{initializer}}};");
+        let mut measured = None;
+        with_configuration(&source, gnu(Target::LinuxGnu), |context, sema| {
+            let plan = sema.initializers.plans.values().next().unwrap();
+            let arena = Bump::new();
+            let (result, steps) = measured_contents(
+                context,
+                sema,
+                plan,
+                sema.types.layout(plan.ty).unwrap().size,
+                &arena,
+            );
+            assert_eq!(result, expected);
+            assert_eq!(sema.errors, usize::from(expected.is_some()));
+            assert!(
+                steps <= 256 * plan.operations.len() + 1024,
+                "{} operations took {steps} steps",
+                plan.operations.len()
+            );
+            measured = Some((plan.operations.len(), steps));
+        });
+        measured.unwrap()
+    };
+    // The old sparse replay took 280 seconds on this ordinary written table.
+    let table = "0xffffffffu,".repeat(32_000);
+    let (operations, steps) = measure(&table, Some(false));
+    assert_eq!(operations, 32_001);
+    assert!(
+        steps < operations + 512,
+        "did not stop at the first surviving leaf: {steps}"
+    );
+    // A later endpoint replacement must not hide surviving middle elements.
+    let table = format!("{table}[0]=0,[31999]=0");
+    let _ = measure(&table, Some(false));
+    // Range length does not change the retained or executed work.
+    for value in ["0xffffffffu", "0"] {
+        let expected = (value != "0").then_some(false);
+        let small = measure(&format!("[0 ... 7] = {value}"), expected);
+        let large = measure(&format!("[0 ... 199999] = {value}"), expected);
+        let huge = measure(&format!("[0 ... 1999999999] = {value}"), expected);
+        assert_eq!(small.0, large.0);
+        assert_eq!(small.0, huge.0);
+        assert!(large.1 < small.1 + 256);
+        assert!(huge.1 < small.1 + 256);
+    }
+    let _ = measure("[0 ... 199999] = 0xffffffffu, [0 ... 199999] = 0", None);
+    let _ = measure(
+        "[0 ... 199999] = 0xffffffffu, [0] = 0, [199999] = 0",
+        Some(false),
+    );
+}

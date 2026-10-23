@@ -4,6 +4,7 @@
 // Shared process runner; integration tests include the same implementation.
 #[path = "../tests/support/native.rs"]
 pub(crate) mod native;
+pub(crate) mod wsl;
 
 std::thread_local! {
     /// Counts effects-only recipe tasks lowering interprets, scoped to the

@@ -104,11 +104,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.work.push(Work::Expression(operand_expression));
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(target_type));
+                self.work.push(Work::TypeName(target_type, false));
             },
             | E::SizeofType(name) | E::AlignofType(name) => {
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(name));
+                self.work.push(Work::TypeName(name, false));
             },
             | E::CompoundLiteral {
                 type_name,
@@ -117,7 +117,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 _ = self.work.pop();
                 self.work.push(Work::CompoundInitializer(e, initializer));
                 self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(type_name));
+                // Clang recovers folded bounds here, where C99 §6.5.2.5p1
+                // requires a non-VLA type (p. 75; PDF p. 87).
+                self.work.push(Work::TypeName(type_name, true));
             },
             | E::Call {
                 function_expression,
@@ -145,13 +147,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Statement(s, true));
             },
             | E::Generic(g) => {
+                // Marks around each operand let the selection skip the
+                // references code generation does not emit.
                 for association in g.associations.iter().rev() {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
                     self.work.push(Work::Expression(association.expression));
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
                     if let Some(name) = association.type_name {
                         self.syntax_operand(super::SyntaxOperand::Type(name));
                     }
                 }
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
                 self.syntax_operand(g.controlling);
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
             },
             | E::Countof(operand) => self.syntax_operand(operand),
             | E::Builtin(b) => {
@@ -404,7 +416,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.control_jump(s, true);
                 self.functions.dead = true;
             },
-            | S::Expression(e) => self.expression_slot(e),
+            | S::Expression(e) => {
+                if let ExpressionSlot::Parsed(expression) = e {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::ExpressionStatementEnd(
+                            expression,
+                        )));
+                }
+                self.expression_slot(e);
+            },
             | S::ComputedGoto(e) => {
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
