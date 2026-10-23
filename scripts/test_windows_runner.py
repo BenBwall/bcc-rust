@@ -50,6 +50,36 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(json.loads(payload.partition("=")[2]), cargo)
         self.assertEqual(json.loads(output.getvalue())["run_id"], 42)
 
+    def test_torture_survey_arguments_reach_the_dispatch(self):
+        calls = []
+
+        def github(*arguments, **options):
+            calls.append(arguments)
+            if arguments[:2] == ("run", "list"):
+                return subprocess.CompletedProcess(arguments, 0, json.dumps([
+                    {"databaseId": 7, "displayTitle": "Windows torture request-123", "url": "torture"},
+                ]), "")
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+
+        survey = ["--match", "20021127-1.c", "--arms", "A0,A1", "--jobs", "1", "--repeat", "5"]
+        with patch.object(sys, "argv", ["bcc-windows", "torture", "--sha", "a" * 40, "--", *survey]), \
+             patch.object(client, "gh", github), \
+             patch.object(client.uuid, "uuid4", return_value=types.SimpleNamespace(hex="request-123")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(client.main(), 0)
+        dispatch = next(call for call in calls if call[:2] == ("workflow", "run"))
+        self.assertIn("suite=torture", dispatch)
+        payload = next(value for value in dispatch if value.startswith("cargo_args_json="))
+        self.assertEqual(json.loads(payload.partition("=")[2]), survey)
+
+    def test_ci_rejects_extra_arguments(self):
+        with patch.object(sys, "argv", ["bcc-windows", "ci", "--sha", "a" * 40, "--", "--lib"]), \
+             patch.object(client, "gh") as github, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as failure:
+                client.main()
+        self.assertEqual(failure.exception.code, 2)
+        github.assert_not_called()
+
     def test_wait_returns_failed_windows_job_status(self):
         def github(*arguments, **options):
             if arguments[:2] == ("run", "list"):

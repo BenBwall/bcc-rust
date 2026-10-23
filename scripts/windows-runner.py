@@ -46,7 +46,7 @@ def checkout_commit(requested=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for suite in ("test", "bench", "ci"):
+    for suite in ("test", "bench", "ci", "torture"):
         command = commands.add_parser(suite)
         source = command.add_mutually_exclusive_group()
         source.add_argument("--sha", help="full pushed commit; works from any directory")
@@ -61,13 +61,14 @@ def main():
         command.add_argument("run_id", type=int)
         if operation == "download":
             command.add_argument("--dir", required=True, help="artifact destination (prefer the shared mount)")
-    # Everything after -- belongs to Cargo, without shell parsing/requoting.
+    # Everything after -- belongs to Cargo (or, for torture, to
+    # scripts/run_gcc_torture_execute.py), without shell parsing/requoting.
     cli = sys.argv[1:]
     separator = cli.index("--") if "--" in cli else len(cli)
     cargo_arguments = cli[separator + 1:] if separator < len(cli) else []
     args = parser.parse_args(cli[:separator])
-    if cargo_arguments and args.command not in ("test", "bench"):
-        parser.error("Cargo arguments are supported only by test and bench")
+    if cargo_arguments and args.command not in ("test", "bench", "torture"):
+        parser.error("Arguments after -- are supported only by test, bench and torture")
     if args.command == "status":
         return gh("api", f"repos/{REPOSITORY}/actions/runners", "--jq",
                   "{total_count,runners:[.runners[]|{name,status,busy,labels:[.labels[].name]}]}").returncode
