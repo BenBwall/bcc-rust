@@ -377,7 +377,8 @@ impl<'id> Session<'id> {
             | Type::F80 => unsafe { LLVMX86FP80TypeInContext(self.context) },
             // SAFETY: The session owns the live context.
             | Type::F128 => unsafe { LLVMFP128TypeInContext(self.context) },
-            // SAFETY: Opaque pointers need only the live context and address space.
+            // SAFETY: Opaque pointers need only the live context and address
+            // space.
             | Type::Ptr => unsafe { LLVMPointerTypeInContext(self.context, 0) },
         };
         Ty(raw, PhantomData)

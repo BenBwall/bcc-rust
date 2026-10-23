@@ -425,8 +425,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 // GNU Designated Initializers: both inclusive
                                 // endpoints are integer constant expressions.
                                 // All elements have the same type; checking the
-                                // last also validates the bound and continuation.
-                                // <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
+                                // last also validates the bound and
+                                // continuation. <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
                                 | DesignatorType::Range(range) => {
                                     let lower_info = self.expression_info(range.lower.expression());
                                     let upper = self.expression_info(range.upper.expression());
