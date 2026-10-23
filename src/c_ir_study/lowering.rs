@@ -80,14 +80,13 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
             let binding = facts
                 .body_binding
                 .ok_or_else(|| unsupported("unnamed parameter", signature.origin))?;
-            this.local(binding, 0, true, sema.bindings[binding].name.source_vectors)?;
+            _ = this.local(binding, 0, true, sema.bindings[binding].name.source_vectors)?;
         }
         this.emit(InstructionKind::Enter(0), signature.origin);
         let mut tasks = ArenaVec::new_in(arena);
         tasks.push(Task::Statement(
             record.syntax.body,
             State {
-                scope:   0,
                 depth:   1,
                 loop_to: None,
             },
@@ -112,6 +111,7 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
         })
     }
 
+    /// C99: §6.8.2-6.8.6, pp. 132-139; PDF pp. 144-151.
     fn statement(
         &mut self,
         statement: &'tu Statement<'tu>,
@@ -126,7 +126,6 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                 self.emit(InstructionKind::Enter(scope), origin);
                 tasks.push(emit(InstructionKind::Exit));
                 let inner = State {
-                    scope,
                     depth: state.depth + 1,
                     ..state
                 };
@@ -258,7 +257,6 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                 tasks.push(Task::Statement(
                     f.body_statement,
                     State {
-                        scope,
                         depth,
                         loop_to: Some((exit, next, depth)),
                     },
@@ -286,6 +284,7 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
         Ok(())
     }
 
+    /// C99: §6.2.4p5, p. 32; PDF p. 44; §6.7.8p11, p. 126; PDF p. 138.
     fn declaration(&mut self, decl: &'tu Declaration<'tu>, scope: usize) -> Result<(), Error> {
         let origin = decl.source_vectors;
         if decl.assertion.is_some() || decl.declaration_specifiers.extensions.is_some() {
@@ -366,6 +365,7 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
         Ok(id)
     }
 
+    /// C99: §6.3, pp. 42-48; PDF pp. 54-60; §6.5, pp. 67-94; PDF pp. 79-106.
     fn expression(&mut self, root: &'tu AstExpr<'tu>) -> Result<usize, Error> {
         let mut tasks = ArenaVec::new_in(self.arena);
         tasks.push((root, false));
@@ -620,7 +620,6 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
 
 #[derive(Clone, Copy)]
 struct State {
-    scope:   usize,
     depth:   usize,
     loop_to: Option<(usize, usize, usize)>,
 }

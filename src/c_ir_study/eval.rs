@@ -29,7 +29,6 @@ pub(super) fn evaluate<'a>(
 ) -> Execution<'a> {
     let mut machine = Machine {
         module,
-        arena,
         limits,
         frames: ArenaVec::new_in(arena),
         locals: ArenaVec::new_in(arena),
@@ -49,6 +48,12 @@ pub(super) fn evaluate<'a>(
             .iter()
             .position(|f| f.signature.name == entry)
             .ok_or(Failure::Unsupported("entry function"))?;
+        if args
+            .iter()
+            .any(|v| !v.ty.valid() || v.bits & !v.ty.mask() != 0)
+        {
+            return Err(Failure::InvalidIr);
+        }
         machine.values.extend(args.iter().map(|&value| Evaluated {
             value,
             effects: Effects::default(),
@@ -75,7 +80,6 @@ pub(super) fn evaluate<'a>(
 
 struct Machine<'m, 'ir, 'a> {
     module:          &'m Module<'ir>,
-    arena:           &'a Bump,
     limits:          Limits,
     frames:          ArenaVec<'a, Frame>,
     locals:          ArenaVec<'a, Cell>,
@@ -219,11 +223,10 @@ impl<'ir> Machine<'_, 'ir, '_> {
                         self.tasks.push(Action::Finish(id));
                         self.tasks.push(Action::Expr(a));
                     },
-                    | ExpressionKind::Binary(_, a, b) | ExpressionKind::Sequence(a, b) => {
+                    | ExpressionKind::Binary(_, a, _) | ExpressionKind::Sequence(a, _) => {
                         self.tasks.push(Action::Finish(id));
                         self.tasks.push(Action::Second(id));
                         self.tasks.push(Action::Expr(a));
-                        _ = b;
                     },
                     | ExpressionKind::Logical { left, .. }
                     | ExpressionKind::Conditional {
@@ -269,7 +272,8 @@ impl<'ir> Machine<'_, 'ir, '_> {
                         function,
                         arguments,
                     } => {
-                        self.tasks.push(Action::Invoke(function, arguments.len()));
+                        self.tasks
+                            .push(Action::Invoke(id, function, arguments.len()));
                         for &arg in arguments.iter().rev() {
                             self.tasks.push(Action::Expr(arg));
                         }
@@ -385,7 +389,8 @@ impl<'ir> Machine<'_, 'ir, '_> {
                 };
                 self.value(value, effects.sequenced(chosen.effects));
             },
-            | Action::Invoke(function, count) => {
+            | Action::Invoke(id, function, count) => {
+                self.origin = Some(self.function()?.expressions[id].origin);
                 let start = self
                     .values
                     .len()
@@ -725,7 +730,7 @@ enum Action {
     Finish(usize),
     Choose(usize),
     Chosen(usize, Effects),
-    Invoke(usize, usize),
+    Invoke(usize, usize, usize),
     CallDone(Effects),
     Initialize(usize),
     Discard,

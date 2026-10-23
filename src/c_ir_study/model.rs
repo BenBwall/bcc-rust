@@ -6,6 +6,7 @@ use crate::{
     target::Scalar,
     translation_phases::{
         Context,
+        SourceVector,
         SourceVectors,
         semantic_analysis::{
             FunctionRecord,
@@ -18,10 +19,19 @@ use crate::{
 };
 
 /// A complete snapshot. IDs and names remain usable after the frontend dies.
-/// Source handles refer to the originating compilation's provenance store.
+/// Copied source segments remain available through their original handles.
 #[derive(Debug)]
 pub(super) struct Module<'ir> {
     pub(super) functions: &'ir [Function<'ir>],
+    pub(super) origins:   &'ir [Origin<'ir>],
+}
+
+/// File IDs refer to the host's source catalog; offsets/lines/columns survive
+/// frontend teardown, including all segments of macro-expanded operations.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Origin<'ir> {
+    pub(super) handle: SourceVectors,
+    pub(super) spans:  &'ir [SourceVector],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -193,6 +203,10 @@ impl Error {
 }
 
 impl IntType {
+    pub(super) fn valid(self) -> bool {
+        self.scalar.integer() && (1..=64).contains(&self.bits)
+    }
+
     pub(super) fn snapshot(sema: &SemanticTranslationUnit<'_>, ty: TypeId) -> Result<Self, Error> {
         if !ty.qualifiers.is_empty() {
             return Err(Error::new(
@@ -256,7 +270,16 @@ impl<'ir> Signature<'ir> {
         else {
             return Err(fail());
         };
-        if record.old_style || record.assembly || parameters.len() != record.parameter_facts.len() {
+        if record.old_style
+            || record.assembly
+            || parameters.len() != record.parameter_facts.len()
+            || record.syntax.declaration_specifiers.extensions.is_some()
+            || sema
+                .symbols
+                .entity(sema.correspondence.entity_of(binding, data))
+                .is_some()
+            || sema.function_extensions.function(binding).is_some()
+        {
             return Err(fail());
         }
         let result = IntType::snapshot(sema, record.result)?;
@@ -277,23 +300,40 @@ impl<'ir> Signature<'ir> {
 }
 
 impl Module<'_> {
+    pub(super) fn source_spans(&self, handle: SourceVectors) -> Option<&[SourceVector]> {
+        self.origins
+            .iter()
+            .find(|o| o.handle == handle)
+            .map(|o| o.spans)
+    }
+
     /// Checks executable references before the evaluator trusts this graph.
     pub(super) fn verify(&self) -> Result<(), Error> {
         let bad = || Error::new(Failure::InvalidIr, None);
         for f in self.functions {
             if f.code.is_empty()
                 || f.locals.len() > 128
+                || !f.signature.result.valid()
+                || f.signature.parameters.iter().any(|ty| !ty.valid())
                 || f.signature.parameters.len() > f.locals.len()
                 || f.labels.iter().any(|&pc| pc >= f.code.len())
             {
                 return Err(bad());
             }
-            for local in f.locals {
-                if local.scope >= f.scopes {
+            for (id, local) in f.locals.iter().enumerate() {
+                if local.scope >= f.scopes
+                    || !local.ty.valid()
+                    || local.parameter != (id < f.signature.parameters.len())
+                    || (local.parameter
+                        && (local.scope != 0 || local.ty != f.signature.parameters[id]))
+                {
                     return Err(bad());
                 }
             }
             for (id, e) in f.expressions.iter().enumerate() {
+                if !e.ty.valid() {
+                    return Err(bad());
+                }
                 let child = |n| if n < id { Ok(()) } else { Err(bad()) };
                 let local = |n| {
                     if n < f.locals.len() {
@@ -304,8 +344,15 @@ impl Module<'_> {
                 };
                 match e.kind {
                     | ExpressionKind::Constant(_) => {},
-                    | ExpressionKind::Read(n) | ExpressionKind::Update { local: n, .. } =>
-                        local(n)?,
+                    | ExpressionKind::Read(n) => local(n)?,
+                    | ExpressionKind::Update {
+                        local: n, promoted, ..
+                    } => {
+                        local(n)?;
+                        if !promoted.valid() {
+                            return Err(bad());
+                        }
+                    },
                     | ExpressionKind::Convert(n) | ExpressionKind::Unary(_, n) => child(n)?,
                     | ExpressionKind::Binary(_, a, b)
                     | ExpressionKind::Sequence(a, b)
@@ -316,10 +363,15 @@ impl Module<'_> {
                         child(b)?;
                     },
                     | ExpressionKind::Set {
-                        local: n, value, ..
+                        local: n,
+                        value,
+                        operation,
                     } => {
                         local(n)?;
                         child(value)?;
+                        if operation.is_some_and(|(_, ty)| !ty.valid()) {
+                            return Err(bad());
+                        }
                     },
                     | ExpressionKind::Conditional {
                         condition,
@@ -383,6 +435,7 @@ impl Module<'_> {
                     | _ => {},
                 }
             }
+            super::verify::scope_flow(f)?;
         }
         Ok(())
     }

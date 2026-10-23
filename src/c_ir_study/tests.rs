@@ -259,6 +259,13 @@ fn object_instances_begin_at_block_entry_and_end_on_jumps() {
     let mut x_live = false;
     for event in execution.events {
         assert!(event.origin.is_some(), "events retain provenance handles");
+        let spans = module
+            .source_spans(event.origin.unwrap())
+            .expect("copied source segments");
+        assert!(
+            !spans.is_empty() && spans[0].line > 0,
+            "source location survives frontend teardown"
+        );
         match event.kind {
             | EventKind::Begin { local, instance } => {
                 assert!(seen.insert(instance), "every lifetime has a new identity");
@@ -377,6 +384,57 @@ fn text_is_deterministic_and_invalid_control_references_are_rejected() {
     let functions = [bad_function];
     let bad = Module {
         functions: &functions,
+        origins:   first.origins,
     };
     assert_eq!(bad.verify().unwrap_err().failure, Failure::InvalidIr);
+
+    let underflow = [
+        Instruction {
+            kind:   InstructionKind::Exit,
+            origin: first.functions[0].signature.origin,
+        },
+        Instruction {
+            kind:   InstructionKind::Fallthrough,
+            origin: first.functions[0].signature.origin,
+        },
+    ];
+    let f = Function {
+        code: &underflow,
+        labels: &[],
+        ..first.functions[0]
+    };
+    assert_eq!(
+        Module {
+            functions: &[f],
+            origins:   first.origins,
+        }
+        .verify()
+        .unwrap_err()
+        .failure,
+        Failure::InvalidIr
+    );
+
+    let result_type = IntType {
+        bits: 0,
+        ..first.functions[0].signature.result
+    };
+    let f = Function {
+        signature: Signature {
+            result: result_type,
+            ..first.functions[0].signature
+        },
+        ..first.functions[0]
+    };
+    let malformed = Module {
+        functions: &[f],
+        origins:   first.origins,
+    };
+    let runtime = Bump::new();
+    assert_eq!(
+        evaluate(&malformed, "sum", &[], Limits::default(), &runtime)
+            .result
+            .unwrap_err()
+            .failure,
+        Failure::InvalidIr
+    );
 }

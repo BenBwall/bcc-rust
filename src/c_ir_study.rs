@@ -19,12 +19,14 @@ mod arithmetic;
 mod eval;
 mod lowering;
 mod model;
+mod verify;
 
 use lowering::Lowerer;
 use model::{
     Error,
     Failure,
     Module,
+    Origin,
     Signature,
 };
 
@@ -32,9 +34,13 @@ use crate::{
     configuration::CStandard,
     translation_phases::{
         Context,
-        semantic_analysis::SemanticTranslationUnit,
+        semantic_analysis::{
+            CleanupKind,
+            SemanticTranslationUnit,
+        },
     },
     util::bump::{
+        ArenaSet,
         ArenaVec,
         Bump,
     },
@@ -61,6 +67,17 @@ fn lower<'tu, 'ir>(
             None,
         ));
     }
+    if sema
+        .control
+        .regions
+        .iter()
+        .any(|r| !matches!(r.cleanup, CleanupKind::None))
+    {
+        return Err(Error::new(
+            Failure::Unsupported("VLA or cleanup lifetime"),
+            None,
+        ));
+    }
     let mut signatures = ArenaVec::new_in(arena);
     for record in sema.functions {
         signatures.push(Signature::snapshot(context, sema, record, arena)?);
@@ -82,8 +99,26 @@ fn lower<'tu, 'ir>(
             arena,
         )?);
     }
+    let mut origins = ArenaVec::new_in(arena);
+    let mut seen = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
+    for function in &functions {
+        let handles = std::iter::once(function.signature.origin)
+            .chain(function.locals.iter().map(|local| local.origin))
+            .chain(function.expressions.iter().map(|e| e.origin))
+            .chain(function.code.iter().map(|op| op.origin));
+        for handle in handles {
+            if seen.insert(handle) {
+                origins.push(Origin {
+                    handle,
+                    spans: arena
+                        .alloc_slice_fill_iter(context.get_source_vectors(handle).iter().cloned()),
+                });
+            }
+        }
+    }
     let module = Module {
         functions: arena.alloc_slice_copy(&functions),
+        origins:   arena.alloc_slice_copy(&origins),
     };
     module.verify()?;
     Ok(module)
