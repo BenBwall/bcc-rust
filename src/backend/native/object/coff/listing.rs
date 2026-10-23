@@ -126,8 +126,9 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                         let id = definition.ok_or(Error("COFF symbol attribute outside .def"))?;
                         match (name, unsigned(args)?) {
                             // MC keeps weakness independent of storage class.
-                            // Static weak fallbacks need separate class metadata;
-                            // refuse them in either directive order for now.
+                            // Static weak fallbacks need separate class
+                            // metadata; refuse them in either directive order
+                            // for now.
                             | (".scl", 3) if object.symbols[id].binding == 2 =>
                                 return Err(Error("unsupported static COFF weak symbol")),
                             | (".scl", class @ (2 | 3)) => {
