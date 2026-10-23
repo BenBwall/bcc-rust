@@ -1004,7 +1004,9 @@ The first isolated slice is in `src/c_ir_study.rs` and `src/c_ir_study/`, behind
 `cfg(test)`. It snapshots existing typed syntax/sema facts into logical integer
 objects, explicit lexical lifetimes, a statement CFG and an expression graph
 retaining sequence points. A bounded evaluator runs after the frontend arena
-has been dropped. It has no dependency on today's scalar IR, optimizer, ABI or
+has been dropped. Copied provenance segments preserve file IDs, offsets, lines
+and columns; resolving file IDs to names/text remains the host's source-catalog
+responsibility. It has no dependency on today's scalar IR, optimizer, ABI or
 LLVM evaluator. The default build and pipeline do not use it.
 
 The slice includes integer functions, automatic locals, conversions, loops,
@@ -1023,7 +1025,10 @@ events, explicit capability refusals and execution limits. The new IR has a
 deterministic text dump and reference verifier; a text parser and the adapter
 back to legacy IR remain future work.
 
-Implementation checkpoint: standard paragraphs and formatting checked; shared
-wrapper compilation and differential validation are pending. The original
+Initial validation: eight targeted tests passed, including ten defined programs
+on two target data models against four legacy execution arms each (80 legacy
+comparisons). The first compilation caught snapshot/evaluator borrow lifetime
+errors, which were corrected before that passing run. Additional provenance,
+type/reference and lexical CFG checks are being validated next. The original
 study's source/citation/link checks remain design evidence, not performance
-measurements.
+measurements; no compilation-overhead budget has been measured yet.
