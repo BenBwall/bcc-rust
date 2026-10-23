@@ -460,11 +460,7 @@ impl<'ir> Machine<'_, 'ir, '_> {
             .ok_or(Failure::InvalidIr)?;
         let base = self.locals.len();
         for (i, local) in f.locals.iter().enumerate() {
-            let value = if i < count {
-                Some(self.values[start + i].value.cast(local.ty))
-            } else {
-                None
-            };
+            let value = (i < count).then(|| self.values[start + i].value.cast(local.ty));
             self.locals.push(Cell {
                 value,
                 live: false,
@@ -723,6 +719,7 @@ impl Effects {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Action {
     Step,
     Expr(usize),

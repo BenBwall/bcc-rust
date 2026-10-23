@@ -1028,7 +1028,11 @@ back to legacy IR remain future work.
 Initial validation: eight targeted tests passed, including ten defined programs
 on two target data models against four legacy execution arms each (80 legacy
 comparisons). The first compilation caught snapshot/evaluator borrow lifetime
-errors, which were corrected before that passing run. Additional provenance,
-type/reference and lexical CFG checks are being validated next. The original
+errors, which were corrected before that passing run. An initial Clippy check
+found 13 findings in the experiment (deliberate integer bit conversions,
+similar names and two action/initialization style issues); these were corrected
+with local conversion justifications and code changes. Additional provenance,
+type/reference and lexical CFG checks and the canonical checks are being
+validated next. The original
 study's source/citation/link checks remain design evidence, not performance
 measurements; no compilation-overhead budget has been measured yet.

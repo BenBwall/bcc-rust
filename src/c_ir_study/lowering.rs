@@ -119,12 +119,12 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
         tasks: &mut ArenaVec<'ir, Task<'tu>>,
     ) -> Result<(), Error> {
         let origin = statement.source_vectors;
-        let emit = |kind| Task::Emit(kind, origin);
+        let emit_task = |kind| Task::Emit(kind, origin);
         match statement.kind {
             | S::Compound { items } => {
                 let scope = self.scope();
                 self.emit(InstructionKind::Enter(scope), origin);
-                tasks.push(emit(InstructionKind::Exit));
+                tasks.push(emit_task(InstructionKind::Exit));
                 let inner = State {
                     depth: state.depth + 1,
                     ..state
@@ -171,7 +171,7 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                     tasks.push(Task::Statement(s, state));
                 }
                 tasks.push(Task::Label(otherwise));
-                tasks.push(emit(InstructionKind::Jump {
+                tasks.push(emit_task(InstructionKind::Jump {
                     label: join,
                     keep:  state.depth,
                 }));
@@ -196,7 +196,7 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                     ..state
                 };
                 tasks.push(Task::Label(exit));
-                tasks.push(emit(InstructionKind::Branch {
+                tasks.push(emit_task(InstructionKind::Branch {
                     condition,
                     then: body,
                     otherwise: exit,
@@ -243,15 +243,15 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                         origin,
                     );
                 }
-                tasks.push(emit(InstructionKind::Exit));
+                tasks.push(emit_task(InstructionKind::Exit));
                 tasks.push(Task::Label(exit));
-                tasks.push(emit(InstructionKind::Jump {
+                tasks.push(emit_task(InstructionKind::Jump {
                     label: header,
                     keep:  depth,
                 }));
                 if let Some(slot) = f.iteration_expression {
                     let id = self.expression(slot_expr(slot, origin)?)?;
-                    tasks.push(emit(InstructionKind::Evaluate(id)));
+                    tasks.push(emit_task(InstructionKind::Evaluate(id)));
                 }
                 tasks.push(Task::Label(next));
                 tasks.push(Task::Statement(
@@ -366,6 +366,10 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
     }
 
     /// C99: §6.3, pp. 42-48; PDF pp. 54-60; §6.5, pp. 67-94; PDF pp. 79-106.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Sema integer constants are encoded as low bits of the supported target type."
+    )]
     fn expression(&mut self, root: &'tu AstExpr<'tu>) -> Result<usize, Error> {
         let mut tasks = ArenaVec::new_in(self.arena);
         tasks.push((root, false));
