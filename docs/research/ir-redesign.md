@@ -2,7 +2,8 @@
 
 Study baseline: `145898d4` (`origin/main` when this worktree was created),
 2026-10-21. All repository `file:line` references in this document refer to
-that commit. This study changes documentation only.
+that commit. Parts 1–3 are the design study; part 4 records the isolated
+implementation added on 2026-10-23, outside the default build and pipeline.
 
 ## 1. Inventory of the current IR
 
@@ -999,13 +1000,30 @@ risk of two competing C models.
 
 ## 4. Prototype and validation status
 
-No prototype is included. This study prioritizes the source inventory,
-primary-source comparison and concrete semantic/migration contracts; the
-experiment above specifies the next implementation milestone. No compiler
-source or default pipeline changed.
+The first isolated slice is in `src/c_ir_study.rs` and `src/c_ir_study/`, behind
+`cfg(test)`. It snapshots existing typed syntax/sema facts into logical integer
+objects, explicit lexical lifetimes, a statement CFG and an expression graph
+retaining sequence points. A bounded evaluator runs after the frontend arena
+has been dropped. It has no dependency on today's scalar IR, optimizer, ABI or
+LLVM evaluator. The default build and pipeline do not use it.
 
-Validation covered source inspection at the pinned baseline, repository
-citation paths/line bounds, relevant C99/C11 paragraph checks, primary-source
-links and `git diff --check`. This is design evidence, not runtime validation:
-no cargo commands, differential program runs or performance measurements were
-performed, and no prototype-parity claim is made.
+The slice includes integer functions, automatic locals, conversions, loops,
+break/continue, direct calls and recursion. Execution reports source operations
+that overflow or violate simple unsequenced-access rules. Indeterminate reads
+have a separate policy-dependent outcome. Conflicts spanning nested sequencing,
+pointers, aggregates, globals, extensions and other unsupported constructs are
+refused. This is not the complete object/provenance or sequencing model proposed
+above, and does not replace the current scalar contract.
+
+Three new portable fixtures live in `test-programs/ir-design-study/`. Tests also
+select seven existing lowering programs and compare results against today's
+interpreter before/after ABI lowering and with/without optimization, using the
+Linux and Windows target data models. Separate litmus tests check UB, object
+events, explicit capability refusals and execution limits. The new IR has a
+deterministic text dump and reference verifier; a text parser and the adapter
+back to legacy IR remain future work.
+
+Implementation checkpoint: standard paragraphs and formatting checked; shared
+wrapper compilation and differential validation are pending. The original
+study's source/citation/link checks remain design evidence, not performance
+measurements.
