@@ -417,14 +417,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     },
                 | ParseAction::Push(child) => {
                     #[cfg(feature = "parser-recursive-descent-study")]
-                    if self.study.enabled()
-                        && matches!(
-                            &child,
-                            ParseFrame::Expression(_)
-                                | ParseFrame::Statement(_)
-                                | ParseFrame::CompoundStatement(_)
-                        )
-                    {
+                    if self.study.enabled() && Self::is_recursive_family(&child) {
                         self.returned = self.study_child(child);
                         if let Some(root) = self.study.failure.take() {
                             return Some(ParseValue::ExternalDeclaration(root));

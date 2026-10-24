@@ -83,6 +83,26 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         self.study.stats
     }
 
+    /// Whether `child`'s production family has a recursive implementation
+    /// that [`Self::study_child`] dispatches to. Add a family here and to
+    /// `study_child` when porting it.
+    pub(super) fn is_recursive_family(child: &ParseFrame<'tu, 'p>) -> bool {
+        matches!(
+            child,
+            ParseFrame::Expression(_) | ParseFrame::Statement(_) | ParseFrame::CompoundStatement(_)
+        )
+    }
+
+    /// Runs `child` from recursive grammar code: its recursive implementation
+    /// when its family is ported, otherwise the retained frames.
+    pub(super) fn rd_child(&mut self, child: ParseFrame<'tu, 'p>) -> Option<ParseValue<'tu>> {
+        if Self::is_recursive_family(&child) {
+            self.study_child(child)
+        } else {
+            self.study_frame(child, false)
+        }
+    }
+
     /// Runs a new child using recursive grammar or the retained frame grammar.
     pub(super) fn study_child(&mut self, child: ParseFrame<'tu, 'p>) -> Option<ParseValue<'tu>> {
         match child {
@@ -153,6 +173,27 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
     }
 
+    /// Enters a recursive production of `kind`: counts its depth, makes it
+    /// the active frame kind for diagnostics, and stops with the frame-depth
+    /// resource failure in limited mode. Pair with [`Self::study_leave`].
+    #[inline(always)]
+    pub(super) fn rd_enter(&mut self, kind: ParseFrameKind) -> Option<StudyEntry> {
+        if let StudyMode::Limited { depth } = self.study.mode
+            && self.study.depth >= depth
+        {
+            self.study.stats.depth_limit_hits += 1;
+            self.study.failure = self.resource_failure(ParserResource::FrameDepth, depth);
+            return None;
+        }
+        let marker = 0_u8;
+        let address = if self.study.stack_samples {
+            std::ptr::from_ref(&marker).addr()
+        } else {
+            0
+        };
+        Some(self.study_enter(kind, address))
+    }
+
     fn study_enter(&mut self, kind: ParseFrameKind, address: usize) -> StudyEntry {
         let entry = StudyEntry {
             active:      self.active_frame,
@@ -188,7 +229,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         entry
     }
 
-    fn study_leave(&mut self, entry: StudyEntry) {
+    pub(super) fn study_leave(&mut self, entry: StudyEntry) {
         self.study.depth -= 1;
         self.active_frame = entry.active;
         self.study.base = entry.base;
@@ -197,7 +238,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 }
 
 #[derive(Clone, Copy)]
-struct StudyEntry {
+pub(super) struct StudyEntry {
     active:      ParseFrameKind,
     base:        usize,
     segment_low: Option<usize>,
