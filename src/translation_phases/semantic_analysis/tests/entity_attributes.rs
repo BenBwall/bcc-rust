@@ -1080,7 +1080,7 @@ fn bss_initializers_report_every_object_with_source_locations() {
             "void f(void) { static int a __attribute__((section(\".bss.z\"))) = 4; }",
             Target::LinuxGnu
         ),
-        []
+        [K::BssInitializer]
     );
     assert_eq!(
         kinds(

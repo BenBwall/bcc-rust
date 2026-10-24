@@ -126,7 +126,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             )
         })?;
         self.tasks.push(Task::CleanupNormal(statement));
-        if let (Some(tail), Some(expression)) = (resolved.outer_tail, resolved.value_tail) {
+        if let (Some(tail), Some(expression)) = (resolved.outer_tail, resolved.value_tail)
+            && !self
+                .unit
+                .sema
+                .control
+                .statement(tail)
+                .is_some_and(|facts| facts.elided)
+        {
             if mode == StatementMode::Value && self.transition_has_cleanup(facts.exit) {
                 self.tasks.push(Task::SnapshotArgument(expression));
             }

@@ -530,7 +530,7 @@ fn gcc_scalar_constant_queries_and_overflow_predicates_are_ices() {
     with_source(
         r#"
 _Static_assert(__builtin_constant_p(1+2),"ICE");
-_Static_assert(!__builtin_constant_p(1.0),"conservative");
+_Static_assert(__builtin_constant_p(1.0),"floating constant");
 _Static_assert(__builtin_add_overflow_p(127,1,(signed char)0),"narrow");
 _Static_assert(!__builtin_add_overflow_p(-1,1u,0u),"mixed");
 _Static_assert(__builtin_sub_overflow_p(0u,1u,0u),"negative");

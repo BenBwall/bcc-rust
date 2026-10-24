@@ -487,7 +487,10 @@ avoids mismatched calls under C99 §6.5.2.2p6,p9 (pp. 71-72; PDF pp. 83-84);
 The C89 implicit declaration rule remains §3.3.2.2 (p. 41; PDF p. 55). Undeclared reserved `__builtin_*` names are GCC
 builtins in every mode: they are bound as opaque functions without a
 diagnostic, and calls to them have unknown results, except that
-`__builtin_constant_p` folds to whether its operand is an arithmetic constant.
+`__builtin_constant_p` uses the shared Clang-like query evaluator: arithmetic
+constants, string starts and supported constant aggregate elements can fold;
+unknown queries emit zero. This value also drives static initializer data and
+runtime lowering.
 
 In GNU modes, as in GCC, an arithmetic constant that is not an integer constant
 expression (§6.6p6) is folded where an integer constant expression is required
@@ -905,7 +908,9 @@ records whether Clang's code generation at `-O0` skips the code it appears in
 (`dead`), which approximates Clang's insertion state rather than run-time
 reachability: a skipped reference creates no LLVM value, so it ranks no
 `always_inline` function in Clang's creation order and selects no DLL import,
-and both consumers read this one flag. Code is skipped in the arm a constant
+and entity reachability instead reads whether lowering omits the reference.
+Static initializer references remain live after jumps when the declaration is
+emitted. Code is skipped in the arm a constant
 condition does not take, in a generic selection's controlling operand and
 unselected associations, after a jump or a loop without an exit, and until a
 label. One evaluator stands for Clang's `ConstantFoldsToSimpleInteger` in
@@ -947,11 +952,52 @@ controlling expression folds emits only the statements Clang's
 `CollectStatementsForCase` gathers from the matching case, else `default`
 (§6.8.4.2p4-5, printed p. 134, PDF p. 146). Analysis still runs in source
 order: the body is analyzed as unfolded until a label is selected, which then
-marks the references recorded since the body began as skipped; a `default` is
-selected tentatively, and a later matching case replaces it, when the
-collection from every case label after it succeeds; otherwise, or past 64 later
-labels, the switch is analyzed as unfolded, which may leave more code emitted
-than Clang does but never less. After the
+marks the references recorded since the body began as skipped and the object
+definitions and statement facts there as elided, except the blocks and case
+labels leading to the selected label and statements holding an ordinary
+label; a `default` is
+selected tentatively only when collection from every later case succeeds.
+A later matching case replaces it and elides the default region too.
+Otherwise, or past 64 later labels, the switch stays unfolded, which may
+retain more code than Clang. A retained generated-control fact directs
+lowering straight to the chosen label when collection succeeded, so unselected
+case labels, also those after the selected `break`, are never lowered; only a
+tentative `default` keeps the case labels after its `break`, since a later case
+may still replace it. An `if` with an elided arm lowers only its selected arm.
+Every lowering consumer of a conditional or logical operator, as a value, as a
+branch condition or in an effects-only recipe, reads the same operand elision
+facts before ordinary constant shortcuts. The common operand of GNU `x ?: y`
+is always emitted, as Clang binds it before folding. Conditional elision waits
+for the result type: Clang's aggregate and complex visitors emit both arms.
+VM composite pointer results conservatively retain both operands, preserving
+main's behavior until their bound selection is repaired. Branch simplification
+operands live in sparse retained facts, keeping expression records at 160 bytes.
+In an `if` branch
+condition, the recursive logical emitter instead simplifies only `1 && X`,
+`X && 1`, `0 || X` and `X || 0`. Nested `0 && X` and `1 || X` retain
+both operands unless the whole condition folds. Branch operands record their
+regions so a later simplification omits references, definitions and statements
+together; lowering reads the retained operand decision. Constant-query integers
+take Clang's constant-context value, so semantic integer facts, case labels,
+static assertions, static initializer data, standalone values and loop
+decisions agree: a comma whose left operand is not constant, and an element
+read through a non-`const` array compound literal, are not constant there.
+Function code still yields one for both, as in Clang, whose non-constant fold
+reads the compound literal and whose `llvm.is.constant` sees the comma's
+constant result: the expression records that its emitted value differs, so
+lowering evaluates the operators around such a query instead of taking their
+constant. Control folding accepts the array read but leaves a discarded-comma
+query unknown, since `ConstantFoldsToSimpleInteger` cannot discard its left
+operand. Nested queries also stay unknown in control contexts when evaluating
+the inner query fails; the constant-context nested-query shortcut is not a
+control fold. Loop folding also treats the condition as unknown, and `__builtin_choose_expr` and static initializer data
+select by the constant-context value. A discarded comma counts only before an
+arithmetic constant; a pointer result is never constant in function code. An unknown query still
+emits zero while the control fold can remain unknown.
+String-address queries require each integer cast to have exactly the pointer width;
+widening an integer after a narrowing cast does not recover the address.
+When lowering omits a folded condition, its executable references are unlowered
+too; nested static declarations keep their initializer-data references. After
 selection, labels inside the selected statements resume nothing, and the code
 after the switch follows the selected statements' end. When Clang's collection
 fails (a label or declaration it would skip, a `break` inside a collected
@@ -983,7 +1029,7 @@ initializer's references are not skipped, and they count as made by the
 function where it declares the object. An expression whose paths join in
 a block with predecessors ends that state: a `&&`, `||` or scalar or `void`
 `?:` whose condition does not fold (unless the `?:` selects between constants,
-which a `void` operand is not), a complex or aggregate `?:`, a product of two
+which a `void` operand is not), a complex `?:` or an ignored-result aggregate `?:`, a product of two
 floating complex values, an atomic update `atomicrmw` cannot perform (an atomic
 `_Bool` decrement among them), an atomic compare-and-exchange, an atomic
 builtin whose memory order is not a constant (unless a library call copies its
@@ -991,12 +1037,12 @@ object), a `__builtin_fpclassify` that does not evaluate, and a System V
 `va_arg` of a type passed in registers (its members judged by their types'
 natural alignment, as the ABI classifies them, with no class for an array of no
 elements or an unnamed bit-field). A call that does not return changes nothing
-in an unevaluated or skipped operand, nor in an operand of
-`__builtin_constant_p`, the object-size builtins, `__builtin_classify_type` and
-`__builtin_choose_expr`, but a join in an operand Clang emits still counts: a
-variably modified `sizeof` or `typeof` operand, an operand of
-`__builtin_constant_p` or the object-size builtins without side effects, and
-either operand of `__builtin_choose_expr`, whose selection is not known yet.
+in an unevaluated or skipped operand, the operand `__builtin_choose_expr` does
+not select among them, nor in an operand of `__builtin_constant_p`, the
+object-size builtins and `__builtin_classify_type`, but a join in an operand
+Clang emits still counts: a variably modified `sizeof` or `typeof` operand, and
+an operand of `__builtin_constant_p` or the object-size builtins without side
+effects.
 Where Clang emits an operand after
 one this analysis visits later (the left operand of a scalar or compound
 assignment, or on the Microsoft ABI the arguments before a call's last), a join
@@ -1019,25 +1065,86 @@ there when a block-scope typedef of the function may give it such a type, so
 that typedefs coming into scope later cannot change a kept answer. Floating
 object reads and explicit casts use the same target rounding as semantic
 constant evaluation, including narrowing, underflow and complex-to-real
-conversion; unsupported formats stay unfolded. Complex and aggregate
-conditional expressions preserve both emitted arms, even when the condition
-folds; scalar and void conditionals skip only an unlabeled unselected arm.
-Labels that prevent omission also preserve the arm's insertion effects and any
-merge. VLA bounds in declarations, typedefs and `sizeof` type operands take
-part in label collection. Conditional values, including GNU omitted-middle
-forms, convert to the result type before further folding. `__builtin_constant_p`
-checks only selected generic/choose operands for side effects, walks statement
-expressions and honors direct pure/const calls; its operands and those of
-`__builtin_classify_type` create no emitted reference.
+conversion; unsupported formats stay unfolded. Labels that prevent omission
+also preserve the arm's insertion effects and any merge. VLA bounds in
+declarations, typedefs and `sizeof` type operands take part in label
+collection. Conditional values, including GNU omitted-middle forms, convert to
+the result type before further folding. `__builtin_constant_p` checks only
+selected generic/choose operands for side effects, walks statement expressions
+and honors direct pure/const calls; its operands and those of
+`__builtin_classify_type` create no emitted reference. Aggregate read coverage
+uses a sorted endpoint sweep, and constant-array `strlen` results are memoized
+with their evaluation-depth and weak-horizon dependencies. Literal lengths
+reached through constant pointers reuse the decoded literal and offset.
 Bit-field and union reads, GNU ranges in `const` initializers and the
-unselected operand of `__builtin_choose_expr` remain unmodeled; each leaves
-code emitted that Clang may skip. Aggregate read coverage uses a sorted
-endpoint sweep, and constant-array `strlen` results are memoized with their
-evaluation-depth and weak-horizon dependencies. Literal lengths reached through
-constant pointers reuse the decoded literal and offset. Static creation-order
-provenance indexes current writers by bit position, snapshots only overlapping
-source runs for range copies, and skips replay for owners with no emitted
-symbol references. The module-item planner
+unselected operand of `__builtin_choose_expr` remain unmodeled. Distinct-object
+address comparisons such as `&x1 == &x2` also remain unfolded. Constant queries still miss `(long)"a" + 1 - 1`, `(long)"a" - 0`,
+`(char *)8`, `!(long)"a"`, `(long)"a" == 0`, `(long)"a" != 0` and `__func__[0]`.
+These gaps can leave code emitted that Clang skips. For a pure condition
+built from constants, addresses and nonvolatile const-object reads whose
+value remains unknown, optional local-static retention falls back to the
+required/`used` closure in the affected if, value-folding conditional, logical or
+foldable-switch region. Deferred definition contexts keep ignored aggregate
+and complex conditional visitors and neighboring declarations independent.
+This is a retention capability boundary, not a new value or branch fold;
+required references and `used` storage remain checked. Parameters and
+ordinary runtime loads do not trigger it. The VLA-after-jump gap above
+instead omits code Clang revives.
+Scalar conditionals omit an unselected constant arm. Aggregate and complex
+visitors emit both arms, including member bases, arguments, assignments and
+return values. Clang can bypass the aggregate visitor for a constant automatic
+initializer; that decision waits for the complete typed initializer plan. A
+dynamic sibling member prevents the bypass. A separate potential-constant
+initializer scan only limits optional retention when a pure condition needs
+an unmodeled fold; it never chooses an arm. Required-only retention propagates
+through helper references. A certain path to the same helper restores its
+optional locals, and required/used entities stay reachable on either path. Fully
+overwritten automatic initializer values use that same required-only policy.
+A memoized backwards scan compresses written bit intervals and processes each
+interval once; unknown union/range operations conservatively retain values.
+It does not change the pre-existing evaluation of overridden initializers. A sparse discarded-result context
+follows parentheses, comma
+results, selected-expression wrappers, statement-expression value tails and
+void casts; expression statements and for initializers/steps start it. Arm
+omission is resolved after typing, so nonvoid statement-expression tails stay
+available to lowering and omitted tails cannot leak insertion state.
+`functions.elided` omits lowering traversal and storage collection
+for whole skipped statements and operands; there is no separate `unemitted`
+state. A missing insertion point (`dead`) alone still permits simple
+statements to collect storage. In `0 && ({ L:; static int a; 1; })`, the
+label prevents elision and preserves the static even though the operand is
+not evaluated. A constant-query operand has one deferred emission decision, shared by
+references, nested definitions and joins. After the ordinary constant fold
+fails, Clang emits a real arithmetic operand without side effects, retaining
+all its referents; other operands are unevaluated. Within a static or thread-local initializer, the query emits only
+its integer value: its operand declarations and all their references are omitted.
+Either way its operand is still used in an expression, so an internal
+identifier it names needs a definition (C99 §6.9p3, p. 140; PDF p. 152).
+A dead automatic initializer holding a label gives Clang an insertion point
+(`EmitAutoVarInit`), so the statements after its declaration are emitted.
+Declarations after a folded switch's selected break are elided just like its
+statements. A void statement-expression tail skipped after a jump retroactively
+elides its definitions, statements and references, and lowering supplies its
+void result without visiting the tail.
+O0-only local-static retention is best effort for unsupported constructs.
+A single retry boundary spans the complete output preparation: lowering,
+optimization and inline resolution, ABI lowering, verification, backend
+support, native frame/encoding and object construction, linking, and
+interpreter global/relocation loading. Any refusal retries once without
+unreferenced, non-`used` locals and the entities only their initializers
+reach. Text and retained-call diagnostics are buffered until an attempt is
+accepted. Interpreter preparation loads storage without running constructors
+or user instructions; execution happens once, after the retry boundary.
+Semantic diagnostics, including emitted BSS initializer checks, still run
+before this capability fallback. Required and `used` entities retain their
+support checks and diagnostics. The native backend also omits unused internal
+TLS objects in named sections it cannot support, and allows an unread internal
+initializer to hold a returns-twice function's address. Incoming global
+references from instructions, data and aliases are collected once per module
+and shared by native support and storage emission.
+Static creation-order provenance indexes current writers by bit position,
+snapshots only overlapping source runs for range copies, and skips replay for
+owners with no emitted symbol references. The module-item planner
 joins those identities by emitted symbol and computes the closure of external
 definitions with an explicit worklist. Semantic definition constraints still
 apply to every analyzed definition, including bodies omitted from emission.
@@ -2323,9 +2430,44 @@ reports each emitted object's first surviving nonzero or relocated leaf at its
 initializer. Semantic checks and lowering share entity reachability: evaluated
 references from emitted functions and object initializers retain internal
 objects, while references owned only by omitted functions do not. Unused
-function-local statics remain omitted at every optimization level. This differs
-from Clang at O0, which emits them with their enclosing function; matching that
-behavior requires changing emission policy rather than initializer validity.
+function-local static and thread-local objects are retained with every emitted
+function when `CompilerConfiguration::optimization().0` is false, exactly when
+`__OPTIMIZE__` is undefined (the default, `-O0`, native B0 and `--opt=none`
+without another enabled optimizer). This models Clang O0 within the emission
+evaluator's supported forms; static duration is
+C99 §6.2.4p3, p. 32; PDF p. 44. Locals of omitted static or C99 inline-only
+bodies remain omitted (§6.7.4p6, pp. 112-113; PDF pp. 124-125), including
+`used` locals. With optimization enabled, only referenced or `used` locals of
+emitted bodies are retained. Constant-untaken arms omitted as a whole by
+Clang's code generation retain no local objects, even `used` ones. The shared
+walk distinguishes a missing insertion point (`dead`) from omission of a whole
+statement or operand (`elided`). Clang `EmitSimpleStmt` still visits declarations,
+compounds, attributed statements and labels (including case/default) after a
+jump or noreturn call. A non-simple statement without a label is skipped there,
+including its nested declarations; labels inside GNU statement expressions count.
+Folded switches elide unselected statements, unselected case labels included,
+and keep only the blocks and labels leading to the selected label; the selected
+label resumes emission before its facts are captured. Unevaluated sizeof/typeof/alignof operands, generic control
+and unselected associations, unselected choose-expression arms and folded-away
+label-free conditional/logical operands retain no local definitions. Runtime VLA operands
+remain evaluated. Declaration contexts are finalized after typing, together
+with reference contexts. Lowering consumes the same operand and statement
+elision facts (C99 §6.8.4.1p2, pp. 133-134; PDF pp. 145-146).
+Function-to-local edges and each initializer's outgoing references share the
+same worklist, so a newly retained local retains its internal referents
+transitively. Only unlowered references retain neither a function nor its
+locals. Dead automatic initializers without labels and dead cleanup
+registrations are omitted by sema and lowering together. Retained local storage
+is defined independently of the executable expression walk, including statics
+inside skipped operands. Lowering checks omitted internal referents before
+creating a declaration. This decision feeds BSS validation, LLVM, both native object paths and
+the interpreter. When optimizing, a reached inline-only function also retains
+its `used` locals, matching Clang's optional-body section diagnostics even on
+native and interpreter pipelines. Semantic checks still precede optimization:
+a constant-read local such as `return b[0]` can be rejected where Clang O1/O2
+folds the read and removes the object. This known difference does not attempt
+to model LLVM's optimizer. Optimized optional copies of C99 inline-only bodies
+retain their existing lowering policy.
 A fixed-depth interval radix tree records later writes; scalar GNU ranges remain periodic queries and one coverage interval, independent of their
 extent. Assignment conversion, negative floating zero, overwritten initializers,
 union selections and bit-fields affect the final contents. Complex ranges use

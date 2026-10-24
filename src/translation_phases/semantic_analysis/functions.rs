@@ -42,6 +42,7 @@ use crate::{
             },
             syntax::{
                 Expression,
+                ExpressionType,
                 FunctionDefinition,
                 Identifier,
                 Statement,
@@ -51,6 +52,7 @@ use crate::{
         },
     },
     util::{
+        arena_list::ArenaList,
         bump::{
             ArenaMap,
             ArenaVec,
@@ -225,6 +227,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
                 self.functions.emission.orphan,
             )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreElided(
+                self.functions.elided,
+            )));
+        self.functions.elided = false;
         self.work
             .push(Work::FunctionWork(FunctionWork::RestoreWeakHorizon(
                 self.functions.emission.weak_horizon,
@@ -471,19 +478,100 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.statements.switch = switch;
                 self.control.targets.truncate(targets);
             },
+            | FunctionWork::CastOperand(operand) => {
+                let ty = self.take_type();
+                if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void)) {
+                    self.discard_expression_result(operand);
+                }
+                self.work.push(Work::Expression(operand));
+            },
+            | FunctionWork::CallArguments(callee, arguments) => {
+                let callee = self.selected_designator(callee);
+                if self.expression_info(callee).binding.is_some_and(|binding| {
+                    self.bindings[binding]
+                        .origin
+                        .descriptor()
+                        .is_some_and(|descriptor| {
+                            matches!(
+                                descriptor.operation,
+                                crate::builtins::BuiltinOperation::Constant
+                            )
+                        })
+                }) {
+                    // Decide after typing whether Clang emits the operand.
+                    // Every reference, definition and join shares this context.
+                    let static_data = self.functions.initializer.is_some_and(|binding| {
+                        self.bindings[binding].duration.is_static_or_thread()
+                    });
+                    self.enter_reference_context_kind(ReferenceContextKind::ConstantQuery {
+                        emitted: false,
+                    });
+                    if let Some(&operand) = arguments.first() {
+                        self.work
+                            .push(Work::FunctionWork(FunctionWork::ConstantQueryEnd {
+                                index: self
+                                    .functions
+                                    .reference_context
+                                    .expect("query context entered"),
+                                operand,
+                                static_data,
+                            }));
+                    }
+                }
+                for &argument in arguments.iter().rev() {
+                    self.work.push(Work::Expression(argument));
+                }
+            },
+            | FunctionWork::ConstantQueryEnd {
+                index,
+                operand,
+                static_data,
+            } => {
+                let emitted = !static_data && self.constant_query_operand_emitted(operand);
+                self.functions.reference_contexts[index].kind =
+                    ReferenceContextKind::ConstantQuery { emitted };
+            },
+            | FunctionWork::BranchOperandEnd(e, start) => self.end_branch_operand(e, start),
+            | FunctionWork::ScalarLogicalEnd(e) => {
+                if let ExpressionType::Binary {
+                    operator,
+                    left_expression,
+                    right_expression,
+                } = e.kind
+                {
+                    let live = operator == super::BinaryOperator::LogicalAnd;
+                    if self.folded_condition(left_expression) == Some(live)
+                        && !self.expression_contains_label(left_expression)
+                    {
+                        self.elide_branch_operand(left_expression);
+                        self.retain_branch_operand(e, right_expression);
+                    }
+                }
+            },
+            | FunctionWork::ConditionReferences(condition, mark) => {
+                let end = self.reference_count();
+                if end > mark.start {
+                    _ = self.functions.condition_uses.insert(
+                        std::ptr::from_ref(condition).addr(),
+                        ConditionUses { mark, end },
+                    );
+                }
+            },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
             | FunctionWork::RestoreUnvisited(unvisited) => self.functions.unvisited = unvisited,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
+            | FunctionWork::RestoreElided(elided) => self.functions.elided = elided,
             | FunctionWork::RestoreWeakHorizon(horizon) =>
                 self.functions.emission.weak_horizon = horizon,
             | FunctionWork::RestoreUnjoinedOrphan(orphan) =>
                 self.functions.emission.orphan = self.functions.emission.orphan.and(orphan),
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
-            | FunctionWork::JoinArms => {
+            | FunctionWork::JoinArms(elided) => {
+                self.functions.elided = elided;
                 let then_end = self.functions.arm_ends.pop().expect("then arm ended");
                 self.functions.dead &= then_end;
                 self.functions.emission.orphan = None;
@@ -493,24 +581,138 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.dead = outer || after.unwrap_or(false);
                 self.functions.emission.orphan = None;
             },
-            | FunctionWork::DeadStatementArm(condition, live, outer, statement) => {
-                let skipped = self.folded_condition(condition) == Some(!live)
+            | FunctionWork::DeadStatementArm {
+                owner,
+                condition,
+                live,
+                outer,
+                outer_elided,
+                statement,
+            } => {
+                let value = self.folded_condition(condition);
+                // Optional retention cannot rely on an unmodeled constant
+                // fold. Keep main's required closure in this scope instead
+                // of exposing its otherwise unused storage or relocations.
+                if statement.is_some() && !self.statement_contains_label(owner, false) {
+                    self.limit_optional_locals_for_next(condition, None);
+                }
+                let skipped = value == Some(!live)
                     && statement
                         .is_none_or(|statement| !self.statement_contains_label(statement, false));
                 self.functions.dead = outer.dead || skipped;
                 self.functions.unvisited = outer.unvisited || skipped;
+                self.functions.elided = outer_elided || skipped;
+                if skipped && let Some(id) = self.control.statement_id(owner) {
+                    self.control.statements[id.0].generated = super::GeneratedControl::If(!live);
+                    self.elide_condition_references(condition);
+                    self.elide_branch_operand(condition);
+                }
             },
-            | FunctionWork::DeadArm(condition, live, outer, arm) => {
-                // Clang emits a folded-away operand that holds a label.
-                let skipped = self.folded_condition(condition) == Some(!live)
-                    && !self.expression_contains_label(arm);
+            | FunctionWork::ConditionalArmEnd(owner, arm, orphan) => {
+                // The selected visitor omits this arm. A value tail can have
+                // created an orphan block while its type was still unknown;
+                // it must not make a later emitted statement disappear.
+                let ty = self.expression_info(arm).ty;
+                let record = matches!(self.types.nodes[ty.index], TypeKind::Tag(id) if self.types.tags[id].kind != super::TagKind::Enum);
+                if record {
+                    self.record_aggregate_initializer_arm(owner);
+                }
+                if record || self.conditional_visitor_folds(owner, ty) {
+                    self.functions.emission.orphan = orphan;
+                }
+            },
+            | FunctionWork::ConditionalArm {
+                owner,
+                arm,
+                live,
+                outer,
+                outer_elided,
+            } => {
+                let (ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c)) =
+                    owner.kind
+                else {
+                    unreachable!("conditional arm owner");
+                };
+                let info = self.expression_info(c.condition_expression);
+                let constant_context = self
+                    .functions
+                    .initializer
+                    .is_some_and(|binding| self.bindings[binding].duration.is_static_or_thread());
+                let value = if info.runtime_query && constant_context {
+                    Self::constant_truth(info)
+                } else {
+                    self.folded_condition(c.condition_expression)
+                };
+                let skipped = value == Some(!live) && !self.expression_contains_label(arm);
+                // Neither insertion-state omission nor whole-statement
+                // omission is known before both operands have been typed.
+                // In particular an aggregate statement-expression tail must
+                // be visited. The deferred context applies visitor omission
+                // to references and definitions once the result is known.
+                self.functions.dead = outer.dead;
+                self.functions.unvisited = outer.unvisited;
+                self.functions.elided = outer_elided;
+                if skipped {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::ConditionalArmEnd(
+                            owner,
+                            arm,
+                            self.functions.emission.orphan,
+                        )));
+                    self.enter_reference_context_kind(ReferenceContextKind::ConditionalArm {
+                        owner,
+                    });
+                }
+                self.work.push(Work::Expression(arm));
+                if value.is_none() && !self.expression_contains_label(arm) {
+                    self.limit_optional_locals_for_next(c.condition_expression, Some(owner));
+                }
+            },
+            | FunctionWork::DeadArm {
+                condition,
+                live,
+                outer,
+                outer_elided,
+                arm,
+            } => {
+                // A `__builtin_choose_expr` (no `arm`) and static initializer
+                // data select by Clang's constant-context value, which
+                // differs from function code's for some queries.
+                let info = self.expression_info(condition);
+                let constant_context = arm.is_none()
+                    || self.functions.initializer.is_some_and(|binding| {
+                        self.bindings[binding].duration.is_static_or_thread()
+                    });
+                let value = if info.runtime_query && constant_context {
+                    Self::constant_truth(info)
+                } else {
+                    self.folded_condition(condition)
+                };
+                // Clang emits a folded-away operand that holds a label, but
+                // never the operand `__builtin_choose_expr` does not select.
+                let skipped = value == Some(!live)
+                    && arm.is_none_or(|arm| !self.expression_contains_label(arm));
                 self.functions.dead = outer.dead || skipped;
                 self.functions.unvisited = outer.unvisited || skipped;
+                self.functions.elided = outer_elided || skipped;
+                if skipped {
+                    self.elide_condition_references(condition);
+                }
+                if let Some(arm) = arm
+                    && value.is_none()
+                    && !self.expression_contains_label(arm)
+                {
+                    self.limit_optional_locals_for_next(condition, None);
+                }
             },
-            | FunctionWork::ConditionalMark(expression, index, outer) =>
-                self.mark_conditional_arm(expression, index, outer),
+            | FunctionWork::ConditionalMark(expression, index, outer, outer_elided) =>
+                self.mark_conditional_arm(expression, index, outer, outer_elided),
             | FunctionWork::GenericMark(generic) => {
-                let at = self.functions.uses.len();
+                let at = EmissionMark {
+                    references:  self.functions.uses.len(),
+                    definitions: self.definitions.len(),
+                    orphan:      self.functions.emission.orphan,
+                };
                 let scratch = self.scratch;
                 let marks = self
                     .functions
@@ -520,12 +722,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // The controlling operand is not emitted, and only the
                 // selected association is: each starts from the block
                 // around the selection ([`super::emission`]).
-                if let Some(&(_, around)) = marks.first()
+                if let Some(around) = marks.first()
                     && (marks.len() == 1 || marks.len() % 2 == 0)
                 {
-                    self.functions.emission.orphan = around;
+                    self.functions.emission.orphan = around.orphan;
                 }
-                marks.push((at, self.functions.emission.orphan));
+                marks.push(at);
             },
             | FunctionWork::ExpressionStatementEnd {
                 expression,
@@ -627,6 +829,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     entity.definition = Some(b.name.source_vectors);
                     self.definitions.push(Definition {
+                        elided:  false,
                         binding: index,
                         kind:    DefinitionKind::Tentative,
                     });
@@ -644,11 +847,57 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut ignored_references = ArenaVec::new_in(self.scratch);
+        let mut ignored_definitions = ArenaVec::new_in(self.scratch);
+        // A query operand is still used in an expression (C99 §6.9p3,
+        // p. 140; PDF p. 152), even where Clang emits only its value.
+        let mut ignored_uses = ArenaVec::new_in(self.scratch);
+        let mut required_locals = ArenaVec::new_in(self.scratch);
         for (index, context) in self.functions.reference_contexts.iter().enumerate() {
+            required_locals.push(
+                matches!(context.kind, ReferenceContextKind::RequiredLocalsOnly { scalar_owner }
+                    if scalar_owner.is_none_or(|owner| self.folded_conditional_emission(owner)
+                        || self.functions.emission.potential_aggregate_arms.contains_key(&std::ptr::from_ref(owner).addr())))
+                    || matches!(context.kind, ReferenceContextKind::InitializerValue { expression }
+                        if self.functions.emission.overridden_values.contains_key(&std::ptr::from_ref(expression).addr()))
+                    || context.parent.is_some_and(|p| required_locals[p]),
+            );
+            let (skip_definitions, skip_uses) = match context.kind {
+                | ReferenceContextKind::ConstantQuery { emitted } => (!emitted, false),
+                | ReferenceContextKind::ConditionalArm { .. } =>
+                    (self.reference_context_unevaluated(index), false),
+                | _ => {
+                    let unevaluated = self.reference_context_unevaluated(index);
+                    (unevaluated, unevaluated)
+                },
+            };
+            ignored_definitions
+                .push(skip_definitions || context.parent.is_some_and(|p| ignored_definitions[p]));
+            ignored_uses.push(skip_uses || context.parent.is_some_and(|p| ignored_uses[p]));
             ignored_references.push(
                 self.reference_context_unevaluated(index)
                     || context.parent.is_some_and(|p| ignored_references[p]),
             );
+        }
+        // sizeof/typeof evaluation is known only after its operand is typed.
+        // Apply the same contexts to declarations as to references before
+        // BSS validation or any backend observes the emission graph.
+        for context in &self.functions.definition_contexts {
+            if context
+                .reference_context
+                .is_some_and(|index| required_locals[index])
+            {
+                _ = self
+                    .functions
+                    .optional_local_bindings
+                    .insert(self.definitions[context.definition].binding, ());
+            }
+            if context.sizeof.is_some_and(|index| ignored[index])
+                || context
+                    .reference_context
+                    .is_some_and(|index| ignored_definitions[index])
+            {
+                self.definitions[context.definition].elided = true;
+            }
         }
         let mut owners = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for function in &self.function_records {
@@ -684,16 +933,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Some(ReferenceOwner::Object(binding)) => Some(binding),
                 | None => None,
             };
-            if !usage.sizeof.is_some_and(|s| ignored[s])
-                && !usage
-                    .reference_context
-                    .is_some_and(|s| ignored_references[s])
-            {
+            let ignored_reference = usage.reference_context.is_some_and(|index| {
+                if matches!(usage.owner, Some(ReferenceOwner::Object(_))) {
+                    self.reference_chain_unevaluated(index, usage.owner)
+                } else {
+                    ignored_references[index]
+                }
+            });
+            if !usage.sizeof.is_some_and(|s| ignored[s]) && !ignored_reference {
                 if let Some(owner) = owner {
                     self.references.push(super::EntityReference {
                         owner,
                         binding: usage.binding,
                         dead: usage.dead,
+                        unlowered: usage.unlowered,
+                        required_locals_only: usage
+                            .reference_context
+                            .is_some_and(|index| required_locals[index]),
                         initializer_value: usage.initializer_value,
                     });
                 }
@@ -716,7 +972,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && !usage.sizeof.is_some_and(|s| ignored[s])
                 && !usage
                     .reference_context
-                    .is_some_and(|s| ignored_references[s])
+                    .is_some_and(|index| ignored_uses[index])
             {
                 _ = used
                     .entry(self.function_identity(usage.binding))
@@ -1220,6 +1476,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             None,
         );
         self.definitions.push(Definition {
+            elided:  false,
             binding: self.bindings.len() - 1,
             kind:    DefinitionKind::FunctionName(function.name),
         });
@@ -1298,7 +1555,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.record_vm(index);
         if binding.kind == BindingKind::Object && (initialized || binding.linkage == Linkage::None)
         {
+            if self.functions.sizeof.is_some() || self.functions.reference_context.is_some() {
+                self.functions.definition_contexts.push(DefinitionContext {
+                    definition:        self.definitions.len(),
+                    sizeof:            self.functions.sizeof,
+                    reference_context: self.functions.reference_context,
+                });
+            }
             self.definitions.push(Definition {
+                elided:  self.functions.elided,
                 binding: index,
                 kind:    DefinitionKind::Object,
             });
@@ -1481,6 +1746,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         _ = self.functions.entities.insert(b.name.name, entity);
         if !defined {
             self.definitions.push(Definition {
+                elided:  false,
                 binding: index,
                 kind:    DefinitionKind::Tentative,
             });
@@ -1518,6 +1784,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let b = self.bindings[index];
         if b.linkage == Linkage::None {
             self.definitions.push(Definition {
+                elided:  false,
                 binding: index,
                 kind:    DefinitionKind::Function,
             });
@@ -1582,6 +1849,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Microsoft retention is finalized separately from the C99/GNU
         // definition constraints; explicit gnu_inline keeps GNU omission.
         self.definitions.push(Definition {
+            elided:  false,
             binding: index,
             kind:    if entity.can_redefine
                 && b.linkage == Linkage::External
@@ -1624,24 +1892,100 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
         self.functions.uses.push(Use {
             reference_context: self.functions.reference_context,
-            owner: self
-                .functions
-                .initializer
-                // A thread-local object's initializer is constant data too.
-                .filter(|&binding| self.bindings[binding].duration.is_static_or_thread())
-                .map(ReferenceOwner::Object)
-                .or(self
-                    .functions
-                    .reference_function
-                    .map(ReferenceOwner::Function)),
+            owner: self.reference_owner(),
             binding,
             name,
             initializer_value: self.functions.initializer_value,
             sizeof: self.functions.sizeof,
             inline_function,
             dll_import,
-            dead: self.functions.dead && (self.functions.unvisited || !static_local),
+            // Elision also removes static initializer data. Otherwise #117's
+            // insertion state keeps declarations visited after a jump live.
+            unlowered: self.functions.elided,
+            dead: self.functions.elided
+                || (self.functions.dead && (self.functions.unvisited || !static_local)),
         });
+    }
+
+    fn reference_owner(&self) -> Option<ReferenceOwner> {
+        self.functions
+            .initializer
+            .filter(|&binding| self.bindings[binding].duration.is_static_or_thread())
+            .map(ReferenceOwner::Object)
+            .or(self
+                .functions
+                .reference_function
+                .map(ReferenceOwner::Function))
+    }
+
+    /// Captures only the condition's uses, before either arm is analyzed.
+    /// Folded lowering can then omit them while retaining initializer data
+    /// of static declarations collected inside an unevaluated operand.
+    /// C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146; omission follows Clang.
+    pub(super) fn begin_condition_references(&mut self, condition: &'tu Expression<'tu>) {
+        self.work
+            .push(Work::FunctionWork(FunctionWork::ConditionReferences(
+                condition,
+                ConditionMark {
+                    start: self.reference_count(),
+                    owner: self.reference_owner(),
+                },
+            )));
+    }
+
+    pub(super) fn elide_condition_references(&mut self, condition: &'tu Expression<'tu>) {
+        let Some(uses) = self
+            .functions
+            .condition_uses
+            .remove(&std::ptr::from_ref(condition).addr())
+        else {
+            return;
+        };
+        let owner = uses.mark.owner;
+        let mut index = self.next_condition_reference(owner, uses.mark.start);
+        while index < uses.end {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
+            let usage = &mut self.functions.uses[index];
+            if usage.owner == owner {
+                usage.dead = true;
+                usage.unlowered = true;
+            }
+            let next = self.next_condition_reference(owner, index + 1);
+            _ = self
+                .functions
+                .condition_elisions
+                .insert((owner, index), next);
+            index = next;
+        }
+    }
+
+    /// Successor links skip an already processed interval for this owner.
+    /// Path compression bounds repeated elision of nested conditions.
+    fn next_condition_reference(&mut self, owner: Option<ReferenceOwner>, start: usize) -> usize {
+        let mut end = start;
+        while let Some(&next) = self.functions.condition_elisions.get(&(owner, end)) {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
+            end = next;
+        }
+        let mut index = start;
+        while let Some(&next) = self.functions.condition_elisions.get(&(owner, index)) {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
+            _ = self
+                .functions
+                .condition_elisions
+                .insert((owner, index), end);
+            index = next;
+        }
+        end
     }
 
     /// The number of references recorded so far, which marks where the
@@ -1659,6 +2003,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
             {
                 usage.dead = true;
+            }
+        }
+    }
+
+    /// Marks references that lowering omits, independently of LLVM creation
+    /// order. C99: §6.9p3-5, p. 140; PDF p. 152.
+    pub(super) fn elide_references(&mut self, range: std::ops::Range<usize>) {
+        let function = self.functions.reference_function;
+        for usage in &mut self.functions.uses[range] {
+            #[cfg(test)]
+            {
+                self.functions.condition_reference_steps += 1;
+            }
+            if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
+            {
+                usage.dead = true;
+                usage.unlowered = true;
             }
         }
     }
@@ -1683,19 +2044,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
-        ranges.push(marks[0].0..marks[1].0);
+        ranges.push((marks[0], marks[1]));
         for (index, association) in generic.associations.iter().enumerate() {
             if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
-                ranges.push(marks[2 + 2 * index].0..marks[3 + 2 * index].0);
+                ranges.push((marks[2 + 2 * index], marks[3 + 2 * index]));
             } else {
                 // Code generation continues in the block the selected
                 // association ends in.
-                self.functions.emission.orphan = marks[3 + 2 * index].1;
+                self.functions.emission.orphan = marks[3 + 2 * index].orphan;
             }
         }
-        for range in ranges {
-            for usage in &mut self.functions.uses[range] {
-                usage.dead = true;
+        for (start, end) in ranges {
+            self.elide_references(start.references..end.references);
+            for definition in &mut self.definitions[start.definitions..end.definitions] {
+                if definition.kind == DefinitionKind::Object {
+                    definition.elided = true;
+                }
             }
         }
     }
@@ -1703,19 +2067,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Pushes the work that enters operand `arm` of `condition`, taken when
     /// it is `live`: code generation skips it when the condition folds to
     /// the other value (`CodeGenFunction::ConstantFoldsToSimpleInteger`),
-    /// unless it holds a label (`CodeGenFunction::ContainsLabel`).
+    /// unless it holds a label (`CodeGenFunction::ContainsLabel`). Without
+    /// an `arm`, the operand belongs to a translation-time selection
+    /// (`__builtin_choose_expr`), which labels do not keep.
     pub(super) fn dead_arm(
         &mut self,
         condition: &'tu Expression<'tu>,
         live: bool,
-        arm: &'tu Expression<'tu>,
+        arm: Option<&'tu Expression<'tu>>,
     ) {
-        self.work.push(Work::FunctionWork(FunctionWork::DeadArm(
+        self.work.push(Work::FunctionWork(FunctionWork::DeadArm {
             condition,
             live,
-            self.skipped_state(),
+            outer: self.skipped_state(),
+            outer_elided: self.functions.elided,
             arm,
-        )));
+        }));
     }
 
     /// The skipped state of the code being analyzed, which an operand or
@@ -1732,7 +2099,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.5p4, p. 135; PDF p. 147.
     fn generated_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
         let info = self.expression_info(condition);
-        (info.constant == super::ConstantClass::Arithmetic)
+        // Function code computes a runtime constant query itself, which IR
+        // emission does not fold for a discarded comma.
+        (info.constant == super::ConstantClass::Arithmetic && !info.runtime_query)
             .then(|| Self::constant_truth(info))
             .flatten()
     }
@@ -1760,7 +2129,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Whether code in sizeof context `sizeof` and reference context
     /// `context`, both analyzed, is evaluated: neither they nor any context
-    /// around them leaves its operand unevaluated.
+    /// around them leaves its operand unevaluated. A `__builtin_constant_p`
+    /// operand counts only when its deferred emission decision says Clang
+    /// generates it, for references, definitions and joins alike.
     pub(super) fn context_evaluated(&self, sizeof: Option<usize>, context: Option<usize>) -> bool {
         let mut sizeof = sizeof;
         while let Some(index) = sizeof {
@@ -1790,12 +2161,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether reference context `index` leaves its operand unevaluated:
     /// alignof always does, GNU typeof unless its type is VM.
     fn reference_context_unevaluated(&self, index: usize) -> bool {
+        self.reference_context_unevaluated_for_owner(index, None)
+    }
+
+    /// Query operands use one decision made after typing. GNU extension:
+    /// Clang's `__builtin_constant_p` and statement expressions.
+    fn reference_context_unevaluated_for_owner(
+        &self,
+        index: usize,
+        _owner: Option<ReferenceOwner>,
+    ) -> bool {
         match self.functions.reference_contexts[index].kind {
+            | ReferenceContextKind::ConstantQuery { emitted } => !emitted,
+            | ReferenceContextKind::ConditionalArm { owner } =>
+                self.folded_conditional_emission(owner),
+            | ReferenceContextKind::RequiredLocalsOnly { .. }
+            | ReferenceContextKind::InitializerValue { .. } => false,
             | ReferenceContextKind::Unevaluated => true,
             | ReferenceContextKind::Typeof(syntax) => self
                 .typeof_sites
                 .get(&std::ptr::from_ref(syntax).addr())
                 .is_none_or(|site| !self.types.variably_modified(site.ty)),
+        }
+    }
+
+    fn reference_chain_unevaluated(&self, mut index: usize, owner: Option<ReferenceOwner>) -> bool {
+        loop {
+            if self.reference_context_unevaluated_for_owner(index, owner) {
+                return true;
+            }
+            let Some(parent) = self.functions.reference_contexts[index].parent else {
+                return false;
+            };
+            index = parent;
         }
     }
 
@@ -1816,7 +2214,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let mut context = usage.reference_context;
             while let Some(index) = context {
-                evaluated &= !self.reference_context_unevaluated(index);
+                evaluated &= !self.reference_context_unevaluated_for_owner(index, usage.owner);
                 context = self.functions.reference_contexts[index].parent;
             }
             if evaluated {
@@ -1938,16 +2336,61 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         syntax: Option<&'tu super::ExtendedType<'tu>>,
     ) {
+        self.enter_reference_context_kind(syntax.map_or(
+            ReferenceContextKind::Unevaluated,
+            ReferenceContextKind::Typeof,
+        ));
+    }
+
+    /// A later initializer can overwrite this whole value. Its required
+    /// closure stays emitted while optional storage follows the final plan.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139; emission follows Clang.
+    pub(super) fn initializer_value_context(&mut self, expression: &'tu Expression<'tu>) {
+        if self.functions.initializer.is_some_and(|b| {
+            self.bindings[b].duration == Duration::Automatic && self.aggregate(self.bindings[b].ty)
+        }) {
+            self.enter_reference_context_kind(ReferenceContextKind::InitializerValue {
+                expression,
+            });
+        }
+    }
+
+    /// Wrap the already queued child in a retention-only context when a
+    /// pure constant condition needs an unmodeled fold. References, insertion
+    /// state and required/used roots remain unchanged. A conditional's result
+    /// type and whole initializer decide later whether its visitor could
+    /// omit an arm.
+    /// C99: §6.6p10, p. 96; PDF p. 108; best-effort retention follows Clang.
+    pub(super) fn limit_optional_locals_for_next(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+        scalar_owner: Option<&'tu Expression<'tu>>,
+    ) {
+        if self.folded_condition(condition).is_none()
+            && self.potential_constant_condition(condition)
+        {
+            let child = self
+                .work
+                .pop()
+                .expect("retention context has a queued child");
+            if let Some(owner) = scalar_owner {
+                self.record_aggregate_initializer_arm(owner);
+            }
+            self.enter_reference_context_kind(ReferenceContextKind::RequiredLocalsOnly {
+                scalar_owner,
+            });
+            self.work.push(child);
+        }
+    }
+
+    fn enter_reference_context_kind(&mut self, kind: ReferenceContextKind<'tu>) {
         self.work
             .push(Work::FunctionWork(FunctionWork::RestoreReferenceContext(
                 self.functions.reference_context,
             )));
         let index = self.functions.reference_contexts.len();
         self.functions.reference_contexts.push(ReferenceContext {
-            kind:   syntax.map_or(
-                ReferenceContextKind::Unevaluated,
-                ReferenceContextKind::Typeof,
-            ),
+            kind,
             parent: self.functions.reference_context,
         });
         self.functions.reference_context = Some(index);
@@ -2055,6 +2498,8 @@ pub(super) struct FunctionContext<'tu> {
 
 #[derive(Clone, Copy)]
 pub(super) enum FunctionWork<'tu> {
+    /// A cast's resolved target selects the operand's value visitor.
+    CastOperand(&'tu Expression<'tu>),
     Finish(
         Option<FunctionContext<'tu>>,
         usize,
@@ -2062,6 +2507,17 @@ pub(super) enum FunctionWork<'tu> {
         Option<usize>,
         usize,
     ),
+    /// Enter operand contexts after resolving a builtin's callee.
+    CallArguments(&'tu Expression<'tu>, ArenaList<'tu, &'tu Expression<'tu>>),
+    /// One deferred operand emission decision, shared by all contexts.
+    ConstantQueryEnd {
+        index:       usize,
+        operand:     &'tu Expression<'tu>,
+        static_data: bool,
+    },
+    BranchOperandEnd(&'tu Expression<'tu>, super::emission::Position),
+    ScalarLogicalEnd(&'tu Expression<'tu>),
+    ConditionReferences(&'tu Expression<'tu>, ConditionMark),
     RestoreSizeof(Option<usize>),
     RestoreReferenceContext(Option<usize>),
     /// Sets whether code generation skips the code that follows.
@@ -2072,6 +2528,8 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whether the code being analyzed is emitted into a block
     /// without predecessors ([`super::emission::State::orphan`]).
     RestoreOrphan(Option<usize>),
+    /// Restores whole-statement/operand omission, including declarations.
+    RestoreElided(bool),
     /// Restores which weak names apply to the code being analyzed
     /// ([`super::emission::State::weak_horizon`]).
     RestoreWeakHorizon(usize),
@@ -2086,22 +2544,41 @@ pub(super) enum FunctionWork<'tu> {
     /// Saves the skipped state at the end of an `if` statement's first arm.
     ThenEnd,
     /// Skips the code after an `if` statement when both arms end skipped.
-    JoinArms,
+    JoinArms(bool),
     /// Enters operand `arm` of a condition, taken when it is `live`, given
-    /// the skipped state of the code around the condition; an operand that
-    /// holds a label is not skipped.
-    DeadArm(&'tu Expression<'tu>, bool, Skipped, &'tu Expression<'tu>),
+    /// whether the code around the condition is skipped and elided; an
+    /// operand that holds a label is not skipped. A translation-time
+    /// selection (`__builtin_choose_expr`) has no `arm`.
+    DeadArm {
+        condition:    &'tu Expression<'tu>,
+        live:         bool,
+        outer:        Skipped,
+        outer_elided: bool,
+        arm:          Option<&'tu Expression<'tu>>,
+    },
+    /// Defer conditional elision until its result type is known.
+    ConditionalArm {
+        owner:        &'tu Expression<'tu>,
+        arm:          &'tu Expression<'tu>,
+        live:         bool,
+        outer:        Skipped,
+        outer_elided: bool,
+    },
+    /// Restore insertion effects after typing an omitted conditional arm.
+    ConditionalArmEnd(&'tu Expression<'tu>, &'tu Expression<'tu>, Option<usize>),
     /// The reference boundaries and insertion states of a conditional's
     /// arms, before its result type settles whether either is skipped.
-    ConditionalMark(&'tu Expression<'tu>, usize, Skipped),
+    ConditionalMark(&'tu Expression<'tu>, usize, Skipped, bool),
     /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
     /// the arm holds a label, which keeps Clang from skipping it.
-    DeadStatementArm(
-        &'tu Expression<'tu>,
-        bool,
-        Skipped,
-        Option<&'tu Statement<'tu>>,
-    ),
+    DeadStatementArm {
+        owner:        &'tu Statement<'tu>,
+        condition:    &'tu Expression<'tu>,
+        live:         bool,
+        outer:        Skipped,
+        outer_elided: bool,
+        statement:    Option<&'tu Statement<'tu>>,
+    },
     /// Clang omits an infinite loop's exit block unless a generated break
     /// targets it. The loop's body is emitted even for a false condition.
     LoopEnd(&'tu Statement<'tu>, bool),
@@ -2116,7 +2593,7 @@ pub(super) enum FunctionWork<'tu> {
     ExpressionStatementEnd {
         expression: &'tu Expression<'tu>,
         serial:     usize,
-        value:      Option<(bool, usize)>,
+        value:      Option<(bool, super::emission::Position)>,
     },
     /// After a statement expression, given the skipped state around it.
     StatementExpressionEnd(bool),
@@ -2206,6 +2683,38 @@ struct Use {
     dll_import:        Option<bool>,
     /// Code generation skips the reference ([`State::dead`]).
     dead:              bool,
+    unlowered:         bool,
+}
+
+/// Deferred evaluation contexts shared by local definitions and references.
+/// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+#[derive(Clone, Copy)]
+struct DefinitionContext {
+    definition:        usize,
+    sizeof:            Option<usize>,
+    reference_context: Option<usize>,
+}
+
+/// Owner and first reference before a foldable condition is analyzed.
+#[derive(Clone, Copy)]
+pub(super) struct ConditionMark {
+    start: usize,
+    owner: Option<ReferenceOwner>,
+}
+
+#[derive(Clone, Copy)]
+struct ConditionUses {
+    mark: ConditionMark,
+    end:  usize,
+}
+
+/// Bounds around a generic operand, whose selection is known after typing.
+/// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+#[derive(Clone, Copy)]
+struct EmissionMark {
+    references:  usize,
+    definitions: usize,
+    orphan:      Option<usize>,
 }
 
 /// A break's evaluation context settles after an enclosing sizeof/typeof
@@ -2234,12 +2743,29 @@ struct ReferenceContext<'tu> {
 enum ReferenceContextKind<'tu> {
     Typeof(&'tu super::ExtendedType<'tu>),
     Unevaluated,
+    /// A `__builtin_constant_p` operand's deferred emission decision. All
+    /// consumers share it; its references remain C99 §6.9p3 uses either way.
+    ConstantQuery {
+        emitted: bool,
+    },
+    /// An unmodeled constant fold cannot safely add optional local roots.
+    RequiredLocalsOnly {
+        scalar_owner: Option<&'tu Expression<'tu>>,
+    },
+    /// Final overwrite coverage is known only once the initializer is planned.
+    InitializerValue {
+        expression: &'tu Expression<'tu>,
+    },
+    /// A folded-away conditional operand is omitted only for scalar results.
+    ConditionalArm {
+        owner: &'tu Expression<'tu>,
+    },
 }
 
 /// Parameter type sites execute as part of the definition, before its binding
 /// is installed. Resolve their syntactic owner to that binding at completion.
 /// C99: §6.9.1p10, p. 142; PDF p. 154.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum ReferenceOwner {
     Function(usize),
     Object(usize),
@@ -2253,6 +2779,11 @@ struct InlineObject {
     binding:  usize,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Insertion, visitation, elision and the enclosing switch are independent emission \
+              facts."
+)]
 pub(super) struct State<'tu, 's> {
     pub(super) reference_context: Option<usize>,
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
@@ -2281,6 +2812,13 @@ pub(super) struct State<'tu, 's> {
     /// does not return, until a label (`CodeGenFunction::EmitStmt`;
     /// [`super::emission`]).
     pub(super) dead: bool,
+    /// A whole statement or operand is omitted, including its declarations:
+    /// an untaken arm, an unselected switch region, or a non-simple statement
+    /// without labels while `dead`. Simple declarations and compounds still
+    /// get visited after jumps. Deferred unevaluated contexts are applied at
+    /// completion too. C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146;
+    /// omission follows Clang's code-generation policy.
+    pub(super) elided: bool,
     /// Code generation does not even visit the code being analyzed: a
     /// statement it skips whole after a jump, the arm or operand a folded
     /// condition skips, and what follows a folded switch's selected
@@ -2304,38 +2842,52 @@ pub(super) struct State<'tu, 's> {
     /// For each generic selection being analyzed, by address, the number
     /// of references recorded at the start and end of its controlling
     /// operand and of each association's expression, with the emission
-    /// model's block state there.
-    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, (usize, Option<usize>)>>,
+    /// model's block state at each boundary.
+    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
+    definition_contexts: ArenaVec<'s, DefinitionContext>,
+    pub(super) optional_local_bindings: ArenaMap<'s, usize, ()>,
+    condition_uses: ArenaMap<'s, usize, ConditionUses>,
+    /// Owner-specific successor links for uses already condition-elided.
+    condition_elisions: ArenaMap<'s, (Option<ReferenceOwner>, usize), usize>,
+    #[cfg(test)]
+    pub(super) condition_reference_steps: usize,
 }
 
 impl<'s> State<'_, 's> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            reference_context:       None,
-            reference_contexts:      ArenaVec::new_in(scratch),
-            reference_function:      None,
-            initializer:             None,
-            initializer_value:       None,
-            current:                 None,
-            next_function:           0,
-            old_names:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            old_types:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:                    ArenaVec::new_in(scratch),
+            reference_context: None,
+            reference_contexts: ArenaVec::new_in(scratch),
+            reference_function: None,
+            initializer: None,
+            initializer_value: None,
+            current: None,
+            next_function: 0,
+            old_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses: ArenaVec::new_in(scratch),
             external_redeclarations: ArenaVec::new_in(scratch),
-            evaluated_imports:       &[],
-            sizeof_contexts:         ArenaVec::new_in(scratch),
-            sizeof:                  None,
-            dead:                    false,
-            unvisited:               false,
-            switch_dead:             false,
-            emission:                super::emission::State::new(scratch),
-            arm_ends:                ArenaVec::new_in(scratch),
-            generated_breaks:        ArenaVec::new_in(scratch),
-            inline_objects:          ArenaVec::new_in(scratch),
-            outside:                 [None; 2],
-            generic_marks:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            evaluated_imports: &[],
+            sizeof_contexts: ArenaVec::new_in(scratch),
+            sizeof: None,
+            dead: false,
+            elided: false,
+            unvisited: false,
+            switch_dead: false,
+            emission: super::emission::State::new(scratch),
+            arm_ends: ArenaVec::new_in(scratch),
+            generated_breaks: ArenaVec::new_in(scratch),
+            inline_objects: ArenaVec::new_in(scratch),
+            outside: [None; 2],
+            generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            definition_contexts: ArenaVec::new_in(scratch),
+            optional_local_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            condition_uses: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            condition_elisions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            #[cfg(test)]
+            condition_reference_steps: 0,
         }
     }
 }

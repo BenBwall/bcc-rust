@@ -317,7 +317,10 @@ int main(void) { return a(2)-7; }";
     #[test]
     fn static_local_initializers_only_reach_functions_when_the_object_is_emitted() {
         for (body, expected) in [
-            ("static int (*p)(void)=f; return 0;", vec!["main"]),
+            (
+                "static int (*p)(void)=f; return 0;",
+                vec!["f", "main", "main.p"],
+            ),
             (
                 "static int (*p)(void)=f; return p()-7;",
                 vec!["f", "main", "main.p"],

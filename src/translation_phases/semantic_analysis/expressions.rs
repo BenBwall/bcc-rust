@@ -577,6 +577,14 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// C11: §6.5.1.1p4, p. 79; PDF p. 97; GNU `choose_expr` follows it.
     /// Constant address conditionals: C99 §6.5.15p4, p. 90; PDF p. 102.
     pub(crate) selected_expression: Option<&'tu Expression<'tu>>,
+    /// The whole operand is skipped by Clang code generation.
+    pub(crate) elided: bool,
+    /// Function code computes a different value than `integer` and
+    /// `floating`, which hold Clang's constant-context value: the operand
+    /// holds a `__builtin_constant_p` whose emitted value is one where a
+    /// constant context reads zero. Lowering evaluates it structurally.
+    /// GNU extension: GCC manual, "Other Builtins".
+    pub(crate) runtime_query: bool,
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
     pub(crate) operation_type: Option<TypeId>,

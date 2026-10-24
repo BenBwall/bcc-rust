@@ -214,7 +214,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             duration: Duration::Static,
             value: None,
         });
-        self.definitions.push(Definition { binding, kind });
+        self.definitions.push(Definition {
+            binding,
+            kind,
+            elided: false,
+        });
         binding
     }
 

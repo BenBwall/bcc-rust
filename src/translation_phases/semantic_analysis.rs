@@ -271,6 +271,10 @@ pub(crate) fn analyze<'tu>(
             ));
     let unit_arena = analyzer.types.tu;
     let symbol_requests = analyzer.symbol_requests;
+    let mut optional_local_bindings = ArenaMap::with_hasher_in(FxBuildHasher, unit_arena);
+    for (&scope, &()) in &analyzer.functions.optional_local_bindings {
+        _ = optional_local_bindings.insert(scope, ());
+    }
     let mut result = SemanticTranslationUnit {
         entities: EntityFacts::empty(analyzer.types.tu),
         references: analyzer.references.leak(),
@@ -292,6 +296,7 @@ pub(crate) fn analyze<'tu>(
         types: analyzer.types.finish(),
         bindings: analyzer.bindings.leak(),
         definitions: analyzer.definitions.leak(),
+        optional_local_bindings,
         external_redeclarations: unit_arena
             .alloc_slice_copy(&analyzer.functions.external_redeclarations),
         functions: analyzer.function_records.leak(),
@@ -518,6 +523,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::OldSignature(f) => self.old_signature(f),
             | Work::BlockItem(item) => match item {
                 | BlockItem::Declaration(d) => {
+                    if !self.functions.elided && self.folded_declaration_elided() {
+                        self.work
+                            .push(Work::FunctionWork(functions::FunctionWork::RestoreElided(
+                                false,
+                            )));
+                        self.functions.elided = true;
+                    }
                     self.unsummarized_block_item();
                     self.work.push(Work::Declaration(d));
                 },
@@ -531,6 +543,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Expression(expression) => self.expression(expression),
             | Work::ExpressionDone(e) => {
                 self.expression_done(e);
+                self.complete_conditional_elision(e);
                 // The blocks `e` creates depend on its type.
                 self.expression_emitted(e);
             },
@@ -543,7 +556,28 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::Initializer(initializer));
             },
             | Work::InitializeDeclaration(declarator, initializer) => {
-                self.correspondence.initializer(declarator, initializer);
+                let automatic = declarator
+                    .identifier()
+                    .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
+                    .is_some_and(|entry| {
+                        self.bindings[entry.binding].duration == Duration::Automatic
+                    });
+                let labeled = automatic
+                    && self.functions.dead
+                    && self.initializer_contains_label(initializer);
+                let omitted = automatic && self.functions.dead && !labeled;
+                if labeled {
+                    // Clang EmitAutoVarInit ensures an insertion point for a
+                    // label, so the code after the declaration is emitted too.
+                    self.functions.dead = false;
+                }
+                self.correspondence
+                    .initializer(declarator, initializer, omitted);
+                self.work
+                    .push(Work::FunctionWork(functions::FunctionWork::RestoreElided(
+                        self.functions.elided,
+                    )));
+                self.functions.elided |= omitted;
                 self.work
                     .push(Work::RestoreReferenceOwner(self.functions.initializer));
                 self.work.push(Work::RestoreInitializerValue(
@@ -563,6 +597,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::InitializeDone(binding, initializer) => {
                 self.record_constant_initializer(binding, initializer);
                 self.initialize_declaration(binding, initializer);
+                self.finish_initializer_value_retention(binding, initializer);
+                self.finish_aggregate_initializer_emission(binding, initializer);
             },
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
@@ -606,6 +642,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.taint(initializer.recovered);
                 match initializer.kind {
                     | InitializerType::AssignmentExpression(e) => {
+                        self.initializer_value_context(e);
                         self.work.push(Work::RestoreInitializerValue(
                             self.functions.initializer_value,
                         ));

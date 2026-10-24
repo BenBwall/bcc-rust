@@ -240,7 +240,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         &mut self,
         declarator: usize,
     ) {
-        let Some((variable, function, source)) =
+        let Some((variable, function, source, reference)) =
             self.attributes.pending_cleanups.remove(&declarator)
         else {
             return;
@@ -248,12 +248,25 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if self.functions.current.is_none() {
             return;
         }
+        // The variable's scope calls the function, so the enclosing body
+        // uses it where the attribute names it. C99: §6.9p3, p. 140; PDF p.
+        // 152.
+        let before = self.reference_count();
+        self.record_binding_use(function, reference);
+        let omitted = self.functions.dead || self.functions.elided;
+        if omitted {
+            self.elide_references(before..self.reference_count());
+        }
         _ = self.control.open(
             self.scope,
             RegionKind::CleanupDeclaration(BindingId(variable)),
-            CleanupKind::Call {
-                variable: BindingId(variable),
-                function: BindingId(function),
+            if omitted {
+                CleanupKind::None
+            } else {
+                CleanupKind::Call {
+                    variable: BindingId(variable),
+                    function: BindingId(function),
+                }
             },
             source,
         );
@@ -909,19 +922,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             }
         }
-        // The variable's scope calls the function, so the enclosing body
-        // uses it: it needs a definition and keeps it reachable.
-        // C99: §6.9p3, p. 140; PDF p. 152.
-        self.record_binding_use(
-            entry.binding,
-            crate::translation_phases::parsing::syntax::Identifier {
-                name:           identifier.contents,
-                source_vectors: identifier.source_vectors,
-            },
-        );
         _ = self.attributes.pending_cleanups.insert(
             declarator,
-            (binding, entry.binding, variable.name.source_vectors),
+            (
+                binding,
+                entry.binding,
+                variable.name.source_vectors,
+                crate::translation_phases::parsing::syntax::Identifier {
+                    name:           identifier.contents,
+                    source_vectors: identifier.source_vectors,
+                },
+            ),
         );
     }
 
@@ -1366,8 +1377,18 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Stable linked semantic identities with an alias request, one each.
     alias_names: ArenaMap<'s, StringCacheId, usize>,
     /// Validated cleanups by declarator identity, waiting for the end of
-    /// their declarator's initializer.
-    pending_cleanups: ArenaMap<'s, usize, (usize, usize, SourceVectors)>,
+    /// their declarator's initializer, with the attribute's use of the
+    /// function.
+    pending_cleanups: ArenaMap<
+        's,
+        usize,
+        (
+            usize,
+            usize,
+            SourceVectors,
+            crate::translation_phases::parsing::syntax::Identifier,
+        ),
+    >,
     /// Gotos written in the initializers of cleanup variables, by statement
     /// address, with each such variable.
     pub(in crate::translation_phases::semantic_analysis) initializing_jumps:

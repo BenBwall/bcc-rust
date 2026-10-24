@@ -56,6 +56,8 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) function_extensions:     super::FunctionExtensions<'tu>,
     pub(crate) types:                   Types<'tu>,
     pub(crate) bindings:                &'tu [Binding],
+    /// Locals in unmodeled constant-control regions need required/used roots.
+    pub(super) optional_local_bindings: ArenaMap<'tu, usize, ()>,
     pub(crate) definitions:             &'tu [Definition],
     /// The file-scope declarations, in source order, that make an inline
     /// function body seen before them an external definition (C99
@@ -105,16 +107,21 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 /// PDF pp. 137-142.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EntityReference {
-    pub(crate) owner:             usize,
-    pub(crate) binding:           usize,
-    /// The reference is in code that Clang's code generation skips (an
-    /// unreachable statement or a constant-false operand): it still keeps
-    /// what it names reachable, but creates no LLVM value there.
-    pub(crate) dead:              bool,
+    pub(crate) owner:                usize,
+    pub(crate) binding:              usize,
+    /// Clang does not create an LLVM value here; used for creation order
+    /// and DLL import selection. Static initializer data stays live.
+    pub(crate) dead:                 bool,
+    /// Lowering emits no reference here. Only this flag drops a reachability
+    /// edge.
+    pub(crate) unlowered:            bool,
+    /// This reference may exist only because a pure Clang fold is unmodeled.
+    /// Keep its required closure without making helper-local optional roots.
+    pub(crate) required_locals_only: bool,
     /// Syntax identity of the initializer value containing this reference,
     /// so creation order can exclude values later stores fully replace.
     /// Analysis and ordinary reachability still retain those references.
-    pub(crate) initializer_value: Option<usize>,
+    pub(crate) initializer_value:    Option<usize>,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than
@@ -288,6 +295,12 @@ pub(crate) enum DefinitionKind {
 /// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Definition {
+    /// The declaration belongs to a whole statement or operand that Clang
+    /// omits even at O0, including deferred unevaluated contexts. Simple
+    /// declarations after jumps remain emitted.
+    /// C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146 (selection semantics);
+    /// storage emission is a compiler policy.
+    pub(crate) elided:  bool,
     pub(crate) binding: usize,
     pub(crate) kind:    DefinitionKind,
 }

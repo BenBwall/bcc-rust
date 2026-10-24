@@ -47,6 +47,7 @@ pub(crate) struct ResolvedFacts<'tu> {
     pub(crate) calls:                 ArenaMap<'tu, usize, CallFacts<'tu>>,
     pub(crate) members:               ArenaMap<'tu, usize, MemberFacts>,
     pub(crate) statement_expressions: ArenaMap<'tu, usize, StatementExpressionFacts<'tu>>,
+    branch_operands:                  ArenaMap<'tu, usize, &'tu Expression<'tu>>,
     #[cfg(test)]
     pub(crate) work:                  [usize; 2],
 }
@@ -123,6 +124,7 @@ pub(in crate::translation_phases::semantic_analysis) struct ResolvedBuilder<'tu,
     calls: ArenaMap<'tu, usize, CallFacts<'tu>>,
     pub(in crate::translation_phases::semantic_analysis) members: ArenaMap<'tu, usize, MemberFacts>,
     statement_expressions: ArenaMap<'tu, usize, StatementExpressionFacts<'tu>>,
+    branch_operands: ArenaMap<'tu, usize, &'tu Expression<'tu>>,
     tails: ArenaMap<'s, usize, Option<&'tu Expression<'tu>>>,
     conversions: ArenaMap<'s, usize, ConversionSummary>,
     implicit_callees: ArenaSet<'s, usize>,
@@ -138,6 +140,19 @@ struct ConversionSummary {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Retain the sole operand left by a branch-context simplification.
+    /// C99: §6.5.13-§6.5.14, pp. 89-90; PDF pp. 101-102.
+    pub(in crate::translation_phases::semantic_analysis) fn retain_branch_operand(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        operand: &'tu Expression<'tu>,
+    ) {
+        _ = self
+            .resolved
+            .branch_operands
+            .insert(identity(expression), operand);
+    }
+
     /// C89/GNU implicit declarations must be installed before the identifier
     /// is typed. Forward call context through immediate transparent children
     /// during ordinary discovery; selection results are not available yet.
@@ -424,6 +439,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
+    pub(crate) fn branch_operand(
+        &self,
+        expression: &Expression<'tu>,
+    ) -> Option<&'tu Expression<'tu>> {
+        self.resolved
+            .branch_operands
+            .get(&identity(expression))
+            .copied()
+    }
+
     pub(crate) fn designation(&self, expression: &Expression<'tu>) -> Option<Designation<'tu>> {
         self.resolved
             .designations
@@ -467,6 +492,7 @@ impl<'tu, 's> ResolvedBuilder<'tu, 's> {
             calls:                 ArenaMap::with_hasher_in(FxBuildHasher, tu),
             members:               ArenaMap::with_hasher_in(FxBuildHasher, tu),
             statement_expressions: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            branch_operands:       ArenaMap::with_hasher_in(FxBuildHasher, tu),
             tails:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conversions:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             implicit_callees:      ArenaSet::with_hasher_in(FxBuildHasher, scratch),
@@ -513,6 +539,7 @@ impl<'tu, 's> ResolvedBuilder<'tu, 's> {
             calls:                 self.calls,
             members:               self.members,
             statement_expressions: self.statement_expressions,
+            branch_operands:       self.branch_operands,
             #[cfg(test)]
             work:                  self.work,
         }

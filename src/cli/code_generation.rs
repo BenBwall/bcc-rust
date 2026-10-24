@@ -10,6 +10,8 @@
 //! pre-ABI module the optimizer worked on, where a structure passed by value
 //! is still one `ptr` parameter, and `--emit=ir-abi` the post-ABI one.
 
+mod retention;
+
 #[expect(
     clippy::disallowed_types,
     reason = "clap parses the output path into a `PathBuf`; the driver borrows it as `&Path`."
@@ -63,8 +65,9 @@ use crate::{
         InlineCopies,
         MiddleEndError,
         analyze_translation_unit,
-        lower_translation_unit_diagnosed,
+        lower_translation_unit_with_locals,
         parse_translation_unit,
+        with_optional_retention,
     },
     target::{
         CodeOptions,
@@ -123,113 +126,60 @@ pub(super) fn generate_code<'tu>(
         Profile::PostAbi
     };
     let copies = options.inline_copies();
-    let lowered = lower_translation_unit_diagnosed(
-        context,
-        &unit,
-        &sema,
-        &ir,
-        optimizer.as_ref(),
-        profile,
-        copies,
-    );
-    let llvm_output =
-        options.emit.is_none() && options.output_path.is_some() && options.backend == BackEnd::Llvm;
-    let diagnosed = match lowered {
-        | Ok(diagnosed) => {
-            if !llvm_output && !matches!(options.emit, Some(Emit::Ir | Emit::IrAbi | Emit::Llvm)) {
-                for diagnostic in diagnosed.retained_diagnostics {
-                    diagnostic.report(context);
-                    // Emitted copies are distinct even when inlining preserves
-                    // their shared source location; do not fold them together.
-                    drop(reporter.report_pending(context, stderr));
-                }
-            }
-            drop(reporter.report_pending(context, stderr));
-            if context.error_count() != 0 {
-                drop(reporter.finish(context, stderr));
-                return FAILURE_STATUS;
-            }
-            diagnosed
-        },
-        | Err(MiddleEndError::Lowering(errors)) => {
+    let target = context.configuration.target();
+    let code = context.configuration.code_options();
+    let prepared = with_optional_retention(true, |retain_locals| {
+        let diagnosed = lower_translation_unit_with_locals(
+            context,
+            &unit,
+            &sema,
+            &ir,
+            optimizer.as_ref(),
+            profile,
+            (copies, retain_locals),
+        )
+        .map_err(retention::Failure::MiddleEnd)?;
+        let prepared = retention::prepare(&diagnosed, context, &ir, target, code, options)?;
+        Ok((diagnosed, prepared))
+    });
+    let (diagnosed, prepared) = match prepared {
+        | Ok(value) => value,
+        | Err(retention::Failure::MiddleEnd(MiddleEndError::Lowering(errors))) => {
             for error in errors.errors {
                 reporter.report_late(error, error.source, context);
             }
             drop(reporter.finish(context, stderr));
             return FAILURE_STATUS;
         },
-        | Err(MiddleEndError::Abi { error, source }) => {
+        | Err(retention::Failure::MiddleEnd(MiddleEndError::Abi { error, source })) => {
             reporter.report_late(&error, source, context);
             drop(reporter.finish(context, stderr));
             return FAILURE_STATUS;
         },
-    };
-    let module = diagnosed.module;
-    let target = context.configuration.target();
-    let code = context.configuration.code_options();
-    if llvm_output && !diagnosed.call_diagnostics.is_empty() {
-        let output = options
-            .output_path
-            .as_deref()
-            .expect("LLVM output has a path");
-        let result = llvm::compile_module_checked(
-            &module,
-            output,
-            options.llvm_options(target, code),
-            diagnosed.call_diagnostics.len(),
-            |counts| {
-                for (&diagnostic, &count) in diagnosed.call_diagnostics.iter().zip(counts) {
-                    for _ in 0..count {
-                        diagnostic.report(context);
-                        drop(reporter.report_pending(context, stderr));
-                    }
-                }
+        | Err(retention::Failure::Calls(diagnostics)) => {
+            for diagnostic in diagnostics {
+                diagnostic.report(context);
                 drop(reporter.report_pending(context, stderr));
-                context.error_count() == 0
-            },
-        );
-        drop(reporter.finish(context, stderr));
-        return match result {
-            | Ok(true) => 0,
-            | Ok(false) => FAILURE_STATUS,
-            | Err(error) => {
-                report_stderr(format_args!(
-                    "error: cannot build `{}`: {error}",
-                    output.display()
-                ));
-                FAILURE_STATUS
-            },
-        };
+            }
+            drop(reporter.finish(context, stderr));
+            return FAILURE_STATUS;
+        },
+        | Err(retention::Failure::Message { text, status }) => {
+            drop(reporter.finish(context, stderr));
+            report_stderr(format_args!("{text}"));
+            return status;
+        },
+    };
+    for diagnostic in prepared.diagnostics {
+        diagnostic.report(context);
+        drop(reporter.report_pending(context, stderr));
     }
     drop(reporter.finish(context, stderr));
-    // The LLVM back end verifies its input; the IR printer, the interpreter
-    // and the native back end rely on the same invariants, so they verify
-    // too rather than print, run or compile a malformed module.
-    if matches!(options.emit, Some(Emit::Ir | Emit::IrAbi | Emit::Asm))
-        || (options.emit.is_none() && options.output_path.is_none())
-        || (options.emit.is_none() && options.backend == BackEnd::Native)
-    {
-        let scratch = Bump::new();
-        let errors = crate::ir::verify_module(&module, profile, &scratch);
-        if !errors.is_empty() {
-            let mut stderr = io::stderr().lock();
-            for error in &errors {
-                drop(writeln!(
-                    stderr,
-                    "error: internal error: invalid bcc IR: {error}"
-                ));
-            }
-            return FAILURE_STATUS;
-        }
-    }
-    match (options.emit, &options.output_path) {
-        | (Some(Emit::Ir | Emit::IrAbi), _) => print_stdout(format_args!("{module}")),
-        | (Some(Emit::Llvm), _) => print_llvm(&module, target, code),
-        | (Some(Emit::Asm), _) => print_native(&module, target, code),
-        | (None, Some(path)) if options.backend == BackEnd::Native =>
-            build_native(&module, target, code, path, options),
-        | (None, Some(path)) => build(&module, target, code, path, options),
-        | (None, None) => interpret(&module, target, options.interpret_step_limit),
+    match prepared.output {
+        | retention::Output::Text(text) => print_stdout(format_args!("{text}")),
+        | retention::Output::Built => 0,
+        | retention::Output::Interpret =>
+            interpret(&diagnosed.module, target, options.interpret_step_limit),
     }
 }
 
@@ -599,87 +549,6 @@ fn interpret(module: &Module<'_>, target: Target, steps: Option<u64>) -> i32 {
     }
 }
 
-/// Prints the module as LLVM IR for `target` to stdout.
-fn print_llvm(module: &Module<'_>, target: Target, code: CodeOptions) -> i32 {
-    let arena = Bump::new();
-    let mut text = ArenaString::new_in(&arena);
-    match llvm::emit_module_with(module, target, code, &mut text) {
-        | Ok(()) => print_stdout(format_args!("{text}")),
-        | Err(error) => {
-            report_stderr(format_args!("error: {error}"));
-            FAILURE_STATUS
-        },
-    }
-}
-
-/// Prints the native back end's assembly for `target` to stdout, or
-/// reports what it does not support.
-fn print_native(module: &Module<'_>, target: Target, code: CodeOptions) -> i32 {
-    let arena = Bump::new();
-    let mut text = ArenaString::new_in(&arena);
-    match native::emit_assembly_with(module, target, code, &mut text) {
-        | Ok(()) => print_stdout(format_args!("{text}")),
-        | Err(error) => {
-            report_stderr(format_args!("error: {error}"));
-            FAILURE_STATUS
-        },
-    }
-}
-
-/// Builds an object or executable with the native back end.
-fn build_native(
-    module: &Module<'_>,
-    target: Target,
-    code: CodeOptions,
-    output: &Path,
-    options: &CodeGeneration,
-) -> i32 {
-    // The back end's code assumes it ends up in an executable, which
-    // `-shared` would break even with the default relocation model.
-    if options.output_kind() == OutputKind::SharedLibrary {
-        report_stderr(format_args!(
-            "error: {}",
-            native::NativeError::SharedLibraryCode
-        ));
-        return FAILURE_STATUS;
-    }
-    let writer = match native::object_writer(module, target, options.requested_object_writer()) {
-        | Ok(writer) => writer,
-        | Err(error) => {
-            report_stderr(format_args!("error: {error}"));
-            return FAILURE_STATUS;
-        },
-    };
-    let arena = Bump::new();
-    let mut text = ArenaString::new_in(&arena);
-    if let Err(error) = native::emit_assembly_with(module, target, code, &mut text) {
-        report_stderr(format_args!("error: {error}"));
-        return FAILURE_STATUS;
-    }
-    // Clang's assembler driver may unlink an output it cannot open. Check
-    // existing regular files first, preserving the C driver's read-only policy.
-    let writable = if output.is_file() {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(output)
-            .map(drop)
-    } else {
-        Ok(())
-    };
-    let result =
-        writable.and_then(|()| native::build(&text, output, target, options.output_kind(), writer));
-    match result {
-        | Ok(()) => 0,
-        | Err(error) => {
-            report_stderr(format_args!(
-                "error: cannot build `{}`: {error}",
-                output.display()
-            ));
-            FAILURE_STATUS
-        },
-    }
-}
-
 /// Prints `text` to stdout and returns success.
 fn print_stdout(text: fmt::Arguments<'_>) -> i32 {
     let mut stdout = io::stdout().lock();
@@ -697,27 +566,6 @@ fn stdout_error(error: &io::Error) -> i32 {
     }
     report_stderr(format_args!("error: failed writing to stdout: {error}"));
     FAILURE_STATUS
-}
-
-/// Emits an object in-process and links an executable when requested.
-fn build(
-    module: &Module<'_>,
-    target: Target,
-    code: CodeOptions,
-    output: &Path,
-    options: &CodeGeneration,
-) -> i32 {
-    let result = llvm::compile_module(module, output, options.llvm_options(target, code));
-    match result {
-        | Ok(()) => 0,
-        | Err(error) => {
-            report_stderr(format_args!(
-                "error: cannot build `{}`: {error}",
-                output.display()
-            ));
-            FAILURE_STATUS
-        },
-    }
 }
 
 /// Parses `--passes`.

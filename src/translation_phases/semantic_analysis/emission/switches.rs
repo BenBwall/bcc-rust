@@ -26,6 +26,7 @@
 
 use super::super::{
     Analyzer,
+    DefinitionKind,
     Integer,
     TypeId,
 };
@@ -63,12 +64,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         let Some(value) = condition.and_then(|condition| self.folded_integer(condition)) else {
+            if let Some(condition) = condition
+                && self.switch_labels(switch).is_some()
+                && !self.statement_contains_label(body, true)
+            {
+                self.limit_optional_locals_for_next(condition, None);
+            }
             return;
         };
         if self.switch_labels(switch).is_none() {
             return;
         }
-        let start = self.reference_count();
+        let start = SwitchMark {
+            references:  self.reference_count(),
+            definitions: self.definitions.len(),
+            statements:  self.control.statements.len(),
+        };
         _ = self.functions.emission.folds.insert(
             index,
             FoldedSwitch {
@@ -79,6 +90,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 phase: Phase::Searching,
                 end: None,
                 tentative: false,
+                selected: None,
                 after: false,
             },
         );
@@ -216,11 +228,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
         match collected {
             | Some(end) => {
-                self.skip_folded_region(fold.start..self.reference_count());
+                self.skip_folded_region(fold, Some(label));
                 if let Some(fold) = self.functions.emission.folds.get_mut(&index) {
                     fold.phase = Phase::Collecting;
                     fold.end = end;
                     fold.tentative = tentative;
+                    fold.selected = Some(label);
                 }
             },
             | None if !tentative => self.set_phase(index, Phase::Unfolded),
@@ -228,33 +241,61 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Marks the references recorded in `range` of a folded switch's body
-    /// as skipped: Clang emits nothing of the statements before the
-    /// selected label. #104 can also omit the statements and definitions
-    /// recorded there that hold no label of the switch.
-    fn skip_folded_region(&mut self, range: std::ops::Range<usize>) {
-        self.skip_references(range);
+    /// Omits the already analyzed region before the selected label, including
+    /// a tentative default replaced by a later matching case, or the whole
+    /// body when nothing is selected. Lowering jumps straight to the
+    /// selection, so only the blocks and labels leading to it are lowered:
+    /// every other statement of the region is omitted with its references,
+    /// case labels included, as Clang's `CollectStatementsForCase` skips it.
+    fn skip_folded_region(&mut self, fold: FoldedSwitch<'tu>, label: Option<&'tu Statement<'tu>>) {
+        let start = fold.start;
+        let path = selection_path(self.scratch, fold.body, label);
+        self.elide_references(start.references..self.reference_count());
+        for definition in &mut self.definitions[start.definitions..] {
+            if definition.kind == DefinitionKind::Object {
+                definition.elided = true;
+            }
+        }
+        for index in start.statements..self.control.statements.len() {
+            let syntax = self.control.statements[index].syntax;
+            if !self.held(syntax).label && !path.contains(&std::ptr::from_ref(syntax).addr()) {
+                self.control.statements[index].elided = true;
+            }
+        }
+    }
+
+    /// Clang collects nothing after the selected break. Only a tentative
+    /// `default` keeps the case labels after it, since a later matching
+    /// case still replaces it ([`Self::select`]).
+    pub(in crate::translation_phases::semantic_analysis) fn folded_statement_elided(
+        &self,
+        statement: &'tu Statement<'tu>,
+    ) -> bool {
+        self.statements
+            .switch
+            .and_then(|index| self.functions.emission.folds.get(&index))
+            .is_some_and(|fold| {
+                let holds = self.held(statement);
+                fold.phase == Phase::Ended && !holds.label && !(fold.tentative && holds.case)
+            })
+    }
+
+    /// Declarations are block items rather than statements, but collection
+    /// skips them too after the selected break. C99 §6.8.4.2p4-5, p. 134;
+    /// PDF p. 146; emission follows Clang's `CollectStatementsForCase`.
+    pub(in crate::translation_phases::semantic_analysis) fn folded_declaration_elided(
+        &self,
+    ) -> bool {
+        self.statements
+            .switch
+            .and_then(|index| self.functions.emission.folds.get(&index))
+            .is_some_and(|fold| fold.phase == Phase::Ended)
     }
 
     fn set_phase(&mut self, index: usize, phase: Phase) {
         if let Some(fold) = self.functions.emission.folds.get_mut(&index) {
             fold.phase = phase;
         }
-    }
-
-    /// Whether a case label of the innermost switch makes skipped code that
-    /// holds it emitted again, as an ordinary label does. Clang never emits
-    /// the statements of a switch it skips, or those a folded switch has
-    /// left behind; it does emit a skipped statement holding a case label
-    /// among the statements it selects, as in an unfolded switch.
-    /// C99: §6.8.1 paragraph 4, p. 132; PDF p. 144.
-    pub(in crate::translation_phases::semantic_analysis) fn case_labels_resume(&self) -> bool {
-        !self.functions.switch_dead
-            && self
-                .statements
-                .switch
-                .and_then(|index| self.functions.emission.folds.get(&index))
-                .is_none_or(|fold| fold.phase != Phase::Ended)
     }
 
     /// Ends a folded switch's selected statements at the `break` that
@@ -290,6 +331,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         index: usize,
     ) {
         let fold = self.functions.emission.folds.remove(&index);
+        if let Some(fold) = fold
+            && matches!(fold.phase, Phase::Collecting | Phase::Ended)
+        {
+            self.retain_folded_dispatch(fold.switch, fold.selected);
+        }
         self.functions.emission.switch_after = match fold.map(|fold| fold.phase) {
             | Some(Phase::Collecting) => Some(self.functions.dead),
             | Some(Phase::Ended) => fold.map(|fold| fold.after),
@@ -303,12 +349,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .any(|label| matches!(label.kind, StatementType::Default(_)))
                 }) && !self.held(fold.body).label;
                 if elided {
-                    self.skip_folded_region(fold.start..self.reference_count());
+                    self.skip_folded_region(fold, None);
+                    self.retain_folded_dispatch(fold.switch, None);
                 }
                 None
             },
             | _ => None,
         };
+    }
+
+    fn retain_folded_dispatch(
+        &mut self,
+        switch: &'tu Statement<'tu>,
+        label: Option<&'tu Statement<'tu>>,
+    ) {
+        if let Some(id) = self.control.statement_id(switch) {
+            self.control.statements[id.0].generated = super::super::GeneratedControl::Switch(label);
+            if let StatementType::Switch {
+                condition_expression,
+                ..
+            } = switch.kind
+                && let Some(condition) =
+                    super::super::statements::slot_expression(condition_expression)
+            {
+                self.elide_condition_references(condition);
+            }
+        }
     }
 
     /// Clang's `CollectStatementsForCase` for `body` and the selected
@@ -472,6 +538,50 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
+/// The statements from a folded switch's `body` down to its selected
+/// `label`, by address. A successful collection reaches the label only
+/// through blocks and case labels (`collect_case`), none of
+/// which lowers an expression or skips a declaration before it.
+fn selection_path<'a, 'tu>(
+    scratch: &'a crate::util::bump::Bump,
+    body: &'tu Statement<'tu>,
+    label: Option<&'tu Statement<'tu>>,
+) -> crate::util::bump::ArenaSet<'a, usize> {
+    let mut path = crate::util::bump::ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, scratch);
+    let Some(label) = label else {
+        return path;
+    };
+    // Breadth-first through blocks and labels, each with its parent.
+    let mut nodes: ArenaVec<'_, (&'tu Statement<'tu>, Option<usize>)> = ArenaVec::new_in(scratch);
+    nodes.push((body, None));
+    let mut next = 0;
+    while let Some(&(statement, _)) = nodes.get(next) {
+        if std::ptr::eq(statement, label) {
+            let mut at = Some(next);
+            while let Some(index) = at {
+                let (statement, parent) = nodes[index];
+                _ = path.insert(std::ptr::from_ref(statement).addr());
+                at = parent;
+            }
+            break;
+        }
+        match statement.kind {
+            | StatementType::Case(_, child) | StatementType::Default(child) =>
+                nodes.push((child, Some(next))),
+            | StatementType::CaseRange(range) => nodes.push((range.statement, Some(next))),
+            | StatementType::Compound { items } =>
+                for &item in items {
+                    if let BlockItem::Statement(child) = item {
+                        nodes.push((child, Some(next)));
+                    }
+                },
+            | _ => {},
+        }
+        next += 1;
+    }
+    path
+}
+
 /// Clang's `mightAddDeclToScope`: whether block item `item` declares
 /// something in the enclosing block, rather than in a block of its own.
 /// C99: §6.2.1 paragraph 4, pp. 29-30; PDF pp. 41-42.
@@ -503,15 +613,24 @@ pub(in crate::translation_phases::semantic_analysis) struct FoldedSwitch<'tu> {
     value:     Integer,
     switch:    &'tu Statement<'tu>,
     body:      &'tu Statement<'tu>,
-    /// The number of references recorded when the body began.
-    start:     usize,
+    /// Emission facts recorded when the body began.
+    start:     SwitchMark,
     phase:     Phase,
     /// The `break` the selected statements end at, if any.
     end:       Option<&'tu Statement<'tu>>,
     /// A `default` is selected tentatively: a matching case replaces it.
     tentative: bool,
+    selected:  Option<&'tu Statement<'tu>>,
     /// The skipped state the selected statements ended in.
     after:     bool,
+}
+
+/// Append-only semantic stores at the start of a folded switch body.
+#[derive(Clone, Copy)]
+struct SwitchMark {
+    references:  usize,
+    definitions: usize,
+    statements:  usize,
 }
 
 /// Where the analysis of a folded switch's body stands.

@@ -859,8 +859,17 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     }
 
     /// Every defined global, in its section, and the file trailer.
-    pub(crate) fn globals(&mut self) -> fmt::Result {
-        for (_, global) in self.module.globals() {
+    pub(crate) fn globals(
+        &mut self,
+        references: &super::support::GlobalReferences<'_>,
+    ) -> fmt::Result {
+        for (id, global) in self.module.globals() {
+            if global.thread_local
+                && global.attributes.section.is_some()
+                && references.unused_internal_global(self.module, id)
+            {
+                continue;
+            }
             let Some(init) = global.init else { continue };
             let name = Name(global.name);
             let relocated =

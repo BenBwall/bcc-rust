@@ -106,6 +106,15 @@ use crate::{
 /// unoptimized build.
 const DEPTH: u32 = 64;
 
+/// The constant evaluator and the emitted `llvm.is.constant` need different
+/// answers for a discarded comma. GNU extension: `__builtin_constant_p`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueryContext {
+    Constant,
+    Control,
+    Runtime,
+}
+
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Clang's `ConstantFoldsToSimpleInteger` for `condition`: its integer
     /// value, when it has an integer or enumerated type, evaluates without
@@ -177,6 +186,48 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         )
     }
 
+    /// Clang's constant-context query value: the semantic integer that
+    /// integer constant expressions, case labels, static assertions and
+    /// static initializer data read. An unknown query is zero, even when
+    /// `EvaluateAsInt` cannot fold it as a control condition.
+    /// GNU extension: GCC manual, "Other Builtins", `__builtin_constant_p`.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_query_integer(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> Integer {
+        Integer::int(i128::from(self.constant_query_value(
+            operand,
+            0,
+            QueryContext::Constant,
+        )))
+    }
+
+    /// Whether function code emits one for a query whose constant-context
+    /// value is zero: Clang's evaluator outside a constant context reads an
+    /// array compound literal, and `llvm.is.constant` sees the arithmetic
+    /// result of a comma whose left operand it cannot evaluate. Control
+    /// folding accepts the array read; only lowering accepts the comma. GNU
+    /// extension: `__builtin_constant_p`.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_query_differs_at_runtime(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> bool {
+        !self.constant_query_value(operand, 0, QueryContext::Constant)
+            && self.constant_query_value(operand, 0, QueryContext::Runtime)
+    }
+
+    /// Whether Clang emits the query operand, after its ordinary constant
+    /// fold fails: only a real arithmetic operand without side effects feeds
+    /// `llvm.is.constant`. GNU extension: Clang `CGBuiltin` `ConstantP`.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_query_operand_emitted(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> bool {
+        self.real(self.expression_info(operand).ty)
+            && !self.query_has_side_effects(operand)
+            && !self.constant_query_value(operand, 0, QueryContext::Control)
+    }
+
     /// The value of `expression` as Clang's evaluator computes it, if it
     /// does; memoized, since conditions nest (see [`Memo`]).
     fn evaluate_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
@@ -234,8 +285,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     fn compute_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
         let info = self.expression_info(expression);
-        // Semantic analysis folds `__builtin_constant_p` as GCC's front end
-        // does, which differs from Clang's evaluator; recompute around it.
+        // An unknown constant query emits zero, but Clang's evaluator may
+        // leave the control condition unfolded. Recompute around queries.
         if info.constant == ConstantClass::Arithmetic
             && !info.unfolded_binary128
             && !self.refolds(expression)
@@ -367,7 +418,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.cast_value(value, expression)
             },
             | ExpressionType::Identifier(_) => self.identifier_value(expression, depth),
-            | ExpressionType::DirectMember { .. } => self.object_value(expression, depth),
+            | ExpressionType::DirectMember { .. } | ExpressionType::CompoundLiteral { .. } =>
+                self.object_value(expression, depth),
             | ExpressionType::StringLiteral(literal) => Some(Value::String(literal, 0)),
             | ExpressionType::StatementExpression(block) => {
                 let StatementType::Compound { items } = block.kind else {
@@ -726,23 +778,25 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// The value Clang's evaluator reads from scalar subobject `expression`
-    /// of a `const`, non-volatile array or structure whose initializer
+    /// of a fresh compound literal or a `const`, non-volatile array or
+    /// structure whose initializer
     /// evaluates whole (`VarDecl::evaluateValue`): what the retained
     /// initializer plan stores there, zero where it stores nothing. A
     /// bit-field, a union, a weak object and a plan with a GNU range are
     /// left unread.
-    /// C99: §6.7.8 paragraphs 10 and 19-21, pp. 126-127; PDF pp. 138-139.
+    /// C99: §6.7.8 paragraphs 10 and 19-21, pp. 126-127; PDF pp. 138-139;
+    /// §6.5.2.5 paragraph 4, p. 75; PDF p. 87 (compound literal values).
     fn object_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
-        let (binding, offset, ty) = self.object_place(expression, depth)?;
-        self.place_value(binding, offset, ty, depth)
+        let (initializer, offset, ty) = self.object_place(expression, depth)?;
+        self.place_value(initializer, offset, ty, depth)
     }
 
-    /// The value of the scalar of type `ty` at byte `offset` of `const`
-    /// object `binding`: see [`Self::object_value`]. The last operation of
-    /// the plan that covers `offset` stores it ([`Self::plan_cover`]).
+    /// The value of the scalar of type `ty` at byte `offset` supplied by
+    /// `initializer`: see [`Self::object_value`]. The last operation of the
+    /// plan that covers `offset` stores it ([`Self::plan_cover`]).
     fn place_value(
         &mut self,
-        binding: usize,
+        initializer: &'tu Initializer<'tu>,
         offset: u64,
         ty: TypeId,
         depth: u32,
@@ -755,10 +809,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         {
             return None;
         }
-        let cover = self.plan_cover(binding, depth)?;
+        let cover = self.plan_cover(initializer, depth)?;
         let index = cover.partition_point(|&(_, end, _)| end <= offset);
         let &(_, _, operation) = cover.get(index).filter(|&&(start, ..)| start <= offset)?;
-        let initializer = *self.functions.emission.constant_aggregates.get(&binding)?;
         let plan = *self.initializers.plan(initializer)?;
         let operation = *plan.operations.get(operation)?;
         let (InitOperation::Zero { destination, .. }
@@ -816,20 +869,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.cast_to(value, ty)
     }
 
-    /// The byte ranges of `const` aggregate `binding` and the plan operation
-    /// that stores each last, sorted and disjoint, when Clang's evaluator
-    /// reads the aggregate: every value its plan stores evaluates, and it
-    /// selects no union member, copies no structure, repeats nothing (a GNU
-    /// range) and leaves nothing unmodeled. Computed once per object, so a
-    /// read costs a search rather than a pass over the plan; kept as
+    /// The byte ranges of the `const` aggregate or compound literal that
+    /// `initializer` initializes and the plan operation that stores each
+    /// last, sorted and disjoint, when Clang's evaluator reads the
+    /// aggregate: every value its plan stores evaluates, and it selects no
+    /// union member, copies no structure, repeats nothing (a GNU range) and
+    /// leaves nothing unmodeled. Computed once per initializer, so a read
+    /// costs a search rather than a pass over the plan; kept as
     /// [`Self::evaluate_value`] keeps a value ([`Memo`]).
-    fn plan_cover(&mut self, binding: usize, depth: u32) -> Option<Cover<'s>> {
-        if let Some(&memo) = self.functions.emission.plan_covers.get(&binding)
+    fn plan_cover(&mut self, initializer: &'tu Initializer<'tu>, depth: u32) -> Option<Cover<'s>> {
+        let key = std::ptr::from_ref(initializer).addr();
+        if let Some(&memo) = self.functions.emission.plan_covers.get(&key)
             && self.memo_holds(&memo, depth)
         {
             return memo.value;
         }
-        let initializer = *self.functions.emission.constant_aggregates.get(&binding)?;
         let plan = *self.initializers.plan(initializer)?;
         let outer = self.begin_memo();
         let mut readable = true;
@@ -870,7 +924,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let cover: Option<Cover<'s>> =
             readable.then(|| &*last_writes(&ranges, self.scratch).leak());
         _ = self.functions.emission.plan_covers.insert(
-            binding,
+            key,
             Memo {
                 value:   cover,
                 cut:     memo.cut,
@@ -886,17 +940,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// constant: Clang's evaluator reads such a subobject of a `const`
     /// object's value. The object must be `const` at its top level, or in
     /// its innermost element type for an array (`QualType::isConstant`),
-    /// and not weak.
+    /// and not weak. A compound literal supplies its initializer directly:
+    /// its fresh value has not been modified through an alias.
     fn object_place(
         &mut self,
         expression: &'tu Expression<'tu>,
         depth: u32,
-    ) -> Option<(usize, u64, TypeId)> {
+    ) -> Option<(&'tu Initializer<'tu>, u64, TypeId)> {
         // The array expression and the element index of a subscript or an
         // indirection still to apply, innermost last.
         let mut expression = unparenthesized(expression);
         let mut steps = ArenaVec::new_in(self.scratch);
-        let (binding, ty) = loop {
+        let (initializer, ty) = loop {
             match expression.kind {
                 | ExpressionType::Identifier(_) => {
                     let binding = self.expression_info(expression).binding?;
@@ -907,8 +962,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     {
                         return None;
                     }
-                    break (binding, data.ty);
+                    let initializer = self
+                        .functions
+                        .emission
+                        .constant_aggregates
+                        .get(&binding)
+                        .copied()?;
+                    break (initializer, data.ty);
                 },
+                | ExpressionType::CompoundLiteral { initializer, .. } =>
+                    break (initializer, self.expression_info(expression).ty),
                 | ExpressionType::Binary {
                     operator: BinaryOperator::Subscript,
                     left_expression,
@@ -997,7 +1060,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | _ => return None,
             }
         }
-        Some((binding, offset, ty))
+        Some((initializer, offset, ty))
     }
 
     /// Whether an object of type `ty` is `const` for Clang's evaluator: at
@@ -1226,24 +1289,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | BuiltinId::ConstantP => {
                 let operand = *arguments.first()?;
-                // Only an arithmetic or pointer operand may be constant,
-                // not a `void` or structure one.
-                let ty = self.types.non_atomic(self.expression_info(operand).ty);
-                let scalar = match self.types.nodes[ty.index] {
-                    | TypeKind::Scalar(Scalar::Void) => false,
-                    | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
-                    | _ => true,
-                };
-                let constant = scalar
-                    && match self.evaluate_value(operand, depth) {
-                        | Some(Value::Address(..)) | None => false,
-                        | Some(Value::String(_, offset) | Value::CastString(_, offset)) =>
-                            offset == 0,
-                        | Some(_) => true,
-                    };
+                let constant = self.constant_query_value(operand, depth, QueryContext::Control);
                 if constant {
                     Some(Value::Integer(Integer::int(1)))
-                } else if self.has_side_effects(operand) {
+                } else if self.query_has_side_effects(operand) {
                     Some(Value::Integer(Integer::int(0)))
                 } else {
                     None
@@ -1327,18 +1376,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// element, or of a `const` character array whose initializer
     /// evaluates, up to its first null element within the array.
     fn strlen_value(&mut self, argument: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
-        if let Some((binding, offset, ty)) = self.object_place(argument, depth)
+        if let Some((initializer, offset, ty)) = self.object_place(argument, depth)
             && let TypeKind::Array(element, ArrayBound::Constant(count)) =
                 self.types.nodes[ty.index]
         {
-            let key = (binding, offset, ty);
+            let key = (std::ptr::from_ref(initializer).addr(), offset, ty);
             if let Some(&memo) = self.functions.emission.array_lengths.get(&key)
                 && self.memo_holds(&memo, depth)
             {
                 return memo.value;
             }
             let outer = self.begin_memo();
-            let value = self.scan_array_length(binding, offset, element, count, depth);
+            let value = self.scan_array_length(initializer, offset, element, count, depth);
             let memo = self.end_memo(outer, value, depth);
             _ = self.functions.emission.array_lengths.insert(key, memo);
             return value;
@@ -1352,7 +1401,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Scan a constant array once per place and memo dependency context.
     fn scan_array_length(
         &mut self,
-        binding: usize,
+        initializer: &'tu Initializer<'tu>,
         offset: u64,
         element: TypeId,
         count: u64,
@@ -1361,7 +1410,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let size = self.types.layout(element)?.size;
         for index in 0..count {
             let Value::Integer(unit) =
-                self.place_value(binding, offset + index * size, element, depth)?
+                self.place_value(initializer, offset + index * size, element, depth)?
             else {
                 return None;
             };
@@ -1390,6 +1439,145 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         Some(Value::Integer(Integer::int(i128::try_from(length).ok()?)))
     }
 
+    /// Whether a query operand has a constant value: in Clang's evaluator in
+    /// a constant context, for control folding, or in function code's value.
+    /// The start of a string literal counts, while an interior pointer or
+    /// another non-null object's address does not. Only at run time does an
+    /// element read through a non-`const` array compound literal count, or
+    /// a comma that discards an ordinary nonvolatile read
+    /// before an arithmetic constant. GNU extension: `__builtin_constant_p`.
+    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59 (pointer-to-integer casts).
+    fn constant_query_value(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+        depth: u32,
+        context: QueryContext,
+    ) -> bool {
+        if depth >= DEPTH {
+            return false;
+        }
+        // Only arithmetic and pointer operands may be constant; an evaluated
+        // void or structure value is not a constant-query operand.
+        let ty = self.types.non_atomic(self.expression_info(operand).ty);
+        let scalar = match self.types.nodes[ty.index] {
+            | TypeKind::Scalar(Scalar::Void) => false,
+            | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
+            | _ => true,
+        };
+        if !scalar {
+            return false;
+        }
+        // Nested queries are integer constant expressions, including under
+        // arithmetic, casts and selected wrappers. Their semantic value is
+        // available here even when control evaluation deliberately stays
+        // unknown. Do not use this shortcut in the control evaluator.
+        (context != QueryContext::Control
+            && self.expression_info(operand).ice
+            && self.expression_info(operand).integer.is_some())
+            || self.constant_query_string_address(operand)
+            || (context == QueryContext::Runtime && self.discarded_comma_constant(operand, depth))
+            || (match self.evaluate_value(operand, depth) {
+                | Some(Value::Address(..)) | None => false,
+                | Some(Value::String(_, offset) | Value::CastString(_, offset)) => offset == 0,
+                | Some(_) =>
+                    context != QueryContext::Constant || !self.reads_array_literal(operand),
+            })
+    }
+
+    /// A comma whose left operand is an ordinary nonvolatile read, before an
+    /// arithmetic constant: function code emits the read, and
+    /// `llvm.is.constant` sees only the constant result. A pointer result is
+    /// never constant there. GNU extension: `__builtin_constant_p`;
+    /// C99 §6.5.17p2, p. 94; PDF p. 106.
+    fn discarded_comma_constant(&mut self, mut operand: &'tu Expression<'tu>, depth: u32) -> bool {
+        if depth >= DEPTH {
+            return false;
+        }
+        while let ExpressionType::Parenthesized { expression } = operand.kind {
+            operand = expression;
+        }
+        let ExpressionType::Binary {
+            operator: BinaryOperator::Comma,
+            left_expression,
+            right_expression,
+        } = operand.kind
+        else {
+            return false;
+        };
+        self.real(self.expression_info(operand).ty)
+            && !self.has_side_effects(left_expression)
+            && (self.discarded_comma_constant(right_expression, depth + 1) || {
+                let info = self.expression_info(right_expression);
+                info.constant == ConstantClass::Arithmetic
+                    && (info.integer.is_some() || info.floating.is_some())
+            })
+    }
+
+    /// Whether evaluating `operand` reads through a non-`const` array
+    /// compound literal, outside `sizeof` and `_Alignof`.
+    /// C99: §6.5.2.5 paragraph 4, p. 75; PDF p. 87.
+    pub(in crate::translation_phases::semantic_analysis) fn reads_array_literal(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> bool {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push((operand, false));
+        while let Some((expression, done)) = work.pop() {
+            #[cfg(test)]
+            {
+                self.functions.emission.array_scan_steps += 1;
+            }
+            let key = std::ptr::from_ref(expression).addr();
+            if self
+                .functions
+                .emission
+                .array_literal_reads
+                .contains_key(&key)
+            {
+                continue;
+            }
+            let skip = matches!(
+                expression.kind,
+                ExpressionType::SizeofExpr(_)
+                    | ExpressionType::SizeofType(_)
+                    | ExpressionType::AlignofExpr(_)
+                    | ExpressionType::AlignofType(_)
+            );
+            if done || skip {
+                let mut reads = matches!(expression.kind, ExpressionType::CompoundLiteral { .. })
+                    && self.array_typed(expression)
+                    && !self.constant_object(self.expression_info(expression).ty);
+                if !skip {
+                    super::labels::expression_children(self.scratch, expression, |child| {
+                        reads |= self
+                            .functions
+                            .emission
+                            .array_literal_reads
+                            .get(&std::ptr::from_ref(child).addr())
+                            .copied()
+                            .unwrap_or(false);
+                    });
+                }
+                _ = self
+                    .functions
+                    .emission
+                    .array_literal_reads
+                    .insert(key, reads);
+            } else {
+                work.push((expression, true));
+                super::labels::expression_children(self.scratch, expression, |child| {
+                    work.push((child, false));
+                });
+            }
+        }
+        self.functions
+            .emission
+            .array_literal_reads
+            .get(&std::ptr::from_ref(operand).addr())
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Clang's `Expr::HasSideEffects`, syntactically: an assignment, an
     /// increment or decrement, a call or a volatile read: a volatile lvalue
     /// that is converted to its value, which an object named or reached
@@ -1398,16 +1586,31 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58; §5.1.2.3 paragraph 2,
     /// p. 13; PDF p. 25.
     fn has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
+        self.side_effects(expression, false)
+    }
+
+    fn query_has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
+        if self.effects_pure(expression, super::super::EffectContext::Value) {
+            return false;
+        }
+        self.side_effects(expression, true)
+    }
+
+    fn side_effects(&self, expression: &'tu Expression<'tu>, inspect_statements: bool) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         // Each expression, with whether its value is read if it is an
         // lvalue.
         work.push((expression, true));
         while let Some((expression, read)) = work.pop() {
             let effect = match expression.kind {
+                | ExpressionType::Call { .. }
+                    if inspect_statements
+                        && self.effects_pure(expression, super::super::EffectContext::Value) =>
+                    false,
                 | ExpressionType::Call {
                     function_expression,
                     arguments,
-                } => {
+                } if inspect_statements => {
                     let pure = self
                         .expression_info(function_expression)
                         .binding
@@ -1420,10 +1623,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     false
                 },
                 | ExpressionType::Generic(_) | ExpressionType::Builtin(_)
-                    if self
-                        .expression_info(expression)
-                        .selected_expression
-                        .is_some() =>
+                    if inspect_statements
+                        && self
+                            .expression_info(expression)
+                            .selected_expression
+                            .is_some() =>
                 {
                     work.push((
                         self.expression_info(expression)
@@ -1433,7 +1637,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     ));
                     false
                 },
-                | ExpressionType::StatementExpression(block) => {
+                | ExpressionType::StatementExpression(block) if inspect_statements => {
                     let mut statements = ArenaVec::new_in(self.scratch);
                     statements.push(block);
                     while let Some(statement) = statements.pop() {
@@ -1456,6 +1660,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                     false
                 },
+                | ExpressionType::Call { .. }
+                | ExpressionType::StatementExpression(_)
                 | ExpressionType::Binary {
                     operator:
                         BinaryOperator::Assignment
@@ -1711,8 +1917,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
-/// The byte ranges of a `const` aggregate, sorted and disjoint, each with the
-/// index of the plan operation that stores it last
+/// The byte ranges of a `const` aggregate or compound literal, sorted and
+/// disjoint, each with the index of the plan operation that stores it last
 /// ([`Analyzer::plan_cover`]).
 pub(super) type Cover<'s> = &'s [(u64, u64, usize)];
 

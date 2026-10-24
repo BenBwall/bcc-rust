@@ -32,8 +32,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.6 paragraphs 9-10, p. 96; PDF p. 108.
     pub(in crate::translation_phases::semantic_analysis) fn address_parts(
         &self,
+        e: &'tu Expression<'tu>,
+        lvalue: bool,
+    ) -> Option<(AddressBase<'tu>, i128)> {
+        self.address_parts_with_casts(e, lvalue, false)
+    }
+
+    /// A string start remains a constant query value only through pointers
+    /// and integers with exactly the pointer width at every cast.
+    /// GNU extension: `__builtin_constant_p`.
+    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_query_string_address(
+        &self,
+        expression: &'tu Expression<'tu>,
+    ) -> bool {
+        matches!(
+            self.address_parts_with_casts(expression, false, true),
+            Some((AddressBase::String(_), 0))
+        )
+    }
+
+    /// Shared address walk; queries additionally require preserving casts.
+    /// C99: §6.6 paragraphs 9-10, p. 96; PDF p. 108.
+    fn address_parts_with_casts(
+        &self,
         mut e: &'tu Expression<'tu>,
         mut lvalue: bool,
+        preserving_casts: bool,
     ) -> Option<(AddressBase<'tu>, i128)> {
         let mut offset = 0_i128;
         loop {
@@ -52,6 +77,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | ExpressionType::Cast {
                         operand_expression, ..
                     } => {
+                        if preserving_casts
+                            && self.pointer_target(info.ty).is_none()
+                            && !self.integer_type(info.ty).is_some_and(|(bits, _)| {
+                                u64::from(bits) == self.types.target.pointer.size * 8
+                            })
+                        {
+                            return None;
+                        }
                         let operand = self.expression_info(operand_expression);
                         if operand.ice
                             && let Some(value) = operand.integer

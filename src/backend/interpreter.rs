@@ -154,6 +154,18 @@ pub(crate) fn run_main(module: &Module<'_>, host: &mut dyn Host) -> Result<Outco
     run_main_with_limits(module, host, Limits::default())
 }
 
+/// Loads globals and relocations without executing constructors or user
+/// instructions. The driver uses this before committing optional retention.
+/// C99: §5.1.2p1, p. 11; PDF p. 23 (startup precedes execution).
+pub(crate) fn check_module(
+    module: &Module<'_>,
+    host: &dyn Host,
+    limits: Limits,
+) -> Result<(), Trap> {
+    let arena = Bump::new();
+    Machine::load(module, &arena, limits, host).map(|_| ())
+}
+
 /// [`run_main`] stopping at `limits`.
 pub(crate) fn run_main_with_limits(
     module: &Module<'_>,

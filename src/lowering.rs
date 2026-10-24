@@ -160,6 +160,7 @@ const ENTITY_FACTS: &str = "entity facts checked by Unit::new: every function an
 /// `plain_inline`, plain inline-only bodies are lowered as copies for LLVM's
 /// optimizing pipelines ([`Unit::lower_plain_inline_bodies`]).
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+#[cfg(test)]
 pub(crate) fn lower_with_sources<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
@@ -169,6 +170,32 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
     scratch: &mut Bump,
     plain_inline: bool,
 ) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
+    crate::pipeline::with_optional_retention(true, |retain_locals| {
+        lower_with_emission(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            scratch,
+            (plain_inline, retain_locals),
+        )
+    })
+}
+
+/// The same lowering contract, with optional O0 local storage controlled by
+/// the caller after a backend support refusal. Required and used storage stay.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+pub(crate) fn lower_with_emission<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    target: Target,
+    arena: &'ir Bump,
+    scratch: &mut Bump,
+    emission: (bool, bool),
+) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
+    let (plain_inline, retain_locals) = emission;
     let mut errors = ArenaVec::new_in(arena);
     if !sema.lowerable(context) {
         errors.push(LoweringError {
@@ -179,15 +206,29 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
             errors: arena.alloc_slice_copy(&errors),
         });
     }
-    match lower_unit(context, syntax, sema, target, arena, scratch, plain_inline) {
-        // A plain inline-only body that lowering refuses is dropped on its
-        // own, and so is one whose attribute refusals would apply. Other
-        // errors that only such bodies cause, such as an object they alone
-        // reach, are rarer: this backstop lowers the unit again without
-        // any, so that they never refuse it (C99 §6.7.4p6).
-        | (Err(_), true) => lower_unit(context, syntax, sema, target, arena, scratch, false).0,
-        | (result, _) => result,
+    let (mut result, copied) = lower_unit(
+        context,
+        syntax,
+        sema,
+        target,
+        arena,
+        scratch,
+        (plain_inline, retain_locals),
+    );
+    // Optional inline bodies cannot refuse an otherwise supported unit.
+    if result.is_err() && copied {
+        result = lower_unit(
+            context,
+            syntax,
+            sema,
+            target,
+            arena,
+            scratch,
+            (false, retain_locals),
+        )
+        .0;
     }
+    result
 }
 
 /// [`lower_with_sources`], with the plain inline-only bodies when
@@ -199,7 +240,7 @@ fn lower_unit<'tu, 'ir>(
     target: Target,
     arena: &'ir Bump,
     scratch: &mut Bump,
-    plain_inline: bool,
+    emission: (bool, bool),
 ) -> (Result<LoweredUnit<'ir>, LoweringErrors<'ir>>, bool) {
     let mut errors = ArenaVec::new_in(arena);
     let tables = Bump::new();
@@ -210,6 +251,8 @@ fn lower_unit<'tu, 'ir>(
             return (Err(LoweringErrors { errors }), false);
         },
     };
+    let (plain_inline, retain_locals) = emission;
+    unit.retain_local_statics = retain_locals;
     let plain_inline = plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);
@@ -231,10 +274,13 @@ fn lower_unit<'tu, 'ir>(
             // A plain inline-only body is optional: one that lowering
             // refuses is not emitted, and calls keep reaching the external
             // definition (C99 §6.7.4p6). Its copy stays bodiless.
+            // The module planner already reports a local static it could not
+            // define; the body declaring it refuses with the same error.
             if !record
                 .0
                 .binding
                 .is_some_and(|binding| unit.optional_inline_body(binding))
+                && !errors.contains(&error)
             {
                 errors.push(error);
             }

@@ -58,6 +58,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))
                 || matches!(e.kind, E::Countof(_)),
         );
+        let branch = self.begin_branch_operand(e);
         self.work.push(Work::ExpressionDone(e));
         match e.kind {
             | E::Parenthesized { expression }
@@ -72,12 +73,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 right_expression,
                 operator,
             } => {
+                if operator == BinaryOperator::Comma {
+                    self.discard_expression_result(left_expression);
+                }
                 let live = match operator {
                     | BinaryOperator::LogicalAnd => Some(true),
                     | BinaryOperator::LogicalOr => Some(false),
                     | _ => None,
                 };
                 if live.is_some() {
+                    if !branch {
+                        self.work.push(Work::FunctionWork(FunctionWork::ScalarLogicalEnd(e)));
+                    }
+                    // The scalar logical visitor emits its nonconstant left
+                    // operand through EmitBranchOnBoolExpr too. Its nested
+                    // logical operands therefore share the branch policy.
+                    self.branch_condition(left_expression);
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreElided(
+                            self.functions.elided,
+                        )));
                     self.work
                         .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
                             self.functions.unvisited,
@@ -87,8 +102,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )));
                 }
                 self.work.push(Work::Expression(right_expression));
-                if let Some(live) = live {
-                    self.dead_arm(left_expression, live, right_expression);
+                if let Some(live) = live.filter(|_| !branch) {
+                    self.dead_arm(left_expression, live, Some(right_expression));
+                    self.begin_condition_references(left_expression);
                 }
                 self.work.push(Work::Expression(left_expression));
             },
@@ -99,26 +115,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let outer = self.skipped_state();
                 self.work
                     .push(Work::FunctionWork(FunctionWork::ConditionalMark(
-                        e, 2, outer,
+                        e, 2, outer, self.functions.elided,
                     )));
-                self.work.push(Work::Expression(c.else_expression));
-                self.work
-                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
-                        e, 1, outer,
+                for (arm, live, mark) in [(c.else_expression, false, 1), (c.then_expression, true, 0)] {
+                    if branch {
+                        self.work.push(Work::Expression(arm));
+                    } else {
+                        self.work.push(Work::FunctionWork(FunctionWork::ConditionalArm {
+                            owner: e,
+                            arm,
+                            live,
+                            outer,
+                            outer_elided: self.functions.elided,
+                        }));
+                    }
+                    self.work.push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, mark, outer, self.functions.elided,
                     )));
-                self.work.push(Work::Expression(c.then_expression));
-                self.work
-                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
-                        e, 0, outer,
-                    )));
+                }
+                // GNU `x ?: y` binds its common operand before folding the
+                // condition (Clang `OpaqueValueMapping`), so it is always
+                // emitted. GNU extension: GCC manual, "Conditionals".
+                if matches!(e.kind, E::Conditional(_)) {
+                    self.begin_condition_references(c.condition_expression);
+                }
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {
                 target_type,
                 operand_expression,
             } => {
-                self.work.push(Work::Expression(operand_expression));
-                self.work.push(Work::DiscardType);
+                self.work.push(Work::FunctionWork(FunctionWork::CastOperand(operand_expression)));
                 self.work.push(Work::TypeName(target_type, false));
             },
             | E::SizeofType(name) | E::AlignofType(name) => {
@@ -140,9 +167,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 function_expression,
                 arguments,
             } => {
-                for &argument in arguments.iter().rev() {
-                    self.work.push(Work::Expression(argument));
-                }
+                self.work.push(Work::FunctionWork(FunctionWork::CallArguments(
+                    function_expression,
+                    arguments,
+                )));
                 self.mark_implicit_callee(function_expression);
                 self.work.push(Work::Expression(function_expression));
             },
@@ -186,6 +214,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
             },
             | E::Countof(operand) => self.syntax_operand(operand),
+            | E::Builtin(b)
+                if b.keyword == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr =>
+            {
+                // The condition is analyzed first, so the operand Clang does
+                // not select is skipped as it is analyzed (`DeadArm`): only
+                // the selected one's calls and joins move the insertion
+                // state, and the restore below in the general arm is not
+                // needed.
+                if let [super::SyntaxOperand::Expression(condition), super::SyntaxOperand::Expression(yes), super::SyntaxOperand::Expression(no)] = &*b.operands {
+                    self.work.push(Work::FunctionWork(FunctionWork::RestoreElided(self.functions.elided)));
+                    self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(self.functions.dead)));
+                    self.work.push(Work::Expression(no));
+                    self.dead_arm(condition, false, None);
+                    self.work.push(Work::Expression(yes));
+                    self.dead_arm(condition, true, None);
+                    self.begin_condition_references(condition);
+                    self.work.push(Work::Expression(condition));
+                }
+            },
             | E::Builtin(b) => {
                 // Code generation emits only the selected operand of
                 // `__builtin_choose_expr`, which is known once both are
@@ -219,17 +266,52 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
         use super::statements::StatementWork as W;
         self.taint(s.recovered);
-        // Unlike a compound or label, a structured statement with a label
-        // creates an insertion block even after a jump. Clang EmitStmt
-        // needs its condition/header as well as the labeled descendant.
-        if self.functions.dead
-            && matches!(
-                s.kind,
-                S::If { .. } | S::Switch { .. } | S::While { .. } | S::DoWhile { .. } | S::For(_)
-            )
-            && self.statement_contains_label(s, !self.case_labels_resume())
-        {
-            self.functions.dead = false;
+        let value_statement = self
+            .functions
+            .emission
+            .value_statements
+            .contains_key(&std::ptr::from_ref(s).addr());
+        let simple = matches!(
+            s.kind,
+            S::Null
+                | S::Compound { .. }
+                | S::Declaration(_)
+                | S::Attributed(_)
+                | S::Label(..)
+                | S::Case(..)
+                | S::CaseRange(_)
+                | S::Default(_)
+                | S::Goto(_)
+                | S::Break
+                | S::Continue
+                | S::LocalLabels(_)
+                | S::SehLeave
+        );
+        let omitted = if self.functions.dead && !simple && !value_statement {
+            if self.statement_contains_label(s, false) {
+                // Clang EmitStmt ensures an insertion point for a label.
+                self.functions.dead = false;
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+        if (omitted || self.folded_statement_elided(s)) && !self.functions.elided {
+            // Clang EmitSimpleStmt handles declarations and compounds even
+            // without an insertion point; EmitStmt skips other label-free
+            // statements, including all declarations nested inside them.
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreElided(false)));
+            self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                self.functions.dead,
+            )));
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                    self.functions.emission.orphan,
+                )));
+            self.functions.elided = true;
         }
         // Code generation skips such a statement whole, unlike a block or a
         // declaration, whose static objects it still emits. An expression
@@ -256,7 +338,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.functions.unvisited = true;
         }
         let outside = self.control.current;
-        _ = self.control.statement(s);
+        if let Some(id) = self.control.statement(s) {
+            self.control.statements[id.0].elided = self.functions.elided;
+        }
         self.work.push(Work::StatementWork(W::RetainTail(s)));
         match s.kind {
             | S::Compound { items } => {
@@ -327,21 +411,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
                         self.functions.unvisited,
                     )));
-                self.work.push(Work::FunctionWork(FunctionWork::JoinArms));
+                self.work.push(Work::FunctionWork(FunctionWork::JoinArms(
+                    self.functions.elided,
+                )));
                 let condition = super::statements::slot_expression(condition_expression);
                 if let Some(child) = else_statement {
                     self.work.push(Work::StatementWork(W::Substatement(child)));
                 }
                 if let Some(condition) = condition {
-                    self.dead_statement_arm(condition, false, else_statement);
+                    self.dead_statement_arm(s, condition, false, else_statement);
                 }
                 self.work.push(Work::FunctionWork(FunctionWork::ThenEnd));
                 self.work
                     .push(Work::StatementWork(W::Substatement(then_statement)));
                 if let Some(condition) = condition {
-                    self.dead_statement_arm(condition, true, Some(then_statement));
+                    self.dead_statement_arm(s, condition, true, Some(then_statement));
                 }
                 self.work.push(Work::Condition(condition_expression, false));
+                if let Some(condition) = condition {
+                    self.begin_condition_references(condition);
+                    self.branch_condition(condition);
+                }
                 self.expression_slot(condition_expression);
             },
             | S::Switch {
@@ -377,6 +467,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
                 self.work.push(Work::Condition(condition_expression, true));
+                if let Some(condition) = super::statements::slot_expression(condition_expression) {
+                    self.begin_condition_references(condition);
+                }
                 self.expression_slot(condition_expression);
             },
             | S::While {
@@ -423,6 +516,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work
                     .push(Work::StatementWork(W::LoopBody(s, f.body_statement)));
                 if let Some(e) = f.iteration_expression {
+                    if let ExpressionSlot::Parsed(expression) = e {
+                        self.discard_expression_result(expression);
+                    }
                     self.expression_slot(e);
                 }
                 if let Some(e) = f.condition_expression {
@@ -435,7 +531,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             self.for_declaration(d);
                             self.work.push(Work::Declaration(d));
                         },
-                        | ForInitializer::Expression(e) => self.expression_slot(e),
+                        | ForInitializer::Expression(e) => {
+                            if let ExpressionSlot::Parsed(expression) = e {
+                                self.discard_expression_result(expression);
+                            }
+                            self.expression_slot(e);
+                        },
                     }
                 }
             },
@@ -487,6 +588,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Expression(e) => {
                 if let ExpressionSlot::Parsed(expression) = e {
+                    if !value_statement {
+                        self.discard_expression_result(expression);
+                    }
                     self.begin_expression_statement(s, expression);
                 }
                 self.expression_slot(e);
@@ -510,19 +614,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.4.1p2, pp. 133-134; PDF pp. 145-146.
     fn dead_statement_arm(
         &mut self,
+        owner: &'tu Statement<'tu>,
         condition: &'tu Expression<'tu>,
         live: bool,
         statement: Option<&'tu Statement<'tu>>,
     ) {
-        // Labels matter only once the condition folds the arm away, so
-        // they are looked for then.
         self.work
-            .push(Work::FunctionWork(FunctionWork::DeadStatementArm(
+            .push(Work::FunctionWork(FunctionWork::DeadStatementArm {
+                owner,
                 condition,
                 live,
-                self.skipped_state(),
+                outer: self.skipped_state(),
+                outer_elided: self.functions.elided,
                 statement,
-            )));
+            }));
     }
 
     pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {

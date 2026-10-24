@@ -39,7 +39,9 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 
 // Rules
+mod branches;
 mod folding;
+mod initializers;
 mod insertion;
 mod noreturn;
 mod switches;
@@ -47,6 +49,8 @@ mod switches;
 // Statement facts
 mod labels;
 
+pub(super) use branches::Position;
+pub(super) use labels::expression_children;
 use rustc_hash::FxBuildHasher;
 
 use crate::{
@@ -74,74 +78,75 @@ pub(super) struct State<'tu, 's> {
     /// Code generation emits the code being analyzed into a block without
     /// predecessors, which a call that does not return created during the
     /// expression statement numbered here or a later one.
-    pub(super) orphan:       Option<usize>,
+    pub(super) orphan: Option<usize>,
+    pub(super) branches: ArenaMap<'s, usize, Option<(Position, Position)>>,
     /// The number of expression statements begun so far.
-    pub(super) serial:       usize,
+    pub(super) serial: usize,
     /// The number of expression statements begun and not yet ended.
-    open_statements:         usize,
+    open_statements: usize,
     /// The joins in `sizeof`, `alignof` and `typeof` operands of the
     /// expression statements being analyzed, each with the number of its
     /// statement and its sizeof and reference contexts, which tell once the
     /// operands are analyzed whether code generation emits them.
-    context_joins:           ArenaVec<'s, (usize, Option<usize>, Option<usize>)>,
+    context_joins: ArenaVec<'s, (usize, Option<usize>, Option<usize>)>,
     /// The value statements of the statement expressions being analyzed,
     /// by address, which Clang emits even after a jump.
-    value_statements:        ArenaMap<'s, usize, ()>,
+    pub(super) value_statements: ArenaMap<'s, usize, ()>,
     /// Bindings that call nothing that returns: a function declared
     /// `noreturn`, or an object, parameter or typedef whose function type
     /// is, directly or by an earlier declaration of the same entity. The
     /// value says whether the fact belongs to the type (GNU, `gnu::`,
     /// Microsoft, or Clang's builtin type), which `__typeof__` and typedefs
     /// carry, rather than to the declaration (`_Noreturn`, `[[noreturn]]`).
-    pub(super) noreturn:     ArenaMap<'s, usize, bool>,
+    pub(super) noreturn: ArenaMap<'s, usize, bool>,
     /// Bindings whose function type's result is a pointer to a `noreturn`
     /// function type: a function, a pointer to one, an array of such
     /// pointers, or a typedef of one.
-    noreturn_results:        ArenaMap<'s, usize, ()>,
+    noreturn_results: ArenaMap<'s, usize, ()>,
     /// Members whose function type does not return, by tag and name.
-    noreturn_fields:         ArenaMap<'s, (usize, StringCacheId), ()>,
+    noreturn_fields: ArenaMap<'s, (usize, StringCacheId), ()>,
     /// File-scope typedefs named `jmp_buf` and `sigjmp_buf` were declared,
     /// which Clang's `longjmp` builtins need.
-    jmp_buf:                 bool,
-    sigjmp_buf:              bool,
+    jmp_buf: bool,
+    sigjmp_buf: bool,
     /// The switches being analyzed whose condition folds, by switch index.
-    folds:                   ArenaMap<'s, usize, switches::FoldedSwitch<'tu>>,
+    folds: ArenaMap<'s, usize, switches::FoldedSwitch<'tu>>,
     /// The skipped state a folded switch's selected statements ended in,
     /// passed from the end of its body to the code after it.
     pub(super) switch_after: Option<bool>,
     /// What each walked statement holds, by address ([`labels`]).
-    holds:                   ArenaMap<'s, usize, labels::Holds>,
+    holds: ArenaMap<'s, usize, labels::Holds>,
     /// The case labels of each walked switch, by address.
-    switches:                ArenaMap<'s, usize, labels::SwitchLabels<'tu, 's>>,
+    switches: ArenaMap<'s, usize, labels::SwitchLabels<'tu, 's>>,
     /// The position of each walked case label among its switch's labels.
-    label_positions:         ArenaMap<'s, usize, usize>,
+    label_positions: ArenaMap<'s, usize, usize>,
     /// The functions walked so far, by address.
-    walked:                  ArenaMap<'s, usize, ()>,
+    walked: ArenaMap<'s, usize, ()>,
     /// The values the evaluator found, by expression address, with the
     /// depth of a query that `folding::DEPTH` cut short and the weak
     /// horizon of one that read a weak name.
-    folded:                  ArenaMap<'s, usize, folding::Memo<Option<folding::Value>>>,
+    folded: ArenaMap<'s, usize, folding::Memo<Option<folding::Value>>>,
     /// A conditional's arm boundaries and insertion states, resolved after
     /// its result type distinguishes scalar from complex/aggregate emission.
-    conditional_marks:       ArenaMap<'s, usize, [(usize, Option<usize>, usize); 3]>,
+    conditional_marks: ArenaMap<'s, usize, [(usize, Option<usize>, usize); 3]>,
     /// The evaluation in progress was cut short by `folding::DEPTH`.
-    depth_cut:               bool,
+    depth_cut: bool,
     /// Whether an expression holds a label, by address.
-    labeled_expressions:     ArenaMap<'s, usize, bool>,
+    labeled_expressions: ArenaMap<'s, usize, bool>,
     /// Whether Clang's evaluator may fold an expression differently from
     /// semantic analysis, by address, with the weak horizon of an answer
     /// that read a weak name.
-    refolds:                 ArenaMap<'s, usize, (bool, Option<usize>)>,
+    refolds: ArenaMap<'s, usize, (bool, Option<usize>)>,
     /// The names that a declaration anywhere in the unit declares `weak`
     /// or `weak_import`, or that `#pragma weak` names, each with the
     /// output-token ordinal from which it is weak (`folding.rs`).
-    weak_names:              ArenaMap<'s, StringCacheId, usize>,
+    weak_names: ArenaMap<'s, StringCacheId, usize>,
     /// Weak value reads exclude `weak_import` once an initializer defines it.
-    weak_values:             ArenaMap<'s, StringCacheId, usize>,
+    weak_values: ArenaMap<'s, StringCacheId, usize>,
     /// Direct calls annotated pure or const, inherited by redeclarations.
-    pure_functions:          ArenaMap<'s, usize, ()>,
+    pure_functions: ArenaMap<'s, usize, ()>,
     /// The output-token ordinal past the root being analyzed.
-    pub(super) root_end:     usize,
+    pub(super) root_end: usize,
     /// The weak names that apply to the code being analyzed: those before
     /// this ordinal. A retained or currently nondiscardable external body
     /// is emitted at its definition, so this is the root's end there and
@@ -149,47 +154,65 @@ pub(super) struct State<'tu, 's> {
     pub(super) weak_horizon: usize,
     /// The evaluation in progress read whether a name in `weak_names`
     /// applies, so that its result holds only at the same horizon.
-    weak_read:               bool,
+    weak_read: bool,
+    /// Expressions whose results Clang discards, including transparent
+    /// wrappers.
+    pub(super) discarded_results: ArenaMap<'s, usize, ()>,
+    /// Aggregate arms in automatic initializers, resolved after planning.
+    pub(super) aggregate_initializer_arms: ArenaMap<'s, usize, ArenaVec<'s, &'tu Expression<'tu>>>,
+    pub(super) constant_aggregate_arms: ArenaMap<'s, usize, ()>,
+    /// Potential eligibility only limits optional retention; it never elides
+    /// code.
+    pub(super) potential_aggregate_arms: ArenaMap<'s, usize, ()>,
+    pub(super) aggregate_constants: ArenaMap<'s, (usize, bool), Option<bool>>,
+    pub(super) initializer_values: ArenaMap<'s, usize, Option<&'s [bool]>>,
+    pub(super) overridden_values: ArenaMap<'s, usize, ()>,
+    /// Pure syntax that may need an unsupported constant fold.
+    pub(super) potential_constants: ArenaMap<'s, usize, bool>,
+    /// Syntactic array-literal reads, memoized across nested query operands.
+    pub(super) array_literal_reads: ArenaMap<'s, usize, bool>,
+    #[cfg(test)]
+    pub(super) array_scan_steps: usize,
     /// The initializers of `const` non-volatile objects, which Clang's
     /// evaluator may read.
-    constant_initializers:   ArenaMap<'s, usize, &'tu Expression<'tu>>,
+    constant_initializers: ArenaMap<'s, usize, &'tu Expression<'tu>>,
     /// The initializers of `const` non-volatile arrays and structures, by
     /// binding, whose retained plans Clang's evaluator may read.
-    constant_aggregates:     ArenaMap<'s, usize, &'tu Initializer<'tu>>,
-    /// The byte ranges of each read aggregate and the operation that stores
-    /// each, by binding, with the depth of a query `folding::DEPTH` cut
-    /// short (`folding.rs`).
-    plan_covers:             ArenaMap<'s, usize, folding::Memo<Option<folding::Cover<'s>>>>,
+    constant_aggregates: ArenaMap<'s, usize, &'tu Initializer<'tu>>,
+    /// The byte ranges of each read aggregate or compound literal and the
+    /// operation that stores each, by the address of its initializer, with
+    /// the depth of a query `folding::DEPTH` cut short (`folding.rs`).
+    plan_covers: ArenaMap<'s, usize, folding::Memo<Option<folding::Cover<'s>>>>,
     /// Cached constant-array strlen queries, including failed scans, with
     /// the same depth and weak-horizon dependencies as other folds.
     array_lengths: ArenaMap<'s, (usize, u64, super::TypeId), folding::Memo<Option<folding::Value>>>,
     /// The elements of each string literal the evaluator reads, by literal
     /// and encoding.
-    literal_units:           ArenaMap<'s, (u32, u8), &'s [u32]>,
+    literal_units: ArenaMap<'s, (u32, u8), &'s [u32]>,
     /// String length by decoded literal and starting element.
-    literal_lengths:         ArenaMap<'s, (usize, usize), Option<usize>>,
+    literal_lengths: ArenaMap<'s, (usize, usize), Option<usize>>,
     /// The block items on the work stack that a variably modified lookahead
     /// has seen: each one's position and address, and whether it or an
     /// item below it may declare something of a variably modified type.
-    variably_modified:       ArenaVec<'s, (usize, usize, bool)>,
+    variably_modified: ArenaVec<'s, (usize, usize, bool)>,
     /// The lowest length the work stack has had since the last variably
     /// modified lookahead, below which that lookahead's answers hold.
-    work_low:                usize,
+    work_low: usize,
     /// Whether each block item a variably modified lookahead examined, or
     /// an item inside it, may declare something of a variably modified
     /// type, by address.
     variably_modified_items: ArenaMap<'s, usize, bool>,
     /// Whether an expression or one in it may join paths, by address
     /// (`insertion.rs`).
-    may_join:                ArenaMap<'s, usize, bool>,
+    may_join: ArenaMap<'s, usize, bool>,
     /// The functions whose block-scope typedefs have been read, by address.
-    vm_typedef_functions:    ArenaMap<'s, usize, ()>,
+    vm_typedef_functions: ArenaMap<'s, usize, ()>,
     /// The names a block-scope typedef may give a variably modified type,
     /// by function address and name.
-    vm_typedefs:             ArenaMap<'s, (usize, StringCacheId), ()>,
+    vm_typedefs: ArenaMap<'s, (usize, StringCacheId), ()>,
     /// The state [`State::orphan`] had where a call of a builtin that
     /// leaves its operands unemitted began, by the address of its callee.
-    unevaluated_calls:       ArenaMap<'s, usize, (Option<usize>, usize)>,
+    unevaluated_calls: ArenaMap<'s, usize, (Option<usize>, usize)>,
 }
 
 impl<'s> State<'_, 's> {
@@ -200,46 +223,58 @@ impl<'s> State<'_, 's> {
 
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            orphan:                  None,
-            serial:                  0,
-            open_statements:         0,
-            context_joins:           ArenaVec::new_in(scratch),
-            value_statements:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn_results:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            noreturn_fields:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            jmp_buf:                 false,
-            sigjmp_buf:              false,
-            folds:                   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            switch_after:            None,
-            holds:                   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            switches:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            label_positions:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            walked:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            folded:                  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            conditional_marks:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            depth_cut:               false,
-            refolds:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            labeled_expressions:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            weak_names:              ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            weak_values:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            pure_functions:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            root_end:                usize::MAX,
-            weak_horizon:            usize::MAX,
-            weak_read:               false,
-            constant_initializers:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            constant_aggregates:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            plan_covers:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            array_lengths:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            literal_units:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            literal_lengths:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            variably_modified:       ArenaVec::new_in(scratch),
-            work_low:                0,
+            orphan: None,
+            branches: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            serial: 0,
+            open_statements: 0,
+            context_joins: ArenaVec::new_in(scratch),
+            value_statements: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn_results: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            noreturn_fields: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            jmp_buf: false,
+            sigjmp_buf: false,
+            folds: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            switch_after: None,
+            holds: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            switches: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            label_positions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            walked: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            folded: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            conditional_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            depth_cut: false,
+            refolds: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            discarded_results: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            aggregate_initializer_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_aggregate_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            potential_aggregate_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            aggregate_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            initializer_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            overridden_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            potential_constants: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            array_literal_reads: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            #[cfg(test)]
+            array_scan_steps: 0,
+            labeled_expressions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            weak_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            weak_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            pure_functions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            root_end: usize::MAX,
+            weak_horizon: usize::MAX,
+            weak_read: false,
+            constant_initializers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constant_aggregates: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            plan_covers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            array_lengths: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            literal_units: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            literal_lengths: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            variably_modified: ArenaVec::new_in(scratch),
+            work_low: 0,
             variably_modified_items: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            may_join:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            vm_typedef_functions:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            vm_typedefs:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            unevaluated_calls:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            may_join: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            vm_typedef_functions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            vm_typedefs: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            unevaluated_calls: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

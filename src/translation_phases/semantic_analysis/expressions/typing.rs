@@ -1307,6 +1307,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.constant = ConstantClass::None;
         }
         _ = self.retain_effect_recipes(info, effects);
+        info.elided = self.functions.elided;
+        // A runtime query value reaches the operators evaluated around it,
+        // but not a `sizeof` or `_Alignof`, whose value is a constant.
+        if !matches!(
+            info.expression.kind,
+            ExpressionType::SizeofExpr(_)
+                | ExpressionType::SizeofType(_)
+                | ExpressionType::AlignofExpr(_)
+                | ExpressionType::AlignofType(_)
+        ) {
+            super::super::emission::expression_children(self.scratch, info.expression, |child| {
+                info.runtime_query |= self
+                    .expression_indices
+                    .get(&std::ptr::from_ref(child).addr())
+                    .is_some_and(|&index| self.expressions[index].runtime_query);
+            });
+        }
         self.expressions.push(info);
     }
 
@@ -1376,6 +1393,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ExpressionInfo {
             expression: e,
             selected_expression: None,
+            elided: false,
+            runtime_query: false,
             place_alignment: None,
             ty,
             operation_type: None,
@@ -1477,7 +1496,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Classifies integer and real floating types for relational operators.
     /// C99: §6.2.5 paragraph 17, p. 35; PDF p. 47.
-    fn real(&self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn real(&self, ty: TypeId) -> bool {
         self.integer_type(ty).is_some()
             || matches!(
                 self.types.nodes[ty.index],

@@ -20,6 +20,7 @@ use crate::{
     ir::{
         Body,
         Function,
+        GlobalId,
         GlobalInit,
         InstData,
         Linkage,
@@ -33,16 +34,21 @@ use crate::{
         Type,
     },
     target::Target,
+    util::bump::{
+        ArenaSet,
+        Bump,
+    },
 };
 
 /// The largest frame the back end lays out: offsets stay well inside the
 /// signed 32-bit displacements of `%rsp`-relative operands.
 pub(crate) const MAX_FRAME_BYTES: u64 = 1 << 30;
 
-/// Checks the whole module; the first unsupported construct is the error.
-pub(crate) fn check_module<'m>(
+/// Checks the whole module against its incoming references.
+pub(super) fn check_module<'m>(
     module: &'m Module<'_>,
     target: Target,
+    references: &GlobalReferences<'_>,
 ) -> Result<(), Unsupported<'m>> {
     let refuse = |function: Option<&'m str>, construct| Unsupported {
         function,
@@ -61,7 +67,7 @@ pub(crate) fn check_module<'m>(
             return Err(refuse(Some(function.name), Construct::RuntimeName(name)));
         }
     }
-    for (_, global) in module.globals() {
+    for (id, global) in module.globals() {
         if !plain_symbol(global.name) {
             return Err(refuse(Some(global.name), Construct::SymbolName));
         }
@@ -77,12 +83,16 @@ pub(crate) fn check_module<'m>(
                     RelocationTarget::Symbol(Symbol::Function(func)) if module.returns_twice(func)
                 )
             })
+            && !references.unused_internal_global(module, id)
         {
             return Err(refuse(Some(global.name), Construct::ReturnsTwice));
         }
         // A thread-local definition belongs in the thread-local data that
         // the TLS offsets count from, not in a named section.
-        if global.thread_local && global.attributes.section.is_some() {
+        if global.thread_local
+            && global.attributes.section.is_some()
+            && !references.unused_internal_global(module, id)
+        {
             return Err(refuse(Some(global.name), Construct::ThreadLocalSection));
         }
     }
@@ -97,6 +107,72 @@ pub(crate) fn check_module<'m>(
             .map_err(|construct| refuse(Some(function.name), construct))?;
     }
     Ok(())
+}
+
+/// Incoming global references, collected once for support and emission.
+/// C99: §6.9p5, p. 140; PDF p. 152. Optional retention follows Clang.
+pub(super) struct GlobalReferences<'a> {
+    observed:          ArenaSet<'a, GlobalId>,
+    #[cfg(test)]
+    pub(super) visits: usize,
+}
+
+impl<'a> GlobalReferences<'a> {
+    pub(super) fn collect(module: &Module<'_>, arena: &'a Bump) -> Self {
+        let mut result = Self {
+            observed:            ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            #[cfg(test)]
+            visits:              0,
+        };
+        for (_, global) in module.globals() {
+            #[cfg(test)]
+            {
+                result.visits += 1;
+            }
+            if let Some(Symbol::Global(id)) = global.attributes.alias {
+                _ = result.observed.insert(id);
+            }
+            if let Some(GlobalInit::Bytes { relocations, .. }) = global.init {
+                for relocation in relocations {
+                    #[cfg(test)]
+                    {
+                        result.visits += 1;
+                    }
+                    if let RelocationTarget::Symbol(Symbol::Global(id)) = relocation.target {
+                        _ = result.observed.insert(id);
+                    }
+                }
+            }
+        }
+        for (_, function) in module.functions() {
+            if let Some(Symbol::Global(id)) = function.attributes.alias {
+                _ = result.observed.insert(id);
+            }
+            if let Some(body) = &function.body {
+                for block in body.blocks() {
+                    for &inst in body.block_insts(block) {
+                        #[cfg(test)]
+                        {
+                            result.visits += 1;
+                        }
+                        if let InstData::GlobalAddr { global } = body.inst(inst) {
+                            _ = result.observed.insert(*global);
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// An address is unobserved only when neither code, data, aliases nor
+    /// linker retention requests require it. Membership is constant-time.
+    pub(super) fn unused_internal_global(&self, module: &Module<'_>, id: GlobalId) -> bool {
+        let global = module.global(id);
+        global.linkage == Linkage::Internal
+            && !global.attributes.used
+            && !self.observed.contains(&id)
+    }
 }
 
 /// The per-function checks and what they need of the module and target.

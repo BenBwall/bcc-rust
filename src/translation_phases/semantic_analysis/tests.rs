@@ -21,6 +21,7 @@ mod control_facts;
 mod correspondence;
 mod diagnostic_parity;
 mod effects;
+mod emission_work;
 mod float128;
 mod fortify;
 mod initializer_plans;

@@ -96,6 +96,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .ok_or_else(|| {
                 LoweringError::missing("statement control facts are not retained", source)
             })?;
+        // Share semantic traversal's whole-statement decision with static
+        // reachability, including references inside the omitted statement.
+        // C99 §6.8.4.1p2, pp. 133-134; PDF pp. 145-146.
+        if control.elided {
+            return Ok(());
+        }
         if !matches!(statement.kind, S::For(_)) || !self.transition_has_cleanup(control.exit) {
             self.tasks.push(Task::CleanupNormal(statement));
         }
@@ -153,6 +159,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 then_statement,
                 else_statement,
             } => {
+                if let crate::translation_phases::semantic_analysis::GeneratedControl::If(taken) =
+                    control.generated
+                {
+                    if let Some(selected) = if taken {
+                        Some(then_statement)
+                    } else {
+                        else_statement
+                    } {
+                        self.tasks.push(child(selected));
+                    }
+                    return Ok(());
+                }
                 let condition = expression(condition_expression, source)?;
                 let then = self.draft.create_block(&[]);
                 let join = self.draft.create_block(&[]);
@@ -465,8 +483,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         continue_to: None,
                     },
                 );
+                if matches!(
+                    control.generated,
+                    crate::translation_phases::semantic_analysis::GeneratedControl::Runtime
+                ) {
+                    self.tasks.push(Task::EndSwitch { statement, exit });
+                    self.tasks.push(child(body_statement));
+                    self.tasks.push(Task::Switch { statement, exit });
+                    self.tasks
+                        .push(Task::Evaluate(expression(condition_expression, source)?));
+                    return Ok(());
+                }
                 self.push_all(&[
-                    Task::Evaluate(expression(condition_expression, source)?),
                     Task::Switch { statement, exit },
                     child(body_statement),
                     Task::EndSwitch { statement, exit },
@@ -521,8 +549,29 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         exit: Block,
     ) -> Result<(), LoweringError> {
         let source = statement.source_vectors;
-        let item = self.pop();
-        let value = self.value(item, source)?;
+        let generated = self
+            .unit
+            .sema
+            .control
+            .statement(statement)
+            .ok_or_else(|| {
+                LoweringError::missing("switch emission facts are not retained", source)
+            })?
+            .generated;
+        let folded = if let crate::translation_phases::semantic_analysis::GeneratedControl::Switch(
+            selected,
+        ) = generated
+        {
+            Some(selected)
+        } else {
+            None
+        };
+        let value = if folded.is_none() {
+            let item = self.pop();
+            Some(self.value(item, source)?)
+        } else {
+            None
+        };
         let facts = self
             .unit
             .sema
@@ -543,6 +592,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut default = None;
         let mut cases = ArenaVec::new_in(self.scratch);
         let mut ranges = ArenaVec::new_in(self.scratch);
+        let mut selected_target = None;
         for (ordinal, case) in facts.cases.iter().enumerate() {
             debug_assert_eq!(case.ordinal, ordinal, "case facts retain source order");
             if let Some(label) = facts.default
@@ -563,6 +613,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 continue;
             };
             let target = self.dispatch_target(block, dispatch, case.statement.source_vectors)?;
+            if let Some(selected) = folded {
+                if selected.is_some_and(|label| std::ptr::eq(label, case.statement)) {
+                    selected_target = Some(target);
+                }
+                continue;
+            }
             if case.range {
                 ranges.push((case.lower.value, case.upper.value, target));
             } else {
@@ -584,6 +640,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if default.is_none() {
             default = Some(self.dispatch_target(exit, facts.no_match, source)?);
         }
+        if let Some(selected) = folded {
+            let target = if selected.is_none() {
+                exit
+            } else {
+                selected_target.or(default).ok_or_else(|| {
+                    LoweringError::missing("folded switch selected label is not retained", source)
+                })?
+            };
+            let edge = self.draft.edge(target, &[]);
+            self.draft
+                .terminate_and_continue_dead(Terminator::Jump(edge));
+            self.switch_starts.push(start);
+            return Ok(());
+        }
+        let value = value.expect("runtime switch evaluated its condition");
         // GNU inclusive ranges use one unsigned interval comparison each,
         // never an expansion proportional to the number of covered values.
         // GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>.
@@ -861,7 +932,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
             tasks.push(Task::DeclareBinding(
                 binding,
-                fact.initializer,
+                fact.initializer.filter(|_| !fact.initializer_elided),
                 init.source_vectors,
             ));
         }
@@ -883,8 +954,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         if data.duration.is_static_or_thread() {
             // The module planner owns which static initializers are emitted;
-            // an unused local initializer cannot make a function reachable.
-            // C99 §6.9p3-5, p. 140; PDF p. 152.
+            // retained locals also keep their initializer's referents alive.
+            // C99 §6.2.4p3, p. 32; PDF p. 44; §6.9p3-5, p. 140; PDF p. 152.
             if data.linkage == Linkage::None && self.unit.reachable.contains(&binding) {
                 _ = self
                     .unit

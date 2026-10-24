@@ -685,7 +685,7 @@ pinned by the `.args` sidecars.
 | `DuplicateDefinition` | [definition](sema3-definition.c) |
 | `TentativeArrayAssumedOne` | [array-completion](sema3-array-completion.c) |
 | `IncompleteTentativeDefinition` | [incomplete-tentative](sema3-incomplete-tentative.c) |
-| `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c) |
+| `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c), [cleanup use](sema3-internal-cleanup.c) |
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `InlineInternalReference` | [inline-reference](sema3-inline-reference.c) |
 | `InlineStaticObject` | [inline-object](sema3-inline-object.c) |

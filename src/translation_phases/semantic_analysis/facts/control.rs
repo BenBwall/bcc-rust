@@ -235,15 +235,33 @@ pub(crate) enum ControlTarget {
     IndirectGoto(FunctionId),
 }
 
+/// Control flow chosen by the same emission decision that omitted its arms.
+/// C99: §6.8.4.1p2, p. 133; PDF p. 145; §6.8.4.2p4-5, p. 134; PDF p. 146.
+#[expect(
+    variant_size_differences,
+    reason = "Switch decisions retain a selected syntax label"
+)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GeneratedControl<'tu> {
+    Runtime,
+    If(bool),
+    Switch(Option<&'tu Statement<'tu>>),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StatementFacts<'tu> {
-    pub(crate) id:     StatementId,
-    pub(crate) syntax: &'tu Statement<'tu>,
-    pub(crate) entry:  ControlPoint,
-    pub(crate) exit:   Transition,
-    pub(crate) label:  Option<LabelId>,
-    pub(crate) jump:   Option<JumpId>,
-    pub(crate) switch: Option<SwitchId>,
+    pub(crate) generated: GeneratedControl<'tu>,
+    /// A whole statement is omitted by code generation,
+    /// including its static declarations. C99: §6.8.4.1p2, pp. 133-134;
+    /// PDF pp. 145-146; storage emission follows Clang.
+    pub(crate) elided:    bool,
+    pub(crate) id:        StatementId,
+    pub(crate) syntax:    &'tu Statement<'tu>,
+    pub(crate) entry:     ControlPoint,
+    pub(crate) exit:      Transition,
+    pub(crate) label:     Option<LabelId>,
+    pub(crate) jump:      Option<JumpId>,
+    pub(crate) switch:    Option<SwitchId>,
 }
 
 #[derive(Debug, Clone, Copy)]

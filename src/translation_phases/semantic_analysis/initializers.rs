@@ -1171,7 +1171,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
-    fn aggregate(&self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn aggregate(&self, ty: TypeId) -> bool {
         matches!(
             self.types.nodes[ty.index],
             TypeKind::Array(..) | TypeKind::Vector { .. }

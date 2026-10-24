@@ -1805,7 +1805,13 @@ fn always_inline_order_follows_external_redeclarations_and_uncreated_bodies() {
          __attribute__((always_inline)) int g(int x) { if (x == 1000) { switch (1) { case 0: \
          return s(x); default: break; } } return x + 2; } void die(void) { exit(9); } int \
          main(int argc, char **argv) { (void)argv; return f(argc) & 0x7f; }";
-    assert_eq!(always_inline_order(uncreated, c99), "fgs");
+    // #118 elides the unselected arm, so its only helper is unreachable.
+    // Clang 23 likewise emits f and g without creating s.
+    assert_eq!(always_inline_order(uncreated, c99), "fg");
+    // Keep the sibling live: elision must not remove a helper an unfolded
+    // switch can call, and its body still follows f and g.
+    let visited = uncreated.replace("switch (1)", "switch (x)");
+    assert_eq!(always_inline_order(&visited, c99), "fgs");
 }
 
 /// The forms PR #117's third review found counted differently from Clang,
