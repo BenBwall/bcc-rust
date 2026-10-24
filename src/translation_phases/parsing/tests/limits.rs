@@ -423,8 +423,15 @@ fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
     let defaults = ParserLimits::default();
     assert_eq!(defaults.external_declarations, usize::MAX);
     assert_eq!(defaults.syntax_nodes, usize::MAX);
-    assert_eq!(defaults.frame_depth, u32::MAX as usize);
+    assert_eq!(
+        defaults.frame_depth,
+        crate::configuration::DEFAULT_MAX_NESTING_DEPTH as usize
+    );
     assert_eq!(defaults.source_segments, usize::MAX);
+    let configured = ParserLimits::for_configuration(
+        crate::configuration::CompilerConfiguration::default().with_max_nesting_depth(7),
+    );
+    assert_eq!(configured.frame_depth, 7);
 }
 
 fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
