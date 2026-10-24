@@ -250,7 +250,7 @@ overrides that remove linker LTO.
 
 [`build_support/native.rs`](build_support/native.rs) compiles the C helper,
 [`build_support/float_parsing.c`](build_support/float_parsing.c), with the `cc` crate and Clang `-flto=full` into a static archive of LLVM bitcode.
-[`build_support/llvm.rs`](build_support/llvm.rs) uses the `cmake` crate and
+[`build_support/llvm/tools.rs`](build_support/llvm/tools.rs) uses the `cmake` crate and
 LLVM's `install-distribution` target to build only Clang, its resource headers,
 libclang, `llvm-ar`, and LLD from Rust's exact LLVM source revision. Only the
 host's backend is enabled. Rust uses
