@@ -119,10 +119,11 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 super::scope::NameClass::Typedef,
             );
         }
+        let tree = context.tu_arena();
         Self {
             cursor: TokenCursor::new(upstream),
             arena,
-            tree: context.tu_arena(),
+            tree,
             context,
             frames: ArenaVec::new_in(arena),
             pools: FramePools::new_in(arena),
@@ -132,6 +133,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             syntax: super::SyntaxLog::default(),
             syntax_nodes: 0,
             emitted_roots: RegionVec::new(),
+            root_ends: ArenaVec::new_in(tree),
             scopes,
             label_scopes: LabelScopes::new_in(arena),
             func_name: None,

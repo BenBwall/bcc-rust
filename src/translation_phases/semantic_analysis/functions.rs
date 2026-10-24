@@ -42,7 +42,6 @@ use crate::{
             },
             syntax::{
                 Expression,
-                ExpressionType,
                 FunctionDefinition,
                 Identifier,
                 Statement,
@@ -218,7 +217,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
             self.functions.dead,
         )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                self.functions.unvisited,
+            )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                self.functions.emission.orphan,
+            )));
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreWeakHorizon(
+                self.functions.emission.weak_horizon,
+            )));
         self.functions.dead = false;
+        self.functions.unvisited = false;
+        self.functions.emission.orphan = None;
+        // Clang emits this body where it is defined, or after the unit.
+        self.functions.emission.weak_horizon =
+            if binding.is_some_and(|index| self.emitted_where_defined(index, f)) {
+                self.functions.emission.root_end
+            } else {
+                usize::MAX
+            };
         self.work.push(Work::FunctionWork(FunctionWork::Finish(
             self.functions.current,
             self.statements.loops,
@@ -351,6 +371,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 .insert(self.bindings.len() - 1, alignment);
                         }
                         parameter_aliases.push((prototype, self.bindings.len() - 1));
+                        if let Some(&typed) = self.functions.emission.noreturn.get(&prototype) {
+                            _ = self
+                                .functions
+                                .emission
+                                .noreturn
+                                .insert(self.bindings.len() - 1, typed);
+                        }
                         if let Some(&written) =
                             self.function_extensions.written_types.get(&prototype)
                         {
@@ -448,51 +475,76 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreReferenceContext(previous) =>
                 self.functions.reference_context = previous,
             | FunctionWork::RestoreDead(dead) => self.functions.dead = dead,
+            | FunctionWork::RestoreUnvisited(unvisited) => self.functions.unvisited = unvisited,
+            | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
+            | FunctionWork::RestoreWeakHorizon(horizon) =>
+                self.functions.emission.weak_horizon = horizon,
+            | FunctionWork::RestoreUnjoinedOrphan(orphan) =>
+                self.functions.emission.orphan = self.functions.emission.orphan.and(orphan),
             | FunctionWork::RestoreSwitchDead(dead) => self.functions.switch_dead = dead,
             | FunctionWork::ThenEnd => self.functions.arm_ends.push(self.functions.dead),
             | FunctionWork::JoinArms => {
                 let then_end = self.functions.arm_ends.pop().expect("then arm ended");
                 self.functions.dead &= then_end;
+                self.functions.emission.orphan = None;
             },
-            | FunctionWork::DeadArm(condition, live, outer) => {
-                let value = self.folded_condition(condition);
-                self.functions.dead = outer || value == Some(!live);
+            | FunctionWork::SwitchEnd(outer) => {
+                let after = self.functions.emission.switch_after.take();
+                self.functions.dead = outer || after.unwrap_or(false);
+                self.functions.emission.orphan = None;
             },
+            | FunctionWork::DeadStatementArm(condition, live, outer, statement) => {
+                let skipped = self.folded_condition(condition) == Some(!live)
+                    && statement
+                        .is_none_or(|statement| !self.statement_contains_label(statement, false));
+                self.functions.dead = outer.dead || skipped;
+                self.functions.unvisited = outer.unvisited || skipped;
+            },
+            | FunctionWork::DeadArm(condition, live, outer, arm) => {
+                // Clang emits a folded-away operand that holds a label.
+                let skipped = self.folded_condition(condition) == Some(!live)
+                    && !self.expression_contains_label(arm);
+                self.functions.dead = outer.dead || skipped;
+                self.functions.unvisited = outer.unvisited || skipped;
+            },
+            | FunctionWork::ConditionalMark(expression, index, outer) =>
+                self.mark_conditional_arm(expression, index, outer),
             | FunctionWork::GenericMark(generic) => {
                 let at = self.functions.uses.len();
                 let scratch = self.scratch;
-                self.functions
+                let marks = self
+                    .functions
                     .generic_marks
                     .entry(std::ptr::from_ref(generic).addr())
-                    .or_insert_with(|| ArenaVec::new_in(scratch))
-                    .push(at);
+                    .or_insert_with(|| ArenaVec::new_in(scratch));
+                // The controlling operand is not emitted, and only the
+                // selected association is: each starts from the block
+                // around the selection ([`super::emission`]).
+                if let Some(&(_, around)) = marks.first()
+                    && (marks.len() == 1 || marks.len() % 2 == 0)
+                {
+                    self.functions.emission.orphan = around;
+                }
+                marks.push((at, self.functions.emission.orphan));
             },
-            | FunctionWork::ExpressionStatementEnd(expression) => {
-                let mut expression = expression;
-                while let ExpressionType::Parenthesized { expression: inner }
-                | ExpressionType::Cast {
-                    operand_expression: inner,
-                    ..
-                } = expression.kind
+            | FunctionWork::ExpressionStatementEnd {
+                expression,
+                serial,
+                value,
+            } => self.end_expression_statement(expression, serial, value),
+            | FunctionWork::StatementExpressionEnd(outer) => {
+                // `StmtExprEvaluation` ensures an insertion point: a body that
+                // ends skipped leaves a new block without predecessors. Only
+                // an emitted statement expression does: not one in code or an
+                // operand that is skipped, nor one in an unevaluated operand.
+                if self.functions.dead
+                    && !outer
+                    && self.functions.sizeof.is_none()
+                    && self.functions.reference_context.is_none()
                 {
-                    expression = inner;
+                    self.functions.emission.orphan = Some(self.functions.emission.serial);
                 }
-                if let ExpressionType::Call {
-                    function_expression,
-                    ..
-                } = expression.kind
-                    && self
-                        .expression_info(function_expression)
-                        .binding
-                        .is_some_and(|binding| {
-                            self.bindings[binding].origin
-                                == super::BindingOrigin::Intrinsic(
-                                    crate::builtins::BuiltinId::Unreachable,
-                                )
-                        })
-                {
-                    self.functions.dead = true;
-                }
+                self.functions.dead = outer;
             },
             | FunctionWork::LoopEnd(statement, outer) => {
                 let infinite = match statement.kind {
@@ -513,6 +565,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .statement_id(statement)
                     .is_some_and(|id| self.has_generated_break(id));
                 self.functions.dead = outer || (infinite && !exits);
+                self.functions.emission.orphan = None;
             },
         }
     }
@@ -641,6 +694,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         owner,
                         binding: usage.binding,
                         dead: usage.dead,
+                        initializer_value: usage.initializer_value,
                     });
                 }
                 if let Some(import) = usage.dll_import {
@@ -1269,16 +1323,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 binding: index,
             });
         }
+        let previous = (binding.linkage != Linkage::None)
+            .then(|| {
+                self.functions
+                    .entities
+                    .get(&self.function_identity(index))
+                    .copied()
+            })
+            .flatten();
+        self.record_noreturn(
+            index,
+            spec,
+            declarator,
+            previous.map(|entity| entity.latest),
+        );
         if binding.linkage == Linkage::None {
             return;
         }
-        let mut entity = self
-            .functions
-            .entities
-            .get(&self.function_identity(index))
-            .copied()
-            .unwrap_or_default();
+        let mut entity = previous.unwrap_or_default();
         entity.latest = index;
+        // A file-scope declaration may make an inline body seen before it
+        // an external definition, which Clang then creates and emits.
+        let forcible = binding.kind == BindingKind::Function
+            && self.scopes[binding.scope].kind == ScopeKind::File
+            && entity.function_body.is_some()
+            && !self.body_external(&entity);
         if binding.kind == BindingKind::Function {
             let explicit_extern = spec.storage_class == Some(StorageClass::Extern);
             if self.scopes[binding.scope].kind == ScopeKind::File
@@ -1336,10 +1405,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        if forcible && self.body_external(&entity) {
+            self.functions.external_redeclarations.push(index);
+        }
         _ = self
             .functions
             .entities
             .insert(self.function_identity(index), entity);
+    }
+
+    /// Whether the body of function `entity` is an external definition by
+    /// the declarations so far: Clang's `isInlineDefinitionExternallyVisible`
+    /// for C99 and GNU inline semantics, and its Microsoft inline retention
+    /// (`doesDeclarationForceExternallyVisibleDefinition`) elsewhere.
+    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125. GNU extension:
+    /// GCC manual, "Inline"; Microsoft ABI extension under C99: §4p6, p. 7;
+    /// PDF p. 19.
+    fn body_external(&self, entity: &Entity) -> bool {
+        let gnu = entity.gnu_inline || self.context.configuration.gnu89_inline();
+        if !gnu && !self.context.configuration.target().c99_inline_definitions() {
+            entity.msvc_inline.emission == InlineEmission::Required
+        } else if gnu {
+            !matches!(entity.function_body, Some(FunctionBody::Replaceable(_)))
+                || entity.gnu_plain_inline
+        } else {
+            entity.non_inline
+        }
     }
 
     /// Inline object restrictions concern the object's own qualification,
@@ -1524,6 +1615,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })
             .and_then(|f| f.binding)
             .filter(|&i| self.bindings[i].linkage == Linkage::External);
+        // Clang emits a block-scope static object's declaration wherever it
+        // visits the declaration, even after a jump (`EmitSimpleStmt`), so
+        // its initializer is skipped only where the code is not visited.
+        let static_local = self.functions.initializer.is_some_and(|binding| {
+            let data = self.bindings[binding];
+            data.linkage == Linkage::None && data.duration.is_static_or_thread()
+        });
         self.functions.uses.push(Use {
             reference_context: self.functions.reference_context,
             owner: self
@@ -1538,40 +1636,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .map(ReferenceOwner::Function)),
             binding,
             name,
+            initializer_value: self.functions.initializer_value,
             sizeof: self.functions.sizeof,
             inline_function,
             dll_import,
-            dead: self.functions.dead,
+            dead: self.functions.dead && (self.functions.unvisited || !static_local),
         });
     }
 
-    /// The truth value code generation folds `condition` to at `-O0`, as
-    /// `CodeGenFunction::ConstantFoldsToSimpleInteger` does: an integer
-    /// constant, or a comma expression whose left operand folds (so has no
-    /// side effects) and whose right operand folds. It does not fold bare
-    /// floating conditions, even though loop code generation can fold their
-    /// truth value when creating an exit block.
-    fn folded_condition(&self, condition: &'tu Expression<'tu>) -> Option<bool> {
-        let mut condition = condition;
-        loop {
-            match condition.kind {
-                | ExpressionType::Parenthesized { expression } => condition = expression,
-                | ExpressionType::Binary {
-                    operator: super::super::parsing::syntax::BinaryOperator::Comma,
-                    left_expression,
-                    right_expression,
-                } => {
-                    _ = self.folded_condition(left_expression)?;
-                    condition = right_expression;
-                },
-                | _ => break,
+    /// The number of references recorded so far, which marks where the
+    /// references of the code analyzed next begin.
+    pub(super) fn reference_count(&self) -> usize {
+        self.functions.uses.len()
+    }
+
+    /// Marks the references recorded in `range` as skipped by code
+    /// generation, except those of nested function bodies, which are
+    /// emitted on their own.
+    pub(super) fn skip_references(&mut self, range: std::ops::Range<usize>) {
+        let function = self.functions.reference_function;
+        for usage in &mut self.functions.uses[range] {
+            if !matches!(usage.owner, Some(ReferenceOwner::Function(owner)) if Some(owner) != function)
+            {
+                usage.dead = true;
             }
         }
-        let info = self.expression_info(condition);
-        (info.constant == super::ConstantClass::Arithmetic)
-            .then_some(info.integer)
-            .flatten()
-            .map(|integer| integer.value != 0)
     }
 
     /// Marks the references of a generic selection's controlling operand
@@ -1594,10 +1683,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
-        ranges.push(marks[0]..marks[1]);
+        ranges.push(marks[0].0..marks[1].0);
         for (index, association) in generic.associations.iter().enumerate() {
             if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
-                ranges.push(marks[2 + 2 * index]..marks[3 + 2 * index]);
+                ranges.push(marks[2 + 2 * index].0..marks[3 + 2 * index].0);
+            } else {
+                // Code generation continues in the block the selected
+                // association ends in.
+                self.functions.emission.orphan = marks[3 + 2 * index].1;
             }
         }
         for range in ranges {
@@ -1607,15 +1700,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Pushes the work that enters the arm of `condition` taken when it is
-    /// `live`: code generation skips it when the condition folds to the
-    /// other value. Clang `CodeGenFunction::ConstantFoldsToSimpleInteger`.
-    pub(super) fn dead_arm(&mut self, condition: &'tu Expression<'tu>, live: bool) {
+    /// Pushes the work that enters operand `arm` of `condition`, taken when
+    /// it is `live`: code generation skips it when the condition folds to
+    /// the other value (`CodeGenFunction::ConstantFoldsToSimpleInteger`),
+    /// unless it holds a label (`CodeGenFunction::ContainsLabel`).
+    pub(super) fn dead_arm(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+        live: bool,
+        arm: &'tu Expression<'tu>,
+    ) {
         self.work.push(Work::FunctionWork(FunctionWork::DeadArm(
             condition,
             live,
-            self.functions.dead,
+            self.skipped_state(),
+            arm,
         )));
+    }
+
+    /// The skipped state of the code being analyzed, which an operand or
+    /// arm starts from.
+    pub(super) fn skipped_state(&self) -> Skipped {
+        Skipped {
+            dead:      self.functions.dead,
+            unvisited: self.functions.unvisited,
+        }
     }
 
     /// Loop code generation folds arithmetic truth, including floating
@@ -1645,25 +1754,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn has_generated_break(&self, target: StatementId) -> bool {
         self.functions.generated_breaks.iter().any(|jump| {
-            if jump.target != target {
+            jump.target == target && self.context_evaluated(jump.sizeof, jump.reference_context)
+        })
+    }
+
+    /// Whether code in sizeof context `sizeof` and reference context
+    /// `context`, both analyzed, is evaluated: neither they nor any context
+    /// around them leaves its operand unevaluated.
+    pub(super) fn context_evaluated(&self, sizeof: Option<usize>, context: Option<usize>) -> bool {
+        let mut sizeof = sizeof;
+        while let Some(index) = sizeof {
+            if self.sizeof_unevaluated(index) {
                 return false;
             }
-            let mut sizeof = jump.sizeof;
-            while let Some(index) = sizeof {
-                if self.sizeof_unevaluated(index) {
-                    return false;
-                }
-                sizeof = self.functions.sizeof_contexts[index].parent;
+            sizeof = self.functions.sizeof_contexts[index].parent;
+        }
+        let mut context = context;
+        while let Some(index) = context {
+            if self.reference_context_unevaluated(index) {
+                return false;
             }
-            let mut context = jump.reference_context;
-            while let Some(index) = context {
-                if self.reference_context_unevaluated(index) {
-                    return false;
-                }
-                context = self.functions.reference_contexts[index].parent;
-            }
-            true
-        })
+            context = self.functions.reference_contexts[index].parent;
+        }
+        true
     }
 
     /// Whether sizeof context `index` leaves its operand unevaluated: its
@@ -1720,7 +1833,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// body, and an internal or
     /// Microsoft discardable inline body that neither GNU `used` nor a
     /// reference from emitted code keeps, as Clang defers such definitions
-    /// until their first use.
+    /// until their first use. An entity with no such reference, which
+    /// Clang never references, stays imported when any evaluated reference
+    /// in a body lowering emits named an import, dead or not: lowering
+    /// still emits some code Clang skips, after a call that does not return
+    /// and in a folded switch's unselected statements, and such a reference
+    /// must name the import it was written with to link. Lowering emits a
+    /// deferred body that any reference reaches.
     pub(super) fn finish_dll_references(&mut self, symbols: &super::facts::SymbolFacts<'tu>) {
         let evaluated = self.functions.evaluated_imports;
         let mut kinds = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
@@ -1730,6 +1849,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             _ = kinds.insert(entity, definition.kind);
         }
         let mut emitted = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut lowered = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for binding in symbols
             .aliases
             .iter()
@@ -1738,15 +1858,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             let entity = self.entity_of(binding);
             _ = emitted.insert(entity, ());
+            _ = lowered.insert(entity, ());
         }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &(owner, binding, _, dead) in evaluated {
-                if !dead && self.owner_emitted(owner, &kinds, &emitted, symbols) {
-                    let entity = self.entity_of(binding);
-                    changed |= emitted.insert(entity, ()).is_none();
+        for (reached, live_only) in [(&mut emitted, true), (&mut lowered, false)] {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for &(owner, binding, _, dead) in evaluated {
+                    if !(dead && live_only) && self.owner_emitted(owner, &kinds, &*reached, symbols)
+                    {
+                        let entity = self.entity_of(binding);
+                        changed |= reached.insert(entity, ()).is_none();
+                    }
                 }
+            }
+        }
+        // Any reference lowering emits decides when none in emitted code
+        // does, an import over a plain one.
+        for &(owner, binding, import, _) in evaluated {
+            if self.owner_emitted(owner, &kinds, &lowered, symbols) {
+                self.dll_lowered(binding, import);
             }
         }
         for &(owner, binding, import, dead) in evaluated {
@@ -1830,6 +1961,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.context.configuration.target().c99_inline_definitions()
             && self.inline_only_declarations(binding)
             && self.dll_storage(binding) != Some(super::DllStorage::Export)
+    }
+
+    /// Whether Clang's code generation emits definition `f` of `binding`
+    /// where it appears rather than after the unit: a retained definition,
+    /// or a non-discardable external definition by the declarations seen
+    /// so far (`CodeGenModule::EmitGlobal`, `MustBeEmitted`).
+    /// C99: §6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125.
+    fn emitted_where_defined(&mut self, binding: usize, _f: &FunctionDefinition<'tu>) -> bool {
+        let entity = self.entity_of(binding);
+        self.retained_by_used(entity)
+            || self.attributes.init_function(entity)
+            || (self.bindings[binding].linkage == Linkage::External
+                && self
+                    .functions
+                    .entities
+                    .get(&self.function_identity(binding))
+                    .is_some_and(|entity| self.body_external(entity)))
     }
 
     /// Whether every file-scope declaration selects a C99 inline-only
@@ -1918,24 +2066,60 @@ pub(super) enum FunctionWork<'tu> {
     RestoreReferenceContext(Option<usize>),
     /// Sets whether code generation skips the code that follows.
     RestoreDead(bool),
+    /// Sets whether code generation visits the code that follows
+    /// ([`State::unvisited`]).
+    RestoreUnvisited(bool),
+    /// Restores whether the code being analyzed is emitted into a block
+    /// without predecessors ([`super::emission::State::orphan`]).
+    RestoreOrphan(Option<usize>),
+    /// Restores which weak names apply to the code being analyzed
+    /// ([`super::emission::State::weak_horizon`]).
+    RestoreWeakHorizon(usize),
+    /// Restores that state after operands code generation may not emit,
+    /// unless they joined paths, which leaves a block with predecessors.
+    RestoreUnjoinedOrphan(Option<usize>),
     /// Restores the skipped state around the innermost switch.
     RestoreSwitchDead(bool),
+    /// After a switch: code generation resumes with the code around it,
+    /// unless a folded switch's selected statements ended skipped.
+    SwitchEnd(bool),
     /// Saves the skipped state at the end of an `if` statement's first arm.
     ThenEnd,
     /// Skips the code after an `if` statement when both arms end skipped.
     JoinArms,
-    /// Enters the arm of a condition taken when it is `live`, given whether
-    /// the code around the condition is skipped.
-    DeadArm(&'tu Expression<'tu>, bool, bool),
+    /// Enters operand `arm` of a condition, taken when it is `live`, given
+    /// the skipped state of the code around the condition; an operand that
+    /// holds a label is not skipped.
+    DeadArm(&'tu Expression<'tu>, bool, Skipped, &'tu Expression<'tu>),
+    /// The reference boundaries and insertion states of a conditional's
+    /// arms, before its result type settles whether either is skipped.
+    ConditionalMark(&'tu Expression<'tu>, usize, Skipped),
+    /// Enters an `if` statement's arm, as [`Self::DeadArm`] does, unless
+    /// the arm holds a label, which keeps Clang from skipping it.
+    DeadStatementArm(
+        &'tu Expression<'tu>,
+        bool,
+        Skipped,
+        Option<&'tu Statement<'tu>>,
+    ),
     /// Clang omits an infinite loop's exit block unless a generated break
     /// targets it. The loop's body is emitted even for a false condition.
     LoopEnd(&'tu Statement<'tu>, bool),
     /// Records where the references of a generic selection's next operand
     /// begin or end ([`State::generic_marks`]).
     GenericMark(&'tu GenericSelection<'tu>),
-    /// After an expression statement: Clang's code generation skips what
-    /// follows `__builtin_unreachable()`, which leaves no insertion point.
-    ExpressionStatementEnd(&'tu Expression<'tu>),
+    /// After an expression statement: Clang's code generation erases the
+    /// block without predecessors that a call that does not return left,
+    /// and skips what follows. `serial` numbers the statement; `value` is
+    /// the skipped state and reference count before a statement
+    /// expression's value statement ([`super::emission`]).
+    ExpressionStatementEnd {
+        expression: &'tu Expression<'tu>,
+        serial:     usize,
+        value:      Option<(bool, usize)>,
+    },
+    /// After a statement expression, given the skipped state around it.
+    StatementExpressionEnd(bool),
 }
 
 /// Definition and tentative-definition state for an identifier with linkage.
@@ -2000,12 +2184,21 @@ enum FunctionBody {
     Unique(SourceVectors),
 }
 
+/// Whether code generation skips the code being analyzed, and whether it
+/// does not even visit it ([`State::dead`], [`State::unvisited`]).
+#[derive(Clone, Copy)]
+pub(super) struct Skipped {
+    pub(super) dead:      bool,
+    pub(super) unvisited: bool,
+}
+
 #[derive(Clone, Copy)]
 struct Use {
     reference_context: Option<usize>,
     owner:             Option<ReferenceOwner>,
     binding:           usize,
     name:              Identifier,
+    initializer_value: Option<usize>,
     sizeof:            Option<usize>,
     inline_function:   Option<usize>,
     /// Whether the reference named an imported declaration, for an entity
@@ -2061,10 +2254,12 @@ struct InlineObject {
 }
 
 pub(super) struct State<'tu, 's> {
-    reference_context: Option<usize>,
+    pub(super) reference_context: Option<usize>,
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
     pub(super) reference_function: Option<usize>,
     pub(super) initializer: Option<usize>,
+    /// Root expression of the initializer value currently being analyzed.
+    pub(super) initializer_value: Option<usize>,
     pub(super) current: Option<FunctionContext<'tu>>,
     next_function: usize,
     old_names: ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
@@ -2072,18 +2267,31 @@ pub(super) struct State<'tu, 's> {
     entities: ArenaMap<'s, StringCacheId, Entity>,
     previous: ArenaMap<'s, usize, SourceVectors>,
     uses: ArenaVec<'s, Use>,
+    /// The file-scope declarations that made an inline body seen before
+    /// them an external definition, in source order.
+    pub(super) external_redeclarations: ArenaVec<'s, usize>,
     /// Evaluated DLL references retained until aliases and init roots resolve.
     evaluated_imports: &'s [(Option<usize>, usize, bool, bool)],
     sizeof_contexts: ArenaVec<'s, SizeofContext<'tu>>,
     pub(super) sizeof: Option<usize>,
     /// Code generation skips the code being analyzed, as Clang's does at
-    /// `-O0`: the arm a constant condition does not take, and statements
-    /// after a jump or a loop without an exit until a label
-    /// (`CodeGenFunction::EmitStmt`).
+    /// `-O0`: the arm a constant condition does not take, the statements a
+    /// folded switch does not select, and statements after a jump, a loop
+    /// without an exit or an expression statement that ends in a call that
+    /// does not return, until a label (`CodeGenFunction::EmitStmt`;
+    /// [`super::emission`]).
     pub(super) dead: bool,
+    /// Code generation does not even visit the code being analyzed: a
+    /// statement it skips whole after a jump, the arm or operand a folded
+    /// condition skips, and what follows a folded switch's selected
+    /// statements. Where it visits skipped code, it still emits the
+    /// declarations of block-scope static objects (`EmitSimpleStmt`).
+    pub(super) unvisited: bool,
     /// The skipped state around the innermost switch, which its case
     /// labels resume.
     pub(super) switch_dead: bool,
+    /// The emission model's state ([`super::emission`]).
+    pub(super) emission: super::emission::State<'tu, 's>,
     /// The skipped state at the end of each enclosing `if` statement's
     /// first arm.
     arm_ends: ArenaVec<'s, bool>,
@@ -2095,34 +2303,39 @@ pub(super) struct State<'tu, 's> {
     pub(super) outside: [Option<usize>; 2],
     /// For each generic selection being analyzed, by address, the number
     /// of references recorded at the start and end of its controlling
-    /// operand and of each association's expression.
-    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, usize>>,
+    /// operand and of each association's expression, with the emission
+    /// model's block state there.
+    generic_marks: ArenaMap<'s, usize, ArenaVec<'s, (usize, Option<usize>)>>,
 }
 
 impl<'s> State<'_, 's> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            reference_context:  None,
-            reference_contexts: ArenaVec::new_in(scratch),
-            reference_function: None,
-            initializer:        None,
-            current:            None,
-            next_function:      0,
-            old_names:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            old_types:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:               ArenaVec::new_in(scratch),
-            evaluated_imports:  &[],
-            sizeof_contexts:    ArenaVec::new_in(scratch),
-            sizeof:             None,
-            dead:               false,
-            switch_dead:        false,
-            arm_ends:           ArenaVec::new_in(scratch),
-            generated_breaks:   ArenaVec::new_in(scratch),
-            inline_objects:     ArenaVec::new_in(scratch),
-            outside:            [None; 2],
-            generic_marks:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            reference_context:       None,
+            reference_contexts:      ArenaVec::new_in(scratch),
+            reference_function:      None,
+            initializer:             None,
+            initializer_value:       None,
+            current:                 None,
+            next_function:           0,
+            old_names:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types:               ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses:                    ArenaVec::new_in(scratch),
+            external_redeclarations: ArenaVec::new_in(scratch),
+            evaluated_imports:       &[],
+            sizeof_contexts:         ArenaVec::new_in(scratch),
+            sizeof:                  None,
+            dead:                    false,
+            unvisited:               false,
+            switch_dead:             false,
+            emission:                super::emission::State::new(scratch),
+            arm_ends:                ArenaVec::new_in(scratch),
+            generated_breaks:        ArenaVec::new_in(scratch),
+            inline_objects:          ArenaVec::new_in(scratch),
+            outside:                 [None; 2],
+            generic_marks:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

@@ -85,6 +85,10 @@ pub(crate) struct Context<'tu> {
     /// Output-token ordinals preserve directive order across includes/macros.
     pub(crate) preprocessed_tokens: usize,
     pub(crate) pack_pragmas: ArenaVec<'tu, super::pragma_pack::PackPragma<'tu>>,
+    /// The names `#pragma weak` makes weak, which semantic analysis keeps
+    /// out of the values Clang's evaluator folds, each with its output-token
+    /// ordinal ([`Self::preprocessed_tokens`] before the next token).
+    pub(crate) weak_pragmas: ArenaVec<'tu, (usize, StringCacheId)>,
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,

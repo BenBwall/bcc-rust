@@ -593,6 +593,371 @@ fn labels_loop_exits_and_floating_conditions_fix_generated_import_state() {
     }
 }
 
+/// A folded switch emits only its selected statements, and an expression
+/// statement ending in a call that does not return skips what follows, so
+/// references there keep the import; references Clang emits drop it.
+/// These expectations are pinned against Clang 23 on both Windows ABIs at
+/// -O0 (#113). C99: §6.8.4.2p5, p. 134; PDF p. 146.
+#[test]
+fn folded_switches_and_calls_that_do_not_return_fix_generated_import_state() {
+    const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
+                            int x; __attribute__((noreturn)) void die(void); void exit(int); ";
+    for (suffix, imported) in [
+        (
+            "int h(void) { switch (0) { case 1: return x; default: break; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (5) { case 1: return x; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: return 0; case 2: return x; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: return 0; } return x; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: break; } return x; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (2) { case 1: break; case 2: return x; } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (5) { case 1: break; default: return x; } return 0; }",
+            false,
+        ),
+        (
+            "int h(int a) { switch (1) { case 0: x; if (a) { case 1: ; } } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch ((0, 1)) { case 0: return x; case 1: break; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { goto L; switch (0) { case 1: L: return x; default: break; } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (5) { default: return 0; case 1: return x; } }",
+            true,
+        ),
+        ("int h(void) { die(); return x; }", true),
+        ("int h(void) { exit(0); return x; }", true),
+        ("int h(void) { die(), x; return 0; }", false),
+        ("int h(int a) { a ? die() : (void)0; return x; }", false),
+        ("int h(void) { 1 ? die() : (void)0; return x; }", true),
+        ("int h(void) { die(); L: return x; }", false),
+        ("int h(void) { int y = (die(), 1); return x + y; }", false),
+        ("int h(void) { ({ die(); }); return x; }", true),
+        ("int h(void) { return ({ die(); x; }); }", false),
+        (
+            "int h(void) { void (*p)(void) = die; p(); return x; }",
+            false,
+        ),
+        (
+            "int h(void) { void (*p)(void) __attribute__((noreturn)) = die; p(); return x; }",
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{suffix}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {suffix}"
+            );
+        }
+    }
+}
+
+/// The forms the #113 review found counted differently from Clang, pinned
+/// against Clang 23 on both Windows ABIs at -O0: labels and breaks in
+/// statement expressions keep a switch unfolded, standard `[[noreturn]]`
+/// stays with its declaration, a hand-declared `longjmp` is a builtin only
+/// after `jmp_buf`, a complex product joins paths, unevaluated operands
+/// change nothing, function types carry `noreturn` through any callee, and
+/// Clang's evaluator folds conditions semantic analysis does not.
+#[test]
+fn review_forms_fix_generated_import_state() {
+    const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
+                            int x; __attribute__((noreturn)) void die(void); ";
+    const NP: &str = "typedef void (*NP)(void) __attribute__((noreturn)); ";
+    for (prefix, suffix, imported) in [
+        (
+            "",
+            "int h(void) { switch (1) { case 1: ({ break; 0; }); case 2: x; } return 0; }",
+            false,
+        ),
+        (
+            "",
+            "int h(void) { switch (1) { case 1: break; case 2: ({ label: 0; }); x; } return 0; }",
+            false,
+        ),
+        (
+            "",
+            "int h(void) { switch (1) { case 1: break; case 2: { int v = ({ lab: 0; }); x; } } \
+             return 0; }",
+            false,
+        ),
+        (
+            "",
+            "[[noreturn]] void d2(void); __typeof__(d2) *p; int h(void) { p(); x; return 0; }",
+            false,
+        ),
+        (
+            "",
+            "struct __jmp_buf_tag; void longjmp(struct __jmp_buf_tag *, int); struct \
+             __jmp_buf_tag *jp; int h(void) { longjmp(jp, 1); x; return 0; }",
+            false,
+        ),
+        (
+            "",
+            "typedef long jmp_buf[8]; void longjmp(long *, int); int h(void) { longjmp(0, 1); x; \
+             return 0; }",
+            true,
+        ),
+        (
+            "",
+            "int h(void) { _Complex double z = 1; die(), (z * z); x; return 0; }",
+            false,
+        ),
+        (
+            "",
+            "int c; int h(void) { die(), sizeof(c ? 1 : 0); x; return 0; }",
+            true,
+        ),
+        (NP, "NP a[1]; int h(void) { a[0](); x; return 0; }", true),
+        (
+            NP,
+            "NP getnp(void); int h(void) { getnp()(); x; return 0; }",
+            true,
+        ),
+        (
+            NP,
+            "NP p1, p2; int c; int h(void) { (c ? p1 : p2)(); x; return 0; }",
+            true,
+        ),
+        (
+            NP,
+            "NP p1; void (*p2)(void); int c; int h(void) { (c ? p1 : p2)(); x; return 0; }",
+            false,
+        ),
+        (
+            "",
+            "struct U { struct { void (*f)(void) __attribute__((noreturn)); }; } u; int h(void) { \
+             u.f(); x; return 0; }",
+            true,
+        ),
+        (
+            "",
+            "int h(void) { switch ((0.0, 1)) { case 1: break; default: x; } return 0; }",
+            true,
+        ),
+        (
+            "",
+            "int h(void) { switch (({ 1; })) { case 1: break; default: x; } return 0; }",
+            true,
+        ),
+        (
+            "",
+            "int c; int h(void) { switch (&c != 0) { case 1: break; default: x; } return 0; }",
+            true,
+        ),
+        (
+            "",
+            "int h(void) { switch (1) { case 1: break; int v; case 2: x; } return 0; }",
+            true,
+        ),
+        (
+            "",
+            "int c; int h(void) { if (__builtin_constant_p(c)) x; return 0; }",
+            false,
+        ),
+        (
+            "",
+            "int h(void) { if (__builtin_constant_p(1) - 1) x; return 0; }",
+            true,
+        ),
+        (
+            "",
+            "int h(void) { const int k = 0; if (k) x; return 0; }",
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{prefix}{suffix}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {suffix}"
+            );
+        }
+    }
+}
+
+/// The forms the second #113 review found counted differently from Clang,
+/// pinned against Clang 23 on both Windows ABIs at -O0: a `default` before
+/// a matching case whose collection fails skips nothing, a pointer
+/// condition does not fold, the join rules read the expression's own type,
+/// a `void` operand is no constant, a decrement of an atomic `_Bool` loops,
+/// a run-time memory order switches unless a library call copies the
+/// object, and a volatile read through a pointer is a side effect. From
+/// the #104 review: string literal elements, `const` aggregates and
+/// `__builtin_strlen` fold (`strlen` only with the builtin's type, which
+/// `unsigned long` is not on LLP64). A variably modified declaration after
+/// a jump resumes nothing, which keeps the import where Clang never reaches
+/// the declaration, as under a union read bcc does not fold. A statement
+/// expression in an operand a folded condition skips skips nothing after
+/// its expression statement.
+#[test]
+fn second_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
+                            int x; __attribute__((noreturn)) void die(void); int c; int \
+                            tick(void); ";
+    for (suffix, imported) in [
+        (
+            "int h(void) { switch (2) { case 1: x; break; default: tick(); break; case 2: if (c) \
+             break; tick(); break; } return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch (3) { case 1: x; break; default: tick(); break; case 2: tick(); \
+             break; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (2) { case 1: x; break; default: break; case 2: break; } return \
+             0; }",
+            true,
+        ),
+        ("int h(void) { if ((void *)0) x; return 0; }", false),
+        (
+            "int h(void) { int *const p = 0; if (p) x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { die(), ((void *)0 && c); x; return 0; }",
+            false,
+        ),
+        ("int h(void) { if ((void *)0 != 0) x; return 0; }", true),
+        (
+            "_Complex double z; int h(void) { die(), (1 ? z : z); x; return 0; }",
+            false,
+        ),
+        (
+            "struct s { int a; } s1, s2; int h(void) { die(), (1 ? s1 : s2); x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { die(), (c ? (void)0 : (void)0); x; return 0; }",
+            false,
+        ),
+        (
+            "_Atomic _Bool b; int h(void) { die(), b--; x; return 0; }",
+            false,
+        ),
+        (
+            "_Atomic _Bool b; int h(void) { die(), b++; x; return 0; }",
+            true,
+        ),
+        (
+            "int e; int h(void) { die(), __atomic_load_n(&e, c); x; return 0; }",
+            false,
+        ),
+        (
+            "int e; int h(void) { const int o = 5; die(), __atomic_load_n(&e, o); x; return 0; }",
+            true,
+        ),
+        (
+            "struct b { char a[24]; } b1, b2; int h(void) { die(), __atomic_load(&b1, &b2, c); x; \
+             return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { die(), __atomic_thread_fence(c); x; return 0; }",
+            false,
+        ),
+        (
+            "volatile int *vp; int h(void) { if (__builtin_constant_p(*vp)) x; return 0; }",
+            true,
+        ),
+        (
+            "struct v { volatile int m; } *vq; int h(void) { if (__builtin_constant_p(vq->m)) x; \
+             return 0; }",
+            true,
+        ),
+        (
+            "volatile int vx; int h(void) { if (__builtin_constant_p(&vx)) x; return 0; }",
+            false,
+        ),
+        ("int h(void) { if (\"ab\"[1] - 'b') x; return 0; }", true),
+        (
+            "int h(void) { static const int a[2] = {0, 1}; if (a[0]) x; return 0; }",
+            true,
+        ),
+        (
+            "struct p { int x, y; }; int h(void) { const struct p q = {0, 1}; if (q.x) x; return \
+             0; }",
+            true,
+        ),
+        (
+            "int h(void) { if (__builtin_strlen(\"abc\") == 0) x; return 0; }",
+            true,
+        ),
+        (
+            "unsigned long strlen(const char *); int h(void) { if (strlen(\"abc\") == 0) x; \
+             return 0; }",
+            false,
+        ),
+        ("int h(int n) { return 0; if (c) { int v[n]; x; } }", true),
+        ("int h(int n) { die(); int v[n]; x; return 0; }", false),
+        ("int h(void) { (void)(0 && ({ 5; })); x; return 0; }", false),
+        ("int h(void) { (void)(1 || ({ 5; })); x; return 0; }", false),
+        (
+            "int h(void) { (void)(0 ? ({ 5; }) : 0); x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { (void)(1 ? 0 : ({ 5; })); x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { (void)(0 ? ({ return 99; 0; }) : 0); x; return 0; }",
+            false,
+        ),
+        ("int h(void) { ({ return 0; 1; }); x; return 0; }", true),
+        (
+            "static const union { int i; float f; } u = {1}; int h(int n) { if (u.i) {} else { \
+             return 0; int a[n]; x; } return 0; }",
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{suffix}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {suffix}"
+            );
+        }
+    }
+    // `long double` is `double` on MSVC, which `atomicrmw` adds to; MinGW's
+    // x87 `long double` loops.
+    let source =
+        format!("{IMPORTED}_Atomic long double ld; int h(void) {{ die(), ld++; x; return 0; }}");
+    assert_eq!(
+        facts(&source, Target::WindowsMsvc, "x").0,
+        Some(DllStorage::Import)
+    );
+    assert_eq!(facts(&source, Target::WindowsGnu, "x").0, None);
+}
+
 /// Generated-reference filtering does not change semantic uses: an internal
 /// function still needs a definition even after an infinite loop.
 /// C99: §6.9p3, p. 140; PDF p. 152.
@@ -817,5 +1182,392 @@ fn aliases_and_initializers_root_generated_dll_references() {
         let source =
             format!("{prefix} __attribute__(({attribute})) inline void h(void){{sink=x;}}");
         assert_eq!(facts(&source, Target::WindowsMsvc, "x").0, None, "{source}");
+    }
+}
+
+/// The forms PR #117's first review found, against Clang 23 on both
+/// Windows ABIs at -O0: a weak `const` object's value is never read, and a
+/// `noreturn` type named by a typedef belongs below the declarator's
+/// function derivations, so these references are emitted and drop the
+/// import. Lowering still emits the code after a call that does not
+/// return and a folded switch's unselected statements, which Clang skips;
+/// when every reference is there, as in a static function only such code
+/// calls, they keep the import they were written with, or the object they
+/// name would not link.
+#[test]
+fn first_pr_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    for (source, imported) in [
+        (
+            "const int wk __attribute__((weak)) = 1; int h(void) { switch (wk) { case 1: break; \
+             default: return x; } return 0; }",
+            false,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 0; int h(void) { if (wk) return x; return 0; }",
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*gp)(void); int h(void) { \
+             gp(); return x; }",
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int h(NP p) { p(); return x; }",
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+    for source in [
+        "__declspec(dllimport) extern int x; __attribute__((noreturn)) void die(void); int \
+         h(void) { die(); return x; } extern int x;",
+        "__declspec(dllimport) extern int x; int h(void) { switch (0) { case 1: return x; \
+         default: break; } return 0; } extern int x;",
+        "__declspec(dllimport) extern int x; int h(void) { if (\"a\"[0] == 98) return x; return \
+         0; } extern int x;",
+        "__declspec(dllimport) extern int x; __attribute__((noreturn)) void die(void); static int \
+         s(void) { return x; } int h(void) { die(); return s(); } extern int x;",
+    ] {
+        for target in WINDOWS {
+            assert_eq!(
+                facts(source, target, "x").0,
+                Some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}
+
+/// The forms PR #117's second review found, against Clang 23 on both
+/// Windows ABIs at -O0. The address of a `dllimport` object is no constant
+/// result, a weak entity by `#pragma weak`, `weak_import` or a later
+/// declaration does not fold in a body Clang emits after the unit, though a
+/// `weak` attribute after the entity's definition, which Clang drops, does
+/// not make it weak; the
+/// Microsoft ABI emits a call's arguments from the last, so a join in an
+/// earlier one follows a call that does not return in a later one: the
+/// reference is emitted and drops the import. Where Clang references
+/// nothing but lowering still emits code, any reference in a body lowering
+/// emits that names the import keeps it, however later references were
+/// written, and one in a body nothing emits decides nothing.
+#[test]
+fn second_pr_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    const SKIPPED: &str = "__declspec(dllimport) extern int x; __attribute__((noreturn)) void \
+                           die(void); int h(void) { die(); return x; } extern int x; ";
+    for (source, msvc, mingw) in [
+        (
+            "__declspec(dllimport) extern int di; int h(void) { int *const dp = &di; if (!dp) \
+             return x; return 0; }",
+            false,
+            false,
+        ),
+        (
+            "__declspec(dllimport) extern int d1, d2; void sinkp(int *); \
+             __attribute__((noreturn)) void die(void); int c; int h(void) { die(), sinkp(c ? &d1 \
+             : &d2); return x; }",
+            false,
+            false,
+        ),
+        (
+            "int sink2(int, int); int tick(void); int c; __attribute__((noreturn)) void \
+             die(void); int h(void) { sink2(c && tick(), (die(), 0)); return x; }",
+            false,
+            true,
+        ),
+        (
+            "int sink3(int, int, int); int tick(void); int c; __attribute__((noreturn)) void \
+             die(void); int h(void) { sink3(c && tick(), 0, (die(), 0)); return x; }",
+            false,
+            true,
+        ),
+        (
+            "void wl(void); static int helper(void) { if (!wl) return x; return 0; } void \
+             wl(void) __attribute__((weak)); int probe(void) { return helper(); }",
+            false,
+            false,
+        ),
+        (
+            "void wf(void);\n#pragma weak wf\nint h(void) { if (!wf) return x; return 0; }",
+            false,
+            false,
+        ),
+        (
+            "void wi(void) __attribute__((weak_import)); int h(void) { if (!wi) return x; return \
+             0; }",
+            false,
+            false,
+        ),
+        (
+            "const int k = 1; int h(void) { if (!k) return x; return 0; } extern const int k \
+             __attribute__((weak));",
+            true,
+            true,
+        ),
+        (
+            "void wd(void) {} int h(void) { if (!wd) return x; return 0; } void wd(void) \
+             __attribute__((weak));",
+            true,
+            true,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for (target, imported) in [(Target::WindowsMsvc, msvc), (Target::WindowsGnu, mingw)] {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+    for (prefix, rest, name, imported) in [
+        (
+            SKIPPED,
+            "int k(void) { if (0) return x; return 0; }",
+            "x",
+            true,
+        ),
+        (SKIPPED, "inline int k(void) { return x; }", "x", true),
+        (SKIPPED, "static int unused(void) { return x; }", "x", true),
+        (SKIPPED, "int k(void) { die(); return x; }", "x", true),
+        (
+            "__declspec(dllimport) extern int x; int h(void) { switch (2) { case 1: return x; \
+             case 2: break; } return 0; } extern int x; ",
+            "int k(void) { if (0) return x; return 0; }",
+            "x",
+            true,
+        ),
+        (
+            "void fn(void); __attribute__((noreturn)) void die(void); int h(void) { die(); fn(); \
+             return 0; } __declspec(dllimport) void fn(void); ",
+            "static void u(void) { fn(); }",
+            "fn",
+            false,
+        ),
+    ] {
+        let source = format!("{prefix}{rest}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, name).0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}
+
+/// The forms PR #117's third review found decided differently from Clang
+/// 23 (`nm -u` on both Windows targets): a `return x` after the redeclaration
+/// without `dllimport` keeps the import only when it is skipped. A weak
+/// name applies to a body Clang emits where it is defined only from the
+/// declaration or `#pragma weak` before its end, a block-scope one
+/// included, and to a deferred body wherever it is; `sizeof` reads only
+/// its operand's type. A literal is not distinct from an object of unknown
+/// size, nor from an object's start when one past its end;
+/// `__builtin_constant_p` is not 1 for a `void` operand or a literal's
+/// element past its first. A block-scope static's initializer is emitted
+/// where Clang visits its declaration, even after a call that does not
+/// return. A typedef that may be variably modified counts wherever its
+/// name is used.
+#[test]
+fn third_pr_review_forms_fix_generated_import_state() {
+    const IMPORTED: &str = "__declspec(dllimport) extern int x; int g(void) { return x; } extern \
+                            int x; __attribute__((noreturn)) void die(void); int c; ";
+    for (source, imported) in [
+        (
+            "const int k = 0; int h(void) { if (k) return x; return 0; }\n#pragma weak k\n",
+            true,
+        ),
+        (
+            "const int k = 0; static int h(void) { if (k) return x; return 0; } int p(void) { \
+             return h(); }\n#pragma weak k\n",
+            false,
+        ),
+        (
+            "extern int w; static int h(void) { if (!&w) return x; return 0; } int p(void) { \
+             return h(); } int u(void) { extern int w __attribute__((weak)); return 0; }",
+            false,
+        ),
+        (
+            "extern int w; int h(void) { if (!&w) return x; return 0; } int u(void) { extern int \
+             w __attribute__((weak)); return 0; }",
+            true,
+        ),
+        (
+            "extern int w; int h(void) { if (!&w) return x; extern int w __attribute__((weak)); \
+             return 0; }",
+            false,
+        ),
+        (
+            "extern int w __attribute__((weak)); int h(void) { if (sizeof(w) == 4) return 0; \
+             return x; }",
+            true,
+        ),
+        (
+            "int h(void) { if (sizeof(__builtin_constant_p(c)) == 4) return 0; return x; }",
+            true,
+        ),
+        (
+            "extern char ua[]; int h(void) { if (ua == \"a\") return x; return 0; }",
+            false,
+        ),
+        (
+            "char oc[4]; int h(void) { if (\"abc\" + 4 == oc) return x; return 0; }",
+            false,
+        ),
+        (
+            "char oc[4]; int h(void) { if (\"abc\" == oc) return x; return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { if (!__builtin_constant_p((void)0)) return x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { if (!__builtin_constant_p((int *)(\"ab\" + 1))) return x; return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { if (!__builtin_constant_p((int *)\"ab\")) return x; return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { die(); static int *p = &x; return *p; }",
+            false,
+        ),
+        (
+            "int h(void) { return 0; { static int *p = &x; return *p; } }",
+            false,
+        ),
+        (
+            "int h(void) { die(); if (c) { static int *p = &x; return *p; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { if (0) { static int *p = &x; return *p; } return 0; }",
+            true,
+        ),
+        (
+            "int h(void) { switch (1) { case 1: break; { static int *p = &x; return *p; } } \
+             return 0; }",
+            true,
+        ),
+        (
+            "typedef int T; int h(void) { die(); typedef int T[c]; die(); { T v; (void)v; return \
+             x; } }",
+            false,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fourth_pr_review_forms_preserve_generated_import_state() {
+    const IMPORTED: &str =
+        "__declspec(dllimport) extern int x; int g(void) { return x; } extern int x; ";
+    for (source, imported) in [
+        (
+            "const float k=16777217.0; int h(void) { if ((int)k==16777216) return x; return 0; }",
+            false,
+        ),
+        (
+            "const float k[1]={16777217.0}; int h(void) { if ((int)k[0]==16777216) return x; \
+             return 0; }",
+            false,
+        ),
+        (
+            "const int k=1; struct S { int a; }; int h(void) { (void)(k ? (struct S){0} : \
+             (x,(struct S){0})); return 0; }",
+            false,
+        ),
+        (
+            "const int k=1; int h(void) { (void)(k ? 1.0i : (x,2.0i)); return 0; }",
+            false,
+        ),
+        (
+            "int h(void) { switch(1) { case 1: break; case sizeof(({ L:;1; })): return x; } \
+             return 0; }",
+            false,
+        ),
+        (
+            "const int k=0; static __attribute__((used)) int h(void) { if(k) return x; return 0; \
+             } int p(void) { return h(); }\n#pragma weak k\n",
+            true,
+        ),
+        (
+            "const int k=0; static int h(void) { if(k) return x; return 0; } int p(void) { return \
+             h(); }\n#pragma weak k\n",
+            false,
+        ),
+    ] {
+        let source = format!("{IMPORTED}{source}");
+        for target in WINDOWS {
+            assert_eq!(
+                facts(&source, target, "x").0,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn final_review_conditional_conversions_preserve_imports_in_iso_c99() {
+    for target in WINDOWS {
+        for (condition, imported) in [
+            ("(int)(k ? 16777217 : 0.0f)==16777216", false),
+            ("(int)(k ? 16777217 : 0.0f)==16777217", true),
+            (
+                "(long long)(k ? 9007199254740993LL : 0.0)==9007199254740992LL",
+                false,
+            ),
+            (
+                "(long long)(k ? 9007199254740993LL : 0.0)==9007199254740993LL",
+                true,
+            ),
+        ] {
+            let source = format!(
+                "__declspec(dllimport) extern int x; int g(void) {{ return x; }} extern int x; \
+                 const int k=1; int h(void) {{ if ({condition}) return x; return 0; }}"
+            );
+            let mut actual = None;
+            with_configuration(
+                &source,
+                microsoft(target).with_gnu_extensions(false),
+                |context, unit| {
+                    let binding = unit
+                        .bindings
+                        .iter()
+                        .rposition(|binding| context.string_cache.at(binding.name.name) == "x")
+                        .unwrap();
+                    actual = unit
+                        .entity_attributes(binding)
+                        .and_then(|attributes| attributes.dll);
+                },
+            );
+            assert_eq!(
+                actual,
+                imported.then_some(DllStorage::Import),
+                "{target:?}: {condition}"
+            );
+        }
     }
 }

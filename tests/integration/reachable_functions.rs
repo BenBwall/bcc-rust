@@ -765,6 +765,28 @@ int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
                  3 * h(x - 1) : 1; } inline __attribute__((always_inline)) int h(int x) { return \
                  x ? 4 * f(x - 1) : 1; } int main(void) { if (0) h(0); return f(6) % 256; }",
             ),
+            // Nor does a call in a folded switch's unselected arm, or after
+            // a call that does not return (#113).
+            (
+                "cycle-3-switch-arm",
+                "inline __attribute__((always_inline)) int f(int); inline \
+                 __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) \
+                 int h(int); inline __attribute__((always_inline)) int f(int x) { return x ? 2 * \
+                 g(x - 1) : 1; } inline __attribute__((always_inline)) int g(int x) { return x ? \
+                 3 * h(x - 1) : 1; } inline __attribute__((always_inline)) int h(int x) { return \
+                 x ? 4 * f(x - 1) : 1; } int probe(void) { switch (0) { case 1: h(0); break; \
+                 default: break; } return 0; } int main(void) { return f(6) % 256; }",
+            ),
+            (
+                "cycle-3-noreturn-call",
+                "inline __attribute__((always_inline)) int f(int); inline \
+                 __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) \
+                 int h(int); inline __attribute__((always_inline)) int f(int x) { return x ? 2 * \
+                 g(x - 1) : 1; } inline __attribute__((always_inline)) int g(int x) { return x ? \
+                 3 * h(x - 1) : 1; } inline __attribute__((always_inline)) int h(int x) { return \
+                 x ? 4 * f(x - 1) : 1; } __attribute__((noreturn)) void die(void) { for (;;) {} } \
+                 int probe(void) { die(); h(0); return 0; } int main(void) { return f(6) % 256; }",
+            ),
             // LLVM expands dynamic allocation (#109 review).
             (
                 "vla",

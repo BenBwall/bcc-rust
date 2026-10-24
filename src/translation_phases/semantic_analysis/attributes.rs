@@ -410,6 +410,58 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
+/// Whether `specifier` writes `noreturn` as a function type attribute (in
+/// GNU, `gnu::` or `__declspec` spelling) and whether as a declaration
+/// attribute (standard `[[noreturn]]` or `[[_Noreturn]]`), as Clang tells
+/// its `NoReturnAttr` type attribute from `CXX11NoReturnAttr`.
+/// C23: §6.7.13.7 paragraphs 1-5, p. 147; PDF p. 160.
+/// GNU extension: GCC manual, "Common Function Attributes", `noreturn`.
+pub(super) fn noreturn_spelling(
+    specifier: &AttributeSpecifier<'_>,
+    context: &crate::translation_phases::Context<'_>,
+) -> (bool, bool) {
+    let mut spelling = (false, false);
+    for attribute in written::written(specifier, context) {
+        if !matches!(attribute.name, "noreturn" | "Noreturn")
+            || catalog::rule(
+                specifier.syntax,
+                attribute.namespace,
+                attribute.name,
+                context.configuration.target(),
+            )
+            .is_none()
+        {
+            continue;
+        }
+        if specifier.syntax == AttributeSyntax::Standard && attribute.namespace.is_none() {
+            spelling.1 = true;
+        } else {
+            spelling.0 = true;
+        }
+    }
+    spelling
+}
+
+/// Whether `specifier` writes `weak` or Clang's `weak_import`, which make a
+/// declared function or object weak for Clang's evaluator
+/// (`ValueDecl::isWeak`), although bcc drops `weak_import`.
+/// GNU extension: GCC manual, "Common Function Attributes", `weak`.
+pub(super) fn weak_spelling(
+    specifier: &AttributeSpecifier<'_>,
+    context: &crate::translation_phases::Context<'_>,
+) -> bool {
+    written::written(specifier, context).any(|attribute| {
+        matches!(attribute.name, "weak" | "weak_import")
+            && catalog::rule(
+                specifier.syntax,
+                attribute.namespace,
+                attribute.name,
+                context.configuration.target(),
+            )
+            .is_some()
+    })
+}
+
 /// Whether a declaration's specifiers or declarator carry any attribute
 /// list, so that its end must be marked for a possible cleanup region.
 pub(super) fn written_on(

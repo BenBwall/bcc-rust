@@ -940,7 +940,10 @@ consistent with the
 translation order for semantic record layout. Numeric caps, reset, nested
 push/pop, identifiers, optional pop alignment and `show` are supported on all
 targets. Malformed directives warn and preserve state; unknown pragmas retain
-the existing ignore policy. Packing is implementation-defined pragma behavior
+the existing ignore policy. `#pragma weak name` (and `name = target`) does not
+make `name` weak in emitted code, but semantic analysis keeps the name, so the
+values Clang's evaluator would not fold for a weak entity stay unfolded where
+the dead-code model reads them (`semantic-analysis.md`). Packing is implementation-defined pragma behavior
 under C99 §6.10.6p1, not a GNU/MSVC language-mode gate. Semantic analysis owns
 the cap, bit-field placement and explicit-alignment interaction; see
 [the retained layout contract](semantic-analysis.md#storage-natural-and-member-place-alignment),
@@ -1496,9 +1499,9 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
-| Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
+| Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
-| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and target-specific names on other targets |
 
 GNU `error` and `warning` require one unevaluated string argument and apply
@@ -1540,9 +1543,14 @@ an evaluated use (a constant `sizeof` operand is no use), and one dropping
 `dllimport` drops it. Code generation exports what the declarations end
 exporting (an `/EXPORT` or `-export` linker directive) and imports, through
 `__imp_name`, what the unit's last evaluated reference in emitted code named
-imported; `dllexport` also retains MSVC inline bodies as described above.
-`noreturn`, `nothrow`, `deprecated`,
-`restrict`, `noalias`, `novtable`, `uuid` and similar
+imported, or, when no emitted code references it, what any evaluated reference
+in a body lowering emits named imported: lowering still emits some code Clang
+skips, such as the code after a call that does not return, and a reference
+there links only through the import it was written with. `dllexport` also retains MSVC inline
+bodies as described above.
+`noreturn` ends the code Clang emits after a call in an expression statement,
+which decides that last reference (`semantic-analysis.md`); `nothrow`,
+`deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
 declaration annotations are accepted. Space-separated modifiers, as in
 `__declspec(selectany allocate("s"))`, are one list. Other names, such as the
 GNU `__declspec(weak)`, warn as Clang's unsupported `__declspec` attributes.

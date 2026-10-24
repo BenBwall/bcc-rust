@@ -30,6 +30,7 @@ pub(crate) mod packed;
 pub(crate) use collections::shared;
 pub(crate) use collections::{
     dedup_arena,
+    interval_cover,
     region_bit_set,
     region_vec,
     string_cache,

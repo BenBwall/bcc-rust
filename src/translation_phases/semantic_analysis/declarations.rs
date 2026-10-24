@@ -1242,6 +1242,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && let TypeKind::Tag(inner) = self.types.nodes[member.ty.index]
             {
                 for field in self.types.tags[inner].fields.get() {
+                    self.inherit_field_noreturn(inner, id, field.name.name);
                     if let Some(&written) = self
                         .function_extensions
                         .written_fields

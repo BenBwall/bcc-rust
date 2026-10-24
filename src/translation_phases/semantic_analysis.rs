@@ -24,7 +24,9 @@
 //!   `declarations.rs` constructs types and bindings; `expressions.rs` and
 //!   `expressions/` type expressions and conversions; `initializers.rs` walks
 //!   subobjects; `statements.rs` checks jumps and returns; `functions.rs`
-//!   checks definitions and completes the translation unit.
+//!   checks definitions and completes the translation unit; `emission.rs`
+//!   models which code Clang's code generation skips in folded switches and
+//!   after calls that do not return.
 //! - Retained facts: `facts/` records lexical/VM/block-expression regions and
 //!   resolved destinations on the same work stack, then finalizes compact
 //!   transitions using iterative heavy-light indexing. It also retains
@@ -63,6 +65,7 @@ mod state;
 
 // Syntax traversal and constraints
 mod declarations;
+mod emission;
 mod expressions;
 mod facts;
 mod functions;
@@ -219,8 +222,11 @@ pub(crate) fn analyze<'tu>(
 ) -> SemanticTranslationUnit<'tu> {
     let scratch = Bump::new();
     let mut analyzer = Analyzer::new(context, &scratch);
-    for &root in unit.external_declarations() {
+    analyzer.record_weak_names(unit.external_declarations(), unit.root_ends());
+    for (index, &root) in unit.external_declarations().iter().enumerate() {
         analyzer.assert_balanced();
+        analyzer.functions.emission.root_end =
+            unit.root_ends().get(index).copied().unwrap_or(usize::MAX);
         analyzer.work.push(Work::Root(root));
         while let Some(work) = analyzer.work.pop() {
             analyzer.step(work);
@@ -286,6 +292,8 @@ pub(crate) fn analyze<'tu>(
         types: analyzer.types.finish(),
         bindings: analyzer.bindings.leak(),
         definitions: analyzer.definitions.leak(),
+        external_redeclarations: unit_arena
+            .alloc_slice_copy(&analyzer.functions.external_redeclarations),
         functions: analyzer.function_records.leak(),
         scopes: analyzer.scopes.leak(),
         type_names,
@@ -310,6 +318,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                   concern modules."
     )]
     fn step(&mut self, work: Work<'tu, 's>) {
+        self.functions.emission.work_popped(self.work.len());
         match work {
             | Work::Root(root) => match root {
                 | ExternalDeclaration::Declaration(d)
@@ -520,7 +529,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::Statement(statement, new_scope) => self.statement(statement, new_scope),
             | Work::Expression(expression) => self.expression(expression),
-            | Work::ExpressionDone(e) => self.expression_done(e),
+            | Work::ExpressionDone(e) => {
+                self.expression_done(e);
+                // The blocks `e` creates depend on its type.
+                self.expression_emitted(e);
+            },
             | Work::ValueExpression(e) => {
                 let info = self.expression_info(e);
                 _ = self.converted(info);
@@ -533,6 +546,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.correspondence.initializer(declarator, initializer);
                 self.work
                     .push(Work::RestoreReferenceOwner(self.functions.initializer));
+                self.work.push(Work::RestoreInitializerValue(
+                    self.functions.initializer_value,
+                ));
+                self.functions.initializer_value = None;
                 if let Some(entry) = declarator
                     .identifier()
                     .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
@@ -543,9 +560,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.work.push(Work::Initializer(initializer));
             },
-            | Work::InitializeDone(binding, initializer) =>
-                self.initialize_declaration(binding, initializer),
+            | Work::InitializeDone(binding, initializer) => {
+                self.record_constant_initializer(binding, initializer);
+                self.initialize_declaration(binding, initializer);
+            },
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
+            | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
             | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
             | Work::Condition(slot, integer) => self.check_condition(slot, integer),
             | Work::RequireConstant(e, assertion, before) => {
@@ -585,8 +605,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Initializer(initializer) => {
                 self.taint(initializer.recovered);
                 match initializer.kind {
-                    | InitializerType::AssignmentExpression(e) =>
-                        self.work.push(Work::Expression(e)),
+                    | InitializerType::AssignmentExpression(e) => {
+                        self.work.push(Work::RestoreInitializerValue(
+                            self.functions.initializer_value,
+                        ));
+                        _ = self
+                            .functions
+                            .initializer_value
+                            .get_or_insert(std::ptr::from_ref(e).addr());
+                        self.work.push(Work::Expression(e));
+                    },
                     | InitializerType::InitializerList(list) => {
                         for element in list.elements.iter().rev() {
                             self.work.push(Work::Initializer(element.initializer));
@@ -1062,6 +1090,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         _ = self.binding_alignments.insert(binding, alignment);
                     }
                     self.retain_written_parameter(binding, original, written_functions);
+                    self.record_parameter_noreturn(binding, p.declaration_specifiers, p.declarator);
                     if let Some(minimum) = array_minimum {
                         _ = self
                             .correspondence
@@ -1230,6 +1259,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             .written_fields
                             .insert((tag, name.name), written);
                     }
+                    self.record_field_noreturn(tag, name.name, d, member, ty);
                 }
                 self.declaration_attributes(
                     attributes::Subject::Member,
@@ -1662,6 +1692,7 @@ struct DeclaredAlignment<'tu> {
 enum Work<'tu, 's> {
     RestoreReferenceFunction(Option<usize>),
     RestoreReferenceOwner(Option<usize>),
+    RestoreInitializerValue(Option<usize>),
     DeclaredAlignment(DeclaredAlignment<'tu>),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),

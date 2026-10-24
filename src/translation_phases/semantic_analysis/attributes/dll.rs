@@ -341,12 +341,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Notes an evaluated reference to `binding` in code that lowering
+    /// emits but Clang may skip, and whether it named an imported
+    /// declaration: any such import keeps the entity imported until a
+    /// reference in emitted code decides ([`Self::dll_referenced`]).
+    pub(in crate::translation_phases::semantic_analysis) fn dll_lowered(
+        &mut self,
+        binding: usize,
+        import: bool,
+    ) {
+        let entity = self.entity_of(binding);
+        if let Some(state) = self.attributes.dll.get_mut(&entity) {
+            state.import = Some(state.import.unwrap_or(false) || import);
+        }
+    }
+
     /// Whether GNU `used` retains the internal entity `entity`'s definition.
     pub(in crate::translation_phases::semantic_analysis) fn retained_by_used(
-        &mut self,
+        &self,
         entity: EntityId,
     ) -> bool {
-        self.attributes.entity(entity).used
+        self.attributes
+            .entities
+            .get(&entity)
+            .is_some_and(|attributes| attributes.used)
     }
 
     /// The storage of the latest declaration of `binding`'s entity.

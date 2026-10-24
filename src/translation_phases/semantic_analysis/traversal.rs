@@ -78,24 +78,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => None,
                 };
                 if live.is_some() {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                            self.functions.unvisited,
+                        )));
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                         self.functions.dead,
                     )));
                 }
                 self.work.push(Work::Expression(right_expression));
                 if let Some(live) = live {
-                    self.dead_arm(left_expression, live);
+                    self.dead_arm(left_expression, live, right_expression);
                 }
                 self.work.push(Work::Expression(left_expression));
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
-                    self.functions.dead,
-                )));
+                // The result type is known only after both arms. Clang's
+                // complex and aggregate emitters preserve both arms even
+                // for a folded condition; scalar emission skips one.
+                let outer = self.skipped_state();
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, 2, outer,
+                    )));
                 self.work.push(Work::Expression(c.else_expression));
-                self.dead_arm(c.condition_expression, false);
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, 1, outer,
+                    )));
                 self.work.push(Work::Expression(c.then_expression));
-                self.dead_arm(c.condition_expression, true);
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::ConditionalMark(
+                        e, 0, outer,
+                    )));
                 self.work.push(Work::Expression(c.condition_expression));
             },
             | E::Cast {
@@ -140,13 +155,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::StatementExpression(s) => {
                 // Code generation resumes after the statement expression
                 // even when its body jumps away.
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
-                    self.functions.dead,
-                )));
+                self.begin_statement_expression(s);
                 self.enter_statement_expression(e.source_vectors);
                 self.work.push(Work::Statement(s, true));
             },
             | E::Generic(g) => {
+                // Code generation continues after the selection in the
+                // block its selected association ends in, which the
+                // selection restores (`skip_unselected_generic`).
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
+                        self.functions.emission.orphan,
+                    )));
                 // Marks around each operand let the selection skip the
                 // references code generation does not emit.
                 for association in g.associations.iter().rev() {
@@ -167,6 +187,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | E::Countof(operand) => self.syntax_operand(operand),
             | E::Builtin(b) => {
+                // Code generation emits only the selected operand of
+                // `__builtin_choose_expr`, which is known once both are
+                // analyzed; a call in either that does not return leaves
+                // the code after it emitted, as without the model, and a
+                // join in either is kept.
+                if b.keyword
+                    == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr
+                {
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreUnjoinedOrphan(
+                            self.functions.emission.orphan,
+                        )));
+                }
                 for &member in b.members.iter().rev() {
                     if let super::super::parsing::OffsetMember::Index(index) = member {
                         self.work.push(Work::Expression(index));
@@ -194,9 +227,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 s.kind,
                 S::If { .. } | S::Switch { .. } | S::While { .. } | S::DoWhile { .. } | S::For(_)
             )
-            && self.statement_contains_label(s)
+            && self.statement_contains_label(s, !self.case_labels_resume())
         {
             self.functions.dead = false;
+        }
+        // Code generation skips such a statement whole, unlike a block or a
+        // declaration, whose static objects it still emits. An expression
+        // statement decides this once a statement expression's value
+        // statement has been resumed ([`Self::begin_expression_statement`]).
+        if self.functions.dead
+            && !self.functions.unvisited
+            && matches!(
+                s.kind,
+                S::If { .. }
+                    | S::Switch { .. }
+                    | S::While { .. }
+                    | S::DoWhile { .. }
+                    | S::For(_)
+                    | S::Return(_)
+                    | S::ComputedGoto(_)
+                    | S::Asm(_)
+                    | S::MsAsm(_)
+                    | S::Seh(_)
+            )
+        {
+            self.work
+                .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(false)));
+            self.functions.unvisited = true;
         }
         let outside = self.control.current;
         _ = self.control.statement(s);
@@ -225,8 +282,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Label(name, child) => {
                 self.label(s, name, true);
-                // A label is a jump target: code generation emits from it.
+                // A label is a jump target: code generation emits from it,
+                // in a block that the code before it can branch to.
                 self.functions.dead = false;
+                self.functions.emission.orphan = None;
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Goto(name) => {
@@ -235,19 +294,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::LocalLabels(names) => self.local_labels(names),
             | S::Default(child) => {
-                self.functions.dead = self.functions.switch_dead;
+                self.functions.dead = self.switch_label_dead(s);
                 // The parser already diagnoses duplicate defaults, preserving
                 // its established diagnostic and recovery contract.
                 self.switch_label(s, s.source_vectors);
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Case(expression, child) => {
-                self.functions.dead = self.functions.switch_dead;
+                self.functions.dead = self.switch_label_dead(s);
                 self.work.push(Work::Statement(child, new_scope));
                 self.case_label(s, expression, None, s.source_vectors);
             },
             | S::CaseRange(c) => {
-                self.functions.dead = self.functions.switch_dead;
+                self.functions.dead = self.switch_label_dead(s);
                 self.work.push(Work::Statement(c.statement, new_scope));
                 self.case_label(s, c.lower, Some(c.upper), s.source_vectors);
             },
@@ -264,6 +323,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 // Code after the statement is skipped when both arms end
                 // skipped, a missing `else` being an empty arm.
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
+                    )));
                 self.work.push(Work::FunctionWork(FunctionWork::JoinArms));
                 let condition = super::statements::slot_expression(condition_expression);
                 if let Some(child) = else_statement {
@@ -292,12 +355,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
                 }
                 // The body is skipped up to its first case label, which
-                // resumes the code around the switch.
+                // resumes the code around the switch, as does its end
+                // unless a folded switch's selected statements end skipped.
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreSwitchDead(
                         self.functions.switch_dead,
                     )));
-                self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreUnvisited(
+                        self.functions.unvisited,
+                    )));
+                self.work.push(Work::FunctionWork(FunctionWork::SwitchEnd(
                     self.functions.dead,
                 )));
                 self.functions.switch_dead = self.functions.dead;
@@ -409,6 +477,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ),
             | S::Break => {
                 self.generated_break();
+                self.switch_break(s);
                 self.control_jump(s, false);
                 self.functions.dead = true;
             },
@@ -418,10 +487,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Expression(e) => {
                 if let ExpressionSlot::Parsed(expression) = e {
-                    self.work
-                        .push(Work::FunctionWork(FunctionWork::ExpressionStatementEnd(
-                            expression,
-                        )));
+                    self.begin_expression_statement(s, expression);
                 }
                 self.expression_slot(e);
             },
@@ -448,68 +514,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         live: bool,
         statement: Option<&'tu Statement<'tu>>,
     ) {
-        if statement.is_some_and(|statement| self.statement_contains_label(statement)) {
-            self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
-                self.functions.dead,
+        // Labels matter only once the condition folds the arm away, so
+        // they are looked for then.
+        self.work
+            .push(Work::FunctionWork(FunctionWork::DeadStatementArm(
+                condition,
+                live,
+                self.skipped_state(),
+                statement,
             )));
-        } else {
-            self.dead_arm(condition, live);
-        }
-    }
-
-    /// Finds labels by an explicit syntax stack. A nested function has its
-    /// own label namespace, and a nested switch owns its case labels.
-    /// C99: §6.8.1p2-4, pp. 131-132; PDF pp. 143-144.
-    fn statement_contains_label(&self, statement: &'tu Statement<'tu>) -> bool {
-        use crate::{
-            translation_phases::parsing::syntax::BlockItem,
-            util::bump::ArenaVec,
-        };
-        let mut work = ArenaVec::new_in(self.scratch);
-        work.push((statement, false));
-        while let Some((statement, ignore_cases)) = work.pop() {
-            match statement.kind {
-                | StatementType::Label(..) => return true,
-                | StatementType::Case(_, child) | StatementType::Default(child) => {
-                    if !ignore_cases {
-                        return true;
-                    }
-                    work.push((child, ignore_cases));
-                },
-                | StatementType::CaseRange(case) => {
-                    if !ignore_cases {
-                        return true;
-                    }
-                    work.push((case.statement, ignore_cases));
-                },
-                | StatementType::Compound { items } =>
-                    for item in items {
-                        if let BlockItem::Statement(child) = item {
-                            work.push((child, ignore_cases));
-                        }
-                    },
-                | StatementType::Attributed(attributed) =>
-                    work.push((attributed.statement, ignore_cases)),
-                | StatementType::If {
-                    then_statement,
-                    else_statement,
-                    ..
-                } => {
-                    work.push((then_statement, ignore_cases));
-                    if let Some(child) = else_statement {
-                        work.push((child, ignore_cases));
-                    }
-                },
-                | StatementType::Switch { body_statement, .. } => work.push((body_statement, true)),
-                | StatementType::While { body_statement, .. }
-                | StatementType::DoWhile { body_statement, .. } =>
-                    work.push((body_statement, ignore_cases)),
-                | StatementType::For(for_loop) =>
-                    work.push((for_loop.body_statement, ignore_cases)),
-                | _ => {},
-            }
-        }
-        false
     }
 
     pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {

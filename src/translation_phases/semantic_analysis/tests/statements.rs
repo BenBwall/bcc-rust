@@ -215,6 +215,54 @@ fn labels_and_loop_placement_are_function_local() {
     );
 }
 
+/// A folded switch's case labels are analyzed in source order and scope, so
+/// their diagnostics follow the statements before them and their types are
+/// visible only from their position on (#113 review, findings 1 and 10).
+/// C99: §6.2.1 paragraphs 4 and 7, pp. 29-30; PDF pp. 41-42.
+#[test]
+fn folded_switch_case_labels_keep_source_order_and_scope() {
+    let names = |source: &str, expected: &[&str]| {
+        with_source(source, |context, _| {
+            let errors = context.take_pending_errors();
+            let names = errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Semantic(error) => error.name,
+                    | _ => None,
+                })
+                .map(|name| context.string_cache.at(name))
+                .collect::<Vec<_>>();
+            assert_eq!(names, expected, "{source}");
+        });
+    };
+    names(
+        "int f(void) { switch (1) { case 1: bad = 0; break; case nope: break; } return 0; }",
+        &["bad", "nope"],
+    );
+    names(
+        "int f(void) { switch (1) { case x: y = 0; case z: w = 0; } return 0; }",
+        &["x", "y", "z", "w"],
+    );
+    // An enumerator a case label declares in one block is not visible in
+    // the next one.
+    assert!(
+        kinds(
+            "int main(void) { switch (1) { { case sizeof(enum { K = 1 }): break; } { case K: \
+             return 1; } } return 0; }"
+        )
+        .contains(&SemanticErrorKind::UndeclaredIdentifier)
+    );
+    clean(
+        "int main(void) { switch (1) { { case sizeof(enum { K = 1 }): break; } { case sizeof(enum \
+         { K = 2 }) + 1: break; } } return 0; }",
+    );
+    clean(
+        "struct T { char v[2]; }; int main(void) { int r = 0; switch (2) { { case sizeof(struct T \
+         { char v[4]; }): r = 4; break; } { case sizeof(struct T): r = 2; break; } } return r != \
+         2; }",
+    );
+}
+
 #[test]
 fn switch_promotion_conversion_and_ranges() {
     assert_eq!(
@@ -471,6 +519,34 @@ fn gnu_statement_forms_keep_their_scopes_and_targets() {
             assert!(context.take_pending_errors().iter().any(|e| matches!(e, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::BreakOutsideLoopOrSwitch)));
         },
     );
+}
+
+/// A case label in a statement expression of a type name, which the label
+/// walk of a folded switch does not record, is rejected after a tentative
+/// `default` as anywhere else (PR #117 review).
+#[test]
+fn folded_switch_rejects_a_case_label_in_a_type_name() {
+    for source in [
+        "void t(void) { switch (1) { default: break; case 2: { __typeof__(({ case 1: ; 0; })) x = \
+         0; (void)x; } } }",
+        "void t(void) { switch (1) { default: break; case 2: (void)sizeof(int[({ case 1: ; 1; \
+         })]); } }",
+    ] {
+        assert!(
+            kinds(source).contains(&SemanticErrorKind::SwitchIntoStatementExpression),
+            "{source}"
+        );
+    }
+}
+
+/// Whether a call does not return is decided without native recursion
+/// through nested `__typeof__` operands and casts (PR #117 review).
+#[test]
+fn noreturn_types_have_no_native_stack_limit() {
+    let operand = format!("{}p{}", "(__typeof__(".repeat(10_000), "))0".repeat(10_000));
+    clean(&format!(
+        "void (*p)(void); void t(void) {{ __typeof__({operand}) x = 0; (void)x; ({operand})(); }}"
+    ));
 }
 
 #[test]
@@ -765,4 +841,135 @@ fn unused_static_functions_follow_their_warning_group() {
             assert_eq!(unit.errors, usize::from(severity == ErrorSeverity::Error));
         });
     }
+}
+
+/// The emission model's queries stay linear on inputs that made them
+/// quadratic during PR #117's reviews: `strlen` of a long constant array,
+/// many reads of a large constant table, nested blocks that each begin
+/// with a call that does not return, and nested assignments and Microsoft
+/// call arguments after such a call, which code generation emits in
+/// another order.
+#[test]
+fn emission_model_queries_stay_linear() {
+    let length = 64_000;
+    let size = 20_000;
+    let depth = 16_000;
+    let mut table = format!("static const int t[{size}] = {{");
+    for index in 0..size {
+        write!(table, "{},", index % 7).unwrap();
+    }
+    table.push_str("}; int f(void) { int r = 0; ");
+    for index in 0..size {
+        write!(table, "if (t[{index}]) r++; ").unwrap();
+    }
+    table.push_str("return r; }");
+    let reverse = |count| {
+        let mut source = format!("static const int t[{count}] = {{");
+        for index in (0..count).rev() {
+            write!(source, "[{index}]={},", index % 7).unwrap();
+        }
+        source.push_str("}; int f(void) { if (t[1]) return 1; return 0; }");
+        source
+    };
+    let repeated_strlen = format!(
+        "static const char s[] = \"{}\"; int f(void) {{ int r=0; {} return r; }}",
+        "a".repeat(length),
+        "if (__builtin_strlen(s)) r++;".repeat(400)
+    );
+    let mut blocks = String::from("__attribute__((noreturn)) void die(void); void f(void) { ");
+    for index in 0..depth {
+        write!(blocks, "l{index}: {{ die(); ").unwrap();
+    }
+    blocks.push_str(&"}".repeat(depth + 1));
+    let assignment = format!(
+        "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} = 1; }}",
+        "a[".repeat(depth),
+        " = 1]".repeat(depth)
+    );
+    let compound = format!(
+        "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} += 1; }}",
+        "a[".repeat(depth),
+        " += 1]".repeat(depth)
+    );
+    let arguments = format!(
+        "void abort(void); int g(int, int); void f(void) {{ abort(), {}0{}; }}",
+        "g(".repeat(depth),
+        ", 0)".repeat(depth)
+    );
+    let msvc = crate::configuration::CompilerConfiguration::default()
+        .with_target(crate::target::Target::WindowsMsvc);
+    for (source, configuration, budget) in [
+        (
+            format!(
+                "static const char s[] = \"{}\"; int f(void) {{ if (__builtin_strlen(s) == 0) \
+                 return 1; return 0; }}",
+                "a".repeat(length)
+            ),
+            None,
+            15,
+        ),
+        (table, None, 15),
+        (reverse(size), None, 15),
+        // Keep the original budgets; this larger independent row rejects
+        // the quadratic painter after parsing cost is paid as well.
+        (reverse(600_000), None, 40),
+        (repeated_strlen.clone(), None, 15),
+        (
+            repeated_strlen.replace("char s[]", "char *const s"),
+            None,
+            15,
+        ),
+        (blocks, None, 15),
+        (assignment, None, 15),
+        (compound, None, 15),
+        (arguments, Some(msvc), 15),
+    ] {
+        let start = std::time::Instant::now();
+        match configuration {
+            | Some(configuration) => with_configuration(&source, configuration, |_, _| {}),
+            | None => with_source(&source, |_, _| {}),
+        }
+        assert!(
+            start.elapsed().as_secs() < budget,
+            "{:?} (limit {budget}s): {}",
+            start.elapsed(),
+            &source[..80]
+        );
+    }
+}
+
+/// The fold evaluator recurses only as deep as keeps it within a 1 MiB
+/// stack, the default reserve of a Windows program's main thread, even
+/// unoptimized: through operands, `const` arrays read element by element
+/// and `strlen` of such arrays (PR #117's third review).
+#[test]
+fn fold_evaluation_fits_a_one_mebibyte_stack() {
+    let mut sum = String::from("int x; void h(void); void t(void) { if (x");
+    sum.push_str(&" + x".repeat(1000));
+    sum.push_str(") h(); }");
+    let mut arrays = String::from("void h(void); void t(void) { const int a0[1] = {0}; ");
+    for index in 1..1000 {
+        write!(arrays, "const int a{index}[1] = {{a{}[0]}}; ", index - 1).unwrap();
+    }
+    arrays.push_str("if (a999[0]) h(); }");
+    let mut strings = String::from("void h(void); void t(void) { const char s0[2] = \"a\"; ");
+    for index in 1..400 {
+        write!(
+            strings,
+            "const char s{index}[2] = {{(char)__builtin_strlen(s{})}}; ",
+            index - 1
+        )
+        .unwrap();
+    }
+    strings.push_str("if (s399[0]) h(); }");
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            for source in [sum, arrays, strings] {
+                clean(&source);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

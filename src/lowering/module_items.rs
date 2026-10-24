@@ -280,7 +280,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
 
     /// The function definitions in source order, except that the
     /// `always_inline` bodies among them take their slots in the order Clang
-    /// creates their LLVM functions ([`Self::clang_creation_order`]). The
+    /// creates their LLVM functions ([`Self::clang_creation_order`]), those
+    /// it never creates last. The
     /// module's function order is LLVM's, so LLVM's always-inliner, which
     /// visits bodies in it, and the resolution of inline copies for the
     /// other back ends (`optimizer/always_inline.rs`) both follow it, and
@@ -317,7 +318,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let mut sorted: ArenaVec<'_, &'tu FunctionRecord<'tu>> =
             ArenaVec::with_capacity_in(slots.len(), self.tables);
         sorted.extend(slots.iter().map(|&index| records[index]));
-        sorted.sort_by_key(|record| record.binding.and_then(|binding| ranks[binding]));
+        // Bodies Clang never creates, referenced only from code it skips,
+        // come after the others, so their copies expand nothing first.
+        sorted.sort_by_key(|record| {
+            let rank = record.binding.and_then(|binding| ranks[binding]);
+            (rank.is_none(), rank)
+        });
         for (&index, record) in slots.iter().zip(sorted) {
             records[index] = record;
         }

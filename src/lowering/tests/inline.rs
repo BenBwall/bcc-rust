@@ -1,5 +1,7 @@
 //! External emission follows C99 §6.7.4p6-7 and GCC's GNU89 inline rules.
 
+use std::fmt::Write;
+
 use super::*;
 use crate::configuration::{
     CStandard,
@@ -865,6 +867,864 @@ fn always_inline_bodies_follow_clang_creation_order() {
     }
 }
 
+/// Whether `probe`, the body of a function `probe` in a file whose
+/// `always_inline` functions f, g and h call one another in a cycle, makes
+/// lowering create h first: whether it references h where Clang does.
+fn h_first(probe: &str, config: CompilerConfiguration) -> bool {
+    h_first_after("", probe, config)
+}
+
+/// [`h_first`] with the external declarations `extra` after f, g and h.
+fn h_first_after(extra: &str, probe: &str, config: CompilerConfiguration) -> bool {
+    let source = format!(
+        "int c; int other(void); __attribute__((noreturn)) void die(void); _Noreturn void \
+         stop(void); void exit(int); void _exit(int); void (*fp)(void) __attribute__((noreturn)); \
+         typedef void nr(void) __attribute__((noreturn)); nr *fpt; struct s {{ void (*m)(void) \
+         __attribute__((noreturn)); }} holder; inline __attribute__((always_inline)) int f(int); \
+         inline __attribute__((always_inline)) int g(int); inline __attribute__((always_inline)) \
+         int h(int); inline __attribute__((always_inline)) int f(int x) {{ return x ? 2 * g(x - \
+         1) : 1; }} inline __attribute__((always_inline)) int g(int x) {{ return x ? 3 * h(x - 1) \
+         : 1; }} inline __attribute__((always_inline)) int h(int x) {{ return x ? 4 * f(x - 1) : \
+         1; }} {extra} int probe(void) {{ {probe} return 0; }} int main(void) {{ return f(6); }}"
+    );
+    let text = lower_with(&source, config).unwrap_or_else(|error| panic!("{error:?}\n{probe}"));
+    let position = |name: &str| {
+        text.find(&format!("function @{name}.always_inline("))
+            .unwrap_or_else(|| panic!("{name}: {probe}\n{text}"))
+    };
+    assert!(position("f") < position("g"), "{probe}\n{text}");
+    position("h") < position("f")
+}
+
+/// A switch whose condition folds emits only the statements Clang's
+/// `CollectStatementsForCase` selects, and an expression statement ending
+/// in a call that does not return skips what follows. References there
+/// create no function, so Clang's order stays f, g, h; references Clang
+/// does emit put h first (#113). Each expectation matches Clang 23's
+/// `-O0 -Xclang -disable-llvm-passes` module.
+#[test]
+fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_calls() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (probe, config, emitted) in [
+        // The unselected arms, the default fallback and an elided body.
+        (
+            "switch (0) { case 1: h(0); break; default: break; }",
+            c99,
+            false,
+        ),
+        ("switch (5) { case 1: h(0); }", c99, false),
+        ("switch (2) { case 1: break; case 2: h(0); }", c99, true),
+        ("switch (5) { case 1: break; default: h(0); }", c99, true),
+        (
+            "switch ((0, 1)) { case 0: h(0); break; case 1: break; }",
+            c99,
+            false,
+        ),
+        (
+            "switch ((other(), 1)) { case 0: h(0); break; case 1: break; }",
+            c99,
+            true,
+        ),
+        // Selected statements fall through later labels, which resume
+        // nothing; the code after the switch follows their end.
+        ("switch (1) { case 1: return 0; case 2: h(0); }", c99, false),
+        (
+            "switch (5) { default: return 0; case 1: h(0); }",
+            c99,
+            false,
+        ),
+        ("switch (1) { case 1: return 0; } h(0);", c99, false),
+        ("switch (1) { case 1: break; } h(0);", c99, true),
+        // Case labels inside skipped statements do not keep them; a case
+        // label Clang cannot reach through blocks, a skipped declaration
+        // or a label the switch would skip leave it unfolded.
+        (
+            "switch (1) { case 0: if (h(0)) { case 3: break; } break; case 1: break; }",
+            c99,
+            false,
+        ),
+        (
+            "switch (1) { case 0: h(0); if (c) { case 1: ; } }",
+            c99,
+            true,
+        ),
+        (
+            "switch (1) { int y; case 0: h(0); break; case 1: y = 0; (void)y; }",
+            c99,
+            true,
+        ),
+        (
+            "goto l; switch (0) { case 1: l: h(0); break; default: break; }",
+            c99,
+            true,
+        ),
+        (
+            "switch (1) { case 2 ... 3: h(0); break; case 1: break; }",
+            gnu,
+            false,
+        ),
+        (
+            "switch (1) { case 1: break; case 2 ... 3: h(0); }",
+            gnu,
+            true,
+        ),
+        // Calls that do not return: attributes, `_Noreturn`, library
+        // functions, function pointers of a `noreturn` type, and casts of
+        // a function designator.
+        ("die(); h(0);", c99, false),
+        ("stop(); h(0);", c99, false),
+        ("exit(0); h(0);", c99, false),
+        ("_exit(0); h(0);", gnu, false),
+        ("_exit(0); h(0);", c99, true),
+        ("exit(0); h(0);", c99.with_hosted(false), true),
+        ("fp(); h(0);", c99, false),
+        ("fpt(); h(0);", c99, false),
+        ("holder.m(); h(0);", c99, false),
+        ("__typeof__(die) *q = die; q(); h(0);", gnu, false),
+        ("void (*p)(void) = die; p(); h(0);", c99, true),
+        ("((void (*)(void))die)(); h(0);", c99, false),
+        (
+            "(void)_Generic(0, int: die(), default: 0); h(0);",
+            c99,
+            false,
+        ),
+        // The rest of the expression is emitted; a condition that does not
+        // fold joins reachable code again; a label resumes code generation.
+        ("die(), h(0);", c99, true),
+        ("(die(), other()); h(0);", c99, false),
+        ("c ? die() : (void)0; h(0);", c99, true),
+        ("1 ? die() : (void)0; h(0);", c99, false),
+        ("(void)(c && (die(), 1)); h(0);", c99, true),
+        ("die(); l: h(0);", c99, true),
+        ("int y = (die(), 1); h(y);", c99, true),
+        ("do die(); while (0); h(0);", c99, true),
+        // A statement expression's value statement is emitted after a jump.
+        ("({ die(); }); h(0);", gnu, false),
+        ("({ die(); (void)h(0); });", gnu, false),
+        ("c = ({ die(); h(0); });", gnu, true),
+        ("c = ({ return 0; h(0); });", gnu, true),
+        // The #113 review's forms: a label or break in a statement
+        // expression keeps the switch unfolded; standard `[[noreturn]]`
+        // stays with its declaration; a hand-declared `longjmp` needs
+        // `jmp_buf`; a complex product joins paths; unevaluated operands
+        // change nothing; function types carry `noreturn` through any
+        // callee; Clang's evaluator folds more conditions.
+        (
+            "switch (1) { case 1: ({ break; 0; }); case 2: h(0); }",
+            gnu,
+            true,
+        ),
+        (
+            "switch (1) { case 1: break; case 2: ({ l: 0; }); h(0); }",
+            gnu,
+            true,
+        ),
+        ("switch (3) { case 2: ({ l: 0; }); h(0); }", gnu, true),
+        (
+            "[[noreturn]] void nd(void); __typeof__(nd) *p = 0; p(); h(0);",
+            gnu,
+            true,
+        ),
+        ("void longjmp(long *, int); longjmp(0, 1); h(0);", c99, true),
+        ("_Complex double z = 1; die(), (z * z); h(0);", c99, true),
+        ("die(), sizeof(c ? 1 : 0); h(0);", c99, false),
+        ("die(), (1 ? 0 : (c ? 1 : 0)); h(0);", c99, false),
+        ("nr *a[1] = {0}; a[0](); h(0);", c99, false),
+        ("(c ? fpt : fpt)(); h(0);", c99, false),
+        ("(c, fpt)(); h(0);", c99, false),
+        ("((nr *)other)(); h(0);", c99, false),
+        ("__typeof__(holder.m) q = 0; q(); h(0);", gnu, false),
+        (
+            "switch ((0.0, 1)) { case 1: break; default: h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "switch (({ 1; })) { case 1: break; default: h(0); }",
+            gnu,
+            false,
+        ),
+        (
+            "switch (&c != 0) { case 1: break; default: h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "switch (1) { case 1: break; int v; case 2: h(0); }",
+            c99,
+            false,
+        ),
+        ("if (__builtin_constant_p(c)) h(0);", c99, true),
+        ("if (__builtin_constant_p((0, 1)) - 1) h(0);", c99, false),
+    ] {
+        assert_eq!(h_first(probe, config), emitted, "{probe}");
+    }
+}
+
+/// The forms the second #113 review and the #104 review found counted
+/// differently from Clang, pinned as above: a `default` before a matching
+/// case whose collection fails skips nothing; pointer conditions do not
+/// fold; the join rules read the expression's type, `va_arg` of what the
+/// System V ABI passes in registers among them; a `void` operand is no
+/// constant; an atomic `_Bool` decrement and a run-time memory order
+/// branch; a volatile read through a pointer is a side effect; string
+/// literal elements, `const` arrays and structures, and the bit and
+/// `strlen` builtins fold. A variably modified declaration after a jump
+/// resumes nothing: Clang resumes code generation there, but not in code it
+/// never reaches, which a condition bcc does not fold, the unselected
+/// operand of `__builtin_choose_expr` or a switch without a match can hide.
+/// A call that does not return skips nothing when one follows.
+#[test]
+fn always_inline_order_follows_folding_and_joins() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (probe, config, emitted) in [
+        (
+            "switch (2) { case 1: h(0); break; default: other(); break; case 2: if (c) break; \
+             other(); break; }",
+            c99,
+            true,
+        ),
+        (
+            "switch (3) { case 1: h(0); break; default: other(); break; case 2: other(); break; }",
+            c99,
+            false,
+        ),
+        ("if ((void *)0) h(0);", c99, true),
+        ("int *const p = 0; if (p) h(0);", c99, true),
+        ("die(), ((void *)0 && c); h(0);", c99, true),
+        ("if ((void *)0 != 0) h(0);", c99, false),
+        (
+            "_Complex double z = 1; die(), (1 ? z : z); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "struct t { int a; } t1 = {0}; die(), (1 ? t1 : t1); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, int); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "struct t { float a, b; }; __builtin_va_list ap; die(), __builtin_va_arg(ap, struct \
+             t); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "struct t { long double a; }; __builtin_va_list ap; die(), __builtin_va_arg(ap, \
+             struct t); h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "struct t { long a, b, c; }; __builtin_va_list ap; die(), __builtin_va_arg(ap, struct \
+             t); h(0);",
+            gnu,
+            false,
+        ),
+        ("die(), (c ? (void)0 : (void)0); h(0);", c99, true),
+        ("static _Atomic _Bool b; die(), b--; h(0);", gnu, true),
+        ("static _Atomic _Bool b; die(), b++; h(0);", gnu, false),
+        ("int e; die(), __atomic_load_n(&e, c); h(0);", gnu, true),
+        ("int e; die(), __atomic_load_n(&e, 5); h(0);", gnu, false),
+        (
+            "volatile int *vp = 0; if (__builtin_constant_p(*vp)) h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "static volatile int vx; if (__builtin_constant_p(&vx)) h(0);",
+            gnu,
+            true,
+        ),
+        ("if (\"a\"[0] == 98) h(0);", c99, false),
+        ("if (*\"a\" == 0) h(0);", c99, false),
+        ("if (*(\"ab\" + 3) == 0) h(0);", c99, true),
+        ("const int a[2] = {0, 1}; if (a[0]) h(0);", c99, false),
+        ("const int a[2] = {c, 0}; if (a[1]) h(0);", c99, true),
+        ("static const int a[4] = {1}; if (a[3]) h(0);", c99, false),
+        ("static int a[2] = {0, 1}; if (a[0]) h(0);", c99, true),
+        (
+            "const struct t { int x, y; } p = {.y = 1}; if (p.x) h(0);",
+            c99,
+            false,
+        ),
+        ("if (__builtin_strlen(\"abc\") == 0) h(0);", gnu, false),
+        ("if (__builtin_clz(1) == 0) h(0);", gnu, false),
+        ("if (__builtin_clz(0) == 32) h(0);", gnu, true),
+        ("if (__builtin_popcount(3) == 1) h(0);", gnu, false),
+        ("return 0; int v[3]; h(0);", c99, false),
+        ("die(); int v[c]; h(0);", c99, true),
+        ("die(); { int v[c]; } h(0);", c99, true),
+        ("die(); int v[3]; h(0);", c99, false),
+        ("return 0; if (c) { int v[c]; h(0); }", c99, false),
+        ("if (0) { int v[c]; h(0); }", c99, false),
+        (
+            "static const union { int i; float f; } u = {1}; if (u.i) {} else { return 0; int a[c \
+             + 1]; h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "switch (5) { default: other(); break; { int a[c + 1]; h(0); } case 2: if (c) break; \
+             other(); break; }",
+            c99,
+            false,
+        ),
+        (
+            "(void)__builtin_choose_expr(0, ({ return 0; int a[c + 1]; h(0); 0; }), 0);",
+            gnu,
+            false,
+        ),
+    ] {
+        assert_eq!(h_first(probe, config), emitted, "{probe}");
+    }
+}
+
+/// A statement expression ending in skipped code leaves a block without
+/// predecessors only when code generation emits it: not in an operand a
+/// folded `?:`, `&&` or `||` skips, nor in the unselected operand of
+/// `__builtin_choose_expr`, so the code after its expression statement is
+/// emitted (the #104 review's `n_g01`, `n_g02`, `n_g03`, `n_g06` and
+/// `n_e06`, checked against Clang 23).
+#[test]
+fn always_inline_order_ignores_statement_expressions_code_generation_skips() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (probe, emitted) in [
+        ("(void)(0 && ({ 5; })); h(0);", true),
+        ("(void)(1 || ({ 5; })); h(0);", true),
+        ("(void)(0 ? ({ 5; }) : 0); h(0);", true),
+        ("(void)(1 ? 0 : ({ 5; })); h(0);", true),
+        ("(void)__builtin_choose_expr(0, ({ 5; }), 0); h(0);", true),
+        ("int r = 0; r = 1 ? 2 : ({ 5; }); r += 1; h(r);", true),
+        (
+            "int r = 0; while (1) { r++; (void)(0 && ({ break; 0; })); if (c) break; } h(r);",
+            true,
+        ),
+        ("(void)(0 ? ({ exit(1); 0; }) : 0); h(0);", true),
+        ("(void)(1 || ({ die(); 0; })); h(0);", true),
+        ("(void)(0 ? ({ for (;;) ; 0; }) : 0); h(0);", true),
+        ("(void)(0 ? ({ return 99; 0; }) : 0); h(0);", true),
+        (
+            "(void)(0 ? ({ __builtin_unreachable(); 0; }) : 0); h(0);",
+            true,
+        ),
+        (
+            "int r = __builtin_choose_expr(__builtin_constant_p(3) && __builtin_constant_p(4), 3 \
+             > 4 ? 3 : 4, ({ int a = 3, b = 4; a > b ? a : b; })); h(r);",
+            true,
+        ),
+        (
+            "int r = 0; r += (0 ? (1 ? ({ static int s; s; }) : 0) : other()); h(r);",
+            true,
+        ),
+        // A statement expression that is emitted and ends skipped still
+        // leaves its block without predecessors.
+        ("({ return 0; 1; }); h(0);", false),
+        ("(void)({ die(); 0; }); h(0);", false),
+        ("(void)(c ? ({ return 0; 1; }) : 0); h(0);", true),
+    ] {
+        assert_eq!(h_first(probe, gnu), emitted, "{probe}");
+    }
+}
+
+/// The forms PR #117's first review found counted differently from Clang,
+/// each checked against Clang 23's `-O0 -Xclang -disable-llvm-passes`
+/// module. A weak `const` object is never read, nor sema's GNU fold of it
+/// trusted; a floating initializer converts to its object's type, as
+/// `__builtin_expect`'s operand converts to `long`; addresses compare in
+/// bytes; an initializer holding an automatic object's address is no
+/// constant. A `noreturn` function pointer type named by a typedef belongs
+/// below the declarator's function derivations, and a written attribute to
+/// the derivation nearest the name, or after a `*` to its pointee. The
+/// operands of `__builtin_constant_p`, the object-size builtins,
+/// `__builtin_classify_type` and both of `__builtin_choose_expr` end
+/// nothing; `__builtin_fpclassify` and `va_arg` of a packed structure whose
+/// member a typedef aligns join paths. A case after a tentative `default`
+/// replaces it, and a parameter or redeclaration carries `noreturn`.
+#[test]
+fn always_inline_order_follows_the_first_pr_review_forms() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let c11 = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (extra, probe, config, emitted) in [
+        (
+            "const int wk __attribute__((weak)) = 0;",
+            "if (wk) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 0;",
+            "if (wk + 1 == 1) ; else h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 1;",
+            "switch (wk) { case 0: h(0); break; case 1: break; }",
+            c99,
+            true,
+        ),
+        (
+            "const int wk __attribute__((weak)) = 1;",
+            "switch (wk) { case 0: h(0); break; case 1: break; }",
+            gnu,
+            true,
+        ),
+        ("", "const int k = 0.5; if (!k) h(0);", c99, true),
+        ("", "if (!__builtin_expect(0.5, 1)) h(0);", c99, true),
+        (
+            "",
+            "if ((char *)&c + 4 == (char *)(&c + 1)) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "if ((char *)&c + 1 == (char *)(&c + 1)) h(0);",
+            c99,
+            false,
+        ),
+        ("", "int y; int *const p = &y; if (!p) h(0);", c99, true),
+        (
+            "",
+            "int y; const struct { int *p; int a; } s = { &y, 0 }; if (s.a) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "static int y; int *const p = &y; if (!p) h(0);",
+            c99,
+            false,
+        ),
+        (
+            "",
+            "const double d = 1.0; if (!(unsigned __int128)d) h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*gp)(void);",
+            "gp(); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*gp)(void);",
+            "gp()(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP (*ga[1])(void);",
+            "ga[0](); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); struct m { NP (*m)(void); } sm;",
+            "sm.m(); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); NP np;",
+            "__typeof__(np) (*q)(void) = 0; q(); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); typedef NP G(void); G getnp;",
+            "getnp()(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP (*p)(void)) { p(); \
+             return h(0); }",
+            "",
+            c99,
+            true,
+        ),
+        (
+            "void plain(void); void (*getfp2(void))(void) __attribute__((noreturn));",
+            "__typeof__(getfp2()) q = plain; q(); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "void (*getfp2(void))(void) __attribute__((noreturn));",
+            "getfp2(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "__attribute__((noreturn)) void (*getfp4(void))(void);",
+            "getfp4(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "void (* __attribute__((noreturn)) getp(void))(void);",
+            "getp(); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void (* __attribute__((noreturn)) getp(void))(void);",
+            "getp()(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_constant_p(idie()); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_object_size((idie(), (char *)0), 0); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_dynamic_object_size((idie(), (char *)0), 0); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "_Noreturn int idie(void);",
+            "(void)__builtin_classify_type(idie()); h(0);",
+            c11,
+            true,
+        ),
+        (
+            "",
+            "__builtin_choose_expr(0, die(), (void)0); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "",
+            "double d = c; die(), (void)__builtin_fpclassify(0, 1, 2, 3, 4, d); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "typedef char C4 __attribute__((aligned(4))); struct __attribute__((packed)) T { char \
+             c; C4 d; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct T); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "",
+            "switch (2) { default: h(0); break; case 2: break; }",
+            c99,
+            false,
+        ),
+        (
+            "",
+            "switch (2) { default: h(0); case 2: other(); break; }",
+            c99,
+            false,
+        ),
+        (
+            "",
+            "switch (2) { default: break; case 2: return 0; } h(0);",
+            c99,
+            false,
+        ),
+        (
+            "_Noreturn void d9(void); void d9(void) { for (;;); }",
+            "d9(); h(0);",
+            c11,
+            false,
+        ),
+        (
+            "void d8(void); __attribute__((noreturn)) void d8(void);",
+            "d8(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP p) { p(); return h(0); \
+             }",
+            "",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP p[1]) { p[0](); return \
+             h(0); }",
+            "",
+            c99,
+            false,
+        ),
+        (
+            "typedef void (*NP)(void) __attribute__((noreturn)); int pr(NP p); int pr(NP p) { \
+             p(); return h(0); }",
+            "",
+            c99,
+            false,
+        ),
+        (
+            "int pr(void (*p)(void) __attribute__((noreturn))) { p(); return h(0); }",
+            "",
+            c99,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            h_first_after(extra, probe, config),
+            emitted,
+            "{extra} {probe}"
+        );
+    }
+}
+
+/// The forms PR #117's second review found counted differently from Clang,
+/// each checked against Clang 23's `-O0 -Xclang -disable-llvm-passes`
+/// module. `#pragma weak`, `_Pragma` and `weak_import` make an entity weak
+/// for the evaluator too. An address of an automatic, thread-local or
+/// parameter object is no constant result, so a `?:` choosing between such
+/// addresses joins, while static ones are selected; floating arithmetic
+/// with a NaN result does not fold, a NaN from `__builtin_nan` does. A join
+/// in an operand code generation may emit counts: a variably modified
+/// `sizeof` or `typeof` operand, an operand of `__builtin_constant_p` or
+/// `__builtin_object_size` without side effects, the selected operand of
+/// `__builtin_choose_expr`; not one of `__builtin_classify_type`. The left
+/// operand of a scalar assignment is emitted after the right, that of a
+/// structure assignment before. `va_arg` of a structure with only an
+/// unnamed bit-field reads no register, one with a zero-length `long
+/// double` array does. A call through an address converted to an integer
+/// or loaded from memory names no function. An operand a folded `&&`, `||`
+/// or `?:` does not take is emitted when it holds a label (forwarded from
+/// PR #118's review).
+#[test]
+fn always_inline_order_follows_the_second_pr_review_forms() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (extra, probe, config, emitted) in [
+        (
+            "\n#pragma weak wk\nconst int wk = 0;",
+            "if (wk) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void wf(void);\n#pragma weak wf\n",
+            "if (!wf) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "\n#pragma weak wf\nvoid wf(void);",
+            "if (!wf) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "_Pragma(\"weak wf\") void wf(void);",
+            "if (!wf) h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void wi(void) __attribute__((weak_import));",
+            "if (!wi) h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "__thread int t1;",
+            "int *const tp = &t1; if (!tp) h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "__thread int t1, t2; void sinkp(int *);",
+            "die(), sinkp(c ? &t1 : &t2); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "void sinkp(int *);",
+            "int l1, l2; die(), sinkp(c ? &l1 : &l2); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "void sinkp(int *);",
+            "static int l1, l2; die(), sinkp(c ? &l1 : &l2); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "void sinkp(int *); int pr(int p1, int p2) { die(), sinkp(c ? &p1 : &p2); return \
+             h(0); }",
+            "",
+            c99,
+            true,
+        ),
+        (
+            "void sinkp(int *);",
+            "int a[2]; die(), sinkp(c ? a : a + 1); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "switch (0.0 / 0.0 != 0.0) { case 1: break; default: h(0); }",
+            c99,
+            true,
+        ),
+        ("", "if (0.0 / 0.0 == 0.0) h(0);", c99, true),
+        (
+            "double sinkd(double);",
+            "die(), sinkd(c ? 0.0 / 0.0 : 1.0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "switch (__builtin_nan(\"\") != 0.0) { case 1: break; default: h(0); }",
+            c99,
+            false,
+        ),
+        (
+            "extern int n, m;",
+            "die(), (void)sizeof(int[c ? n : m]); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "extern int n, m;",
+            "die(), (void)(__typeof__(int[c ? n : m]) *)0; h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "char *p, *q;",
+            "die(), (void)__builtin_object_size(c ? p : q, 0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "",
+            "die(), (void)__builtin_constant_p(c ? 1 : c); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "int a1(void), a2(void);",
+            "die(), __builtin_choose_expr(1, c ? a1() : a2(), 0); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "",
+            "die(), (void)__builtin_classify_type(c ? 1 : c); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "int arr[2];",
+            "arr[c && other()] = (die(), 0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "int arr[2];",
+            "arr[c && other()] += (die(), 0); h(0);",
+            c99,
+            true,
+        ),
+        (
+            "struct S { int a; } sa[2]; struct S dies(void) __attribute__((noreturn));",
+            "sa[c && other()] = dies(); h(0);",
+            c99,
+            false,
+        ),
+        (
+            "struct T { int i; long double ld[0]; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct T); h(0);",
+            gnu,
+            true,
+        ),
+        (
+            "struct U { int : 8; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct U); h(0);",
+            gnu,
+            false,
+        ),
+        (
+            "struct V { int i : 8; };",
+            "__builtin_va_list ap; die(), __builtin_va_arg(ap, struct V); h(0);",
+            gnu,
+            true,
+        ),
+        ("", "((void (*)(void))(int)(long)die)(); h(0);", c99, true),
+        ("", "(*(void (**)(void))&die)(); h(0);", c99, true),
+        ("", "((void (*)(void))(void *)die)(); h(0);", c99, false),
+        ("", "(**die)(); h(0);", c99, false),
+        (
+            "const int kz = 0;",
+            "c = kz && ({ int y = h(0); l: y; });",
+            gnu,
+            true,
+        ),
+        (
+            "const int ko = 1;",
+            "c = ko ? 0 : ({ int y = h(0); l: y; });",
+            gnu,
+            true,
+        ),
+        (
+            "const int kz = 0;",
+            "c = kz && ({ int y = h(0); y; });",
+            gnu,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            h_first_after(extra, probe, config),
+            emitted,
+            "{extra} {probe}"
+        );
+    }
+}
+
+/// A fold that the evaluator's depth limit cuts short in one condition is
+/// not remembered for a shallower one: `!k` folds after a deeper condition
+/// read `k` as it does alone (PR #117's second review, checked against
+/// Clang 23).
+#[test]
+fn always_inline_order_does_not_remember_depth_cut_folds() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let terms = |count: usize| " + __builtin_popcount(1)".repeat(count);
+    for deep in [false, true] {
+        let first = if deep {
+            format!("if (k{}) other(); ", terms(30))
+        } else {
+            String::new()
+        };
+        let probe = format!("const int k = 0{}; {first}if (!k) h(0);", terms(40));
+        assert!(!h_first(&probe, c99), "{probe}");
+    }
+}
+
 /// A weak inline definition is a weak definition, emitted where it is
 /// referenced, as Clang emits it; a strong definition elsewhere wins. A
 /// GNU89 plain inline definition is an external definition anyway.
@@ -897,4 +1757,459 @@ fn weak_inline_definitions_are_weak_definitions_when_referenced() {
             assert!(!text.contains("@f.always_inline"), "{text}");
         }
     }
+}
+
+/// The order of the `always_inline` bodies' definitions in `source`'s
+/// module, by name.
+fn always_inline_order(source: &str, config: CompilerConfiguration) -> String {
+    let text = lower_with(source, config).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    text.lines()
+        .filter(|line| line.contains("alwaysinline") && line.ends_with('{'))
+        .filter_map(|line| line.strip_prefix("function @"))
+        .filter_map(|line| line.split(['(', '.']).next())
+        .filter(|name| ["f", "g", "h", "s"].contains(name))
+        .collect()
+}
+
+/// Clang creates an inline body that a later file-scope declaration makes
+/// external at that declaration and emits it with the deferred bodies,
+/// after the unit (`EmitGlobal`); a body it never creates, referenced only
+/// from code it skips, comes after the bodies it creates, so its copy
+/// expands nothing into them first (PR #117's third review, checked by
+/// linking and running against Clang 23 at -O0 and -O2).
+#[test]
+fn always_inline_order_follows_external_redeclarations_and_uncreated_bodies() {
+    const CYCLE: &str = "inline __attribute__((always_inline)) int f(int x); inline \
+                         __attribute__((always_inline)) int g(int x); inline \
+                         __attribute__((always_inline)) int h(int x); inline \
+                         __attribute__((always_inline)) int f(int x) { return x > 0 ? g(x - 1) + \
+                         1 : 0; } inline __attribute__((always_inline)) int g(int x) { return x > \
+                         0 ? h(x - 1) + 1 : 0; } inline __attribute__((always_inline)) int h(int \
+                         x) { return x > 0 ? f(x - 1) + 1 : 0; } ";
+    const MAIN: &str = "int main(int argc, char **argv) { (void)argv; return f(argc + 2); }";
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    for (between, after, order) in [
+        // g is created at its redeclaration, f by main, h by g's body.
+        ("extern int g(int);", "", "gfh"),
+        ("", "extern int g(int);", "fgh"),
+        ("int u(void) { return h(1); } extern int g(int);", "", "hgf"),
+    ] {
+        let source = format!("{CYCLE}{between} {MAIN} {after}");
+        assert_eq!(always_inline_order(&source, c99), order, "{source}");
+    }
+    let uncreated =
+        "void exit(int); __attribute__((noreturn)) void die(void); inline \
+         __attribute__((always_inline)) int f(int x); inline __attribute__((always_inline)) int \
+         g(int x); inline __attribute__((always_inline)) int s(int x) { return f(x) + 5; } inline \
+         __attribute__((always_inline)) int f(int x) { return g(x) + 1; } inline \
+         __attribute__((always_inline)) int g(int x) { if (x == 1000) { switch (1) { case 0: \
+         return s(x); default: break; } } return x + 2; } void die(void) { exit(9); } int \
+         main(int argc, char **argv) { (void)argv; return f(argc) & 0x7f; }";
+    assert_eq!(always_inline_order(uncreated, c99), "fgs");
+}
+
+/// The forms PR #117's third review found counted differently from Clang,
+/// each checked against Clang 23's `-O0 -Xclang -disable-llvm-passes`
+/// module: a `sizeof` operand counts only by its type; a literal is not
+/// distinct from an object of unknown size or past an object's end;
+/// `__builtin_constant_p` of a `void` operand or of a literal's later
+/// element does not fold; a block-scope static after a call that does not
+/// return is still emitted, with what its initializer names, while one in
+/// a folded-away arm is not; a typedef that a block-scope typedef may make
+/// variably modified counts wherever its name is used.
+#[test]
+fn always_inline_order_follows_the_third_pr_review_forms() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (extra, probe, emitted) in [
+        (
+            "extern int w __attribute__((weak));",
+            "if (sizeof(w) == 4) ; else h(0);",
+            false,
+        ),
+        (
+            "",
+            "if (sizeof(__builtin_constant_p(c)) == 4) ; else h(0);",
+            false,
+        ),
+        ("extern char ua[];", "if (ua == \"a\") h(0);", true),
+        ("char oc[4];", "if (\"abc\" + 4 == oc) h(0);", true),
+        ("char oc[4];", "if (\"abc\" == oc) h(0);", false),
+        ("", "if (!__builtin_constant_p((void)0)) h(0);", true),
+        (
+            "",
+            "if (!__builtin_constant_p((int *)(\"ab\" + 1))) h(0);",
+            true,
+        ),
+        ("", "if (!__builtin_constant_p((int *)\"ab\")) h(0);", false),
+        ("", "die(); static int (*sp)(int) = h; c = !!sp;", true),
+        (
+            "",
+            "exit(0); { static int (*sp)(int) = h; c = !!sp; }",
+            true,
+        ),
+        ("", "if (0) { static int (*sp)(int) = h; c = !!sp; }", false),
+        (
+            "",
+            "die(); if (c) { static int (*sp)(int) = h; c = !!sp; }",
+            false,
+        ),
+        (
+            "typedef int T;",
+            "die(); typedef int T[c]; die(); { T v; (void)v; h(0); }",
+            true,
+        ),
+        (
+            "typedef int T;",
+            "die(); { typedef int T[c]; die(); T v; (void)v; h(0); }",
+            true,
+        ),
+    ] {
+        assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
+    }
+}
+
+/// Assignment and explicit floating conversions precede the integer fold,
+/// including reads through an aggregate plan (PR #117's fourth review).
+#[test]
+fn always_inline_order_rounds_floating_values_before_folding() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (extra, probe, emitted) in [
+        (
+            "const float k = 16777217.0;",
+            "if ((int)k == 16777216) h(0);",
+            true,
+        ),
+        (
+            "const float k = 16777219.0;",
+            "if ((int)k == 16777219) h(0);",
+            false,
+        ),
+        (
+            "const float k[1] = {16777217.0};",
+            "if ((int)k[0] == 16777216) h(0);",
+            true,
+        ),
+        (
+            "struct S { float f; }; const struct S k = {16777217.0};",
+            "if ((int)k.f == 16777216) h(0);",
+            true,
+        ),
+        ("const float k = 1e-50;", "if (!(_Bool)k) h(0);", true),
+        ("const float k[1] = {1e-50};", "if (!k[0]) h(0);", true),
+        ("const double k = 1.0i;", "if (!(_Bool)k) h(0);", true),
+        ("const double k[1] = {1.0i};", "if (!k[0]) h(0);", true),
+        ("", "if ((int)(float)16777217.0 == 16777216) h(0);", true),
+        ("", "if (!(_Bool)(double)1.0i) h(0);", true),
+    ] {
+        assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
+    }
+}
+
+#[test]
+fn always_inline_order_preserves_complex_and_aggregate_conditional_arms() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for probe in [
+        "(void)(k ? (struct S){0} : (h(0), (struct S){0}));",
+        "(void)(k ? (h(0), (struct S){0}) : (struct S){0});",
+        "(void)(k ? 1.0i : (h(0), 2.0i));",
+        "(void)(k ? (h(0), 1.0i) : 2.0i);",
+        "(void)(k ? 1.0 : (h(0), 2.0i));",
+        "(void)(k ? (k ? (struct S){0} : (h(0), (struct S){0})) : (struct S){0});",
+    ] {
+        assert!(
+            h_first_after("const int k = 1; struct S { int x; };", probe, gnu),
+            "{probe}"
+        );
+    }
+    assert!(!h_first_after(
+        "const int k = 1;",
+        "(void)(k ? 1 : (h(0), 2));",
+        gnu
+    ));
+    assert!(!h_first_after(
+        "const int k = 1;",
+        "(void)(k ? (void)1 : (void)h(0));",
+        gnu
+    ));
+}
+
+#[test]
+fn always_inline_order_sees_labels_in_case_expressions() {
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for probe in [
+        "switch (1) { case 1: break; case sizeof(({ L:; 1; })): h(0); break; }",
+        "switch (1) { case 1: break; case (1 ? 0 : ({ L:; 1; })): h(0); break; }",
+        "switch (1) { case 1: break; case sizeof(({ L:; 1; })) ... 6: h(0); break; }",
+        "switch (1) { case 1: break; case 3 ... sizeof(({ L:; 1; })): h(0); break; }",
+    ] {
+        assert!(h_first(probe, gnu), "{probe}");
+    }
+    assert!(!h_first(
+        "switch (1) { case 1: break; case sizeof(int): h(0); break; }",
+        gnu
+    ));
+}
+
+#[test]
+fn always_inline_order_bounds_weak_names_at_eager_bodies() {
+    const CYCLE: &str =
+        "inline __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) \
+         int g(int); inline __attribute__((always_inline)) int h(int); inline \
+         __attribute__((always_inline)) int f(int x) { return x ? g(x-1) : 0; } inline \
+         __attribute__((always_inline)) int g(int x) { return x ? h(x-1) : 0; } inline \
+         __attribute__((always_inline)) int h(int x) { return x ? f(x-1) : 0; }";
+    let gnu = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true);
+    for (specifier, eager) in [
+        ("static __attribute__((used))", true),
+        ("inline __attribute__((used))", true),
+        ("static __attribute__((constructor))", true),
+        ("static __attribute__((destructor))", true),
+        ("extern inline", true),
+        ("static", false),
+    ] {
+        let source = format!(
+            "const int k=0; {CYCLE} {specifier} int probe(void) {{ if (k) h(0); return 0; }} int \
+             main(void) {{ return probe() + f(4); }}\n#pragma weak k\n"
+        );
+        assert_eq!(
+            always_inline_order(&source, gnu),
+            if eager { "fgh" } else { "fhg" },
+            "{source}"
+        );
+    }
+    // `used` does not make a plain C99 inline-only body appear at O0.
+    let source = format!(
+        "const int k=0; {CYCLE} inline __attribute__((used)) int probe(void) {{ if(k) h(0); \
+         return 0; }}\n#pragma weak k\nint main(void) {{ return f(4); }}"
+    );
+    assert_eq!(always_inline_order(&source, gnu), "fgh");
+    let source = source.replace(
+        "inline __attribute__((used))",
+        "inline __attribute__((used,always_inline))",
+    );
+    assert_eq!(always_inline_order(&source, gnu), "fgh");
+}
+
+#[test]
+fn always_inline_order_keeps_used_bodies_eager_when_forced_external() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let source =
+        "inline __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) \
+         int g(int); inline __attribute__((always_inline)) int h(int); inline \
+         __attribute__((always_inline,used)) int f(int x) { return x > 0 ? g(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int g(int x) { return x > 0 ? h(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int h(int x) { return x > 0 ? f(x-1)+1 : 0; } int \
+         main(void) { return h(4); } extern int f(int); extern int h(int);";
+    assert_eq!(always_inline_order(source, c99), "fgh");
+}
+
+#[test]
+fn always_inline_order_ignores_overridden_static_initializer_values() {
+    const CYCLE: &str =
+        "inline __attribute__((always_inline)) int f(int); inline __attribute__((always_inline)) \
+         int g(int); inline __attribute__((always_inline)) int h(int); inline \
+         __attribute__((always_inline)) int h(int x) { return x > 0 ? f(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int g(int x) { return x > 0 ? h(x-1)+1 : 0; } inline \
+         __attribute__((always_inline)) int f(int x) { return x > 0 ? g(x-1)+1 : 0; }";
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    for declaration in [
+        "static int (*p[1])(int) = { [0]=g, [0]=h };",
+        "static struct { int (*p)(int); } s = { .p=g, .p=h };",
+        "static union { int (*p)(int); int (*q)(int); } u = { .p=g, .q=h };",
+        "static struct { int (*p)(int); int x; } s[1] = { [0].p=g, [0]={h,0} };",
+        "static int (*p[1])(int) = { [0]=(int (*)(int))(void*)g, [0]=h };",
+        "static int (*p[2])(int) = { [0 ... 1]=g, [0 ... 1]=h };",
+        "static int (*p[100000])(int) = { [0 ... 99999]=g, [0 ... 99999]=h };",
+        "static struct { int (*p)(int); int x; } s[3] = { [0 ... 2].p=g, [0 ... 2].p=h };",
+        "static int (*p[2][3])(int) = { [0 ... 1][0 ... 2]=g, [0 ... 1][0 ... 2]=h };",
+    ] {
+        let source = format!(
+            "{CYCLE} int probe(void) {{ {declaration} return 0; }} int main(void) {{ return f(4); \
+             }} extern int g(int); extern int h(int);"
+        );
+        assert_eq!(always_inline_order(&source, c99), "hfg", "{source}");
+    }
+    // The source element is replaced, but its earlier copies still need g.
+    for declaration in [
+        "static int (*p[3])(int) = { [0 ... 2]=g, [0]=h };",
+        "static int (*p[2])(int) = { [1]=g, [0]=h };",
+        "static struct { int (*p)(int); int x; } s[3] = { [0 ... 2].p=g, [0].p=h };",
+        "static int (*p[2][3])(int) = { [0 ... 1][0 ... 2]=g, [0][0]=h };",
+    ] {
+        let source = format!(
+            "{CYCLE} int probe(void) {{ {declaration} return 0; }} int main(void) {{ return f(4); \
+             }} extern int g(int); extern int h(int);"
+        );
+        assert_eq!(always_inline_order(&source, c99), "hgf", "{source}");
+    }
+}
+
+/// This must reach lowering's creation-order planner: semantic-only timing
+/// never queries the enclosing owner of a block static's initializer.
+#[test]
+fn nested_static_initializer_ownership_stays_linear() {
+    let depth = 16_000;
+    let mut source = String::from(
+        "static inline __attribute__((always_inline)) int f(void) { return 1; } static inline \
+         __attribute__((always_inline)) int h(void) { return f(); } int main(void) {",
+    );
+    for index in 0..depth {
+        write!(source, "{{ static int (*p{index})(void) = h;").unwrap();
+    }
+    source.push_str(&"}".repeat(depth));
+    source.push_str("return h(); }");
+    let start = std::time::Instant::now();
+    drop(lower_with(&source, CompilerConfiguration::default()).unwrap());
+    assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
+}
+
+/// PR #117's final review: labels prevent operand omission, and implicit
+/// arithmetic conversions precede a conditional's enclosing integer cast.
+/// C99: §6.5.15 paragraph 5, p. 90; PDF p. 102.
+#[test]
+fn always_inline_order_follows_final_review_emission_boundaries() {
+    let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
+    let gnu = c99.with_gnu_extensions(true);
+    for (extra, probe, emitted) in [
+        ("", "if (!*(volatile char*)\"a\") h(0);", true),
+        ("", "if (!((volatile char*)\"a\")[0]) h(0);", true),
+        ("", "if (!*\"a\") h(0);", false),
+        ("", "(1 ? (die(),0) : ({ L: 0; })); h(0);", true),
+        ("", "0 && ({ L: die(); 0; }); h(0);", true),
+        ("", "1 || ({ L: die(); 0; }); h(0);", true),
+        ("", "die(), (1 ? 0 : ({ L:; 1; })); h(0);", true),
+        ("", "die(), (0 ? ({ L:; 1; }) : 0); h(0);", true),
+        (
+            "",
+            "switch(1) { case 0: h(0); break; case 1: break; int a[({ L: 1; })]; }",
+            true,
+        ),
+        (
+            "",
+            "switch(1) { case 0: h(0); break; case 1: break; typedef int A[({ L: 1; })]; }",
+            true,
+        ),
+        (
+            "",
+            "switch(1) { case 0: h(0); break; case 1: break; sizeof(int[({ L: 1; })]); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(_Generic(0, int:c, default:other()))) { case 0: break; \
+             case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(__builtin_choose_expr(1,c,other()))) { case 0: break; \
+             case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({int d;c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({if(c) c; c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "",
+            "switch(__builtin_constant_p(({for(;c;){} c;}))) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "int pure(void) __attribute__((pure));",
+            "switch(__builtin_constant_p(pure())) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        (
+            "int pure(void) __attribute__((const));",
+            "switch(__builtin_constant_p(pure())) { case 0: break; case 1: h(0); }",
+            true,
+        ),
+        ("", "if (!(1 ?: __builtin_constant_p(c))) h(0);", false),
+        (
+            "extern int w __attribute__((weak));",
+            "if (!(1 ?: w)) h(0);",
+            false,
+        ),
+        (
+            "extern const int k __attribute__((weak_import)); const int k=0;",
+            "if (k) h(0);",
+            false,
+        ),
+        (
+            "extern const int k __attribute__((weak)); const int k=0;",
+            "if (k) h(0);",
+            true,
+        ),
+        ("", "static long p=__builtin_constant_p(h); (void)p;", false),
+        (
+            "",
+            "static long p[1]={__builtin_classify_type(h)}; (void)p;",
+            false,
+        ),
+        ("", "static int (*p)(int)=h; (void)p;", true),
+    ] {
+        assert_eq!(h_first_after(extra, probe, gnu), emitted, "{extra} {probe}");
+    }
+    for config in [c99, gnu] {
+        for (probe, emitted) in [
+            ("if ((int)(k ? 16777217 : 0.0f)==16777216) h(0);", true),
+            ("if ((int)(k ? 16777217 : 0.0f)==16777217) h(0);", false),
+            (
+                "if ((long long)(k ? 9007199254740993LL : 0.0)==9007199254740992LL) h(0);",
+                true,
+            ),
+            (
+                "if ((long long)(k ? 9007199254740993LL : 0.0)==9007199254740993LL) h(0);",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                h_first_after("const int k=1;", probe, config),
+                emitted,
+                "{probe}"
+            );
+        }
+    }
+}
+
+/// Many short copies must query only overlapping current writers, including
+/// when the copied values carry function addresses.
+#[test]
+fn short_static_range_copies_stay_linear() {
+    let count = 20_000;
+    let mut source = String::from(
+        "static inline __attribute__((always_inline)) int f(void) { return 1; } static inline \
+         __attribute__((always_inline)) int h(void) { return f(); } int main(void) { static int \
+         (*const p[])(void) = {",
+    );
+    for index in 0..count {
+        write!(source, "[{} ... {}]=h,", 2 * index, 2 * index + 1).unwrap();
+    }
+    source.push_str("}; return p[0](); }");
+    let start = std::time::Instant::now();
+    drop(
+        lower_with(
+            &source,
+            CompilerConfiguration::default().with_gnu_extensions(true),
+        )
+        .unwrap(),
+    );
+    assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
 }
