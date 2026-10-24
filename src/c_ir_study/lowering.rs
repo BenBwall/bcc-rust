@@ -1,4 +1,6 @@
-//! Iterative lowering of the deliberately closed integer subset.
+//! Recursive lowering of the deliberately closed integer subset: statements
+//! and expressions nest as Rust calls, compound siblings are a loop, and the
+//! caller supplies the native stack, as for the recursive lowering study.
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60; §6.8, pp. 131-139;
 //! PDF pp. 143-151. Required sequencing stays in expression nodes.
 
@@ -54,7 +56,7 @@ pub(super) struct Lowerer<'s, 'tu, 'ir> {
 }
 
 impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
-    /// Two work stacks keep source nesting off the Rust call stack.
+    /// Lowers one definition; source nesting becomes native recursion.
     pub(super) fn run(
         context: &'s Context<'tu>,
         sema: &'s SemanticTranslationUnit<'tu>,
@@ -83,23 +85,13 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
             _ = this.local(binding, 0, true, sema.bindings[binding].name.source_vectors)?;
         }
         this.emit(InstructionKind::Enter(0), signature.origin);
-        let mut tasks = ArenaVec::new_in(arena);
-        tasks.push(Task::Statement(
+        this.statement(
             record.syntax.body,
             State {
                 depth:   1,
                 loop_to: None,
             },
-        ));
-        while let Some(task) = tasks.pop() {
-            match task {
-                | Task::Emit(kind, origin) => this.emit(kind, origin),
-                | Task::Label(id) => this.labels[id] = this.code.len(),
-                | Task::Declaration(decl, scope) => this.declaration(decl, scope)?,
-                | Task::Statement(statement, state) =>
-                    this.statement(statement, state, &mut tasks)?,
-            }
-        }
+        )?;
         this.emit(InstructionKind::Fallthrough, signature.origin);
         Ok(Function {
             signature,
@@ -112,31 +104,25 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
     }
 
     /// C99: §6.8.2-6.8.6, pp. 132-139; PDF pp. 144-151.
-    fn statement(
-        &mut self,
-        statement: &'tu Statement<'tu>,
-        state: State,
-        tasks: &mut ArenaVec<'ir, Task<'tu>>,
-    ) -> Result<(), Error> {
+    fn statement(&mut self, statement: &'tu Statement<'tu>, state: State) -> Result<(), Error> {
         let origin = statement.source_vectors;
-        let emit_task = |kind| Task::Emit(kind, origin);
         match statement.kind {
             | S::Compound { items } => {
                 let scope = self.scope();
                 self.emit(InstructionKind::Enter(scope), origin);
-                tasks.push(emit_task(InstructionKind::Exit));
                 let inner = State {
                     depth: state.depth + 1,
                     ..state
                 };
-                for item in items.iter().rev() {
-                    tasks.push(match item {
-                        | BlockItem::Statement(s) => Task::Statement(s, inner),
-                        | BlockItem::Declaration(d) => Task::Declaration(d, scope),
+                for item in items {
+                    match item {
+                        | BlockItem::Statement(s) => self.statement(s, inner)?,
+                        | BlockItem::Declaration(d) => self.declaration(d, scope)?,
                         | BlockItem::FunctionDefinition(_) =>
                             return Err(unsupported("nested function", origin)),
-                    });
+                    }
                 }
+                self.emit(InstructionKind::Exit, origin);
             },
             | S::Declaration(_) =>
                 return Err(unsupported("declaration statement extension", origin)),
@@ -166,17 +152,20 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                     },
                     origin,
                 );
-                tasks.push(Task::Label(join));
+                self.place_label(then);
+                self.statement(then_statement, state)?;
+                self.emit(
+                    InstructionKind::Jump {
+                        label: join,
+                        keep:  state.depth,
+                    },
+                    origin,
+                );
+                self.place_label(otherwise);
                 if let Some(s) = else_statement {
-                    tasks.push(Task::Statement(s, state));
+                    self.statement(s, state)?;
                 }
-                tasks.push(Task::Label(otherwise));
-                tasks.push(emit_task(InstructionKind::Jump {
-                    label: join,
-                    keep:  state.depth,
-                }));
-                tasks.push(Task::Statement(then_statement, state));
-                tasks.push(Task::Label(then));
+                self.place_label(join);
             },
             | S::While {
                 condition_expression,
@@ -195,15 +184,6 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                     loop_to: Some((exit, header, state.depth)),
                     ..state
                 };
-                tasks.push(Task::Label(exit));
-                tasks.push(emit_task(InstructionKind::Branch {
-                    condition,
-                    then: body,
-                    otherwise: exit,
-                }));
-                tasks.push(Task::Label(header));
-                tasks.push(Task::Statement(body_statement, inner));
-                tasks.push(Task::Label(body));
                 if !do_while {
                     self.emit(
                         InstructionKind::Jump {
@@ -213,6 +193,18 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                         origin,
                     );
                 }
+                self.place_label(body);
+                self.statement(body_statement, inner)?;
+                self.place_label(header);
+                self.emit(
+                    InstructionKind::Branch {
+                        condition,
+                        then: body,
+                        otherwise: exit,
+                    },
+                    origin,
+                );
+                self.place_label(exit);
             },
             | S::For(f) => {
                 let scope = self.scope();
@@ -231,7 +223,7 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                 let body = self.label();
                 let next = self.label();
                 let exit = self.label();
-                self.labels[header] = self.code.len();
+                self.place_label(header);
                 if let Some(slot) = f.condition_expression {
                     let condition = self.expression(slot_expr(slot, origin)?)?;
                     self.emit(
@@ -243,25 +235,33 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
                         origin,
                     );
                 }
-                tasks.push(emit_task(InstructionKind::Exit));
-                tasks.push(Task::Label(exit));
-                tasks.push(emit_task(InstructionKind::Jump {
-                    label: header,
-                    keep:  depth,
-                }));
-                if let Some(slot) = f.iteration_expression {
-                    let id = self.expression(slot_expr(slot, origin)?)?;
-                    tasks.push(emit_task(InstructionKind::Evaluate(id)));
-                }
-                tasks.push(Task::Label(next));
-                tasks.push(Task::Statement(
+                // The iteration expression precedes the body in expression
+                // numbering, as in source order of the controlling clauses.
+                let iteration = f
+                    .iteration_expression
+                    .map(|slot| self.expression(slot_expr(slot, origin)?))
+                    .transpose()?;
+                self.place_label(body);
+                self.statement(
                     f.body_statement,
                     State {
                         depth,
                         loop_to: Some((exit, next, depth)),
                     },
-                ));
-                tasks.push(Task::Label(body));
+                )?;
+                self.place_label(next);
+                if let Some(id) = iteration {
+                    self.emit(InstructionKind::Evaluate(id), origin);
+                }
+                self.emit(
+                    InstructionKind::Jump {
+                        label: header,
+                        keep:  depth,
+                    },
+                    origin,
+                );
+                self.place_label(exit);
+                self.emit(InstructionKind::Exit, origin);
             },
             | S::Break | S::Continue => {
                 let (exit, next, keep) = state
@@ -370,228 +370,220 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
         clippy::cast_possible_truncation,
         reason = "Sema integer constants are encoded as low bits of the supported target type."
     )]
-    fn expression(&mut self, root: &'tu AstExpr<'tu>) -> Result<usize, Error> {
-        let mut tasks = ArenaVec::new_in(self.arena);
-        tasks.push((root, false));
-        while let Some((e, finish)) = tasks.pop() {
-            let ordinal = self
-                .sema
-                .expression_index(e)
-                .ok_or_else(|| unsupported("missing expression facts", e.source_vectors))?;
-            if self.expression_ids.contains_key(&ordinal) {
-                continue;
-            }
-            if !finish {
-                tasks.push((e, true));
-                match e.kind {
-                    | E::Binary {
-                        left_expression: a,
-                        right_expression: b,
-                        ..
-                    } => {
-                        tasks.push((b, false));
-                        tasks.push((a, false));
-                    },
-                    | E::Unary {
-                        operand_expression: a,
-                        ..
-                    }
-                    | E::Parenthesized { expression: a }
-                    | E::Cast {
-                        operand_expression: a,
-                        ..
-                    } => tasks.push((a, false)),
-                    | E::Conditional(c) => {
-                        tasks.push((c.else_expression, false));
-                        tasks.push((c.then_expression, false));
-                        tasks.push((c.condition_expression, false));
-                    },
-                    | E::Call { arguments, .. } =>
-                        for &arg in arguments.iter().rev() {
-                            tasks.push((arg, false));
-                        },
-                    | _ => {},
-                }
-                continue;
-            }
-            let info = self
-                .sema
-                .expression_info(e)
-                .ok_or_else(|| unsupported("missing expression type", e.source_vectors))?;
-            let ty = IntType::snapshot(self.sema, info.ty)?;
-            let child = |a| {
-                self.sema
-                    .expression_index(a)
-                    .and_then(|i| self.expression_ids.get(&i))
-                    .copied()
-                    .ok_or_else(|| unsupported("missing child", e.source_vectors))
-            };
-            let place = |a| {
-                self.sema
-                    .designation(a)
-                    .and_then(|d| d.binding)
-                    .and_then(|b| self.bindings.get(&b))
-                    .copied()
-                    .ok_or_else(|| unsupported("nonlocal or noninteger place", e.source_vectors))
-            };
-            let kind = match e.kind {
-                | E::Constant(_) | E::SizeofType(_) | E::SizeofExpr(_) => {
-                    let value = info
-                        .integer
-                        .ok_or_else(|| unsupported("nonconstant integer leaf", e.source_vectors))?;
-                    ExpressionKind::Constant((value.value as u64) & ty.mask())
-                },
-                | E::Identifier(_) => {
-                    if let Some(binding) = info.binding
-                        && self.sema.bindings[binding].kind == BindingKind::Enumerator
-                    {
-                        ExpressionKind::Constant(
-                            info.integer
-                                .ok_or_else(|| {
-                                    unsupported("enumerator without value", e.source_vectors)
-                                })?
-                                .value as u64,
-                        )
-                    } else {
-                        ExpressionKind::Read(place(e)?)
-                    }
-                },
-                | E::Parenthesized { expression: a }
-                | E::Cast {
-                    operand_expression: a,
-                    ..
-                } => ExpressionKind::Convert(child(a)?),
-                | E::Unary {
-                    operator,
-                    operand_expression: a,
-                } => match operator {
-                    | U::Plus => ExpressionKind::Convert(child(a)?),
-                    | U::Minus | U::LogicalNot | U::BitwiseNot => ExpressionKind::Unary(
-                        match operator {
-                            | U::Minus => Unary::Negate,
-                            | U::LogicalNot => Unary::Not,
-                            | _ => Unary::Invert,
-                        },
-                        child(a)?,
-                    ),
-                    | U::PreIncrement | U::PostIncrement | U::PreDecrement | U::PostDecrement => {
-                        let local = place(a)?;
-                        let promoted = if ty.bits < 32 {
-                            IntType {
-                                scalar: Scalar::Int,
-                                bits:   32,
-                                signed: true,
-                            }
-                        } else {
-                            ty
-                        };
-                        ExpressionKind::Update {
-                            local,
-                            increment: matches!(operator, U::PreIncrement | U::PostIncrement),
-                            postfix: matches!(operator, U::PostIncrement | U::PostDecrement),
-                            promoted,
-                        }
-                    },
-                    | _ => return Err(unsupported("unary operation", e.source_vectors)),
-                },
-                | E::Binary {
-                    operator,
-                    left_expression: a,
-                    right_expression: b,
-                } => {
-                    let (left, right) = (child(a)?, child(b)?);
-                    match operator {
-                        | B::Comma => ExpressionKind::Sequence(left, right),
-                        | B::LogicalAnd | B::LogicalOr => ExpressionKind::Logical {
-                            left,
-                            right,
-                            and: operator == B::LogicalAnd,
-                        },
-                        | B::Assignment => ExpressionKind::Set {
-                            local:     place(a)?,
-                            value:     right,
-                            operation: None,
-                        },
-                        | op if assignment(op).is_some() => ExpressionKind::Set {
-                            local:     place(a)?,
-                            value:     right,
-                            operation: Some((
-                                assignment(op).expect("guarded"),
-                                IntType::snapshot(
-                                    self.sema,
-                                    info.operation_type.ok_or_else(|| {
-                                        unsupported("compound operation type", e.source_vectors)
-                                    })?,
-                                )?,
-                            )),
-                        },
-                        | op => ExpressionKind::Binary(
-                            binary(op)
-                                .ok_or_else(|| unsupported("binary operation", e.source_vectors))?,
-                            left,
-                            right,
-                        ),
-                    }
-                },
-                | E::Conditional(c) => ExpressionKind::Conditional {
-                    condition: child(c.condition_expression)?,
-                    then:      child(c.then_expression)?,
-                    otherwise: child(c.else_expression)?,
-                },
-                | E::Call {
-                    function_expression,
-                    arguments,
-                } => {
-                    let call = self
-                        .sema
-                        .call_facts(e)
-                        .ok_or_else(|| unsupported("missing call facts", e.source_vectors))?;
-                    if !call.prototype || call.variadic {
-                        return Err(unsupported(
-                            "nonprototype or variadic call",
-                            e.source_vectors,
-                        ));
-                    }
-                    let binding = self
-                        .sema
-                        .designation(function_expression)
-                        .and_then(|d| d.binding)
-                        .ok_or_else(|| unsupported("indirect call", e.source_vectors))?;
-                    let entity = self
-                        .sema
-                        .correspondence
-                        .entity_of(binding, self.sema.bindings[binding])
-                        .0;
-                    let function = self
-                        .signatures
-                        .iter()
-                        .position(|s| s.entity == entity)
-                        .ok_or_else(|| unsupported("external call", e.source_vectors))?;
-                    let mut args = ArenaVec::new_in(self.arena);
-                    for &a in arguments {
-                        args.push(child(a)?);
-                    }
-                    ExpressionKind::Call {
-                        function,
-                        arguments: self.arena.alloc_slice_copy(&args),
-                    }
-                },
-                | _ =>
-                    return Err(unsupported(
-                        "expression outside integer slice",
-                        e.source_vectors,
-                    )),
-            };
-            let mut id = self.push_expr(kind, ty, e.source_vectors);
-            for conversion in self.sema.expression_conversions(e) {
-                let target = IntType::snapshot(self.sema, conversion.ty)?;
-                if target != self.expressions[id].ty {
-                    id = self.push_expr(ExpressionKind::Convert(id), target, e.source_vectors);
-                }
-            }
-            _ = self.expression_ids.insert(ordinal, id);
+    fn expression(&mut self, e: &'tu AstExpr<'tu>) -> Result<usize, Error> {
+        let ordinal = self
+            .sema
+            .expression_index(e)
+            .ok_or_else(|| unsupported("missing expression facts", e.source_vectors))?;
+        if let Some(&id) = self.expression_ids.get(&ordinal) {
+            return Ok(id);
         }
-        Ok(self.expression_ids[&self.sema.expression_index(root).expect("checked")])
+        match e.kind {
+            | E::Binary {
+                left_expression: a,
+                right_expression: b,
+                ..
+            } => {
+                _ = self.expression(a)?;
+                _ = self.expression(b)?;
+            },
+            | E::Unary {
+                operand_expression: a,
+                ..
+            }
+            | E::Parenthesized { expression: a }
+            | E::Cast {
+                operand_expression: a,
+                ..
+            } => _ = self.expression(a)?,
+            | E::Conditional(c) => {
+                _ = self.expression(c.condition_expression)?;
+                _ = self.expression(c.then_expression)?;
+                _ = self.expression(c.else_expression)?;
+            },
+            | E::Call { arguments, .. } =>
+                for &arg in arguments {
+                    _ = self.expression(arg)?;
+                },
+            | _ => {},
+        }
+        let info = self
+            .sema
+            .expression_info(e)
+            .ok_or_else(|| unsupported("missing expression type", e.source_vectors))?;
+        let ty = IntType::snapshot(self.sema, info.ty)?;
+        let child = |a| {
+            self.sema
+                .expression_index(a)
+                .and_then(|i| self.expression_ids.get(&i))
+                .copied()
+                .ok_or_else(|| unsupported("missing child", e.source_vectors))
+        };
+        let place = |a| {
+            self.sema
+                .designation(a)
+                .and_then(|d| d.binding)
+                .and_then(|b| self.bindings.get(&b))
+                .copied()
+                .ok_or_else(|| unsupported("nonlocal or noninteger place", e.source_vectors))
+        };
+        let kind = match e.kind {
+            | E::Constant(_) | E::SizeofType(_) | E::SizeofExpr(_) => {
+                let value = info
+                    .integer
+                    .ok_or_else(|| unsupported("nonconstant integer leaf", e.source_vectors))?;
+                ExpressionKind::Constant((value.value as u64) & ty.mask())
+            },
+            | E::Identifier(_) => {
+                if let Some(binding) = info.binding
+                    && self.sema.bindings[binding].kind == BindingKind::Enumerator
+                {
+                    ExpressionKind::Constant(
+                        info.integer
+                            .ok_or_else(|| {
+                                unsupported("enumerator without value", e.source_vectors)
+                            })?
+                            .value as u64,
+                    )
+                } else {
+                    ExpressionKind::Read(place(e)?)
+                }
+            },
+            | E::Parenthesized { expression: a }
+            | E::Cast {
+                operand_expression: a,
+                ..
+            } => ExpressionKind::Convert(child(a)?),
+            | E::Unary {
+                operator,
+                operand_expression: a,
+            } => match operator {
+                | U::Plus => ExpressionKind::Convert(child(a)?),
+                | U::Minus | U::LogicalNot | U::BitwiseNot => ExpressionKind::Unary(
+                    match operator {
+                        | U::Minus => Unary::Negate,
+                        | U::LogicalNot => Unary::Not,
+                        | _ => Unary::Invert,
+                    },
+                    child(a)?,
+                ),
+                | U::PreIncrement | U::PostIncrement | U::PreDecrement | U::PostDecrement => {
+                    let local = place(a)?;
+                    let promoted = if ty.bits < 32 {
+                        IntType {
+                            scalar: Scalar::Int,
+                            bits:   32,
+                            signed: true,
+                        }
+                    } else {
+                        ty
+                    };
+                    ExpressionKind::Update {
+                        local,
+                        increment: matches!(operator, U::PreIncrement | U::PostIncrement),
+                        postfix: matches!(operator, U::PostIncrement | U::PostDecrement),
+                        promoted,
+                    }
+                },
+                | _ => return Err(unsupported("unary operation", e.source_vectors)),
+            },
+            | E::Binary {
+                operator,
+                left_expression: a,
+                right_expression: b,
+            } => {
+                let (left, right) = (child(a)?, child(b)?);
+                match operator {
+                    | B::Comma => ExpressionKind::Sequence(left, right),
+                    | B::LogicalAnd | B::LogicalOr => ExpressionKind::Logical {
+                        left,
+                        right,
+                        and: operator == B::LogicalAnd,
+                    },
+                    | B::Assignment => ExpressionKind::Set {
+                        local:     place(a)?,
+                        value:     right,
+                        operation: None,
+                    },
+                    | op if assignment(op).is_some() => ExpressionKind::Set {
+                        local:     place(a)?,
+                        value:     right,
+                        operation: Some((
+                            assignment(op).expect("guarded"),
+                            IntType::snapshot(
+                                self.sema,
+                                info.operation_type.ok_or_else(|| {
+                                    unsupported("compound operation type", e.source_vectors)
+                                })?,
+                            )?,
+                        )),
+                    },
+                    | op => ExpressionKind::Binary(
+                        binary(op)
+                            .ok_or_else(|| unsupported("binary operation", e.source_vectors))?,
+                        left,
+                        right,
+                    ),
+                }
+            },
+            | E::Conditional(c) => ExpressionKind::Conditional {
+                condition: child(c.condition_expression)?,
+                then:      child(c.then_expression)?,
+                otherwise: child(c.else_expression)?,
+            },
+            | E::Call {
+                function_expression,
+                arguments,
+            } => {
+                let call = self
+                    .sema
+                    .call_facts(e)
+                    .ok_or_else(|| unsupported("missing call facts", e.source_vectors))?;
+                if !call.prototype || call.variadic {
+                    return Err(unsupported(
+                        "nonprototype or variadic call",
+                        e.source_vectors,
+                    ));
+                }
+                let binding = self
+                    .sema
+                    .designation(function_expression)
+                    .and_then(|d| d.binding)
+                    .ok_or_else(|| unsupported("indirect call", e.source_vectors))?;
+                let entity = self
+                    .sema
+                    .correspondence
+                    .entity_of(binding, self.sema.bindings[binding])
+                    .0;
+                let function = self
+                    .signatures
+                    .iter()
+                    .position(|s| s.entity == entity)
+                    .ok_or_else(|| unsupported("external call", e.source_vectors))?;
+                let mut args = ArenaVec::new_in(self.arena);
+                for &a in arguments {
+                    args.push(child(a)?);
+                }
+                ExpressionKind::Call {
+                    function,
+                    arguments: self.arena.alloc_slice_copy(&args),
+                }
+            },
+            | _ =>
+                return Err(unsupported(
+                    "expression outside integer slice",
+                    e.source_vectors,
+                )),
+        };
+        let mut id = self.push_expr(kind, ty, e.source_vectors);
+        for conversion in self.sema.expression_conversions(e) {
+            let target = IntType::snapshot(self.sema, conversion.ty)?;
+            if target != self.expressions[id].ty {
+                id = self.push_expr(ExpressionKind::Convert(id), target, e.source_vectors);
+            }
+        }
+        _ = self.expression_ids.insert(ordinal, id);
+        Ok(id)
     }
 
     fn push_expr(
@@ -607,6 +599,10 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
 
     fn emit(&mut self, kind: InstructionKind, origin: SourceVectors) {
         self.code.push(Instruction { kind, origin });
+    }
+
+    fn place_label(&mut self, label: usize) {
+        self.labels[label] = self.code.len();
     }
 
     fn label(&mut self) -> usize {
@@ -626,13 +622,6 @@ impl<'s, 'tu, 'ir> Lowerer<'s, 'tu, 'ir> {
 struct State {
     depth:   usize,
     loop_to: Option<(usize, usize, usize)>,
-}
-
-enum Task<'tu> {
-    Statement(&'tu Statement<'tu>, State),
-    Declaration(&'tu Declaration<'tu>, usize),
-    Emit(InstructionKind, SourceVectors),
-    Label(usize),
 }
 
 fn slot_expr(slot: ExpressionSlot<'_>, origin: SourceVectors) -> Result<&AstExpr<'_>, Error> {

@@ -1,4 +1,9 @@
-//! Bounded execution with explicit activation, object and expression stacks.
+//! Bounded execution by native recursion, following the recursive parser and
+//! lowering studies: one Rust call per activation and per expression node.
+//! Activation records, objects and lexical scopes remain data, because the
+//! trace and debugger views inspect them. The caller supplies the native
+//! stack (the tests use the reserved compilation worker); `Limits::nesting`
+//! bounds its depth.
 //! C99: §6.2.4p5, p. 32; PDF p. 44; §6.5p2,5, p. 67; PDF p. 79;
 //! §6.5.2.2p10, p. 72; PDF p. 84; §6.8.6.4p3, p. 139; PDF p. 151.
 //! Indeterminate reads stop as policy-dependent execution, not mandatory ISO
@@ -33,10 +38,10 @@ pub(super) fn evaluate<'a>(
         frames: ArenaVec::new_in(arena),
         locals: ArenaVec::new_in(arena),
         scopes: ArenaVec::new_in(arena),
-        tasks: ArenaVec::new_in(arena),
-        values: ArenaVec::new_in(arena),
+        arguments: ArenaVec::new_in(arena),
         events: ArenaVec::new_in(arena),
         steps: 0,
+        nesting: 0,
         next_activation: 0,
         next_instance: 0,
         origin: None,
@@ -54,12 +59,13 @@ pub(super) fn evaluate<'a>(
         {
             return Err(Failure::InvalidIr);
         }
-        machine.values.extend(args.iter().map(|&value| Evaluated {
-            value,
-            effects: Effects::default(),
-        }));
-        machine.enter(function, args.len())?;
-        machine.run()
+        machine
+            .arguments
+            .extend(args.iter().map(|&value| Evaluated {
+                value,
+                effects: Effects::default(),
+            }));
+        machine.call(function, 0)
     })();
     let result = result.map_err(|failure| Error::new(failure, machine.origin));
     if let Err(error) = result
@@ -84,364 +90,280 @@ struct Machine<'m, 'ir, 'a> {
     frames:          ArenaVec<'a, Frame>,
     locals:          ArenaVec<'a, Cell>,
     scopes:          ArenaVec<'a, usize>,
-    tasks:           ArenaVec<'a, Action>,
-    values:          ArenaVec<'a, Evaluated>,
+    /// Evaluated arguments of calls whose callee has not been entered yet.
+    arguments:       ArenaVec<'a, Evaluated>,
     events:          ArenaVec<'a, Event>,
     steps:           usize,
+    nesting:         usize,
     next_activation: u64,
     next_instance:   u64,
     origin:          Option<SourceVectors>,
 }
 
 impl<'ir> Machine<'_, 'ir, '_> {
-    fn run(&mut self) -> Result<Value, Failure> {
-        while let Some(action) = self.tasks.pop() {
-            if self.steps == self.limits.steps {
-                return Err(Failure::Limit("steps"));
-            }
-            self.steps += 1;
-            if let Some(value) = self.step(action)? {
-                return Ok(value);
-            }
-        }
-        Err(Failure::InvalidIr)
+    /// Runs one activation whose arguments are `arguments[start..]`. A failed
+    /// activation stays on `frames`, so the failure event names it.
+    fn call(&mut self, function: usize, start: usize) -> Result<Value, Failure> {
+        self.enter()?;
+        self.activate(function, start)?;
+        let value = self.body()?;
+        let frame = self.frames.pop().ok_or(Failure::InvalidIr)?;
+        self.locals.truncate(frame.base);
+        self.nesting -= 1;
+        Ok(value)
     }
 
-    fn step(&mut self, action: Action) -> Result<Option<Value>, Failure> {
-        match action {
-            | Action::Step => {
-                let frame = self.frames.last_mut().ok_or(Failure::InvalidIr)?;
-                let f = &self.module.functions[frame.function];
-                let op = *f.code.get(frame.pc).ok_or(Failure::InvalidIr)?;
-                frame.pc += 1;
-                self.origin = Some(op.origin);
-                match op.kind {
-                    | InstructionKind::Enter(scope) => {
-                        self.scopes.push(scope);
-                        let frame = *self.frame()?;
-                        for (id, local) in f.locals.iter().enumerate() {
-                            if local.scope != scope {
-                                continue;
-                            }
-                            let cell = self
-                                .locals
-                                .get_mut(frame.base + id)
-                                .ok_or(Failure::InvalidIr)?;
-                            if cell.live {
-                                return Err(Failure::InvalidIr);
-                            }
-                            self.next_instance += 1;
-                            cell.instance = self.next_instance;
-                            cell.live = true;
-                            if !local.parameter {
-                                cell.value = None;
-                            }
-                            self.event(
-                                EventKind::Begin {
-                                    local:    id,
-                                    instance: self.next_instance,
-                                },
-                                Some(local.origin),
-                            )?;
-                        }
-                        self.tasks.push(Action::Step);
+    /// Executes statement instructions in order until the activation returns.
+    fn body(&mut self) -> Result<Value, Failure> {
+        let f = self.function()?;
+        let mut pc = 0;
+        loop {
+            self.tick()?;
+            let op = *f.code.get(pc).ok_or(Failure::InvalidIr)?;
+            pc += 1;
+            self.origin = Some(op.origin);
+            match op.kind {
+                | InstructionKind::Enter(scope) => self.begin(scope)?,
+                | InstructionKind::Exit => {
+                    let keep = self
+                        .scopes
+                        .len()
+                        .checked_sub(self.frame()?.scope_base + 1)
+                        .ok_or(Failure::InvalidIr)?;
+                    self.unwind(keep)?;
+                },
+                | InstructionKind::Declare { local, initializer } => {
+                    self.cell_mut(local)?.value = None;
+                    self.event(EventKind::Indeterminate { local }, self.origin)?;
+                    if let Some(e) = initializer {
+                        let v = self.expression(e)?.value.cast(f.locals[local].ty);
+                        self.write(local, v)?;
+                    }
+                    self.boundary()?;
+                },
+                | InstructionKind::Evaluate(e) => {
+                    _ = self.expression(e)?;
+                    self.boundary()?;
+                },
+                | InstructionKind::Branch {
+                    condition,
+                    then,
+                    otherwise,
+                } => {
+                    let v = self.expression(condition)?;
+                    self.boundary()?;
+                    pc = self.label(if v.value.bits != 0 { then } else { otherwise })?;
+                },
+                | InstructionKind::Jump { label, keep } => {
+                    self.unwind(keep)?;
+                    pc = self.label(label)?;
+                },
+                | InstructionKind::Return(e) => {
+                    let value = self.expression(e)?.value;
+                    return self.leave(value);
+                },
+                | InstructionKind::Fallthrough => {
+                    if f.signature.name != "main" {
+                        return Err(Failure::Unsupported("non-main fallthrough"));
+                    }
+                    return self.leave(Value::new(f.signature.result, 0));
+                },
+            }
+        }
+    }
+
+    /// C99: §6.8.6.4p3, p. 139; PDF p. 151; §5.1.2.2.3p1, p. 13; PDF p. 25.
+    fn leave(&mut self, value: Value) -> Result<Value, Failure> {
+        let value = value.cast(self.function()?.signature.result);
+        self.boundary()?;
+        self.unwind(0)?;
+        self.event(EventKind::Return, self.origin)?;
+        Ok(value)
+    }
+
+    /// Evaluates one expression node and its operands in their C order.
+    fn expression(&mut self, id: usize) -> Result<Evaluated, Failure> {
+        self.enter()?;
+        self.tick()?;
+        let result = self.expression_inner(id);
+        self.nesting -= 1;
+        result
+    }
+
+    fn expression_inner(&mut self, id: usize) -> Result<Evaluated, Failure> {
+        let e = *self
+            .function()?
+            .expressions
+            .get(id)
+            .ok_or(Failure::InvalidIr)?;
+        self.origin = Some(e.origin);
+        let evaluated = |value, effects| Ok(Evaluated { value, effects });
+        match e.kind {
+            | ExpressionKind::Constant(bits) =>
+                evaluated(Value::new(e.ty, bits), Effects::default()),
+            | ExpressionKind::Read(local) => {
+                let value = self.read(local)?.cast(e.ty);
+                evaluated(
+                    value,
+                    Effects {
+                        reads: 1 << local,
+                        ..Effects::default()
                     },
-                    | InstructionKind::Exit => {
-                        let keep = self
-                            .scopes
-                            .len()
-                            .checked_sub(self.frame()?.scope_base + 1)
-                            .ok_or(Failure::InvalidIr)?;
-                        self.unwind(keep)?;
-                        self.tasks.push(Action::Step);
-                    },
-                    | InstructionKind::Declare { local, initializer } => {
-                        self.cell_mut(local)?.value = None;
-                        self.event(EventKind::Indeterminate { local }, self.origin)?;
-                        if let Some(e) = initializer {
-                            self.tasks.push(Action::Initialize(local));
-                            self.tasks.push(Action::Expr(e));
-                        } else {
-                            self.boundary()?;
-                            self.tasks.push(Action::Step);
-                        }
-                    },
-                    | InstructionKind::Evaluate(e) => {
-                        self.tasks.push(Action::Discard);
-                        self.tasks.push(Action::Expr(e));
-                    },
-                    | InstructionKind::Branch {
-                        condition,
-                        then,
-                        otherwise,
-                    } => {
-                        self.tasks.push(Action::Branch(then, otherwise));
-                        self.tasks.push(Action::Expr(condition));
-                    },
-                    | InstructionKind::Jump { label, keep } => {
-                        self.unwind(keep)?;
-                        self.jump(label)?;
-                        self.tasks.push(Action::Step);
-                    },
-                    | InstructionKind::Return(e) => {
-                        self.tasks.push(Action::Return);
-                        self.tasks.push(Action::Expr(e));
-                    },
-                    | InstructionKind::Fallthrough => {
-                        if f.signature.name != "main" {
-                            return Err(Failure::Unsupported("non-main fallthrough"));
-                        }
-                        self.values.push(Evaluated {
-                            value:   Value::new(f.signature.result, 0),
-                            effects: Effects::default(),
-                        });
-                        self.tasks.push(Action::Return);
-                    },
-                }
+                )
             },
-            | Action::Expr(id) => {
-                let e = *self
-                    .function()?
-                    .expressions
-                    .get(id)
-                    .ok_or(Failure::InvalidIr)?;
+            | ExpressionKind::Convert(a) => {
+                let a = self.expression(a)?;
                 self.origin = Some(e.origin);
-                match e.kind {
-                    | ExpressionKind::Constant(bits) =>
-                        self.value(Value::new(e.ty, bits), Effects::default()),
-                    | ExpressionKind::Read(local) => {
-                        let value = self.read(local)?.cast(e.ty);
-                        self.value(
-                            value,
-                            Effects {
-                                reads: 1 << local,
-                                ..Effects::default()
-                            },
-                        );
-                    },
-                    | ExpressionKind::Convert(a) | ExpressionKind::Unary(_, a) => {
-                        self.tasks.push(Action::Finish(id));
-                        self.tasks.push(Action::Expr(a));
-                    },
-                    | ExpressionKind::Binary(_, a, _) | ExpressionKind::Sequence(a, _) => {
-                        self.tasks.push(Action::Finish(id));
-                        self.tasks.push(Action::Second(id));
-                        self.tasks.push(Action::Expr(a));
-                    },
-                    | ExpressionKind::Logical { left, .. }
-                    | ExpressionKind::Conditional {
-                        condition: left, ..
-                    } => {
-                        self.tasks.push(Action::Choose(id));
-                        self.tasks.push(Action::Expr(left));
-                    },
-                    | ExpressionKind::Set { value, .. } => {
-                        self.tasks.push(Action::Finish(id));
-                        self.tasks.push(Action::Expr(value));
-                    },
-                    | ExpressionKind::Update {
-                        local,
-                        increment,
-                        postfix,
-                        promoted,
-                    } => {
-                        let old = self.read(local)?;
-                        let value = arithmetic::binary(
-                            if increment {
-                                Binary::Add
-                            } else {
-                                Binary::Subtract
-                            },
-                            old.cast(promoted),
-                            Value::new(promoted, 1),
-                            promoted,
-                        )?
-                        .cast(old.ty);
-                        self.write(local, value)?;
-                        self.value(
-                            if postfix { old } else { value },
-                            Effects {
-                                reads:       1 << local,
-                                writes:      1 << local,
-                                tail_writes: 1 << local,
-                                sequence:    false,
-                            },
-                        );
-                    },
-                    | ExpressionKind::Call {
-                        function,
-                        arguments,
-                    } => {
-                        self.tasks
-                            .push(Action::Invoke(id, function, arguments.len()));
-                        for &arg in arguments.iter().rev() {
-                            self.tasks.push(Action::Expr(arg));
-                        }
-                    },
-                }
+                evaluated(a.value.cast(e.ty), a.effects)
             },
-            | Action::Second(id) => {
-                let e = self.function()?.expressions[id];
+            | ExpressionKind::Unary(op, a) => {
+                let a = self.expression(a)?;
                 self.origin = Some(e.origin);
-                let child = match e.kind {
-                    | ExpressionKind::Binary(_, _, b) => b,
-                    | ExpressionKind::Sequence(_, b) => {
-                        self.boundary()?;
-                        b
-                    },
-                    | _ => return Err(Failure::InvalidIr),
-                };
-                self.tasks.push(Action::Expr(child));
+                evaluated(arithmetic::unary(op, a.value, e.ty)?, a.effects)
             },
-            | Action::Finish(id) => {
-                let e = self.function()?.expressions[id];
+            | ExpressionKind::Binary(op, a, b) => {
+                let a = self.expression(a)?;
+                let b = self.expression(b)?;
                 self.origin = Some(e.origin);
-                let b = self.pop()?;
-                match e.kind {
-                    | ExpressionKind::Convert(_) => self.value(b.value.cast(e.ty), b.effects),
-                    | ExpressionKind::Unary(op, _) =>
-                        self.value(arithmetic::unary(op, b.value, e.ty)?, b.effects),
-                    | ExpressionKind::Binary(op, _, _) => {
-                        let a = self.pop()?;
-                        let effects = a.effects.unsequenced(b.effects)?;
-                        self.value(arithmetic::binary(op, a.value, b.value, e.ty)?, effects);
-                    },
-                    | ExpressionKind::Sequence(_, _) => {
-                        let a = self.pop()?;
-                        self.value(b.value.cast(e.ty), a.effects.sequenced(b.effects));
-                    },
-                    | ExpressionKind::Set {
-                        local, operation, ..
-                    } => {
-                        let bit = 1 << local;
-                        if b.effects.tail_writes & bit != 0 {
-                            return Err(Failure::Undefined(Undefined::UnsequencedAccess));
-                        }
-                        let mut effects = b.effects;
-                        let value = if let Some((op, ty)) = operation {
-                            if effects.sequence && effects.writes & bit != 0 {
-                                return Err(Failure::Unsupported(
-                                    "compound assignment across sequence points",
-                                ));
-                            }
-                            let old = self.read(local)?.cast(ty);
-                            effects.reads |= bit;
-                            arithmetic::binary(
-                                op,
-                                old,
-                                if matches!(op, Binary::ShiftLeft | Binary::ShiftRight) {
-                                    b.value
-                                } else {
-                                    b.value.cast(ty)
-                                },
-                                ty,
-                            )?
-                        } else {
-                            b.value
-                        };
-                        let value = value.cast(self.function()?.locals[local].ty);
-                        self.write(local, value)?;
-                        effects.writes |= bit;
-                        effects.tail_writes |= bit;
-                        self.value(value.cast(e.ty), effects);
-                    },
-                    | _ => return Err(Failure::InvalidIr),
-                }
+                let effects = a.effects.unsequenced(b.effects)?;
+                evaluated(arithmetic::binary(op, a.value, b.value, e.ty)?, effects)
             },
-            | Action::Choose(id) => {
-                let e = self.function()?.expressions[id];
+            | ExpressionKind::Sequence(a, b) => {
+                let a = self.expression(a)?;
                 self.origin = Some(e.origin);
-                let condition = self.pop()?;
                 self.boundary()?;
-                match e.kind {
-                    | ExpressionKind::Logical { right, and, .. } => {
-                        if (condition.value.bits != 0) == and {
-                            self.tasks.push(Action::Chosen(id, condition.effects));
-                            self.tasks.push(Action::Expr(right));
-                        } else {
-                            self.value(
-                                Value::new(e.ty, u64::from(!and)),
-                                condition.effects.sequenced(Effects::default()),
-                            );
-                        }
-                    },
-                    | ExpressionKind::Conditional {
-                        then, otherwise, ..
-                    } => {
-                        self.tasks.push(Action::Chosen(id, condition.effects));
-                        self.tasks.push(Action::Expr(if condition.value.bits != 0 {
-                            then
-                        } else {
-                            otherwise
-                        }));
-                    },
-                    | _ => return Err(Failure::InvalidIr),
-                }
-            },
-            | Action::Chosen(id, effects) => {
-                let e = self.function()?.expressions[id];
+                let b = self.expression(b)?;
                 self.origin = Some(e.origin);
-                let chosen = self.pop()?;
-                let value = if matches!(e.kind, ExpressionKind::Logical { .. }) {
-                    Value::new(e.ty, u64::from(chosen.value.bits != 0))
+                evaluated(b.value.cast(e.ty), a.effects.sequenced(b.effects))
+            },
+            | ExpressionKind::Logical { left, right, and } => {
+                let condition = self.expression(left)?;
+                self.origin = Some(e.origin);
+                self.boundary()?;
+                if (condition.value.bits != 0) == and {
+                    let chosen = self.expression(right)?;
+                    self.origin = Some(e.origin);
+                    evaluated(
+                        Value::new(e.ty, u64::from(chosen.value.bits != 0)),
+                        condition.effects.sequenced(chosen.effects),
+                    )
                 } else {
-                    chosen.value.cast(e.ty)
+                    evaluated(
+                        Value::new(e.ty, u64::from(!and)),
+                        condition.effects.sequenced(Effects::default()),
+                    )
+                }
+            },
+            | ExpressionKind::Conditional {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let condition = self.expression(condition)?;
+                self.origin = Some(e.origin);
+                self.boundary()?;
+                let chosen = self.expression(if condition.value.bits != 0 {
+                    then
+                } else {
+                    otherwise
+                })?;
+                self.origin = Some(e.origin);
+                evaluated(
+                    chosen.value.cast(e.ty),
+                    condition.effects.sequenced(chosen.effects),
+                )
+            },
+            | ExpressionKind::Set {
+                local,
+                value,
+                operation,
+            } => {
+                let b = self.expression(value)?;
+                self.origin = Some(e.origin);
+                let bit = 1 << local;
+                if b.effects.tail_writes & bit != 0 {
+                    return Err(Failure::Undefined(Undefined::UnsequencedAccess));
+                }
+                let mut effects = b.effects;
+                let value = if let Some((op, ty)) = operation {
+                    if effects.sequence && effects.writes & bit != 0 {
+                        return Err(Failure::Unsupported(
+                            "compound assignment across sequence points",
+                        ));
+                    }
+                    let old = self.read(local)?.cast(ty);
+                    effects.reads |= bit;
+                    arithmetic::binary(
+                        op,
+                        old,
+                        if matches!(op, Binary::ShiftLeft | Binary::ShiftRight) {
+                            b.value
+                        } else {
+                            b.value.cast(ty)
+                        },
+                        ty,
+                    )?
+                } else {
+                    b.value
                 };
-                self.value(value, effects.sequenced(chosen.effects));
+                let value = value.cast(self.function()?.locals[local].ty);
+                self.write(local, value)?;
+                effects.writes |= bit;
+                effects.tail_writes |= bit;
+                evaluated(value.cast(e.ty), effects)
             },
-            | Action::Invoke(id, function, count) => {
-                self.origin = Some(self.function()?.expressions[id].origin);
-                let start = self
-                    .values
-                    .len()
-                    .checked_sub(count)
-                    .ok_or(Failure::InvalidIr)?;
+            | ExpressionKind::Update {
+                local,
+                increment,
+                postfix,
+                promoted,
+            } => {
+                let old = self.read(local)?;
+                let value = arithmetic::binary(
+                    if increment {
+                        Binary::Add
+                    } else {
+                        Binary::Subtract
+                    },
+                    old.cast(promoted),
+                    Value::new(promoted, 1),
+                    promoted,
+                )?
+                .cast(old.ty);
+                self.write(local, value)?;
+                evaluated(
+                    if postfix { old } else { value },
+                    Effects {
+                        reads:       1 << local,
+                        writes:      1 << local,
+                        tail_writes: 1 << local,
+                        sequence:    false,
+                    },
+                )
+            },
+            | ExpressionKind::Call {
+                function,
+                arguments,
+            } => {
+                let start = self.arguments.len();
+                for &argument in arguments {
+                    let argument = self.expression(argument)?;
+                    self.arguments.push(argument);
+                }
+                self.origin = Some(e.origin);
                 let mut effects = Effects::default();
-                for i in start..self.values.len() {
-                    effects = effects.unsequenced(self.values[i].effects)?;
+                for i in start..self.arguments.len() {
+                    effects = effects.unsequenced(self.arguments[i].effects)?;
                 }
                 self.boundary()?;
-                self.tasks.push(Action::CallDone(effects));
-                self.enter(function, count)?;
-            },
-            | Action::CallDone(effects) => {
-                let result = self.pop()?;
-                self.value(result.value, effects.sequenced(Effects::default()));
-            },
-            | Action::Initialize(local) => {
-                let v = self.pop()?.value.cast(self.function()?.locals[local].ty);
-                self.write(local, v)?;
-                self.boundary()?;
-                self.tasks.push(Action::Step);
-            },
-            | Action::Discard => {
-                _ = self.pop()?;
-                self.boundary()?;
-                self.tasks.push(Action::Step);
-            },
-            | Action::Branch(then, otherwise) => {
-                let v = self.pop()?;
-                self.boundary()?;
-                self.jump(if v.value.bits != 0 { then } else { otherwise })?;
-                self.tasks.push(Action::Step);
-            },
-            | Action::Return => {
-                let value = self.pop()?.value.cast(self.function()?.signature.result);
-                self.boundary()?;
-                self.unwind(0)?;
-                self.event(EventKind::Return, self.origin)?;
-                let frame = self.frames.pop().ok_or(Failure::InvalidIr)?;
-                self.locals.truncate(frame.base);
-                if self.frames.is_empty() {
-                    return Ok(Some(value));
-                }
-                self.value(value, Effects::default());
+                let value = self.call(function, start)?;
+                evaluated(value, effects.sequenced(Effects::default()))
             },
         }
-        Ok(None)
     }
 
-    fn enter(&mut self, function: usize, count: usize) -> Result<(), Failure> {
+    /// Creates the activation's objects from `arguments[start..]`.
+    fn activate(&mut self, function: usize, start: usize) -> Result<(), Failure> {
         if self.frames.len() == self.limits.call_depth {
             return Err(Failure::Limit("call depth"));
         }
@@ -450,35 +372,80 @@ impl<'ir> Machine<'_, 'ir, '_> {
             .functions
             .get(function)
             .ok_or(Failure::InvalidIr)?;
-        if count != f.signature.parameters.len() {
+        if self.arguments.len().checked_sub(start) != Some(f.signature.parameters.len()) {
             return Err(Failure::InvalidIr);
         }
-        let start = self
-            .values
-            .len()
-            .checked_sub(count)
-            .ok_or(Failure::InvalidIr)?;
         let base = self.locals.len();
         for (i, local) in f.locals.iter().enumerate() {
-            let value = (i < count).then(|| self.values[start + i].value.cast(local.ty));
+            let value = self
+                .arguments
+                .get(start + i)
+                .filter(|_| i < f.signature.parameters.len())
+                .map(|argument| argument.value.cast(local.ty));
             self.locals.push(Cell {
                 value,
                 live: false,
                 instance: 0,
             });
         }
-        self.values.truncate(start);
+        self.arguments.truncate(start);
         self.next_activation += 1;
         self.frames.push(Frame {
             function,
-            pc: 0,
             base,
             scope_base: self.scopes.len(),
             activation: self.next_activation,
         });
         self.origin = Some(f.signature.origin);
-        self.event(EventKind::Call { function }, self.origin)?;
-        self.tasks.push(Action::Step);
+        self.event(EventKind::Call { function }, self.origin)
+    }
+
+    /// Starts the lifetime of every object declared in `scope`.
+    fn begin(&mut self, scope: usize) -> Result<(), Failure> {
+        self.scopes.push(scope);
+        let frame = *self.frame()?;
+        let f = self.function()?;
+        for (id, local) in f.locals.iter().enumerate() {
+            if local.scope != scope {
+                continue;
+            }
+            let cell = self
+                .locals
+                .get_mut(frame.base + id)
+                .ok_or(Failure::InvalidIr)?;
+            if cell.live {
+                return Err(Failure::InvalidIr);
+            }
+            self.next_instance += 1;
+            cell.instance = self.next_instance;
+            cell.live = true;
+            if !local.parameter {
+                cell.value = None;
+            }
+            self.event(
+                EventKind::Begin {
+                    local:    id,
+                    instance: self.next_instance,
+                },
+                Some(local.origin),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn enter(&mut self) -> Result<(), Failure> {
+        if self.nesting == self.limits.nesting {
+            return Err(Failure::Limit("evaluation nesting"));
+        }
+        self.nesting += 1;
+        Ok(())
+    }
+
+    fn tick(&mut self) -> Result<(), Failure> {
+        if self.steps == self.limits.steps {
+            return Err(Failure::Limit("steps"));
+        }
+        self.steps += 1;
         Ok(())
     }
 
@@ -565,22 +532,12 @@ impl<'ir> Machine<'_, 'ir, '_> {
         Ok(&self.module.functions[self.frame()?.function])
     }
 
-    fn jump(&mut self, label: usize) -> Result<(), Failure> {
-        let pc = *self
-            .function()?
+    fn label(&self, label: usize) -> Result<usize, Failure> {
+        self.function()?
             .labels
             .get(label)
-            .ok_or(Failure::InvalidIr)?;
-        self.frames.last_mut().ok_or(Failure::InvalidIr)?.pc = pc;
-        Ok(())
-    }
-
-    fn pop(&mut self) -> Result<Evaluated, Failure> {
-        self.values.pop().ok_or(Failure::InvalidIr)
-    }
-
-    fn value(&mut self, value: Value, effects: Effects) {
-        self.values.push(Evaluated { value, effects });
+            .copied()
+            .ok_or(Failure::InvalidIr)
     }
 
     fn boundary(&mut self) -> Result<(), Failure> {
@@ -649,6 +606,9 @@ pub(super) struct Limits {
     pub(super) steps:      usize,
     pub(super) call_depth: usize,
     pub(super) events:     usize,
+    /// Nested Rust calls (activations plus expression nodes), so that an
+    /// untrusted program cannot exhaust a smaller host stack.
+    pub(super) nesting:    usize,
 }
 
 impl Default for Limits {
@@ -657,6 +617,7 @@ impl Default for Limits {
             steps:      2_000_000,
             call_depth: 128,
             events:     1_000_000,
+            nesting:    1 << 16,
         }
     }
 }
@@ -664,7 +625,6 @@ impl Default for Limits {
 #[derive(Clone, Copy)]
 struct Frame {
     function:   usize,
-    pc:         usize,
     base:       usize,
     scope_base: usize,
     activation: u64,
@@ -717,20 +677,4 @@ impl Effects {
             sequence:    true,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-enum Action {
-    Step,
-    Expr(usize),
-    Second(usize),
-    Finish(usize),
-    Choose(usize),
-    Chosen(usize, Effects),
-    Invoke(usize, usize, usize),
-    CallDone(Effects),
-    Initialize(usize),
-    Discard,
-    Branch(usize, usize),
-    Return,
 }

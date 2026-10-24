@@ -6,9 +6,11 @@
 //! Neither path participates in ordinary compilation.
 //!
 //! Read `lower`, then `lowering::Lowerer::run` and `eval::evaluate`.
-//! `model` owns the contract, `arithmetic` its integer implementation,
-//! `lowering` the explicit syntax work stacks, and `tests` differential and
-//! semantic litmus cases. The scalar/LLVM boundary migration is later work.
+//! `model` owns the contract, `arithmetic` its integer implementation, and
+//! `tests` differential and semantic litmus cases. Lowering and evaluation
+//! recurse natively, as in the recursive parser and lowering studies; the
+//! tests run them on the reserved compilation stack. The scalar/LLVM boundary
+//! migration is later work.
 //!
 //! C99: §6.2.4p5, p. 32; PDF p. 44 (automatic lifetime);
 //! §6.3.1.3, p. 43; PDF p. 55 (integer conversion);

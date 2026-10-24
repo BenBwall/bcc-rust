@@ -514,9 +514,11 @@ ABI coercions for ordinary internal calls.
 Use immutable, module-owned dense IDs and arena tables, not borrowed pointers
 to sema internals whose arena may be released. Intern a reachable snapshot of
 semantic types, layouts and source origins; avoid copying the entire syntax
-tree. Keep arena allocation, nonrecursive work stacks and compact instruction
-records, but do not force every new semantic record into 16 bytes before
-measurement.
+tree. Keep arena allocation and compact instruction records, but do not force
+every new semantic record into 16 bytes before measurement. Traverse by native
+recursion on the reserved compilation stack, as the recursive parser and
+lowering study (`docs/research/recursive-lowering.md`) does, rather than with
+hand-written work stacks; bound recursion where input is untrusted.
 
 ```text
 CType = Void | Bool | Integer{rank, signedness, target_width}
@@ -1032,9 +1034,9 @@ back to legacy IR remain future work.
 | --- | --- |
 | `src/c_ir_study.rs` | Check capability gates, snapshot function signatures, lower bodies, copy source segments, verify the resulting module |
 | `src/c_ir_study/model.rs` | Closed integer/object/CFG contract, failure categories, reference/type checks and deterministic dump |
-| `src/c_ir_study/lowering.rs` | Iterative statement and expression work stacks consuming accepted sema facts; no frontend references escape |
+| `src/c_ir_study/lowering.rs` | Recursive statement and expression lowering (compound siblings iterate) consuming accepted sema facts; no frontend references escape |
 | `src/c_ir_study/arithmetic.rs` | Target-width arithmetic, conversions and explicit implementation policies, independently of the existing interpreter |
-| `src/c_ir_study/eval.rs` | Explicit action/frame/object stacks, bounded execution and source-linked events |
+| `src/c_ir_study/eval.rs` | Recursive evaluation (one Rust call per activation and expression node) over activation, object and scope records; bounded steps, calls, nesting and trace; source-linked events |
 | `src/c_ir_study/verify.rs` | Reachable CFG edges must agree on lexical scope stacks; jumps cannot silently invent nested lifetimes |
 | `src/c_ir_study/tests.rs` | Defined-program differential comparisons, semantic litmus cases and malformed-IR checks |
 
@@ -1056,8 +1058,18 @@ at the source operation even if its result is discarded. Indeterminate reads
 stop in their own category. Signed narrowing uses two's-complement low bits,
 and negative signed right shift uses arithmetic shift: these are explicit bcc
 policies, not universal C requirements. Default limits are 2,000,000 evaluator
-actions, 128 active calls and 1,000,000 retained events; the slice allows at most
-128 logical locals per function and integer widths through 64 bits.
+steps (one per executed instruction or expression node), 128 active calls,
+65,536 nested evaluator calls and 1,000,000 retained events; the slice allows at
+most 128 logical locals per function and integer widths through 64 bits.
+
+Lowering and evaluation follow the recursive parser and lowering study rather
+than the frame machines: each nested statement, expression node and C
+activation is one Rust call, and compound-statement siblings iterate so width
+never becomes depth. Activation, object and scope records remain explicit data
+because the trace and a debugger inspect them. The tests run the study on the
+same 100 GiB demand-paged compilation stack the study CLI uses, including a
+4,096-level block and expression nest; the nesting limit keeps an untrusted
+program from exhausting a smaller host stack such as a browser worker's.
 
 This milestone validates an executable semantic snapshot, not the full design.
 It has no pointer, aggregate, effective-type or provenance semantics, and no
