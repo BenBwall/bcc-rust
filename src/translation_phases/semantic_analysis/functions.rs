@@ -942,7 +942,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         d.identifier().map(|n| n.name),
                         None,
                     ),
-                    // Nested function prototypes retain their own prototype scope.
+                    // Nested function prototypes retain their own prototype
+                    // scope.
                     | _ => {},
                 }
             }

@@ -1843,7 +1843,8 @@ enum Work<'tu, 's> {
 struct Analyzer<'a, 'tu, 's> {
     references:              ArenaVec<'tu, EntityReference>,
     // Deterministic scaling-test counts: VM ancestors, offset members,
-    // initializer type nodes, initializer plan steps. They are absent from production compilation.
+    // initializer type nodes, initializer plan steps. They are absent from
+    // production compilation.
     #[cfg(test)]
     review_steps:            Cell<[usize; 4]>,
     context:                 &'a mut Context<'tu>,

@@ -1262,8 +1262,8 @@ impl PreprocessorExpressionOperator {
             | Self::LogicalOr => 12,
             | Self::QuestionMark | Self::Conditional => 13,
             | Self::Comma => 14,
-            // OpeningParenthesis is not a normal operator. We only pop it off the stack when we
-            // encounter a closing parenthesis.
+            // OpeningParenthesis is not a normal operator. We only pop it off
+            // the stack when we encounter a closing parenthesis.
             | Self::OpeningParenthesis => u32::MAX,
         }
     }
