@@ -699,7 +699,7 @@ pub(in crate::translation_phases::parsing) struct DeclarationSpecifiersFrame<'tu
 /// for imaginary types (§6.4.1 paragraph 2, p. 50; PDF p. 62), which only
 /// informative annex G specifies; the frame rejects it.
 #[derive(Debug, Clone, Copy)]
-enum PrimitiveTypeSpecifier {
+pub(in crate::translation_phases::parsing) enum PrimitiveTypeSpecifier {
     Signed,
     Unsigned,
     Int,
@@ -739,6 +739,12 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             return Some(ParseAction::Consume);
         }
         None
+    }
+
+    /// The construction parameters a recursive specifier parse needs: the
+    /// grammar context and whether an implicit-`int` declarator may follow.
+    pub(in crate::translation_phases::parsing) fn study_parameters(&self) -> (SpecifierMode, bool) {
+        (self.mode, self.implicit_name_allowed)
     }
 
     pub(in crate::translation_phases::parsing) fn parameter() -> Self {
@@ -1144,7 +1150,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 /// How a thread storage-class keyword was written: `_Thread_local` keeps
 /// the keyword's own spelling ID, and the aliases keep theirs.
 /// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
-fn thread_spelling(parser: &Parser<'_, '_, '_>, token: Token) -> ThreadSpelling {
+pub(in crate::translation_phases::parsing) fn thread_spelling(
+    parser: &Parser<'_, '_, '_>,
+    token: Token,
+) -> ThreadSpelling {
     if token.contents == KeywordTokenType::ThreadLocal.cache_id() {
         ThreadSpelling::Reserved
     } else if parser.context.string_cache.at(token.contents) == "__thread" {
@@ -1158,7 +1167,10 @@ fn thread_spelling(parser: &Parser<'_, '_, '_>, token: Token) -> ThreadSpelling 
 /// only `static` and `extern` can, and from C23 `auto` too.
 /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127. C23 (N3220): §6.7.2
 /// paragraph 2, p. 99; PDF p. 112.
-fn thread_conflicts(parser: &Parser<'_, '_, '_>, storage_class: StorageClass) -> bool {
+pub(in crate::translation_phases::parsing) fn thread_conflicts(
+    parser: &Parser<'_, '_, '_>,
+    storage_class: StorageClass,
+) -> bool {
     match storage_class {
         | StorageClass::Static | StorageClass::Extern => false,
         | StorageClass::Auto =>
@@ -1167,7 +1179,9 @@ fn thread_conflicts(parser: &Parser<'_, '_, '_>, storage_class: StorageClass) ->
     }
 }
 
-fn storage_class(token: TokenType) -> Option<StorageClass> {
+pub(in crate::translation_phases::parsing) fn storage_class(
+    token: TokenType,
+) -> Option<StorageClass> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Auto) => Some(StorageClass::Auto),
         | TokenType::Keyword(KeywordTokenType::Register) => Some(StorageClass::Register),
@@ -1229,7 +1243,9 @@ pub(in crate::translation_phases::parsing) fn report_duplicate_type_qualifier(
 ///
 /// C99: §6.7.2, pp. 99-100; PDF pp. 111-112; `_Imaginary` caveat as documented
 /// on [`PrimitiveTypeSpecifier`].
-fn primitive_type_specifier(keyword: KeywordTokenType) -> Option<PrimitiveTypeSpecifier> {
+pub(in crate::translation_phases::parsing) fn primitive_type_specifier(
+    keyword: KeywordTokenType,
+) -> Option<PrimitiveTypeSpecifier> {
     match keyword {
         | KeywordTokenType::Signed => Some(PrimitiveTypeSpecifier::Signed),
         | KeywordTokenType::Unsigned => Some(PrimitiveTypeSpecifier::Unsigned),

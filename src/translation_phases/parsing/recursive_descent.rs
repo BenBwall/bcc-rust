@@ -18,8 +18,11 @@
 //! expressions §6.5, pp. 67-94; PDF pp. 79-106; statements §6.8,
 //! pp. 131-139; PDF pp. 143-151. Semantic constraints remain in analysis.
 
+mod declaration_specifiers;
+mod enum_specifier;
 mod expressions;
 mod statements;
+mod struct_or_union;
 
 #[cfg(test)]
 #[expect(
@@ -89,7 +92,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     pub(super) fn is_recursive_family(child: &ParseFrame<'tu, 'p>) -> bool {
         matches!(
             child,
-            ParseFrame::Expression(_) | ParseFrame::Statement(_) | ParseFrame::CompoundStatement(_)
+            ParseFrame::Expression(_)
+                | ParseFrame::Statement(_)
+                | ParseFrame::CompoundStatement(_)
+                | ParseFrame::DeclarationSpecifiers(_)
+                | ParseFrame::StructOrUnionSpecifier(_)
+                | ParseFrame::EnumSpecifier(_)
         )
     }
 
@@ -132,6 +140,18 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 self.rd_compound(function_body)
                     .map(ParseValue::CompoundStatement)
             },
+            | ParseFrame::DeclarationSpecifiers(frame) => {
+                let (mode, implicit_name_allowed) = frame.study_parameters();
+                self.rd_declaration_specifiers(mode, implicit_name_allowed)
+                    .map(ParseValue::DeclarationSpecifiers)
+            },
+            | ParseFrame::StructOrUnionSpecifier(frame) => {
+                self.pools.struct_or_union_specifiers.reclaim(frame);
+                self.rd_struct_or_union_specifier()
+                    .map(ParseValue::StructOrUnionSpecifier)
+            },
+            | ParseFrame::EnumSpecifier(_) =>
+                self.rd_enum_specifier().map(ParseValue::EnumSpecifier),
             | _ => unreachable!("only recursive grammar families are intercepted"),
         }
     }

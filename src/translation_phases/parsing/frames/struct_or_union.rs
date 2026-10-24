@@ -515,7 +515,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    if Self::member_list_continues(parser) {
+                    if member_list_continues(parser) {
                         // A stray `)` cannot end the member list; its `}`
                         // follows, so the member continues after it.
                         if !(resuming_after_recovery || width_recovered) {
@@ -669,101 +669,6 @@ pub(in crate::translation_phases::parsing) struct StructOrUnionSpecifierFrame<'t
 }
 
 impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
-    /// Whether the body's `}` follows a stray `)` after a member declarator,
-    /// with only member declarations in between.
-    ///
-    /// C99 §6.7.2.1p1: a struct-declaration-list holds member declarations,
-    /// each starting with a specifier or qualifier, so a `)` is stray when
-    /// the rest of the member and any member declarations lead to the list's
-    /// `}`. Inside an enclosing parenthesis, as in
-    /// `int f(struct S { int x ) int after;`, the `)` closes that
-    /// parenthesis and the body's `}` is missing. The scan is bounded so
-    /// repeated errors stay linear.
-    fn member_list_continues(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
-        const SCAN_LIMIT: usize = 64;
-        // Parentheses and brackets, which never contain `;`.
-        let mut groups = 0_u32;
-        // Nested struct, union, or enum bodies.
-        let mut braces = 0_u32;
-        // The first tokens finish the current member; each later member
-        // starts with a declaration specifier or qualifier.
-        let mut member_start = false;
-        let mut previous = None;
-        let mut before_previous = None;
-        for index in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(index) else {
-                return false;
-            };
-            let kind = token.kind;
-            if is_statement_keyword(kind) {
-                return false;
-            }
-            let top_level = groups == 0 && braces == 0;
-            if top_level && member_start && !is_operator(Some(token), OperatorTokenType::Semicolon)
-            {
-                if !is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace)
-                    && !parser.declaration_starter(token)
-                {
-                    return false;
-                }
-                member_start = false;
-            }
-            match kind {
-                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
-                    if groups > 0 {
-                        return false;
-                    }
-                    if braces == 0 {
-                        return true;
-                    }
-                    braces -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::Semicolon) => {
-                    if groups > 0 {
-                        return false;
-                    }
-                    member_start = braces == 0;
-                },
-                | TokenType::Operator(OperatorTokenType::Equals) if groups == 0 => return false,
-                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
-                    let opens_tag_body = |kind: Option<TokenType>| {
-                        matches!(
-                            kind,
-                            Some(TokenType::Keyword(
-                                KeywordTokenType::Struct
-                                    | KeywordTokenType::Union
-                                    | KeywordTokenType::Enum
-                            ))
-                        )
-                    };
-                    if groups == 0
-                        && !(opens_tag_body(previous)
-                            || matches!(previous, Some(TokenType::Identifier))
-                                && opens_tag_body(before_previous))
-                    {
-                        return false;
-                    }
-                    braces += 1;
-                },
-                | TokenType::Operator(
-                    OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
-                ) => groups += 1,
-                | TokenType::Operator(
-                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
-                ) => {
-                    if groups == 0 {
-                        return false;
-                    }
-                    groups -= 1;
-                },
-                | _ => {},
-            }
-            before_previous = previous;
-            previous = Some(kind);
-        }
-        false
-    }
-
     /// Checks member features before ending GNU `__extension__` suppression.
     /// C99: flexible array members §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
     fn finish_member(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
@@ -836,4 +741,100 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             suppression_entry: 0,
         }
     }
+}
+
+/// Whether the body's `}` follows a stray `)` after a member declarator,
+/// with only member declarations in between.
+///
+/// C99 §6.7.2.1p1: a struct-declaration-list holds member declarations,
+/// each starting with a specifier or qualifier, so a `)` is stray when
+/// the rest of the member and any member declarations lead to the list's
+/// `}`. Inside an enclosing parenthesis, as in
+/// `int f(struct S { int x ) int after;`, the `)` closes that
+/// parenthesis and the body's `}` is missing. The scan is bounded so
+/// repeated errors stay linear.
+pub(in crate::translation_phases::parsing) fn member_list_continues(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
+    const SCAN_LIMIT: usize = 64;
+    // Parentheses and brackets, which never contain `;`.
+    let mut groups = 0_u32;
+    // Nested struct, union, or enum bodies.
+    let mut braces = 0_u32;
+    // The first tokens finish the current member; each later member
+    // starts with a declaration specifier or qualifier.
+    let mut member_start = false;
+    let mut previous = None;
+    let mut before_previous = None;
+    for index in 0..SCAN_LIMIT {
+        let Some(token) = parser.cursor.lookahead(index) else {
+            return false;
+        };
+        let kind = token.kind;
+        if is_statement_keyword(kind) {
+            return false;
+        }
+        let top_level = groups == 0 && braces == 0;
+        if top_level && member_start && !is_operator(Some(token), OperatorTokenType::Semicolon) {
+            if !is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace)
+                && !parser.declaration_starter(token)
+            {
+                return false;
+            }
+            member_start = false;
+        }
+        match kind {
+            | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                if groups > 0 {
+                    return false;
+                }
+                if braces == 0 {
+                    return true;
+                }
+                braces -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::Semicolon) => {
+                if groups > 0 {
+                    return false;
+                }
+                member_start = braces == 0;
+            },
+            | TokenType::Operator(OperatorTokenType::Equals) if groups == 0 => return false,
+            | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
+                let opens_tag_body = |kind: Option<TokenType>| {
+                    matches!(
+                        kind,
+                        Some(TokenType::Keyword(
+                            KeywordTokenType::Struct
+                                | KeywordTokenType::Union
+                                | KeywordTokenType::Enum
+                        ))
+                    )
+                };
+                if groups == 0
+                    && !(opens_tag_body(previous)
+                        || matches!(previous, Some(TokenType::Identifier))
+                            && opens_tag_body(before_previous))
+                {
+                    return false;
+                }
+                braces += 1;
+            },
+            | TokenType::Operator(
+                OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
+            ) => groups += 1,
+            | TokenType::Operator(
+                OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+            ) => {
+                if groups == 0 {
+                    return false;
+                }
+                groups -= 1;
+            },
+            | _ => {},
+        }
+        before_previous = previous;
+        previous = Some(kind);
+    }
+    false
 }

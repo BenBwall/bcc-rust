@@ -176,9 +176,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::AwaitTagAttributes;
                     return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
                 }
-                if is_operator(token, OperatorTokenType::Colon)
-                    && Self::underlying_type_follows(parser)
-                {
+                if is_operator(token, OperatorTokenType::Colon) && underlying_type_follows(parser) {
                     let token = token.expect("colon exists");
                     parser.extension(
                         crate::configuration::Feature::EnumUnderlyingType,
@@ -217,9 +215,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 }
             },
             | EnumPhase::AfterName => {
-                if is_operator(token, OperatorTokenType::Colon)
-                    && Self::underlying_type_follows(parser)
-                {
+                if is_operator(token, OperatorTokenType::Colon) && underlying_type_follows(parser) {
                     let token = token.expect("colon exists");
                     if self.underlying_type.is_some() {
                         parser.report(
@@ -300,7 +296,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                         ),
                         token,
                     );
-                    if Self::enumerator_list_continues(parser) {
+                    if enumerator_list_continues(parser) {
                         // A stray `)` cannot end the list; its `}` follows.
                         let token = token.expect("closing-parenthesis token exists");
                         self.source_vectors.push(token.source_vectors);
@@ -318,7 +314,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else if let Some(misplaced) = token
-                    && Self::misplaced_enumerator(parser, misplaced)
+                    && misplaced_enumerator(parser, misplaced)
                 {
                     // C99 §6.7.2.2p1: an enumeration constant is an
                     // identifier. A keyword or constant written in its place
@@ -442,7 +438,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let stray = Self::enumerator_list_continues(parser);
+                    let stray = enumerator_list_continues(parser);
                     if !(stray && resuming_after_error) {
                         parser.report(
                             ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
@@ -470,7 +466,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Reprocess
                 } else if let Some(misplaced) = token
-                    && Self::misplaced_enumerator(parser, misplaced)
+                    && misplaced_enumerator(parser, misplaced)
                 {
                     // The `,` is missing before a keyword or constant that
                     // stands in for the next enumerator; consume it so it is
@@ -592,99 +588,6 @@ pub(in crate::translation_phases::parsing) struct EnumSpecifierFrame<'tu, 'p> {
 }
 
 impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
-    /// Whether the current `:` opens an enum-type-specifier, whose
-    /// specifier-qualifier-list must follow it. Any other colon belongs to
-    /// the enclosing grammar: a generic association or an unnamed bit-field.
-    /// C23: §6.7.3.3 paragraph 1, p. 109; PDF p. 122.
-    fn underlying_type_follows(parser: &Parser<'_, 'tu, 'p>) -> bool {
-        parser
-            .cursor
-            .following()
-            .is_some_and(|token| parser.type_name_starter(token))
-    }
-
-    /// Whether `token`, which cannot start an enumerator, stands alone in
-    /// enumerator position: a non-identifier, non-delimiter token followed by
-    /// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
-    /// stops before a following declaration.
-    fn misplaced_enumerator(parser: &mut Parser<'_, 'tu, 'p>, token: Token) -> bool {
-        !matches!(token.kind, TokenType::Identifier)
-            && !matches!(
-                token.kind,
-                TokenType::Operator(
-                    OperatorTokenType::OpeningParenthesis
-                        | OperatorTokenType::OpeningSquareBracket
-                        | OperatorTokenType::OpeningCurlyBrace
-                        | OperatorTokenType::ClosingParenthesis
-                        | OperatorTokenType::ClosingSquareBracket
-                        | OperatorTokenType::ClosingCurlyBrace
-                        | OperatorTokenType::Comma
-                        | OperatorTokenType::Semicolon
-                        | OperatorTokenType::Equals
-                )
-            )
-            && parser.cursor.following().is_some_and(|following| {
-                matches!(
-                    following.kind,
-                    TokenType::Operator(
-                        OperatorTokenType::Comma
-                            | OperatorTokenType::Equals
-                            | OperatorTokenType::ClosingCurlyBrace
-                    )
-                )
-            })
-    }
-
-    /// Whether the body's `}` follows a stray `)` before anything that
-    /// cannot appear in an enumerator list.
-    ///
-    /// C99 §6.7.2.2p1: an enumerator list holds only enumerators, `=`,
-    /// constant expressions, and commas, so a `)` is stray when the list's
-    /// `}` still follows. Inside an enclosing parenthesis, as in
-    /// `int f(enum E { A ) int after;`, the `)` closes that parenthesis and
-    /// the body's `}` is missing. The scan is bounded so repeated errors stay
-    /// linear.
-    fn enumerator_list_continues(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
-        const SCAN_LIMIT: usize = 64;
-        let mut nesting = 0_u32;
-        for index in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(index) else {
-                return false;
-            };
-            match token.kind {
-                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
-                    if nesting == 0 {
-                        return true;
-                    }
-                    nesting -= 1;
-                },
-                | TokenType::Operator(
-                    OperatorTokenType::OpeningParenthesis
-                    | OperatorTokenType::OpeningSquareBracket
-                    | OperatorTokenType::OpeningCurlyBrace,
-                ) => nesting += 1,
-                | TokenType::Operator(
-                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
-                ) => {
-                    if nesting == 0 {
-                        return false;
-                    }
-                    nesting -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
-                | kind if is_statement_keyword(kind)
-                    || nesting == 0
-                        && !matches!(kind, TokenType::Identifier)
-                        && parser.declaration_starter(token) =>
-                {
-                    return false;
-                },
-                | _ => {},
-            }
-        }
-        false
-    }
-
     fn finish_enumerator(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
@@ -742,4 +645,104 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             resuming_after_error: false,
         }
     }
+}
+
+/// Whether the current `:` opens an enum-type-specifier, whose
+/// specifier-qualifier-list must follow it. Any other colon belongs to
+/// the enclosing grammar: a generic association or an unnamed bit-field.
+/// C23: §6.7.3.3 paragraph 1, p. 109; PDF p. 122.
+pub(in crate::translation_phases::parsing) fn underlying_type_follows(
+    parser: &Parser<'_, '_, '_>,
+) -> bool {
+    parser
+        .cursor
+        .following()
+        .is_some_and(|token| parser.type_name_starter(token))
+}
+
+/// Whether `token`, which cannot start an enumerator, stands alone in
+/// enumerator position: a non-identifier, non-delimiter token followed by
+/// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
+/// stops before a following declaration.
+pub(in crate::translation_phases::parsing) fn misplaced_enumerator(
+    parser: &mut Parser<'_, '_, '_>,
+    token: Token,
+) -> bool {
+    !matches!(token.kind, TokenType::Identifier)
+        && !matches!(
+            token.kind,
+            TokenType::Operator(
+                OperatorTokenType::OpeningParenthesis
+                    | OperatorTokenType::OpeningSquareBracket
+                    | OperatorTokenType::OpeningCurlyBrace
+                    | OperatorTokenType::ClosingParenthesis
+                    | OperatorTokenType::ClosingSquareBracket
+                    | OperatorTokenType::ClosingCurlyBrace
+                    | OperatorTokenType::Comma
+                    | OperatorTokenType::Semicolon
+                    | OperatorTokenType::Equals
+            )
+        )
+        && parser.cursor.following().is_some_and(|following| {
+            matches!(
+                following.kind,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Equals
+                        | OperatorTokenType::ClosingCurlyBrace
+                )
+            )
+        })
+}
+
+/// Whether the body's `}` follows a stray `)` before anything that
+/// cannot appear in an enumerator list.
+///
+/// C99 §6.7.2.2p1: an enumerator list holds only enumerators, `=`,
+/// constant expressions, and commas, so a `)` is stray when the list's
+/// `}` still follows. Inside an enclosing parenthesis, as in
+/// `int f(enum E { A ) int after;`, the `)` closes that parenthesis and
+/// the body's `}` is missing. The scan is bounded so repeated errors stay
+/// linear.
+pub(in crate::translation_phases::parsing) fn enumerator_list_continues(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
+    const SCAN_LIMIT: usize = 64;
+    let mut nesting = 0_u32;
+    for index in 0..SCAN_LIMIT {
+        let Some(token) = parser.cursor.lookahead(index) else {
+            return false;
+        };
+        match token.kind {
+            | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                if nesting == 0 {
+                    return true;
+                }
+                nesting -= 1;
+            },
+            | TokenType::Operator(
+                OperatorTokenType::OpeningParenthesis
+                | OperatorTokenType::OpeningSquareBracket
+                | OperatorTokenType::OpeningCurlyBrace,
+            ) => nesting += 1,
+            | TokenType::Operator(
+                OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+            ) => {
+                if nesting == 0 {
+                    return false;
+                }
+                nesting -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
+            | kind if is_statement_keyword(kind)
+                || nesting == 0
+                    && !matches!(kind, TokenType::Identifier)
+                    && parser.declaration_starter(token) =>
+            {
+                return false;
+            },
+            | _ => {},
+        }
+    }
+    false
 }
