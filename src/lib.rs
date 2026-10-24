@@ -66,6 +66,10 @@ mod lowering;
 )]
 mod optimizer;
 
+// Isolated semantic experiment; never part of the compiler's default build.
+#[cfg(test)]
+mod c_ir_study;
+
 // Invocation and language choices
 mod builtins;
 mod cli;
