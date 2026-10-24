@@ -66,7 +66,6 @@ mod lowering;
 )]
 mod optimizer;
 
-#[cfg(feature = "reserved-compilation-stack")]
 #[expect(
     dead_code,
     unused_imports,
@@ -137,15 +136,17 @@ use coz as _;
 /// Runs a complete compilation callback on a demand-paged native stack.
 /// Create arenas and context inside the callback and keep all phases that
 /// borrow them there. Only sendable results may leave the joined worker.
-/// The reservation is finite; exhaustion is fatal, not a parser diagnostic.
+/// The parser's recursive descent runs on this stack; its nesting limit
+/// (`--max-nesting-depth`) keeps deep input from exhausting the reservation,
+/// which would be fatal rather than a diagnostic.
 ///
 /// # Errors
 /// Returns an OS error if the stack reservation or worker cannot be created.
-/// Only Linux and Windows implement the worker.
+/// Linux and Windows reserve a guarded demand-paged mapping; other platforms
+/// ask the standard thread builder for a stack of the requested size.
 ///
 /// # Panics
 /// Resumes a callback panic on the caller after joining and freeing the stack.
-#[cfg(feature = "reserved-compilation-stack")]
 pub fn with_compilation_stack<R: Send>(
     bytes: usize,
     compile: impl FnOnce() -> R + Send,

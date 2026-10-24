@@ -4,8 +4,9 @@
 //! `CreateThread` to reserve the requested size and lets its guard commit
 //! pages. Compiler calls have no stack-growth checks. Neither implementation
 //! moves active frames or catches overflow; exhausting the reservation remains
-//! fatal. The callback and its arenas live on the worker, and completion is
-//! synchronous.
+//! fatal; the parser's nesting limit keeps recursion far inside it. Other
+//! platforms use a standard thread with a stack of the requested size. The
+//! callback and its arenas live on the worker, and completion is synchronous.
 
 #[cfg(target_os = "linux")]
 #[path = "compilation_stack/linux.rs"]
@@ -42,13 +43,31 @@ where
     #[cfg(windows)]
     return windows::run(bytes, callback);
     #[cfg(not(any(target_os = "linux", windows)))]
-    {
-        let _ = (bytes, callback);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "reserved stacks require Linux or Windows",
-        ))
-    }
+    return portable_run(bytes, callback);
+}
+
+/// Other platforms: the standard thread builder's stack of `bytes`, which
+/// their thread libraries also back lazily. Its base is not reported.
+#[cfg(not(any(target_os = "linux", windows)))]
+fn portable_run<F, R>(bytes: usize, callback: F) -> io::Result<R>
+where
+    F: FnOnce(Bounds) -> R + Send,
+    R: Send,
+{
+    let bounds = Bounds {
+        base: 0,
+        bytes,
+        guard_bytes: 0,
+    };
+    thread::scope(|scope| {
+        let worker = thread::Builder::new()
+            .name("compilation".into())
+            .stack_size(bytes)
+            .spawn_scoped(scope, move || callback(bounds))?;
+        Ok(worker
+            .join()
+            .unwrap_or_else(|payload| panic::resume_unwind(payload)))
+    })
 }
 
 /// Usable address interval, excluding explicit Linux guards. Windows fills

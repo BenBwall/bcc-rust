@@ -88,12 +88,13 @@ use crate::{
 /// and `--interpret` with the program's status.
 #[doc(hidden)]
 pub fn run() -> Result<i32, MainError> {
-    #[cfg(feature = "reserved-compilation-stack")]
-    return crate::with_compilation_stack(100 * 1024_usize.pow(3), run_on_current_thread)
-        .map_err(MainError::CompilationStack)?;
-    #[cfg(not(feature = "reserved-compilation-stack"))]
-    run_on_current_thread()
+    crate::with_compilation_stack(COMPILATION_STACK_BYTES, run_on_current_thread)
+        .map_err(MainError::CompilationStack)?
 }
+
+/// Address space reserved for the compilation worker's stack. Pages are
+/// committed only as recursion touches them, so the size costs no memory.
+const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
 
 /// Keeps all compilation arenas, phases and output on the same thread.
 fn run_on_current_thread() -> Result<i32, MainError> {

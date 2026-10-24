@@ -19,7 +19,6 @@ use thiserror::Error;
 )]
 pub enum MainError {
     /// Reserving a native compilation stack failed before compiler setup.
-    #[cfg(feature = "reserved-compilation-stack")]
     #[error("error: cannot create compilation stack: {0}")]
     CompilationStack(io::Error),
     #[error("error: cannot read `{}`: {source}", path.display())]
