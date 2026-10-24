@@ -246,6 +246,21 @@ pub(super) struct StudyState<'tu> {
 }
 
 impl StudyState<'_> {
+    /// Porting oracle: `BCC_TEST_PARSER_MODE=recursive` runs every test parse
+    /// through the recursive grammar so the machine-mode expectations check
+    /// it. Temporary; removed once the frame machine is deleted.
+    pub(super) fn oracle_default() -> Self {
+        #[cfg(test)]
+        #[expect(clippy::disallowed_methods, reason = "test-only porting switch")]
+        if std::env::var_os("BCC_TEST_PARSER_MODE").is_some_and(|mode| mode == "recursive") {
+            return Self {
+                mode: StudyMode::Recursive,
+                ..Self::default()
+            };
+        }
+        Self::default()
+    }
+
     pub(super) fn enabled(&self) -> bool {
         self.mode != StudyMode::Machine && self.suspended == 0
     }
