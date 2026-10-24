@@ -1,0 +1,84 @@
+ABSTRACT MACHINE WASM CONTRACT v1 — 2026-10-21
+This file specifies the implemented ABI. Product design and final validation
+results live in abstract-machine-website.md; build instructions live in
+../../web/README.md.
+
+FEATURE BOUNDARY
+Cargo features: default=[native] preserves the existing compiler; the independent
+abstract-machine feature enables src/abstract_machine.rs without native compiler
+modules or dependencies. Build with cargo rustc --no-default-features --features abstract-machine
+--lib --crate-type cdylib --target wasm32-unknown-unknown. Explicit crate type
+keeps the native default artifact behavior unchanged.
+The native parser cannot be included with minimal cfg changes: its 100 GiB
+GrowingRegion reservations overflow wasm32, vm.rs implements only OS/Miri
+reservation APIs, binary128 and float parsing require generated native FFI, and
+build_support/native.rs requires TARGET=HOST and LLVM cross-language LTO.
+A wasm allocator would need bounded fixed regions (linear-memory growth cannot
+relocate live references), resource/include policy, and float conversion work.
+The prototype instead runs a self-contained, bounded C subset using std,
+without importing native modules. Full-frontend integration remains future work.
+
+RUST ENGINE INTERFACE:
+  abstract_machine::compile(source: &str) -> Result<Program, Diagnostic>
+  Program::session(&self) -> Session
+  Session::{state_json,trace_json} -> String
+  Session::{step,back} (return values ignored by bridge)
+  State::to_json(&self) -> String
+Bridge retains Program for reset and reconstructs its initial Session. No
+Session::compile or Session::reset adapter is required in the engine.
+Rejected source returns an engine-shaped status=error state with diagnostics;
+compile still returns ABI dispatch success (0). Previous session is discarded.
+State/trace JSON schema is engine-owned; UI should read actual model/json files.
+
+RAW WASM ABI (no wasm-bindgen, no imports, one session per wasm instance):
+  memory: exported WebAssembly.Memory
+  bcc_abi_version() -> u32 = 1
+  bcc_alloc(len: u32) -> u32  (zero-initialized input; 0 on invalid/too-large request)
+  bcc_free(ptr: u32, len: u32) (same pointer and length from alloc; free exactly once)
+  bcc_compile(ptr: u32, len: u32) -> u32
+  bcc_state() -> u32
+  bcc_step() -> u32
+  bcc_back() -> u32
+  bcc_reset() -> u32
+  bcc_trace() -> u32
+  bcc_response_ptr() -> u32
+  bcc_response_len() -> u32
+All operation exports return 0 on successful dispatch, 1 for invalid UTF-8/input
+or missing session. C compile diagnostics are a successful dispatch (see JSON).
+Response bytes are UTF-8 JSON owned by wasm, valid until the next operation.
+Use fresh Uint8Array(memory.buffer, ptr, len) after every call: allocation/step
+may grow memory and detach previous views. Copy/decode a response before calling
+another operation. Input remains caller-owned; compile copies/parses it before
+returning, then JS calls free. No calls are reentrant. Instance is single-threaded.
+Input limit: 1 MiB. Bounds/UTF-8 checked by compile; alloc/free are a C ABI requiring
+correct ownership and pairing. Invalid free is caller error, as in C.
+Transport failures return {"version":1,"error":"..."}.
+
+BUILD / TOOLS
+Rust 1.99.0 pinned; wasm32-unknown-unknown installed successfully via
+  rustup target add wasm32-unknown-unknown
+No wasm-bindgen/wasm-tools/wasm-opt installed; node is available for ABI smoke tests.
+Every cargo command must use, from this worktree root:
+  python3 /home/agent/workspace/bcc-rust/triage-2026-10-16/swarm/run.py cargo ...
+The web/build.sh script uses the wrapper and copies Cargo's reported artifact
+into web/pkg/bcc_rust.wasm before releasing the shared build lock. Do not guess
+a shared-cache artifact path: another worktree can clean it immediately afterward.
+Wasm uses explicit cargo rustc --crate-type cdylib, keeping native library artifact
+types unchanged. Native default builds continue to select the original compiler
+and build dependencies. No new dependencies or Cargo.lock changes were needed.
+
+Engine states use schema_version=1 and engine=bounded-c-subset; transport errors
+use version=1. The engine source limit is 32 KiB, below the raw transport's
+1 MiB allocation ceiling. The JS adapter enforces the smaller limit before copying.
+
+REPRODUCIBLE CHECKS (run after sh web/build.sh):
+  node --experimental-default-type=module web/check.mjs
+  node --experimental-default-type=module web/abi-check.mjs
+  node --experimental-default-type=module web/worker-check.mjs
+  node --experimental-default-type=module web/worker-check.mjs --missing
+The raw ABI check covers exports, zeroed allocations/limits/null, input bounds,
+UTF-8 rejection, C diagnostics/execution, state, reverse replay/reset, terminal
+fixed points and trace JSON. It instantiates the actual artifact without imports.
+The Worker check supplies Node messaging/fetch shims, not simulated C execution.
+See abstract-machine-website.md for final Rust check commands/results and the
+host-library error that blocked browser rendering and screenshots.

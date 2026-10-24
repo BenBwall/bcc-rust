@@ -1,0 +1,92 @@
+Bounded C execution API and schema v1
+
+CHOICE: independent, explicitly bounded C subset evaluator. No compiler/LLVM,
+filesystem, virtual-memory arena, serde, wasm-bindgen, or other dependencies.
+The native frontend was evaluated: pipeline::parse_translation_unit and
+analyze_translation_unit expose the right syntax/semantic inputs for a future
+adapter, but retain Context/Bump/RegionVec and native compiler dependencies.
+This prototype must NOT be labelled as executing bcc's full C frontend.
+
+The `abstract-machine` feature exposes `pub mod abstract_machine`. The module
+requires only std and builds on native and wasm32. `abstract_machine_wasm.rs`
+wraps the safe Rust API; the engine defines no raw exports.
+
+PUBLIC API:
+  pub const DEMO_SOURCE: &str;
+  pub fn compile(source: &str) -> Result<Program, Diagnostic>;
+  Program::session(&self) -> Session;
+  Program::source(&self) -> &str;
+  Session::step(&mut self) -> &State;
+  Session::back(&mut self) -> &State;
+  Session::state(&self) -> &State;
+  Session::state_json(&self) -> String;
+  Session::trace_json(&self) -> String;
+  Diagnostic::to_json(&self) -> String;
+No unsafe ABI in engine; wrapper can hold Session and return JSON bytes.
+
+JSON schema v1:
+  {schema_version:1, engine:"bounded-c-subset", step:number,
+   status:"ready"|"running"|"finished"|"undefined_behavior"|"error"|"limit",
+   source_range:{start:byteOffset,end:exclusiveByteOffset,line:oneBased,
+                 column:oneBased,end_line:oneBased,end_column:oneBased},
+   event:string, frames:[{id:number,function:string,depth:number}],
+   objects:[{id:number,name:string,type:string,frame_id:number,
+             storage_duration:"automatic",lifetime:"alive"|"ended",
+             value:Value}], pending_effects:[string], diagnostics:[Diagnostic],
+   return_value:null|Value}
+  Value = {kind:"indeterminate"} | {kind:"integer",value:number}
+        | {kind:"pointer",target:number|null,offset:number}
+        | {kind:"array",elements:[Value]}
+  Diagnostic = {kind:"unsupported"|"syntax"|"undefined_behavior"|"indeterminate"|"limit",
+                message:string,source_range:Range,citation:string|null}
+Pointer offsets are int elements, never host addresses. Object IDs never reused.
+source_range is the next operation; event describes the last completed step.
+Trace JSON: {schema_version:1,source:string,states:[State,...]}.
+Back restores a recorded complete machine state; forward replays existing states.
+
+Subset: signed 32-bit int, int pointers, fixed int arrays, int-returning named
+functions, named int/int* parameters, block locals/scopes, if/else, while, for,
+return, assignments, arithmetic/comparisons, address/dereference/subscript,
+prefix/postfix increment as standalone statements. Array brace initialization.
+No preprocessing, globals, library I/O, casts, structs, floating point, malloc,
+function pointers, arbitrary declarators, or compound side-effect expressions.
+Unsupported input is an explicit diagnostic, never scripted or ignored.
+Evaluation order: chosen left-to-right for side-effect-free operands; calls
+are allowed as a whole scalar initializer/RHS/return/condition/expression
+statement. Calls in array initializer lists and nested calls are rejected.
+Assignments/increments nested in expressions are rejected to avoid claiming
+unimplemented C99 sequencing checks. pending_effects describes the next store;
+this prototype does not model deferred/unsequenced writes.
+
+Bounds: source <=32 KiB; parser nesting <=64; code <=8192 operations;
+runtime <=2048 steps, <=32 frames, <=128 total objects, <=512 int cells,
+<=1024 operands; recorded states stop at an 8 MiB conservative retention
+threshold (plus one bounded terminal state and vector capacity overhead).
+Limits are explicit terminal diagnostics, not UB or silent truncation.
+
+IMPLEMENTATION NOTES:
+- Session snapshots retain the complete operand/call/scope/object state, rather
+  than recomputing execution on back/forward. IDs are activation/allocation IDs.
+- Indeterminate reads (including pointers whose targets have ended) stop with
+  kind "indeterminate", status "error" and a verified rule. This is a
+  conservative prototype policy, not a claim that every such read is UB.
+- UB checks: checked signed int arithmetic, division/remainder by zero,
+  invalid/null/one-past dereference, and pointer arithmetic outside the target.
+- &*p and &array[n] cancel indirection per C99 6.5.3.2p3, allowing formation
+  of a one-past pointer without treating it as a read.
+- Syntax, type and call-arity checks run for all parsed code, including dead
+  branches. Unknown names/callees, incompatible pointer/int assignments,
+  nested writes/calls, and unsupported preprocessing transformations fail.
+- Non-main fallthrough is conservatively unsupported even if a caller would
+  discard the value. Main fallthrough returns zero. Array tails initialize zero.
+- Pending effects describe the imminent store/increment; there is no deferred
+  side-effect queue, exhaustive order exploration, or whole-C UB certification.
+- No engine ABI exports; the wasm bridge wraps this safe API.
+- Calls require the current function or an earlier definition (self-recursion
+  works); forward calls require unsupported prototypes and are rejected.
+- Standalone (*p)++/(*p)-- and ++*p/--*p update the pointed-to int. Bare *p++
+  and *p-- are rejected as nested effects, preserving C postfix precedence.
+
+Automatic lifetimes begin at declarations in this prototype. C99 fixed
+automatic objects instead begin lifetime at block entry (6.2.4p5); initialization
+happens when the declaration is reached. This approximation is visible in the UI.
