@@ -1239,10 +1239,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                         usize::try_from(offset + size).expect("an initializer fits the object");
                     bytes[start..end].fill(0);
                     // C99 §6.7.8p19: replacement also discards old addresses.
-                    relocations.retain(|relocation: &Relocation| {
-                        relocation.offset + relocation.size() <= offset
-                            || relocation.offset >= offset + size
-                    });
+                    discard(&mut relocations, offset, offset + size);
                 },
                 | Leaf::Scalar {
                     offset,
@@ -1267,10 +1264,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let (start, size) = (index(offset, literal)?, index(size, literal)?);
                     let count = string.len().min(size);
                     bytes[start..start + size].fill(0);
-                    relocations.retain(|relocation| {
-                        relocation.offset + relocation.size() <= offset
-                            || relocation.offset >= offset + size as u64
-                    });
+                    discard(&mut relocations, offset, offset + size as u64);
                     bytes[start..start + count].copy_from_slice(&string[..count]);
                 },
                 | Leaf::Copy { expression, .. } =>
@@ -1335,9 +1329,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let (start, size) = (index(offset, expression)?, index(size, expression)?);
         // C99 §6.7.8p19: a later write replaces overlapping addresses,
         // including a scalar member that overwrites only part of a pointer.
-        relocations.retain(|relocation| {
-            relocation.offset + relocation.size() <= offset || relocation.offset >= offset + written
-        });
+        discard(relocations, offset, offset + written);
         let integer = info.integer.filter(|_| {
             representation == Repr::Pointer
                 || !matches!(
@@ -1426,11 +1418,14 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         {
             let target = self.label_difference(expression, width)?;
             bytes[start..start + size].fill(0);
-            relocations.push(Relocation {
-                offset,
-                target,
-                addend: 0,
-            });
+            insert(
+                relocations,
+                Relocation {
+                    offset,
+                    target,
+                    addend: 0,
+                },
+            );
             return Ok(());
         }
         // Semantic analysis keeps an address converted to an integer as wide
@@ -1447,11 +1442,14 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // that representation must not reappear if a later write drops the
         // relocation.
         bytes[start..start + size].fill(0);
-        relocations.push(Relocation {
-            offset,
-            target,
-            addend,
-        });
+        insert(
+            relocations,
+            Relocation {
+                offset,
+                target,
+                addend,
+            },
+        );
         Ok(())
     }
 
@@ -1753,22 +1751,70 @@ fn replicate(
         }
     }
     let mut inside = ArenaVec::new_in(scratch);
-    inside.extend(relocations.iter().copied().filter(|relocation| {
-        relocation.offset >= offset && relocation.offset + relocation.size() <= offset + size
-    }));
-    // Of the copies ending after a relocation's start, the first overlaps
-    // it if it starts before the relocation ends.
-    relocations.retain(|relocation| {
-        let after = relocation.offset.saturating_sub(offset + size) / stride + 1;
-        after > count || offset + after * stride >= relocation.offset + relocation.size()
-    });
+    inside.extend(
+        relocations[overlapping(relocations, offset, offset + size)]
+            .iter()
+            .copied()
+            .filter(|relocation| {
+                relocation.offset >= offset
+                    && relocation.offset + relocation.size() <= offset + size
+            }),
+    );
+    // Only relocations under the copies can change. Of the copies ending
+    // after a relocation's start, the first overlaps it if it starts before
+    // the relocation ends.
+    let copies = overlapping(relocations, offset + stride, end as u64);
+    let mut kept = ArenaVec::new_in(scratch);
+    kept.extend(
+        relocations[copies.clone()]
+            .iter()
+            .copied()
+            .filter(|relocation| {
+                let after = relocation.offset.saturating_sub(offset + size) / stride + 1;
+                after > count || offset + after * stride >= relocation.offset + relocation.size()
+            }),
+    );
+    // A kept relocation lies between copies, so merging keeps the order.
+    let mut kept = kept.into_iter().peekable();
+    let mut merged = ArenaVec::with_capacity_in(kept.len() + inside.len() * elements, scratch);
     for copy in 1..=count {
-        relocations.extend(inside.iter().map(|&relocation| Relocation {
-            offset: relocation.offset + copy * stride,
-            ..relocation
-        }));
+        for &relocation in &inside {
+            let relocation = Relocation {
+                offset: relocation.offset + copy * stride,
+                ..relocation
+            };
+            while let Some(earlier) = kept.next_if(|kept| kept.offset < relocation.offset) {
+                merged.push(earlier);
+            }
+            merged.push(relocation);
+        }
     }
+    merged.extend(kept);
+    drop(relocations.splice(copies, merged));
     Some(())
+}
+
+/// The positions of the relocations that overlap bytes `start..end`. Each
+/// write first discards the relocations it overlaps and [`insert`] keeps the
+/// list sorted by offset, so relocations never overlap and their ends are
+/// sorted too: one search finds the run, without scanning the whole list.
+fn overlapping(relocations: &[Relocation], start: u64, end: u64) -> std::ops::Range<usize> {
+    let first =
+        relocations.partition_point(|relocation| relocation.offset + relocation.size() <= start);
+    first..first + relocations[first..].partition_point(|relocation| relocation.offset < end)
+}
+
+/// Discards the relocations a write of bytes `start..end` replaces (C99
+/// §6.7.8 paragraph 19, p. 127; PDF p. 139).
+fn discard(relocations: &mut ArenaVec<'_, Relocation>, start: u64, end: u64) {
+    drop(relocations.drain(overlapping(relocations, start, end)));
+}
+
+/// Adds a relocation whose bytes no other relocation overlaps, in offset
+/// order.
+fn insert(relocations: &mut ArenaVec<'_, Relocation>, relocation: Relocation) {
+    let at = relocations.partition_point(|earlier| earlier.offset < relocation.offset);
+    relocations.insert(at, relocation);
 }
 
 /// A byte position in an object being initialized, which a static object
