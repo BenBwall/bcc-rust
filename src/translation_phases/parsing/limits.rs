@@ -18,9 +18,15 @@ use super::{
         ParserResource,
     },
 };
-use crate::translation_phases::{
-    GetSourceFileIndex,
-    preprocessing::Token,
+use crate::{
+    configuration::{
+        CompilerConfiguration,
+        DEFAULT_MAX_NESTING_DEPTH,
+    },
+    translation_phases::{
+        GetSourceFileIndex,
+        preprocessing::Token,
+    },
 };
 
 impl<'tu> Parser<'_, 'tu, '_> {
@@ -89,6 +95,16 @@ pub(super) struct ParserLimits {
     pub(super) source_segments:       usize,
 }
 
+impl ParserLimits {
+    /// The defaults with the configured nesting ceiling.
+    pub(super) fn for_configuration(configuration: CompilerConfiguration) -> Self {
+        Self {
+            frame_depth: configuration.max_nesting_depth() as usize,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for ParserLimits {
     fn default() -> Self {
         Self {
@@ -96,8 +112,9 @@ impl Default for ParserLimits {
             // There is no smaller grammar or representation limit.
             external_declarations: usize::MAX,
             syntax_nodes:          usize::MAX,
-            // Scope bindings store their nesting depth in a `u32`.
-            frame_depth:           u32::MAX as usize,
+            // Deep enough for generated code, shallow enough that the
+            // reserved compilation stack cannot overflow first.
+            frame_depth:           DEFAULT_MAX_NESTING_DEPTH as usize,
             // Each source arena checks its own `u32` index space. Their
             // combined count has no smaller representation limit than usize.
             source_segments:       usize::MAX,

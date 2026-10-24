@@ -248,6 +248,14 @@ struct Cli {
     /// Suppress all warning diagnostics (GCC -w).
     #[arg(short = 'w', long)]
     suppress_warnings: bool,
+    /// Stop parsing with a diagnostic once this many recursive grammar
+    /// productions are active at once. Each nested expression operand,
+    /// statement, block, declarator and initializer brace counts one level.
+    /// Raise it for machine-generated input that nests deeper.
+    #[arg(long, value_name = "N",
+        default_value_t = crate::configuration::DEFAULT_MAX_NESTING_DEPTH,
+        value_parser = clap::value_parser!(u32).range(1..))]
+    max_nesting_depth: u32,
     /// Spell `__DATE__` and `__TIME__` from seconds since the Unix epoch, in
     /// UTC.
     ///

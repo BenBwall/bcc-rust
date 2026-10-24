@@ -170,6 +170,17 @@ impl CompilerConfiguration {
         self.suppress_warnings
     }
 
+    /// The most recursive grammar productions the parser keeps active at
+    /// once before it stops with a resource diagnostic.
+    pub(crate) const fn max_nesting_depth(self) -> u32 {
+        self.max_nesting_depth
+    }
+
+    pub(crate) const fn with_max_nesting_depth(mut self, depth: u32) -> Self {
+        self.max_nesting_depth = depth;
+        self
+    }
+
     pub(crate) const fn standard(self) -> CStandard {
         self.standard
     }
@@ -249,6 +260,7 @@ impl CompilerConfiguration {
             optimization: (false, false),
             gnu89_inline: None,
             suppress_warnings: false,
+            max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,
             warning_options: [super::diagnostics::WarningSettings::DEFAULT;
                 super::DiagnosticGroup::COUNT],

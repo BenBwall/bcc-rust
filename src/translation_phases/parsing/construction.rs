@@ -120,6 +120,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             );
         }
         let tree = context.tu_arena();
+        let limits = ParserLimits::for_configuration(context.configuration);
         Self {
             #[cfg(feature = "parser-recursive-descent-study")]
             study: super::recursive_descent::StudyState::oracle_default(),
@@ -150,7 +151,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             has_external_declaration: false,
             reported_empty_translation_unit: false,
             external_declaration_count: 0,
-            limits: ParserLimits::default(),
+            limits,
             resource_limit_reported: false,
             #[cfg(test)]
             trace: FrameTrace::new(),

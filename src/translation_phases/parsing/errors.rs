@@ -1140,7 +1140,11 @@ impl ParserErrorType<'_> {
                 resource.description()
             ))
             .label("parsing stopped here")
-            .note("bcc bounds parser memory and nesting; split or simplify this input"),
+            .note(if *resource == ParserResource::FrameDepth {
+                "raise the limit with --max-nesting-depth=N, or simplify this input"
+            } else {
+                "bcc bounds parser memory and nesting; split or simplify this input"
+            }),
             | Self::ParserFrameConsumedAtEndOfInput(frame) => new(format_in!(
                 arena,
                 "internal compiler error: the {} parser read past the end of input",

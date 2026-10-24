@@ -85,8 +85,27 @@ pub(crate) struct CompilerConfiguration {
     gnu89_inline: Option<bool>,
     suppress_warnings: bool,
     warnings_as_errors: bool,
+    /// Most recursive grammar productions active at once; see
+    /// [`DEFAULT_MAX_NESTING_DEPTH`].
+    max_nesting_depth: u32,
     warning_options: [diagnostics::WarningSettings; DiagnosticGroup::COUNT],
 }
+
+/// Default ceiling on the recursive grammar productions active at once:
+/// every nested expression operand, statement, block, declarator, initializer
+/// brace and specifier body counts one level, so one source nesting level
+/// costs one to three. 2^18 levels accept nesting far deeper than GCC or
+/// Clang compile on their default stacks. The archived stack measurements
+/// (`docs/research/parser-reserved-stack.md`) are below 1 KiB per level in
+/// release and 8 KiB in debug, so the limit is reached long before the
+/// reserved 100 GiB compilation stack is exhausted: deep input gets a
+/// diagnostic instead of a stack overflow.
+///
+/// C99: §5.2.4.1, pp. 20-21; PDF pp. 32-33 requires at least 63 nesting
+/// levels of parenthesized expressions, 127 of blocks, and 12 declarator
+/// derivations; footnote 13 asks implementations to avoid fixed limits, so
+/// the limit is configurable (`--max-nesting-depth`).
+pub(crate) const DEFAULT_MAX_NESTING_DEPTH: u32 = 1 << 18;
 
 // Tests
 #[cfg(test)]

@@ -134,6 +134,7 @@ pub(super) fn normalize_language_arguments(
                     | "--idirafter"
                     | "--sysroot"
                     | "--source-date-epoch"
+                    | "--max-nesting-depth"
                     | "--tls-model"
                     | "--opt"
                     | "--llvm-opt"
@@ -206,6 +207,7 @@ impl Cli {
             .with_optimization(self.code_generation.optimization_macros())
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
+            .with_max_nesting_depth(self.max_nesting_depth)
     }
 
     /// Clang diagnoses unsupported warning options at startup and continues.
