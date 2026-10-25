@@ -80,7 +80,7 @@ mod lowering;
 mod optimizer;
 
 // Isolated semantic experiment; never part of the compiler's default build.
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod c_ir_study;
 
 #[expect(
