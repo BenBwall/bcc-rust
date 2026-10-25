@@ -1000,6 +1000,21 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         frame
     }
 
+    /// The kind, the caller-consumed keyword's provenance when the frame
+    /// starts at `(`, and the starting error count a recursive study parse
+    /// needs.
+    #[cfg(feature = "parser-recursive-descent-study")]
+    pub(in crate::translation_phases::parsing) fn study_parameters(
+        &self,
+    ) -> (ModernKind, Option<SourceVectors>, usize) {
+        let keyword = if matches!(self.phase, Phase::Open) {
+            self.source_vectors
+        } else {
+            None
+        };
+        (self.kind, keyword, self.starting_errors)
+    }
+
     fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
         if self.kind != ModernKind::Attributes {
             parser.merge_source(&mut self.source_vectors, token);

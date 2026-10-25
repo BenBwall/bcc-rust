@@ -248,7 +248,7 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                         return true;
                     }
                     let previous = parser.cursor.previous.expect("asm introducer consumed");
-                    Self::new_line(parser, previous, next)
+                    new_line(parser, previous, next)
                 });
                 if boundary {
                     if !self.delimiters.is_empty() {
@@ -536,6 +536,14 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
         })
     }
 
+    /// The keyword and starting error count a recursive study parse needs.
+    #[cfg(feature = "parser-recursive-descent-study")]
+    pub(in crate::translation_phases::parsing) fn study_parameters(
+        &self,
+    ) -> (KeywordTokenType, usize) {
+        (self.keyword, self.starting_errors)
+    }
+
     pub(in crate::translation_phases::parsing) fn new(
         arena: &'p Bump,
         keyword: KeywordTokenType,
@@ -555,68 +563,72 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
             handler_keyword: None,
         }
     }
+}
 
-    /// Whether a source line ends between `previous` and `next`. Macro tokens
-    /// stand at their invocation: `previous` at its end, and `next` at the
-    /// invocation's start, which is the first character after `previous`
-    /// that is neither white space nor a comment, so an invocation whose
-    /// arguments span lines stays on the line where it starts. Phase-2
-    /// splices join lines, while a comment's new-line ends one, as in the
-    /// text of the line.
-    /// C99: phases 2-3 are §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
-    fn new_line(parser: &Parser<'_, 'tu, 'p>, previous: Token, next: Token) -> bool {
-        let Some(a) = parser.context.user_source_end(previous.source_vectors) else {
-            return false;
-        };
-        let Some(b) = parser.context.user_source_end(next.source_vectors) else {
-            return false;
-        };
-        if a.source_file_index != b.source_file_index {
-            return true;
-        }
-        if a.line == b.line || a.end() >= b.index as usize {
-            return false;
-        }
-        let Some(text) = parser.context.source_text(a.source_file_index) else {
-            return true;
-        };
-        let bytes = text.as_bytes();
-        let trigraphs = parser
-            .context
-            .configuration
-            .accepts(crate::configuration::Feature::Trigraphs);
-        let spliced = |index: usize| {
-            let before = if bytes[index] == b'\n' && index > 0 && bytes[index - 1] == b'\r' {
-                index - 1
-            } else {
-                index
-            };
-            before > 0 && bytes[before - 1] == b'\\'
-                || trigraphs && before >= 3 && &bytes[before - 3..before] == b"??/"
-        };
-        let mut index = a.end();
-        let mut comment = false;
-        while index < b.index as usize {
-            match bytes[index] {
-                | b'\r' if bytes.get(index + 1) == Some(&b'\n') => {},
-                | b'\n' | b'\r' if !spliced(index) => return true,
-                | b'\n' | b'\r' | b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\\' => {},
-                | b'?' if trigraphs && bytes[index..].starts_with(b"??/") => index += 2,
-                | b'*' if comment && bytes.get(index + 1) == Some(&b'/') => {
-                    comment = false;
-                    index += 1;
-                },
-                | _ if comment => {},
-                | b'/' if bytes.get(index + 1) == Some(&b'*') => {
-                    comment = true;
-                    index += 1;
-                },
-                // A line comment runs to the new-line that ends the line.
-                | b'/' if bytes.get(index + 1) == Some(&b'/') => return true,
-                | _ => return false,
-            }
-            index += 1;
-        }
-        false
+/// Whether a source line ends between `previous` and `next`. Macro tokens
+/// stand at their invocation: `previous` at its end, and `next` at the
+/// invocation's start, which is the first character after `previous`
+/// that is neither white space nor a comment, so an invocation whose
+/// arguments span lines stays on the line where it starts. Phase-2
+/// splices join lines, while a comment's new-line ends one, as in the
+/// text of the line.
+/// C99: phases 2-3 are §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+pub(in crate::translation_phases::parsing) fn new_line(
+    parser: &Parser<'_, '_, '_>,
+    previous: Token,
+    next: Token,
+) -> bool {
+    let Some(a) = parser.context.user_source_end(previous.source_vectors) else {
+        return false;
+    };
+    let Some(b) = parser.context.user_source_end(next.source_vectors) else {
+        return false;
+    };
+    if a.source_file_index != b.source_file_index {
+        return true;
     }
+    if a.line == b.line || a.end() >= b.index as usize {
+        return false;
+    }
+    let Some(text) = parser.context.source_text(a.source_file_index) else {
+        return true;
+    };
+    let bytes = text.as_bytes();
+    let trigraphs = parser
+        .context
+        .configuration
+        .accepts(crate::configuration::Feature::Trigraphs);
+    let spliced = |index: usize| {
+        let before = if bytes[index] == b'\n' && index > 0 && bytes[index - 1] == b'\r' {
+            index - 1
+        } else {
+            index
+        };
+        before > 0 && bytes[before - 1] == b'\\'
+            || trigraphs && before >= 3 && &bytes[before - 3..before] == b"??/"
+    };
+    let mut index = a.end();
+    let mut comment = false;
+    while index < b.index as usize {
+        match bytes[index] {
+            | b'\r' if bytes.get(index + 1) == Some(&b'\n') => {},
+            | b'\n' | b'\r' if !spliced(index) => return true,
+            | b'\n' | b'\r' | b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\\' => {},
+            | b'?' if trigraphs && bytes[index..].starts_with(b"??/") => index += 2,
+            | b'*' if comment && bytes.get(index + 1) == Some(&b'/') => {
+                comment = false;
+                index += 1;
+            },
+            | _ if comment => {},
+            | b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                comment = true;
+                index += 1;
+            },
+            // A line comment runs to the new-line that ends the line.
+            | b'/' if bytes.get(index + 1) == Some(&b'/') => return true,
+            | _ => return false,
+        }
+        index += 1;
+    }
+    false
 }

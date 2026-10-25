@@ -712,6 +712,12 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
         ParseAction::Push(ParseFrame::Gnu(parser.pools.gnu(frame)))
     }
 
+    /// The kind and starting error count a recursive study parse needs.
+    #[cfg(feature = "parser-recursive-descent-study")]
+    pub(in crate::translation_phases::parsing) fn study_parameters(&self) -> (GnuKind, usize) {
+        (self.kind, self.starting_errors)
+    }
+
     fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
         parser.merge_source(&mut self.source_vectors, token);
     }

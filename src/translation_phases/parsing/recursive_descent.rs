@@ -15,6 +15,9 @@
 mod declaration_specifiers;
 mod enum_specifier;
 mod expressions;
+mod gnu;
+mod modern;
+mod msvc;
 mod statements;
 mod struct_or_union;
 
@@ -93,6 +96,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 | ParseFrame::DeclarationSpecifiers(_)
                 | ParseFrame::StructOrUnionSpecifier(_)
                 | ParseFrame::EnumSpecifier(_)
+                | ParseFrame::Modern(_)
+                | ParseFrame::Gnu(_)
+                | ParseFrame::Msvc(_)
         )
     }
 
@@ -143,6 +149,22 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             },
             | ParseFrame::EnumSpecifier(_) =>
                 self.rd_enum_specifier().map(ParseValue::EnumSpecifier),
+            | ParseFrame::Modern(frame) => {
+                let (kind, keyword, errors) = frame.study_parameters();
+                self.pools.modern_frames.reclaim(frame);
+                self.rd_modern(kind, keyword, errors)
+                    .map(ParseValue::Modern)
+            },
+            | ParseFrame::Gnu(frame) => {
+                let (kind, errors) = frame.study_parameters();
+                self.pools.gnu_frames.reclaim(frame);
+                self.rd_gnu(kind, errors).map(ParseValue::Gnu)
+            },
+            | ParseFrame::Msvc(frame) => {
+                let (keyword, errors) = frame.study_parameters();
+                self.pools.msvc_frames.reclaim(frame);
+                self.rd_msvc(keyword, errors).map(ParseValue::Statement)
+            },
             | _ => unreachable!("only recursive grammar families are intercepted"),
         }
     }
