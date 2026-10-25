@@ -383,9 +383,11 @@ These citations were verified against the searchable N1256 edition through
 
 - `src/abstract_machine.rs` and its child modules own the independent subset
   parser, source-located operations, C object runtime, snapshots and JSON.
-- `src/abstract_machine_wasm.rs` exposes the versioned single-session raw
-  wasm ABI. It passes through engine JSON and retains the compiled program
-  for reset. No binding generator or host imports are required.
+- The site links the engine as an ordinary Rust dependency of its Web
+  Worker (`web/src/bin/engine_worker.rs`, `web/src/machine.rs`). An earlier
+  revision exposed a raw wasm ABI (`src/abstract_machine_wasm.rs`) driven by
+  hand-written JavaScript; it was removed on 2026-10-25 together with that
+  JavaScript, and the results below that cite it are historical.
 - Cargo's default `native` feature preserves the original compiler modules,
   dependency graph and build-script behavior. `abstract-machine` can also be
   enabled alongside native; browser builds disable default features.
@@ -393,9 +395,9 @@ These citations were verified against the searchable N1256 edition through
   are gated. The wasm build does not compile the native frontend, VM arenas,
   LLVM, FFI, CLI, filesystem or embedded headers. None is needed by this
   headerless demo. These are isolated rather than secretly ported.
-- `web/` contains the static page, renderer, controls and wasm adapter. Every
-  value is supplied by Rust. Missing wasm disables execution and displays
-  instructions; there is no scripted execution or JavaScript C evaluator.
+- `web/` is a Leptos crate: the page, renderer, controls and the engine
+  Worker. Every value is supplied by Rust; the only JavaScript is what
+  wasm-bindgen and Trunk generate.
 
 The implemented subset uses signed 32-bit int, int pointers with
 element-based offsets, fixed-size int arrays, automatic locals, named

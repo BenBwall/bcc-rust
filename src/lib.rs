@@ -28,11 +28,9 @@
 
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
-// Browser execution engine and raw WebAssembly bridge
+// Browser execution engine, linked by the site in web/
 #[cfg(feature = "abstract-machine")]
 pub mod abstract_machine;
-#[cfg(all(feature = "abstract-machine", target_arch = "wasm32"))]
-mod abstract_machine_wasm;
 
 // Compiler phases and driver
 #[cfg(feature = "native")]
