@@ -49,6 +49,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
     /// MSVC extension: Microsoft Learn, "try-finally statement".
     /// <https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement>
+    #[inline(never)]
     pub(super) fn parse_msvc(
         &mut self,
         keyword: KeywordTokenType,

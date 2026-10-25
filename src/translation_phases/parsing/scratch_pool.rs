@@ -103,6 +103,7 @@ impl<'p, T> VecPool<'p, T> {
 
     /// Takes back `vector`'s allocation, discarding its contents. Every
     /// allocation is kept, since the arena could not reuse a dropped one.
+    #[inline(never)]
     pub(super) fn reclaim(&mut self, vector: &mut ArenaVec<'p, T>) {
         if vector.capacity() != 0 {
             vector.clear();

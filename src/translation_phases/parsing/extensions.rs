@@ -49,6 +49,9 @@ impl Parser<'_, '_, '_> {
         self.extension_source(feature, spelling, token.source_vectors);
     }
 
+    /// Out of line so the recursive productions that call it keep small
+    /// native frames.
+    #[inline(never)]
     pub(super) fn extension_source(
         &mut self,
         feature: crate::configuration::Feature,

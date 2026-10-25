@@ -35,9 +35,15 @@ use crate::{
 impl Parser<'_, '_, '_> {
     /// Advances the diagnostic occurrence cursor even on recovery skips.
     pub(super) fn suppress_token_diagnostic(&mut self, token: Token) {
-        if self.token_diagnostics.is_empty() {
-            return;
+        if !self.token_diagnostics.is_empty() {
+            self.suppress_pending_token_diagnostic(token);
         }
+    }
+
+    /// Kept out of line: its spelling table would otherwise enlarge the
+    /// native frame of every recursive production that consumes a token.
+    #[inline(never)]
+    fn suppress_pending_token_diagnostic(&mut self, token: Token) {
         match token.kind {
             | TokenType::Keyword(_) => {
                 self.suppress_diagnostic_occurrence(token, None);
