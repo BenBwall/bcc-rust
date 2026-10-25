@@ -57,7 +57,6 @@ use crate::{
             },
             extensions::{
                 gnu::{
-                    GnuFrame,
                     GnuKind,
                     GnuValue,
                 },
@@ -70,25 +69,13 @@ use crate::{
                 },
             },
             frames::{
-                compound_statement::CompoundStatementFrame,
                 declaration::DeclarationContext,
-                declaration_specifiers::{
-                    DeclarationSpecifiersFrame,
-                    SpecifierMode,
-                },
-                declarator::{
-                    DeclaratorFrame,
-                    DeclaratorMode,
-                },
+                declaration_specifiers::SpecifierMode,
+                declarator::DeclaratorMode,
                 expression_operators::is_operator,
                 statement::is_statement_keyword,
             },
-            machine::{
-                ParseAction,
-                ParseFrame,
-                ParseFrameKind,
-                ParseValue,
-            },
+            machine::ParseFrameKind,
             recovery::{
                 SynchronizationKind,
                 SynchronizationSet,
@@ -223,12 +210,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 || matches!(token.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
                     && token.contents == KeywordTokenType::MsAsm.cache_id()
         }) {
-            let ParseAction::Push(frame) = GnuFrame::push(self, GnuKind::Asm { label: false })
-            else {
-                unreachable!("a GNU frame push returns its frame");
-            };
-            let value = self.rd_child(frame)?;
-            let ParseValue::Gnu(GnuValue::Asm(asm)) = value else {
+            let value = self.rd_gnu(GnuKind::Asm { label: false }, self.hard_error_count)?;
+            let GnuValue::Asm(asm) = value else {
                 panic!("file asm child protocol");
             };
             return Some(ExternalDeclaration::Asm(asm));
@@ -344,10 +327,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             .current()
             .is_some_and(|x| matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert)))
         {
-            let frame = self.pooled_modern_frame(ModernKind::Assertion);
-            let value = self.rd_child(frame)?;
+            let value = self.rd_modern(ModernKind::Assertion, None, self.hard_error_count)?;
             self.pedantic_suppression = shell.suppression_entry;
-            let ParseValue::Modern(ModernValue::Assertion(assertion)) = value else {
+            let ModernValue::Assertion(assertion) = value else {
                 unreachable!("assertion declaration protocol: {value:?}")
             };
             return Some(self.alloc_syntax(Declaration {
@@ -361,12 +343,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
         // Specifiers are a child production because tag specifiers own
         // complete struct/union/enum bodies.
-        let value = self.rd_child(ParseFrame::DeclarationSpecifiers(
-            DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
-        ))?;
-        let ParseValue::DeclarationSpecifiers(mut specifiers) = value else {
-            unreachable!("specifier frame returned an unexpected value: {value:?}");
-        };
+        let mut specifiers = self.rd_declaration_specifiers(SpecifierMode::Declaration, true)?;
         if let Some(source_vectors) = leading_extension {
             specifiers.extensions = Some(self.alloc_syntax(SpecifierExtension {
                 kind: SpecifierExtensionKind::ExtensionMarker,
@@ -433,13 +410,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             TypeSpecifiers::Extended(ExtendedType::AutoType)
         );
         'declarators: loop {
-            let value = self.rd_child(ParseFrame::Declarator(DeclaratorFrame::new(
-                self.arena,
-                DeclaratorMode::Named,
-            )))?;
-            let ParseValue::Declarator(declarator) = value else {
-                unreachable!("declarator frame returned an unexpected value: {value:?}");
-            };
+            let declarator = self.rd_declarator(DeclaratorMode::Named)?;
             let Some(declarator) = declarator else {
                 let token = self.cursor.current();
                 self.report(
@@ -907,14 +878,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         &mut self,
         source_vectors: &mut Option<SourceVectors>,
     ) -> Option<&'tu Statement<'tu>> {
-        let value = self.rd_child(ParseFrame::CompoundStatement(CompoundStatementFrame::new(
-            self.arena,
-            self.hard_error_count,
-            true,
-        )))?;
-        let ParseValue::CompoundStatement(body) = value else {
-            unreachable!("function body returned an unexpected value: {value:?}");
-        };
+        let body = self.rd_compound(true)?;
         self.context.merge_into(source_vectors, body.source_vectors);
         Some(body)
     }

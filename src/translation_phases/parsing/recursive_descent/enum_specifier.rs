@@ -41,19 +41,13 @@ use crate::{
                     misplaced_enumerator,
                     underlying_type_follows,
                 },
-                expression::{
-                    ExpressionBoundary,
-                    ExpressionFrame,
-                    ExpressionMode,
-                },
+                expression::ExpressionBoundary,
                 expression_operators::is_operator,
             },
             machine::{
                 ConstantExpressionResult,
                 EnumSpecifierResult,
-                ParseFrame,
                 ParseFrameKind,
-                ParseValue,
                 unexpected_return,
             },
             recovery::{
@@ -209,9 +203,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         enumeration: &mut Enumeration<'tu, 'p>,
         enumerator: bool,
     ) -> Option<&'tu SpecifierExtension<'tu>> {
-        let frame = self.pooled_modern_frame(ModernKind::Attributes);
-        let returned = self.rd_child(frame)?;
-        let ParseValue::Modern(ModernValue::Attributes(x)) = returned else {
+        let returned = self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+        let ModernValue::Attributes(x) = returned else {
             unexpected_return!("enum attributes protocol: {returned:?}")
         };
         let next = if enumerator {
@@ -348,20 +341,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Parses an explicit enumerator value after its `=` and completes the
     /// enumerator.
     fn rd_enumerator_value(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
-        let frame = ParseFrame::Expression(ExpressionFrame::new(
-            self.arena,
-            ExpressionMode::ConstantExpression,
-            ExpressionBoundary::Enumerator,
-            self.hard_error_count,
-        ));
-        let returned = self.rd_child(frame)?;
-        let ParseValue::ConstantExpression(ConstantExpressionResult {
+        let ConstantExpressionResult {
             expression: index,
             recovered,
-        }) = returned
-        else {
-            unexpected_return!("enumerator-value frame returned an unexpected value: {returned:?}");
-        };
+        } = self.rd_constant_expression(ExpressionBoundary::Enumerator)?;
         enumeration.resuming_after_error = recovered;
         let source_vectors = index.expression().source_vectors;
         enumeration.source_vectors.push(source_vectors);

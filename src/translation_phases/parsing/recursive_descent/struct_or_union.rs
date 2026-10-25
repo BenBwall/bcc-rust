@@ -43,23 +43,14 @@ use crate::{
             },
             frames::{
                 declaration_specifiers::SpecifierMode,
-                declarator::{
-                    DeclaratorFrame,
-                    DeclaratorMode,
-                },
-                expression::{
-                    ExpressionBoundary,
-                    ExpressionFrame,
-                    ExpressionMode,
-                },
+                declarator::DeclaratorMode,
+                expression::ExpressionBoundary,
                 expression_operators::is_operator,
                 struct_or_union::member_list_continues,
             },
             machine::{
                 ConstantExpressionResult,
-                ParseFrame,
                 ParseFrameKind,
-                ParseValue,
                 unexpected_return,
             },
             recovery::{
@@ -180,9 +171,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Parses tag attributes before the tag or after the body.
     fn rd_record_attributes(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
-        let frame = self.pooled_modern_frame(ModernKind::Attributes);
-        let returned = self.rd_child(frame)?;
-        let ParseValue::Modern(ModernValue::Attributes(x)) = returned else {
+        let returned = self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+        let ModernValue::Attributes(x) = returned else {
             unexpected_return!("aggregate attributes protocol: {returned:?}")
         };
         record.attributes = Some(self.alloc_syntax(SpecifierExtension {
@@ -201,9 +191,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if token.is_some_and(|x| {
                 matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert))
             }) {
-                let frame = self.pooled_modern_frame(ModernKind::Assertion);
-                let returned = self.rd_child(frame)?;
-                let ParseValue::Modern(ModernValue::Assertion(assertion)) = returned else {
+                let returned =
+                    self.rd_modern(ModernKind::Assertion, None, self.hard_error_count)?;
+                let ModernValue::Assertion(assertion) = returned else {
                     unexpected_return!("member assertion protocol: {returned:?}")
                 };
                 record.declarations.push(StructDeclaration {
@@ -298,14 +288,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 self.rd_consume();
                 self.rd_bit_field_width(record)?;
             } else {
-                let frame =
-                    ParseFrame::Declarator(DeclaratorFrame::new(self.arena, DeclaratorMode::Named));
-                let returned = self.rd_child(frame)?;
-                let ParseValue::Declarator(declarator) = returned else {
-                    unexpected_return!(
-                        "member declarator returned an unexpected value: {returned:?}"
-                    );
-                };
+                let declarator = self.rd_declarator(DeclaratorMode::Named)?;
                 record.member_declarator = declarator;
                 if let Some(source_vectors) = declarator.map(|declarator| declarator.source_vectors)
                 {
@@ -389,20 +372,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Parses the constant-expression bit-field width after its `:` and
     /// commits the member declarator.
     fn rd_bit_field_width(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
-        let frame = ParseFrame::Expression(ExpressionFrame::new(
-            self.arena,
-            ExpressionMode::ConstantExpression,
-            ExpressionBoundary::StructMember,
-            self.hard_error_count,
-        ));
-        let returned = self.rd_child(frame)?;
-        let ParseValue::ConstantExpression(ConstantExpressionResult {
+        let ConstantExpressionResult {
             expression: index,
             recovered,
-        }) = returned
-        else {
-            unexpected_return!("bit-field frame returned an unexpected value: {returned:?}");
-        };
+        } = self.rd_constant_expression(ExpressionBoundary::StructMember)?;
         record.width_recovered = recovered;
         let source_vectors = index.expression().source_vectors;
         self.context
@@ -430,9 +403,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         loop {
             let token = self.cursor.current();
             if self.attribute_starter(token) {
-                let frame = self.pooled_modern_frame(ModernKind::Attributes);
-                let returned = self.rd_child(frame)?;
-                let ParseValue::Modern(ModernValue::Attributes(x)) = returned else {
+                let returned =
+                    self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+                let ModernValue::Attributes(x) = returned else {
                     panic!("bit-field attribute child protocol");
                 };
                 if let Some(member) = record.member_declarators.last_mut() {

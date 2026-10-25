@@ -59,7 +59,6 @@ use crate::{
             machine::{
                 EnumSpecifierResult,
                 ParseFrameKind,
-                ParseValue,
                 unexpected_return,
             },
             syntax::{
@@ -151,9 +150,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 continue;
             }
             if self.attribute_starter(Some(token)) {
-                let frame = self.pooled_modern_frame(ModernKind::Attributes);
-                let returned = self.rd_child(frame)?;
-                let ParseValue::Modern(ModernValue::Attributes(attributes)) = returned else {
+                let returned =
+                    self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+                let ModernValue::Attributes(attributes) = returned else {
                     unexpected_return!("attribute protocol: {returned:?}")
                 };
                 list.add_extension(
@@ -259,15 +258,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 .type_specifiers
                 .report_conflict(self, token.contents, token);
         }
-        let frame = self.pooled_modern_frame(ModernKind::Operand {
-            type_only: keyword == KeywordTokenType::Atomic,
-            constant:  matches!(
-                keyword,
-                KeywordTokenType::Alignas | KeywordTokenType::BitInt
-            ),
-        });
-        let returned = self.rd_child(frame)?;
-        let ParseValue::Modern(ModernValue::Operand(operand, source)) = returned else {
+        let returned = self.rd_modern(
+            ModernKind::Operand {
+                type_only: keyword == KeywordTokenType::Atomic,
+                constant:  matches!(
+                    keyword,
+                    KeywordTokenType::Alignas | KeywordTokenType::BitInt
+                ),
+            },
+            None,
+            self.hard_error_count,
+        )?;
+        let ModernValue::Operand(operand, source) = returned else {
             unexpected_return!("specifier operand protocol: {returned:?}")
         };
         if keyword == KeywordTokenType::Alignas {

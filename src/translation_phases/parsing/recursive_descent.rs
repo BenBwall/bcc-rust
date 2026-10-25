@@ -111,16 +111,6 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         )
     }
 
-    /// Runs `child` from recursive grammar code: its recursive implementation
-    /// when its family is ported, otherwise the retained frames.
-    pub(super) fn rd_child(&mut self, child: ParseFrame<'tu, 'p>) -> Option<ParseValue<'tu>> {
-        if Self::is_recursive_family(&child) {
-            self.study_child(child)
-        } else {
-            self.study_frame(child, false)
-        }
-    }
-
     /// Runs a new child using recursive grammar or the retained frame grammar.
     pub(super) fn study_child(&mut self, child: ParseFrame<'tu, 'p>) -> Option<ParseValue<'tu>> {
         match child {

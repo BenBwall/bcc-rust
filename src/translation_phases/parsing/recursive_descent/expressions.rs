@@ -7,7 +7,7 @@
 //! footnote 74, p. 67; PDF p. 79). Grouping, subscripts, call arguments,
 //! prefix, cast and conditional operands recurse. The caller chooses which
 //! delimiters end the expression and keeps ownership of them. Type names,
-//! initializers and extension operands run through [`Parser::rd_child`];
+//! initializers and extension operands call their own productions;
 //! operand constraints and constant evaluation belong to semantic analysis.
 
 use super::StudyMode;
@@ -47,25 +47,21 @@ use crate::{
                     is_postfix_starter,
                     prefix_operator,
                 },
-                initializer::InitializerFrame,
                 statement::is_statement_keyword,
-                type_name::TypeNameFrame,
             },
             gnu::{
-                GnuFrame,
                 GnuKind,
                 GnuValue,
             },
             machine::{
+                ConstantExpressionResult,
                 ExpressionResult,
                 InitializerResult,
-                ParseAction,
                 ParseFrame,
                 ParseFrameKind,
                 ParseValue,
             },
             modern::{
-                ModernFrame,
                 ModernKind,
                 ModernValue,
                 SyntaxOperand,
@@ -75,6 +71,7 @@ use crate::{
                 BinaryOperator,
                 ConditionalExpression,
                 Constant,
+                ConstantExpression,
                 Expression,
                 ExpressionType,
                 Identifier,
@@ -113,6 +110,30 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         } else {
             self.rd_expression_entered(mode, boundary, recovery)
         }
+    }
+
+    /// Parses an expression of `mode` that `boundary` ends, for a caller
+    /// whose own recovery boundary is the same.
+    pub(super) fn rd_expression_ending_at(
+        &mut self,
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+    ) -> Option<ExpressionResult<'tu>> {
+        self.rd_expression(mode, boundary, boundary)
+    }
+
+    /// Parses a `constant-expression` that `boundary` ends and owns.
+    ///
+    /// C99: §6.6 paragraph 1, p. 95; PDF p. 107.
+    pub(super) fn rd_constant_expression(
+        &mut self,
+        boundary: ExpressionBoundary,
+    ) -> Option<ConstantExpressionResult<'tu>> {
+        let result = self.rd_expression_ending_at(ExpressionMode::ConstantExpression, boundary)?;
+        Some(ConstantExpressionResult {
+            expression: ConstantExpression(result.expression),
+            recovered:  result.recovered,
+        })
     }
 
     fn rd_expression_entered(
@@ -201,10 +222,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             | KeywordTokenType::BuiltinBitCast),
         ) = token.kind
         {
-            let ParseAction::Push(child) = GnuFrame::push(self, GnuKind::Builtin(keyword)) else {
-                unreachable!("a GNU builtin pushes its frame")
-            };
-            let ParseValue::Gnu(GnuValue::Builtin(builtin)) = self.rd_child(child)? else {
+            let GnuValue::Builtin(builtin) =
+                self.rd_gnu(GnuKind::Builtin(keyword), self.hard_error_count)?
+            else {
                 unreachable!("builtin child protocol")
             };
             let expression = self.store_expression(
@@ -252,15 +272,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 ExpressionFrame::report_alignof_expression(self, token);
             }
-            let child = self.pooled_modern_frame(if keyword == KeywordTokenType::Generic {
+            let kind = if keyword == KeywordTokenType::Generic {
                 ModernKind::Generic
             } else {
                 ModernKind::Operand {
                     type_only: false,
                     constant:  false,
                 }
-            });
-            self.rd_modern_operand(e, keyword, token.source_vectors, child)?;
+            };
+            self.rd_modern_operand(e, keyword, token.source_vectors, kind, None)?;
             return Some(false);
         }
         // A brace group directly inside a call's or statement header's `(`
@@ -734,10 +754,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             && ExpressionFrame::parenthesized_type_name_follows(self)
             && !ExpressionFrame::parenthesized_compound_literal_follows(self)
         {
-            let frame =
-                ModernFrame::operand_after_keyword(self.arena, self.hard_error_count, source);
-            let child = ParseFrame::Modern(self.pools.modern(frame));
-            return self.rd_modern_operand(e, keyword, source, child);
+            let kind = ModernKind::Operand {
+                type_only: true,
+                constant:  false,
+            };
+            return self.rd_modern_operand(e, keyword, source, kind, Some(source));
         }
         let operand = self
             .rd_expression(ExpressionMode::UnaryExpression, e.boundary, e.recovery)?
@@ -755,18 +776,20 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     }
 
     /// C11 `_Generic` (§6.5.1.1, p. 78; PDF p. 96) and the parenthesized
-    /// operands of `_Alignof` and `_Countof`, owned by the modern frame.
+    /// operands of `_Alignof` and `_Countof`, parsed by the ISO construct
+    /// grammar. `opened` is the keyword's provenance when the caller already
+    /// consumed it and the construct starts at `(`.
     fn rd_modern_operand(
         &mut self,
         e: &mut RdExpression<'tu, 'p>,
         keyword: KeywordTokenType,
         keyword_source: SourceVectors,
-        child: ParseFrame<'tu, 'p>,
+        construct: ModernKind,
+        opened: Option<SourceVectors>,
     ) -> Option<()> {
-        let (kind, source) = match self.rd_child(child)? {
-            | ParseValue::Modern(ModernValue::Generic(x)) =>
-                (ExpressionType::Generic(x), x.source_vectors),
-            | ParseValue::Modern(ModernValue::Operand(operand, source)) => (
+        let (kind, source) = match self.rd_modern(construct, opened, self.hard_error_count)? {
+            | ModernValue::Generic(x) => (ExpressionType::Generic(x), x.source_vectors),
+            | ModernValue::Operand(operand, source) => (
                 match (keyword, operand) {
                     | (KeywordTokenType::Alignof, SyntaxOperand::Type(x)) =>
                         ExpressionType::AlignofType(x),
@@ -1133,13 +1156,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         opening: SourceVectors,
         usage: TypeNameUse,
     ) -> Option<()> {
-        let mut frame = TypeNameFrame::new(self.hard_error_count);
-        if ExpressionFrame::type_name_is_compound_literal(self) {
-            frame = frame.with_storage();
-        }
-        let ParseValue::TypeName(type_name) = self.rd_child(ParseFrame::TypeName(frame))? else {
-            unreachable!("type-name child protocol")
-        };
+        let compound_literal = ExpressionFrame::type_name_is_compound_literal(self);
+        let type_name = self.rd_type_name_syntax(self.hard_error_count, compound_literal)?;
         let mut source = self
             .context
             .merge_vectors(opening, type_name.source_vectors);
@@ -1229,17 +1247,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         if let Some(token) = self.cursor.current() {
             self.extension(Feature::CompoundLiterals, "compound literal", token);
         }
-        let frame = InitializerFrame::new(
-            self.arena,
+        let InitializerResult { initializer, .. } = self.rd_initializer(
             self.hard_error_count,
             e.closing_parenthesis_is_boundary(),
             e.closing_square_bracket_is_boundary(),
-        );
-        let ParseValue::Initializer(InitializerResult { initializer, .. }) =
-            self.rd_child(ParseFrame::Initializer(frame))?
-        else {
-            unreachable!("compound-literal initializer protocol")
-        };
+        )?;
         let source = self
             .context
             .merge_vectors(type_source, initializer.source_vectors);

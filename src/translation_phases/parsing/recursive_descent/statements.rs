@@ -12,8 +12,8 @@
 //! blocks (§6.8.4 paragraph 3, p. 133; PDF p. 145; §6.8.5 paragraph 5,
 //! p. 135; PDF p. 147), so they open implicit scopes; a compound statement
 //! opens a block scope (§6.2.1 paragraph 4, p. 29; PDF p. 41). Declarations,
-//! function definitions and extension statements run through
-//! [`Parser::rd_child`]. Only syntax and the duplicate-`default` constraint
+//! function definitions and extension statements call their own
+//! productions. Only syntax and the duplicate-`default` constraint
 //! (§6.8.4.2 paragraph 3, p. 134; PDF p. 146) are checked here; the other
 //! statement constraints belong to semantic analysis.
 
@@ -27,10 +27,7 @@ use crate::{
             errors::ParserErrorType,
             frames::{
                 compound_statement::CompoundStatementFrame,
-                declaration::{
-                    DeclarationContext,
-                    DeclarationFrame,
-                },
+                declaration::DeclarationContext,
                 expression::{
                     ExpressionBoundary,
                     ExpressionMode,
@@ -40,16 +37,13 @@ use crate::{
                     is_operator,
                     is_postfix_starter,
                 },
-                function_definition::FunctionDefinitionFrame,
                 statement::StatementFrame,
             },
             gnu::{
-                GnuFrame,
                 GnuKind,
                 GnuValue,
             },
             machine::{
-                ParseAction,
                 ParseFrame,
                 ParseFrameKind,
                 ParseValue,
@@ -59,7 +53,6 @@ use crate::{
                 ModernValue,
                 SpecifierExtensionKind,
             },
-            msvc::MsvcFrame,
             recovery::{
                 ExpressionTerminator,
                 SynchronizationKind,
@@ -183,11 +176,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             {
                 return self.rd_gnu_statement(s, GnuKind::Asm { label: false });
             }
-            let frame = MsvcFrame::new(self.arena, keyword, self.hard_error_count);
-            let child = ParseFrame::Msvc(self.pools.msvc(frame));
-            let ParseValue::Statement(statement) = self.rd_child(child)? else {
-                unreachable!("MSVC statement child protocol")
-            };
+            let statement = self.rd_msvc(keyword, self.hard_error_count)?;
             return Some(Built::Existing(statement));
         }
         if let Some(token) = token {
@@ -201,8 +190,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
             }
         }
         if self.attribute_starter(token) {
-            let child = self.pooled_modern_frame(ModernKind::Attributes);
-            let ParseValue::Modern(ModernValue::Attributes(attributes)) = self.rd_child(child)?
+            let ModernValue::Attributes(attributes) =
+                self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?
             else {
                 unreachable!("statement attributes protocol")
             };
@@ -383,20 +372,19 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     fn rd_gnu_statement(&mut self, s: &mut RdStatement, kind: GnuKind) -> Option<Built<'tu>> {
-        let ParseAction::Push(child) = GnuFrame::push(self, kind) else {
-            unreachable!("a GNU statement pushes its frame")
-        };
-        Some(Built::Kind(match self.rd_child(child)? {
-            | ParseValue::Gnu(GnuValue::Asm(asm)) => {
-                s.source = Some(asm.source_vectors);
-                StatementType::Asm(asm)
+        Some(Built::Kind(
+            match self.rd_gnu(kind, self.hard_error_count)? {
+                | GnuValue::Asm(asm) => {
+                    s.source = Some(asm.source_vectors);
+                    StatementType::Asm(asm)
+                },
+                | GnuValue::LocalLabels(labels, source) => {
+                    s.source = Some(source);
+                    StatementType::LocalLabels(labels)
+                },
+                | _ => unreachable!("GNU statement child protocol"),
             },
-            | ParseValue::Gnu(GnuValue::LocalLabels(labels, source)) => {
-                s.source = Some(source);
-                StatementType::LocalLabels(labels)
-            },
-            | _ => unreachable!("GNU statement child protocol"),
-        }))
+        ))
     }
 
     /// Skips a declaration-shaped substatement after its diagnostic and
@@ -1147,16 +1135,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
                             token,
                         );
                     }
-                    let frame = FunctionDefinitionFrame::new(
-                        self.arena,
-                        declaration,
-                        self.hard_error_count,
-                    );
-                    let ParseValue::FunctionDefinition(definition) =
-                        self.rd_child(ParseFrame::FunctionDefinition(frame))?
-                    else {
-                        unreachable!("nested function child protocol")
-                    };
+                    let definition =
+                        self.rd_function_definition(declaration, self.hard_error_count)?;
                     sources.push(definition.source_vectors);
                     items.push(BlockItem::FunctionDefinition(definition));
                 } else {
@@ -1187,12 +1167,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         &mut self,
         context: DeclarationContext,
     ) -> Option<&'tu crate::translation_phases::parsing::declaration_syntax::Declaration<'tu>> {
-        let frame = DeclarationFrame::new(self.arena, context, self.hard_error_count);
-        let ParseValue::Declaration(declaration) = self.rd_child(ParseFrame::Declaration(frame))?
-        else {
-            unreachable!("declaration child protocol")
-        };
-        Some(declaration)
+        self.rd_declaration(context, self.hard_error_count)
     }
 
     fn rd_statement_expression_slot(

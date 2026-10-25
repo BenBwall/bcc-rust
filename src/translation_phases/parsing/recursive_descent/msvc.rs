@@ -17,20 +17,11 @@ use crate::{
                 Seh,
                 new_line,
             },
-            frames::{
-                compound_statement::CompoundStatementFrame,
-                expression::{
-                    ExpressionBoundary,
-                    ExpressionFrame,
-                    ExpressionMode,
-                },
+            frames::expression::{
+                ExpressionBoundary,
+                ExpressionMode,
             },
-            machine::{
-                ParseFrame,
-                ParseFrameKind,
-                ParseValue,
-                any_expression_value,
-            },
+            machine::ParseFrameKind,
             syntax::{
                 ExpressionSlot,
                 Statement,
@@ -115,13 +106,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     OperatorTokenType::OpeningParenthesis,
                     "`(` before SEH filter",
                 );
-                let returned = self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-                    self.arena,
-                    ExpressionMode::Expression,
-                    ExpressionBoundary::ClosingParenthesis,
-                    self.hard_error_count,
-                )))?;
-                let expression = any_expression_value(Some(returned));
+                let expression = self
+                    .rd_expression_ending_at(
+                        ExpressionMode::Expression,
+                        ExpressionBoundary::ClosingParenthesis,
+                    )?
+                    .expression;
                 filter = Some(expression);
                 self.context
                     .merge_into(&mut source, expression.source_vectors);
@@ -165,12 +155,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
             )
         }) {
-            let returned = self.rd_child(ParseFrame::CompoundStatement(
-                CompoundStatementFrame::new(self.arena, self.hard_error_count, false),
-            ))?;
-            let ParseValue::CompoundStatement(child) = returned else {
-                panic!("SEH compound child protocol")
-            };
+            let child = self.rd_compound(false)?;
             self.context.merge_into(source, child.source_vectors);
             Some(child)
         } else {

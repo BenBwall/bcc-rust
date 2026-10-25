@@ -33,17 +33,14 @@ use crate::{
             },
             errors::ParserErrorType,
             frames::{
-                declaration_specifiers::DeclarationSpecifiersFrame,
+                declaration_specifiers::SpecifierMode,
                 declarator::DeclaratorMode,
                 expression_operators::is_operator,
                 parameter_list::unknown_type_name_starts_prototype,
             },
             machine::{
                 ParameterListResult,
-                ParseFrame,
                 ParseFrameKind,
-                ParseValue,
-                unexpected_return,
             },
             recovery::{
                 SynchronizationKind,
@@ -412,13 +409,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     }
 
     fn rd_parameter_specifiers(&mut self) -> Option<DeclarationSpecifiers<'tu>> {
-        let value = self.rd_child(ParseFrame::DeclarationSpecifiers(
-            DeclarationSpecifiersFrame::parameter(),
-        ))?;
-        let ParseValue::DeclarationSpecifiers(specifiers) = value else {
-            unexpected_return!("parameter specifiers returned an unexpected value: {value:?}");
-        };
-        Some(specifiers)
+        self.rd_declaration_specifiers(SpecifierMode::Declaration, false)
     }
 
     /// Requires `)` immediately after `...`: the ellipsis is terminal in

@@ -26,20 +26,11 @@ use crate::{
                 },
                 modern::SyntaxOperand,
             },
-            frames::{
-                expression::{
-                    ExpressionBoundary,
-                    ExpressionFrame,
-                    ExpressionMode,
-                },
-                type_name::TypeNameFrame,
+            frames::expression::{
+                ExpressionBoundary,
+                ExpressionMode,
             },
-            machine::{
-                ParseFrame,
-                ParseFrameKind,
-                ParseValue,
-                any_expression_value,
-            },
+            machine::ParseFrameKind,
             syntax::{
                 Expression,
                 Identifier,
@@ -442,25 +433,19 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     true,
                 | _ => false,
             };
-            let returned = if type_operand {
-                self.rd_child(ParseFrame::TypeName(TypeNameFrame::new(
-                    self.hard_error_count,
-                )))?
+            let operand = if type_operand {
+                SyntaxOperand::Type(self.rd_type_name_syntax(self.hard_error_count, false)?)
             } else {
-                self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-                    self.arena,
-                    if keyword == KeywordTokenType::BuiltinChooseExpr && operands.is_empty() {
-                        ExpressionMode::ConstantExpression
-                    } else {
-                        ExpressionMode::AssignmentExpression
-                    },
-                    ExpressionBoundary::Argument,
-                    self.hard_error_count,
-                )))?
-            };
-            let operand = match returned {
-                | ParseValue::TypeName(x) => SyntaxOperand::Type(x),
-                | x => SyntaxOperand::Expression(any_expression_value(Some(x))),
+                let mode = if keyword == KeywordTokenType::BuiltinChooseExpr && operands.is_empty()
+                {
+                    ExpressionMode::ConstantExpression
+                } else {
+                    ExpressionMode::AssignmentExpression
+                };
+                SyntaxOperand::Expression(
+                    self.rd_expression_ending_at(mode, ExpressionBoundary::Argument)?
+                        .expression,
+                )
             };
             self.context.merge_into(source, operand.source());
             operands.push(operand);
@@ -578,13 +563,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
     ) -> Option<&'tu Expression<'tu>> {
-        let returned = self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-            self.arena,
-            mode,
-            boundary,
-            self.hard_error_count,
-        )))?;
-        let expression = any_expression_value(Some(returned));
+        let expression = self.rd_expression_ending_at(mode, boundary)?.expression;
         self.context.merge_into(source, expression.source_vectors);
         Some(expression)
     }

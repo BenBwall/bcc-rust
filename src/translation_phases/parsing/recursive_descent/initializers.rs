@@ -50,12 +50,9 @@ use crate::{
                 statement::is_statement_keyword,
             },
             machine::{
-                ConstantExpressionResult,
+                ExpressionResult,
                 InitializerResult,
-                ParseFrame,
                 ParseFrameKind,
-                ParseValue,
-                expression_value,
             },
             recovery::DelimiterDepth,
             syntax::{
@@ -124,13 +121,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         &mut self,
         starting_error_count: usize,
     ) -> Option<InitializerResult<'tu>> {
-        let value = self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-            self.arena,
-            ExpressionMode::AssignmentExpression,
-            ExpressionBoundary::Initializer,
-            self.hard_error_count,
-        )))?;
-        let expression = expression_value(Some(value));
+        let expression = self
+            .rd_expression_ending_at(
+                ExpressionMode::AssignmentExpression,
+                ExpressionBoundary::Initializer,
+            )?
+            .expression;
         let recovered = self.hard_error_count > starting_error_count;
         let initializer = self.alloc_syntax(Initializer {
             kind: InitializerType::AssignmentExpression(expression),
@@ -377,22 +373,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// p. 125; PDF p. 137; ranges are an extension to it.
     fn rd_array_designator(&mut self, list: &mut BracedList<'tu, 'p>) -> Option<()> {
         let (expression, expression_recovered) = loop {
-            let value = self.rd_child(ParseFrame::Expression(
-                ExpressionFrame::with_recovery_boundary(
-                    self.arena,
-                    ExpressionMode::ConstantExpression,
-                    ExpressionBoundary::Designator,
-                    ExpressionBoundary::Initializer,
-                    self.hard_error_count,
-                ),
-            ))?;
-            let ParseValue::ConstantExpression(ConstantExpressionResult {
+            let ExpressionResult {
                 expression,
                 recovered,
-            }) = value
-            else {
-                unreachable!("array designator returned an unexpected value: {value:?}");
-            };
+            } = self.rd_expression(
+                ExpressionMode::ConstantExpression,
+                ExpressionBoundary::Designator,
+                ExpressionBoundary::Initializer,
+            )?;
+            let expression = ConstantExpression(expression);
             let Some(ellipsis) = self
                 .cursor
                 .current()

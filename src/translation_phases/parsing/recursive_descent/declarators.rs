@@ -45,7 +45,6 @@ use crate::{
                 },
                 expression::{
                     ExpressionBoundary,
-                    ExpressionFrame,
                     ExpressionMode,
                 },
                 expression_operators::{
@@ -54,16 +53,11 @@ use crate::{
                 },
             },
             gnu::{
-                GnuFrame,
                 GnuKind,
                 GnuValue,
             },
             machine::{
-                ExpressionResult,
-                ParseAction,
-                ParseFrame,
                 ParseFrameKind,
-                ParseValue,
                 unexpected_return,
             },
             modern::{
@@ -434,12 +428,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     || matches!(token.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
                         && token.uses_ambiguous_asm(self.context.configuration)
             }) {
-                let ParseAction::Push(frame) = GnuFrame::push(self, GnuKind::Asm { label: true })
-                else {
-                    unreachable!("a GNU child push returns its frame")
-                };
-                let value = self.rd_child(frame)?;
-                let ParseValue::Gnu(GnuValue::Asm(asm)) = value else {
+                let value = self.rd_gnu(GnuKind::Asm { label: true }, self.hard_error_count)?;
+                let GnuValue::Asm(asm) = value else {
                     unexpected_return!("asm label child protocol: {value:?}")
                 };
                 parts
@@ -578,18 +568,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 parts.push_array(&mut array);
                 return Some(false);
             }
-            let value = self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-                self.arena,
-                ExpressionMode::AssignmentExpression,
-                ExpressionBoundary::ArrayBound,
-                self.hard_error_count,
-            )))?;
-            let ParseValue::Expression(ExpressionResult {
-                expression: index, ..
-            }) = value
-            else {
-                unexpected_return!("array-bound child returned an unexpected value: {value:?}");
-            };
+            let index = self
+                .rd_expression_ending_at(
+                    ExpressionMode::AssignmentExpression,
+                    ExpressionBoundary::ArrayBound,
+                )?
+                .expression;
             let source_vectors = index.source_vectors;
             check_array_extension(self, index);
             array.assignment_expression = Some(index);
@@ -770,9 +754,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
     ) -> Option<&'tu AttributeSpecifier<'tu>> {
-        let frame = self.pooled_modern_frame(ModernKind::Attributes);
-        let value = self.rd_child(frame)?;
-        let ParseValue::Modern(ModernValue::Attributes(attributes)) = value else {
+        let value = self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+        let ModernValue::Attributes(attributes) = value else {
             unexpected_return!("declarator attributes protocol: {value:?}")
         };
         self.context

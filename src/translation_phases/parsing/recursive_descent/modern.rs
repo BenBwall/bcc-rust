@@ -26,21 +26,11 @@ use crate::{
                 StaticAssertion,
                 SyntaxOperand,
             },
-            frames::{
-                expression::{
-                    ExpressionBoundary,
-                    ExpressionFrame,
-                    ExpressionMode,
-                },
-                type_name::TypeNameFrame,
+            frames::expression::{
+                ExpressionBoundary,
+                ExpressionMode,
             },
-            machine::{
-                ParseFrame,
-                ParseFrameKind,
-                ParseValue,
-                any_expression_value,
-                unexpected_return,
-            },
+            machine::ParseFrameKind,
         },
         preprocessing::{
             KeywordTokenType,
@@ -116,7 +106,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             || kind != ModernKind::Assertion
                 && keyword != Some(KeywordTokenType::BitInt)
                 && token.is_some_and(|x| self.type_name_starter(x));
-        let returned = if is_type {
+        let operand = if is_type {
             if kind == ModernKind::Generic
                 && let Some(token) = token
             {
@@ -126,9 +116,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     token,
                 );
             }
-            self.rd_child(ParseFrame::TypeName(TypeNameFrame::new(
-                self.hard_error_count,
-            )))?
+            SyntaxOperand::Type(self.rd_type_name_syntax(self.hard_error_count, false)?)
         } else {
             let mode = if kind == ModernKind::Assertion
                 || matches!(kind, ModernKind::Operand { constant: true, .. })
@@ -150,16 +138,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             } else {
                 ExpressionBoundary::Argument
             };
-            self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-                self.arena,
-                mode,
-                boundary,
-                self.hard_error_count,
-            )))?
-        };
-        let operand = match returned {
-            | ParseValue::TypeName(x) => SyntaxOperand::Type(x),
-            | other => SyntaxOperand::Expression(any_expression_value(Some(other))),
+            SyntaxOperand::Expression(self.rd_expression_ending_at(mode, boundary)?.expression)
         };
         self.context.merge_into(&mut source, operand.source());
         let mut message = None;
@@ -257,12 +236,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 self.rd_iso_own(kind, source, token);
                 None
             } else {
-                let returned = self.rd_child(ParseFrame::TypeName(TypeNameFrame::new(
-                    self.hard_error_count,
-                )))?;
-                let ParseValue::TypeName(x) = returned else {
-                    unexpected_return!("generic association type protocol: {returned:?}")
-                };
+                let x = self.rd_type_name_syntax(self.hard_error_count, false)?;
                 self.context.merge_into(source, x.source_vectors);
                 Some(x)
             };
@@ -272,13 +246,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 OperatorTokenType::Colon,
                 "`:` in generic association",
             );
-            let returned = self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-                self.arena,
+            let returned = self.rd_expression_ending_at(
                 ExpressionMode::AssignmentExpression,
                 ExpressionBoundary::Argument,
-                self.hard_error_count,
-            )))?;
-            let expression = any_expression_value(Some(returned));
+            )?;
+            let expression = returned.expression;
             self.context.merge_into(source, expression.source_vectors);
             associations.push(GenericAssociation {
                 type_name,
@@ -730,8 +702,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         {
             return Some(true);
         }
-        let returned = self.rd_child(ParseFrame::Expression(ExpressionFrame::new(
-            self.arena,
+        let returned = self.rd_expression_ending_at(
             if list {
                 ExpressionMode::Expression
             } else {
@@ -742,11 +713,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             } else {
                 ExpressionBoundary::Argument
             },
-            self.hard_error_count,
-        )))?;
+        )?;
         state.arguments.push(AttributeArgument {
             index:      state.argument_index,
-            expression: any_expression_value(Some(returned)),
+            expression: returned.expression,
         });
         let token = self.cursor.current();
         if !token.is_some_and(|token| {

@@ -14,19 +14,11 @@ use crate::translation_phases::parsing::{
     Parser,
     declaration_syntax::TypeName,
     frames::{
-        declaration_specifiers::{
-            DeclarationSpecifiersFrame,
-            SpecifierMode,
-        },
+        declaration_specifiers::SpecifierMode,
         declarator::DeclaratorMode,
         type_name::is_abstract_declarator_starter,
     },
-    machine::{
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
+    machine::ParseFrameKind,
 };
 
 impl<'tu> Parser<'_, 'tu, '_> {
@@ -53,16 +45,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
         starting_error_count: usize,
         compound_literal: bool,
     ) -> Option<&'tu TypeName<'tu>> {
-        let value = self.rd_child(ParseFrame::DeclarationSpecifiers(
-            DeclarationSpecifiersFrame::new(if compound_literal {
-                SpecifierMode::CompoundLiteral
-            } else {
-                SpecifierMode::TypeName
-            }),
-        ))?;
-        let ParseValue::DeclarationSpecifiers(declaration_specifiers) = value else {
-            unexpected_return!("type-name specifiers returned an unexpected value: {value:?}");
+        let mode = if compound_literal {
+            SpecifierMode::CompoundLiteral
+        } else {
+            SpecifierMode::TypeName
         };
+        let declaration_specifiers = self.rd_declaration_specifiers(mode, true)?;
         let declarator = if self
             .cursor
             .current()
