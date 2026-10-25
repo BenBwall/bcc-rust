@@ -153,13 +153,22 @@ impl TypeNameFrame<'_> {
         self.compound_literal = true;
         self
     }
+
+    #[cfg(feature = "parser-recursive-descent-study")]
+    /// The starting error count and whether this type name may carry the
+    /// storage-class specifiers of a compound literal.
+    pub(in crate::translation_phases::parsing) fn study_parameters(&self) -> (usize, bool) {
+        (self.starting_error_count, self.compound_literal)
+    }
 }
 
 /// Whether `token` can begin an `abstract-declarator`: `pointer`, `(`, or
 /// `[`.
 ///
 /// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
-fn is_abstract_declarator_starter(token: TokenType) -> bool {
+pub(in crate::translation_phases::parsing) fn is_abstract_declarator_starter(
+    token: TokenType,
+) -> bool {
     matches!(
         token,
         TokenType::Operator(

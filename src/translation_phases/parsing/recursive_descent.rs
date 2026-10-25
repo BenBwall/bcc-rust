@@ -12,14 +12,17 @@
 
 mod declaration_specifiers;
 mod declarations;
+mod declarators;
 mod enum_specifier;
 mod expressions;
 mod gnu;
 mod initializers;
 mod modern;
 mod msvc;
+mod parameter_lists;
 mod statements;
 mod struct_or_union;
+mod type_names;
 
 #[cfg(test)]
 #[expect(
@@ -102,6 +105,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 | ParseFrame::Declaration(_)
                 | ParseFrame::FunctionDefinition(_)
                 | ParseFrame::Initializer(_)
+                | ParseFrame::Declarator(_)
+                | ParseFrame::ParameterList(_)
+                | ParseFrame::TypeName(_)
         )
     }
 
@@ -183,6 +189,20 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     frame.study_parameters();
                 self.rd_initializer(starting_error_count, parenthesis_boundary, bracket_boundary)
                     .map(ParseValue::Initializer)
+            },
+            | ParseFrame::Declarator(frame) => self
+                .rd_declarator(frame.study_parameters())
+                .map(ParseValue::Declarator),
+            | ParseFrame::ParameterList(frame) => {
+                let allow_k_and_r = frame.study_parameters();
+                self.pools.parameter_lists.reclaim(frame);
+                self.rd_parameter_list(allow_k_and_r)
+                    .map(ParseValue::ParameterList)
+            },
+            | ParseFrame::TypeName(frame) => {
+                let (starting_error_count, compound_literal) = frame.study_parameters();
+                self.rd_type_name_syntax(starting_error_count, compound_literal)
+                    .map(ParseValue::TypeName)
             },
             | _ => unreachable!("only recursive grammar families are intercepted"),
         }

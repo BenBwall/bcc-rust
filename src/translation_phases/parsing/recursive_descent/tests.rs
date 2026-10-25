@@ -147,6 +147,51 @@ fn recovery_preserves_delimiters_bodies_and_following_statements() {
 }
 
 #[test]
+fn declarators_parameter_lists_and_type_names_match_machine() {
+    let sources = [
+        "int (((x))), *const *volatile p, (*(*f)(void))[3], a[static const 4], b[*];",
+        "typedef int T; int g(T, int (*)(T x, ...), T [restrict], void (*)(), ...);",
+        "int k(a, b, c) int a, b, c; { return sizeof(int (*)[2]) + (long (*)(void))0 != 0; }",
+        "int v(...); int w(int, ...); int z(int x, int y[x]); struct S { int (*m)(int); };",
+        "int f(void) { return (int (*[2])(int)) 0 == (void *) &(char [3]) { 1, 2 }; }",
+        "int bad[3; int after;",
+        "int (*missing(int; int after;",
+        "int q[* x]; int r(int, ); int s(a b, c); int t(int ... x); int after;",
+        "int *; int (); int (*)[2]; int after;",
+        "int m(a, int b, ...); int n(int a b); int (x; int after;",
+    ];
+    for source in sources {
+        let (expected, _) = inspect(source, StudyMode::Machine, false);
+        for mode in [StudyMode::Recursive, StudyMode::Growing] {
+            let (actual, _) = inspect(source, mode, false);
+            assert_eq!(
+                actual, expected,
+                "declarator mismatch for {mode:?}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn deep_parenthesized_declarators_recurse_natively() {
+    let depth = 512;
+    let source = format!(
+        "int {}x{}; int {}(*y)(void){};",
+        "(".repeat(depth),
+        ")".repeat(depth),
+        "(*".repeat(depth),
+        ")".repeat(depth)
+    );
+    let (expected, _) = inspect(&source, StudyMode::Machine, false);
+    let (actual, stats) = inspect(&source, StudyMode::Recursive, false);
+    assert_eq!(actual, expected);
+    assert!(
+        stats.max_depth > depth,
+        "each parenthesized declarator is a recursive entry"
+    );
+}
+
+#[test]
 fn hybrid_fallback_preserves_binding_power_at_every_threshold() {
     let source = "int f(void) { return a = b ? c, d + e * f : g ? h : i, j + k * l; }";
     let (expected, _) = inspect(source, StudyMode::Machine, false);

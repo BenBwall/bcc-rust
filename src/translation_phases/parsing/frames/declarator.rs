@@ -244,8 +244,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // parenthesized abstract declarator.
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
-                    self.direct_declarators
-                        .push(Self::empty_function(parser, true));
+                    self.direct_declarators.push(empty_function(parser, true));
                     self.has_direct_declarator = true;
                     parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
@@ -584,7 +583,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // interpret their contents as a prototype.
                 let allow_k_and_r = self.named;
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let direct = Self::empty_function(parser, allow_k_and_r);
+                    let direct = empty_function(parser, allow_k_and_r);
                     self.direct_declarators.push(direct);
                     self.has_direct_declarator = true;
                     let token = token.expect("closing-parenthesis token exists");
@@ -777,20 +776,10 @@ pub(in crate::translation_phases::parsing) struct DeclaratorFrame<'tu, 'p> {
 }
 
 impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
-    /// C23: §6.7.7.4 paragraph 13, p. 130; PDF p. 143 makes every empty
-    /// function declarator a prototype, as if its parameter list were `void`.
-    fn empty_function(parser: &Parser<'_, 'tu, 'p>, legacy: bool) -> DirectDeclarator<'tu> {
-        if legacy && parser.context.configuration.standard() < crate::configuration::CStandard::C23
-        {
-            DirectDeclarator::KAndRStyleFunction {
-                parameters: ArenaList::empty(),
-            }
-        } else {
-            DirectDeclarator::Function {
-                parameter_list: ArenaList::empty(),
-                is_variadic:    false,
-            }
-        }
+    #[cfg(feature = "parser-recursive-descent-study")]
+    /// The declarator mode this frame was constructed with.
+    pub(in crate::translation_phases::parsing) fn study_parameters(&self) -> DeclaratorMode {
+        self.mode
     }
 
     /// GNU declarator labels and shared attribute attachment points.
@@ -1002,7 +991,28 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
     }
 }
 
-fn check_array_extension<'tu>(parser: &mut Parser<'_, 'tu, '_>, index: &'tu Expression<'tu>) {
+/// C23: §6.7.7.4 paragraph 13, p. 130; PDF p. 143 makes every empty
+/// function declarator a prototype, as if its parameter list were `void`.
+pub(in crate::translation_phases::parsing) fn empty_function<'tu>(
+    parser: &Parser<'_, 'tu, '_>,
+    legacy: bool,
+) -> DirectDeclarator<'tu> {
+    if legacy && parser.context.configuration.standard() < crate::configuration::CStandard::C23 {
+        DirectDeclarator::KAndRStyleFunction {
+            parameters: ArenaList::empty(),
+        }
+    } else {
+        DirectDeclarator::Function {
+            parameter_list: ArenaList::empty(),
+            is_variadic:    false,
+        }
+    }
+}
+
+pub(in crate::translation_phases::parsing) fn check_array_extension<'tu>(
+    parser: &mut Parser<'_, 'tu, '_>,
+    index: &'tu Expression<'tu>,
+) {
     let mut operand = index;
     while let super::syntax::ExpressionType::Parenthesized { expression, .. } = operand.kind {
         operand = expression;

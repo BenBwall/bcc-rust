@@ -112,7 +112,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                         matches!(token.kind, TokenType::Identifier)
                             && !parser.scopes.is_typedef(token.contents)
                     })
-                    && !Self::unknown_type_name_starts_prototype(parser)
+                    && !unknown_type_name_starts_prototype(parser)
                 {
                     // C23: §6.7.7.1 paragraph 1, pp. 126-127; PDF
                     // pp. 139-140 removes identifier-list declarators.
@@ -678,55 +678,11 @@ pub(in crate::translation_phases::parsing) struct ParameterListFrame<'tu, 'p> {
     suppression_entry: usize,
 }
 
-impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
-    /// Reports whether a parameter list that starts with a non-typedef
-    /// identifier is really a prototype whose first type name is unknown.
-    ///
-    /// An identifier list contains only identifiers and commas (C99 §6.7.5,
-    /// p. 114; PDF p. 126). An identifier followed by `*` or a
-    /// declaration-specifier keyword, as in `(size_t *p)`, can only start a
-    /// parameter declaration. After two adjacent identifiers, as in
-    /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
-    /// declaration syntax; without it, `(a b, c)` stays an identifier list with
-    /// an omitted comma.
-    fn unknown_type_name_starts_prototype(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
-        /// Tokens examined after two adjacent identifiers before the list is
-        /// assumed to be an identifier list.
-        const SCAN_LIMIT: usize = 64;
-        let Some(following) = parser.cursor.following() else {
-            return false;
-        };
-        match following.kind {
-            | TokenType::Operator(OperatorTokenType::Asterisk) => true,
-            | TokenType::Identifier => {
-                for index in 1..=SCAN_LIMIT {
-                    let Some(token) = parser.cursor.lookahead(index) else {
-                        return false;
-                    };
-                    if parser.declaration_starter(token)
-                        || matches!(
-                            token.kind,
-                            TokenType::Operator(
-                                OperatorTokenType::Asterisk
-                                    | OperatorTokenType::OpeningSquareBracket
-                                    | OperatorTokenType::Ellipsis
-                            )
-                        )
-                    {
-                        return true;
-                    }
-                    if !matches!(
-                        token.kind,
-                        TokenType::Identifier | TokenType::Operator(OperatorTokenType::Comma)
-                    ) {
-                        return false;
-                    }
-                }
-                false
-            },
-            | TokenType::Keyword(_) => parser.declaration_starter(following),
-            | _ => false,
-        }
+impl<'p> ParameterListFrame<'_, 'p> {
+    #[cfg(feature = "parser-recursive-descent-study")]
+    /// Whether this parameter list may be a K&R identifier list.
+    pub(in crate::translation_phases::parsing) fn study_parameters(&self) -> bool {
+        self.allow_k_and_r
     }
 
     pub(in crate::translation_phases::parsing) fn new(
@@ -748,5 +704,57 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             diagnosed_mixed_parameter: false,
             suppression_entry: 0,
         }
+    }
+}
+
+/// Reports whether a parameter list that starts with a non-typedef
+/// identifier is really a prototype whose first type name is unknown.
+///
+/// An identifier list contains only identifiers and commas (C99 §6.7.5,
+/// p. 114; PDF p. 126). An identifier followed by `*` or a
+/// declaration-specifier keyword, as in `(size_t *p)`, can only start a
+/// parameter declaration. After two adjacent identifiers, as in
+/// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
+/// declaration syntax; without it, `(a b, c)` stays an identifier list with
+/// an omitted comma.
+pub(in crate::translation_phases::parsing) fn unknown_type_name_starts_prototype(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
+    /// Tokens examined after two adjacent identifiers before the list is
+    /// assumed to be an identifier list.
+    const SCAN_LIMIT: usize = 64;
+    let Some(following) = parser.cursor.following() else {
+        return false;
+    };
+    match following.kind {
+        | TokenType::Operator(OperatorTokenType::Asterisk) => true,
+        | TokenType::Identifier => {
+            for index in 1..=SCAN_LIMIT {
+                let Some(token) = parser.cursor.lookahead(index) else {
+                    return false;
+                };
+                if parser.declaration_starter(token)
+                    || matches!(
+                        token.kind,
+                        TokenType::Operator(
+                            OperatorTokenType::Asterisk
+                                | OperatorTokenType::OpeningSquareBracket
+                                | OperatorTokenType::Ellipsis
+                        )
+                    )
+                {
+                    return true;
+                }
+                if !matches!(
+                    token.kind,
+                    TokenType::Identifier | TokenType::Operator(OperatorTokenType::Comma)
+                ) {
+                    return false;
+                }
+            }
+            false
+        },
+        | TokenType::Keyword(_) => parser.declaration_starter(following),
+        | _ => false,
     }
 }
