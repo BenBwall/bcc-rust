@@ -557,20 +557,6 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             source_vectors,
         })
     }
-
-    /// Runs the shared synchronization scan for a recursive production and
-    /// returns the provenance of the tokens it discarded.
-    pub(super) fn rd_recover(&mut self, set: SynchronizationSet) -> Option<SourceVectors> {
-        #[cfg(test)]
-        {
-            let depth = self.frames.len();
-            self.recover(set, depth)
-        }
-        #[cfg(not(test))]
-        {
-            self.recover(set)
-        }
-    }
 }
 
 /// How a struct-declarator ended.
