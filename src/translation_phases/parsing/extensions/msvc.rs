@@ -1,4 +1,5 @@
-//! MSVC extensions to translation phase 7, owned by explicit frames.
+//! Syntax and keyword tables of the MSVC extensions to translation phase 7,
+//! parsed by `grammar/msvc.rs`.
 //!
 //! C99: vendor extensions to declarators §6.7.5, p. 114; PDF p. 126 and
 //! statements §6.8, p. 131; PDF p. 143. Microsoft Learn specifies SEH and

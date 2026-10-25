@@ -1,16 +1,16 @@
-//! Extension frames parse later ISO and vendor syntax on the same machine.
+//! Syntax and diagnostic policy for later ISO and vendor extensions.
 //! [`Parser::extension`] reports accepted syntax through the configured
-//! diagnostic policy. Each extension frame owns its delimiters and pushes
-//! ordinary expression, type-name, or compound children. Semantic
-//! interpretation belongs to analysis.
+//! diagnostic policy. The extension productions in `grammar/modern.rs`,
+//! `grammar/gnu.rs`, and `grammar/msvc.rs` own their delimiters and call the
+//! ordinary expression, type-name, and compound productions; the syntax they
+//! build is defined here. Semantic interpretation belongs to analysis.
 //!
-//! For `_Alignof(int)`, the modern frame owns the parentheses and pushes a
-//! type-name frame for `int`. The child returns its type-name syntax, then the
-//! modern frame consumes `)` and returns its operand to the expression frame.
+//! For `_Alignof(int)`, the ISO construct production owns the parentheses and
+//! calls the type-name production for `int`. It then consumes `)` and returns
+//! the [`modern::SyntaxOperand`] that the expression production wraps.
 //!
-//! Read [`Parser::extension`] first for diagnostic policy, then
-//! [`modern::ModernFrame::step`], [`gnu::GnuFrame::step`], or
-//! [`msvc::MsvcFrame::step`] for the dialect in question.
+//! Read [`Parser::extension`] first for diagnostic policy, then the syntax of
+//! the dialect in question.
 //!
 //! Files under `extensions/` are grouped by origin:
 //!

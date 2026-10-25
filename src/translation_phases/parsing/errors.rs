@@ -135,7 +135,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 error_type.severity()
             },
             warning_group,
-            frame: self.active_production,
+            production: self.active_production,
             expected: error_type.expected_syntax(),
             found: token.map(|token| token.kind),
             found_spelling,
@@ -255,7 +255,7 @@ pub(crate) struct ParserError<'tu> {
             reason = "Only parser tests assert on this diagnostic field."
         )
     )]
-    pub(crate) frame:             ProductionKind,
+    pub(crate) production:        ProductionKind,
     #[cfg_attr(
         not(test),
         expect(

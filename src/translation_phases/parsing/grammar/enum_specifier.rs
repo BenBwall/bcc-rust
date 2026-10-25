@@ -1,4 +1,4 @@
-//! Recursive enum specifier grammar for the phase-7 study.
+//! Recursive enum specifier grammar.
 //!
 //! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
 //! `enum-specifier`, `enumerator-list`, and `enumerator` (C99: §6.7.2.2

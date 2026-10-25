@@ -1260,7 +1260,7 @@ enum LabelPrefix<'tu> {
 }
 
 /// Returns whether a token begins a statement production rather than an
-/// expression that the expression frame can consume.
+/// expression that the expression production can consume.
 ///
 /// C99: the keywords that open `labeled-statement`, `selection-statement`,
 /// `iteration-statement`, and `jump-statement` in §6.8.1-§6.8.6,

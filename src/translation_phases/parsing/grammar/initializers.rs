@@ -1,4 +1,4 @@
-//! Recursive initializer and designation grammar for the phase-7 study.
+//! Recursive initializer and designation grammar.
 //!
 //! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
 //! `initializer`, `initializer-list`, `designation`, `designator-list`, and

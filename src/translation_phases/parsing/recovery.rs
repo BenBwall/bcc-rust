@@ -39,7 +39,7 @@ use crate::{
 
 impl Parser<'_, '_, '_> {
     /// Consumes malformed input until the active synchronization policy says
-    /// its owning frame can safely resume.
+    /// its owning production can safely resume.
     ///
     /// C99: continued translation after a required diagnostic is permitted by
     /// §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23. C99 does not
@@ -228,7 +228,7 @@ impl Parser<'_, '_, '_> {
     }
 }
 
-/// A production-specific synchronization policy and the frame allowed to
+/// A production-specific synchronization policy and the production allowed to
 /// resume after the scan.
 ///
 /// C99: recovery serves the diagnostic requirement in §5.1.1.3, p. 11; PDF
@@ -296,7 +296,7 @@ pub(super) enum SynchronizationKind {
 ///
 /// Keeping delimiter depth here makes recovery ownership inspectable and keeps
 /// the state resumable if the token source becomes asynchronous in a later
-/// phase. `active` is `None` whenever normal frame execution is in progress.
+/// phase. `active` is `None` whenever normal parsing is in progress.
 /// A finished scan keeps its emptied stacks in `spare` for the next one, so
 /// recovery reuses the same parse-arena storage however often it runs.
 ///

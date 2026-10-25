@@ -1510,7 +1510,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 }
 
 /// One expression's Double-E state: the expected position, the pending
-/// operands and operators, and the recovery flags of the frame grammar.
+/// operands and operators, and its recovery flags.
 ///
 /// C99: §6.5, pp. 67-94; PDF pp. 79-106.
 struct ExpressionParts<'tu, 'p> {
@@ -1737,8 +1737,7 @@ fn is_closing_delimiter(token: TokenType) -> bool {
     )
 }
 
-/// Arguments and provenance of the postfix call an expression frame is
-/// building.
+/// Arguments and provenance of the postfix call an expression is building.
 ///
 /// C99: `postfix-expression ( argument-expression-list(opt) )`, §6.5.2,
 /// pp. 69-70; PDF pp. 81-82; function calls §6.5.2.2, p. 71; PDF p. 83.
@@ -1749,8 +1748,8 @@ pub(in crate::translation_phases::parsing) struct CallState<'tu, 'p> {
     pub(in crate::translation_phases::parsing) operator_sources: ArenaVec<'p, SourceVectors>,
 }
 
-/// The expression nonterminal a frame parses, which bounds the operators it
-/// may absorb.
+/// The expression nonterminal a production parses, which bounds the
+/// operators it may absorb.
 ///
 /// C99: `Expression` is `expression` (§6.5.17 paragraph 1, p. 94;
 /// PDF p. 106); `AssignmentExpression` is `assignment-expression` (§6.5.16

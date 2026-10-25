@@ -3,7 +3,7 @@
 //! [`Parser::declaration_starter`] asks whether a token can start specifiers in
 //! the current scope. The following scans distinguish declarations from
 //! expressions and recognize declaration-shaped prefixes without consuming
-//! input. They select grammar frames; they do not resolve types or check
+//! input. They select grammar productions; they do not resolve types or check
 //! redeclarations.
 //!
 //! C99: translation phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
@@ -35,10 +35,10 @@ impl Parser<'_, '_, '_> {
     /// (§6.7.2, p. 99; PDF p. 111), type qualifiers (§6.7.3, p. 108;
     /// PDF p. 120), and `inline` (§6.7.4, p. 112; PDF p. 124); typedef-name
     /// is a type-specifier under §6.7.2, p. 99; PDF p. 111. `_Imaginary` is
-    /// accepted here so the specifier frame can diagnose it. Later-standard
-    /// specifiers, `_Static_assert`, attribute specifiers, and the GNU and
-    /// MSVC specifier keywords also start one; a `[` counts only as described
-    /// on [`Self::attribute_starter_in_lookahead`].
+    /// accepted here so the specifier production can diagnose it.
+    /// Later-standard specifiers, `_Static_assert`, attribute specifiers, and
+    /// the GNU and MSVC specifier keywords also start one; a `[` counts only as
+    /// described on [`Self::attribute_starter_in_lookahead`].
     pub(super) fn declaration_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(

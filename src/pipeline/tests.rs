@@ -586,7 +586,7 @@ fn parse_arena_use_does_not_grow_with_repeated_declarations() {
     let (twice, twice_errors) = parse_arena_high_water(&EVERY_FRAME.repeat(80));
     assert!(once_errors > 0, "the input exercises recovery");
     assert_eq!(twice_errors, 2 * once_errors);
-    assert!(once > 0, "frames and scopes use the parse arena");
+    assert!(once > 0, "productions and scopes use the parse arena");
     assert_eq!(twice, once, "parse arena use grows with the input");
 }
 

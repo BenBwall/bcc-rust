@@ -1,5 +1,5 @@
 //! Recursive external-declaration, declaration, and function-definition
-//! grammar for the phase-7 study.
+//! grammar.
 //!
 //! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of one
 //! `external-declaration` of a `translation-unit` (C99: §6.9 paragraph 1,

@@ -1,4 +1,5 @@
-//! GNU extensions to translation phase 7, implemented by resumable frames.
+//! Syntax of the GNU extensions to translation phase 7, parsed by
+//! `grammar/gnu.rs`.
 //!
 //! C99: these extend expression, statement and declarator grammar (§6.5,
 //! pp. 67-94; PDF pp. 79-106; §6.8, pp. 131-139; PDF pp. 143-151;

@@ -1,4 +1,4 @@
-//! Recursive struct and union specifier grammar for the phase-7 study.
+//! Recursive struct and union specifier grammar.
 //!
 //! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
 //! `struct-or-union-specifier`, `struct-declaration-list`,

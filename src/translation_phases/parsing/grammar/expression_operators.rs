@@ -6,8 +6,9 @@
 //! subclause's syntax gives its associativity (§6.5 paragraph 3 and
 //! footnote 74, p. 67; PDF p. 79). The tables below flatten that grammar
 //! (§6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106; §A.2.1, pp. 409-411;
-//! PDF pp. 421-423) for the expression frame's Double-E reducer. Levels 1
-//! and 2 (postfix, unary, and cast) are recognized by the frame itself.
+//! PDF pp. 421-423) for the expression production's Double-E reducer. Levels
+//! 1 and 2 (postfix, unary, and cast) are recognized by the production
+//! itself.
 
 use std::fmt::Debug;
 
@@ -98,7 +99,7 @@ pub(in crate::translation_phases::parsing) fn is_operator(
 /// 12 `logical-OR-expression` §6.5.14, p. 89; PDF p. 101;
 /// 14 `assignment-expression` §6.5.16, p. 91; PDF p. 103; 15 `expression`
 /// (comma) §6.5.17, p. 94; PDF p. 106. Subscripting is a postfix operator
-/// (level 1, §6.5.2, p. 69; PDF p. 81) that the frame builds directly.
+/// (level 1, §6.5.2, p. 69; PDF p. 81) that the production builds directly.
 fn binary_operator_precedence(operator: BinaryOperator) -> u32 {
     match operator {
         | BinaryOperator::Multiplication | BinaryOperator::Division | BinaryOperator::Modulo => 3,

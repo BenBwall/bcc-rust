@@ -1,4 +1,5 @@
-//! ISO additions to translation phase 7, expressed as resumable frames.
+//! Syntax of the ISO additions to translation phase 7, parsed by
+//! `grammar/modern.rs`.
 //!
 //! C11: generic selections §6.5.1.1, p. 78; PDF p. 96; static assertions
 //! §6.7.10, p. 145; PDF p. 163. C99: the shared type-name and expression

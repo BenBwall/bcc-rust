@@ -17,7 +17,7 @@
 //! parenthesized declarators recurse natively, so the minimums of 12
 //! declarators and 63 parenthesized-declarator levels (§5.2.4.1, p. 20;
 //! PDF p. 32; §6.7.5 paragraph 7, p. 115; PDF p. 127) are bounded only by
-//! the study depth limit.
+//! the configured nesting-depth limit.
 
 use crate::{
     translation_phases::{

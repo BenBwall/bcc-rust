@@ -146,9 +146,9 @@ impl<'tu, 'p> TokenCursor<'tu, 'p> {
         self.at(0).and_then(|_| self.at(index.checked_add(1)?))
     }
 
-    /// Tokens consumed by a child frame, retained by an enclosing attribute
-    /// without reparsing or advancing the cursor. `start` is a saved consumed
-    /// count from this cursor.
+    /// Tokens consumed by a child production, retained by an enclosing
+    /// attribute without reparsing or advancing the cursor. `start` is a saved
+    /// consumed count from this cursor.
     pub(super) fn consumed_since(&self, start: usize) -> &[Token] {
         &self.upstream.tokens[start..self.position]
     }

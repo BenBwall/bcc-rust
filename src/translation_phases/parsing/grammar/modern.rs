@@ -892,8 +892,8 @@ pub(in crate::translation_phases::parsing) enum ModernValue<'tu> {
     Attributes(&'tu AttributeSpecifier<'tu>),
 }
 
-/// Selects the operand, generic, assertion or attribute grammar owned by a
-/// frame.
+/// Selects the operand, generic, assertion or attribute grammar that an ISO
+/// construct production parses.
 /// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
 /// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
 /// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.

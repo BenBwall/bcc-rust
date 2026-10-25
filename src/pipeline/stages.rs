@@ -71,8 +71,8 @@ pub(crate) fn with_preprocessor<'tu, R>(
     run(preprocessor, context, &pp)
 }
 
-/// Keeps phase-7 working storage scoped to parsing: the parser's frames,
-/// their pools, its scopes, and its recovery state come from `parse`, which
+/// Keeps phase-7 working storage scoped to parsing: the parser's scratch
+/// pools, its scopes, and its recovery state come from `parse`, which
 /// the caller frees when parsing ends. The syntax tree goes into the
 /// translation-unit arena.
 pub(crate) fn parse_with_arena<'tu>(

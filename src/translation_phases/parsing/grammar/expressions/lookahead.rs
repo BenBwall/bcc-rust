@@ -263,7 +263,7 @@ pub(in crate::translation_phases::parsing) fn type_name_is_compound_literal(
 /// Returns whether the current `(` opens a type name, or the storage
 /// classes of a compound literal before one, as in `(constexpr int){1}`.
 /// Storage-class and `inline` keywords that a compound literal cannot
-/// take are diagnosed by the type-name frame, as in `(static int)x`.
+/// take are diagnosed by the type-name production, as in `(static int)x`.
 /// C23: compound-literal storage-class specifiers §6.5.3.6 paragraph 1,
 /// p. 78; PDF p. 91.
 pub(in crate::translation_phases::parsing) fn parenthesized_type_name_follows(

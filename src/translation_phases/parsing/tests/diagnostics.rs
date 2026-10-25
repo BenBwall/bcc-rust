@@ -227,7 +227,7 @@ fn parser_diagnostics_expose_structured_context_and_fifo_recovery() {
         let first = diagnostics[0];
         assert_eq!(first.code, ParserDiagnosticCode::Syntax);
         assert_eq!(first.severity, ErrorSeverity::Error);
-        assert_eq!(first.frame, ProductionKind::DeclarationSpecifiers);
+        assert_eq!(first.production, ProductionKind::DeclarationSpecifiers);
         assert_eq!(first.expected, ExpectedSyntax::DeclarationSpecifier);
         assert_eq!(
             first.found,

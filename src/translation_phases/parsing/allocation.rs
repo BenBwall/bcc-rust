@@ -40,7 +40,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         node
     }
 
-    /// Copies frame-retained nodes into one length-prefixed list in the
+    /// Copies production-retained nodes into one length-prefixed list in the
     /// translation-unit arena, counts them, and empties `nodes` for reuse.
     /// An empty list allocates nothing.
     pub(super) fn alloc_syntax_list<T: TreeNode<'tu> + Copy>(

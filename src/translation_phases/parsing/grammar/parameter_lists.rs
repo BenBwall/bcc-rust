@@ -571,7 +571,7 @@ pub(in crate::translation_phases::parsing) fn unknown_type_name_starts_prototype
     }
 }
 
-/// Parameter-list child result before it is appended to a declarator frame.
+/// Parameter-list child result before it is appended to a declarator.
 ///
 /// C99: parameter-type-list, parameter-list, and identifier-list are specified
 /// by §6.7.5, p. 114; PDF p. 126, with semantics in §6.7.5.3,
@@ -580,6 +580,6 @@ pub(in crate::translation_phases::parsing) fn unknown_type_name_starts_prototype
 pub(super) struct ParameterListResult<'tu> {
     /// Function suffix constructed from the parsed list.
     pub(super) direct_declarator: DirectDeclarator<'tu>,
-    /// Exact source provenance owned by the parameter-list frame.
+    /// Exact source provenance owned by the parameter list.
     pub(super) source_vectors:    SourceVectors,
 }

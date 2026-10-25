@@ -1,4 +1,4 @@
-//! Recursive declaration-specifier grammar for the phase-7 study.
+//! Recursive declaration-specifier grammar.
 //!
 //! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
 //! `declaration-specifiers` (C99: §6.7 paragraph 1, p. 97; PDF p. 109) and
@@ -1078,7 +1078,7 @@ pub(in crate::translation_phases::parsing) enum SpecifierMode {
 /// `_Imaginary` comes from the keyword inventory in §6.4.1, p. 50; PDF p. 62
 /// and is retained here only for the existing extension path. It is reserved
 /// for imaginary types (§6.4.1 paragraph 2, p. 50; PDF p. 62), which only
-/// informative annex G specifies; the frame rejects it.
+/// informative annex G specifies; the specifier production rejects it.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::translation_phases::parsing) enum PrimitiveTypeSpecifier {
     Signed,
