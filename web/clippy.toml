@@ -1,0 +1,2 @@
+# The site is ordinary heap-allocating UI code. This file replaces the
+# compiler's arena-only allocation rules in ../.clippy.toml.

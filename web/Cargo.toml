@@ -1,0 +1,69 @@
+[package]
+name = "bcc-web"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.0"
+description = "Static Leptos site for the bcc C abstract machine"
+license-file = "../LICENSE"
+publish = false
+
+# A standalone workspace: the site has its own lockfile and never joins the
+# compiler's native build.
+[workspace]
+
+[lib]
+name = "bcc_web"
+
+# The browser app, which hydrates the prerendered page.
+[[bin]]
+name = "bcc-web"
+path = "src/main.rs"
+required-features = ["hydrate"]
+
+# The engine Web Worker: runs the bcc abstract machine off the UI thread.
+[[bin]]
+name = "engine-worker"
+path = "src/bin/engine_worker.rs"
+required-features = ["worker"]
+
+# Native build-time renderer run by Trunk's post_build hook.
+[[bin]]
+name = "prerender"
+path = "src/bin/prerender.rs"
+required-features = ["ssr"]
+
+[features]
+hydrate = ["leptos/hydrate", "dep:console_error_panic_hook"]
+ssr = ["leptos/ssr"]
+worker = ["dep:bcc-rust", "dep:console_error_panic_hook"]
+
+[dependencies]
+# The browser execution engine only; no native compiler or LLVM.
+bcc-rust = { path = "..", default-features = false, features = ["abstract-machine"], optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+futures-channel = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+js-sys = "0.3"
+leptos = "0.8.22"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Blob", "DedicatedWorkerGlobalScope", "Document", "Element", "ErrorEvent", "File", "FileList", "HtmlElement", "HtmlInputElement",
+    "HtmlTextAreaElement", "MessageEvent", "ScrollIntoViewOptions", "ScrollLogicalPosition",
+    "Window", "Worker", "WorkerOptions", "WorkerType",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_qualifications = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
