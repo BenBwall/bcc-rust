@@ -1187,4 +1187,45 @@ mod tests {
             assert!(stdout.contains(expected), "{expected}: {stdout}");
         }
     }
+
+    fn nested_initializer(depth: usize) -> String {
+        format!("int x = {}1{};\n", "(".repeat(depth), ")".repeat(depth))
+    }
+
+    #[test]
+    fn nesting_limit_flag_stops_deep_input_with_a_diagnostic() {
+        let source = nested_initializer(64);
+        let output = run(&["--max-nesting-depth=16", "--input", &source]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.code().is_some(), "{output:?}");
+        assert!(
+            stderr.contains("input exceeds the parser's nesting depth limit of 16"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("--max-nesting-depth=N"), "{stderr}");
+        assert_eq!(stderr.matches("nesting depth limit").count(), 1, "{stderr}");
+
+        let raised = run(&["--max-nesting-depth=1000", "--input", &source]);
+        assert!(raised.status.success(), "{raised:?}");
+        assert!(raised.stderr.is_empty(), "{raised:?}");
+    }
+
+    #[test]
+    fn default_nesting_limit_accepts_deep_generated_input() {
+        // Far deeper than GCC or Clang accept on default stacks; the
+        // reserved compilation stack holds it without a diagnostic.
+        let output = run(&["--input", &nested_initializer(20_000)]);
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+
+    #[test]
+    fn nesting_limit_must_be_positive() {
+        let output = run(&["--max-nesting-depth=0", "--input", "int x;\n"]);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--max-nesting-depth"),
+            "{output:?}"
+        );
+    }
 }
