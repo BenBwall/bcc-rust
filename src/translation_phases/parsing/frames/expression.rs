@@ -58,11 +58,11 @@ use std::fmt::Debug;
 // Recovery lookahead
 mod lookahead;
 
-pub(in crate::translation_phases::parsing) use lookahead::closer_follows_stray_run;
-use lookahead::{
+pub(in crate::translation_phases::parsing) use lookahead::{
     brace_group_closes_before_parenthesis,
     brace_group_continues_expression,
     brace_group_is_block,
+    closer_follows_stray_run,
 };
 
 use super::{
@@ -1647,9 +1647,9 @@ pub(in crate::translation_phases::parsing) enum ExpressionBoundary {
 /// postfix suffix (§6.5.2 paragraph 1, p. 69; PDF p. 81).
 #[derive(Debug, Clone, Copy)]
 pub(in crate::translation_phases::parsing) struct ExpressionOperand<'tu> {
-    expression:         &'tu Expression<'tu>,
-    unary_expression:   bool,
-    postfix_expression: bool,
+    pub(in crate::translation_phases::parsing) expression:         &'tu Expression<'tu>,
+    pub(in crate::translation_phases::parsing) unary_expression:   bool,
+    pub(in crate::translation_phases::parsing) postfix_expression: bool,
 }
 
 /// Resumable expression production: an operand/operator stack pair
@@ -1660,8 +1660,6 @@ pub(in crate::translation_phases::parsing) struct ExpressionOperand<'tu> {
 #[derive(Debug)]
 pub(in crate::translation_phases::parsing) struct ExpressionFrame<'tu, 'p> {
     mode: ExpressionMode,
-    #[cfg(feature = "parser-recursive-descent-study")]
-    study_precedence_limit: Option<u32>,
     boundary: ExpressionBoundary,
     recovery_boundary: ExpressionBoundary,
     phase: ExpressionPhase<'tu>,
@@ -1897,7 +1895,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// Returns whether the current `(` begins a compound literal: a type name
     /// whose `)` is followed by `{`.
     /// C99: §6.5.2.5 paragraph 1, p. 75; PDF p. 87.
-    fn parenthesized_compound_literal_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
+    pub(in crate::translation_phases::parsing) fn parenthesized_compound_literal_follows(
+        parser: &mut Parser<'_, 'tu, 'p>,
+    ) -> bool {
         if !Self::parenthesized_type_name_follows(parser) {
             return false;
         }
@@ -1937,7 +1937,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// expression, which GCC and Clang accept from `__alignof__`. The
     /// standard spellings take only a type name.
     /// C11: §6.5.3 paragraph 1, p. 88; PDF p. 106. Extension: GNU.
-    fn report_alignof_expression(parser: &mut Parser<'_, 'tu, 'p>, keyword: Token) {
+    pub(in crate::translation_phases::parsing) fn report_alignof_expression(
+        parser: &mut Parser<'_, 'tu, 'p>,
+        keyword: Token,
+    ) {
         let gnu_spelling =
             KeywordTokenType::classify(keyword.contents, parser.context.configuration)
                 .is_some_and(|x| x.origin == Some(crate::configuration::FeatureOrigin::Gnu));
@@ -2099,28 +2102,6 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// p. 91; PDF p. 103); a `constant-expression` ends before a comma or an
     /// assignment operator (§6.6 paragraph 1, p. 95; PDF p. 107).
     fn is_boundary(&self, token: Option<TokenType>) -> bool {
-        #[cfg(feature = "parser-recursive-descent-study")]
-        if let Some(limit) = self.study_precedence_limit {
-            let precedence = token
-                .and_then(binary_operator)
-                .map(|operator| {
-                    LanguageExpressionOperator::Binary {
-                        operator,
-                        source_vectors: SourceVectors::default(),
-                    }
-                    .precedence()
-                })
-                .or_else(|| {
-                    matches!(
-                        token,
-                        Some(TokenType::Operator(OperatorTokenType::QuestionMark))
-                    )
-                    .then_some(13)
-                });
-            if precedence.is_some_and(|precedence| precedence > limit) {
-                return true;
-            }
-        }
         if matches!(
             self.boundary,
             ExpressionBoundary::StructMember | ExpressionBoundary::Enumerator
@@ -2188,7 +2169,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         Self::is_owning_boundary_for(self.boundary, token)
     }
 
-    fn is_owning_boundary_for(boundary: ExpressionBoundary, token: TokenType) -> bool {
+    pub(in crate::translation_phases::parsing) fn is_owning_boundary_for(
+        boundary: ExpressionBoundary,
+        token: TokenType,
+    ) -> bool {
         if Self::is_closing_delimiter(token) {
             return true;
         }
@@ -2240,7 +2224,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         }
     }
 
-    fn is_closing_delimiter(token: TokenType) -> bool {
+    pub(in crate::translation_phases::parsing) fn is_closing_delimiter(token: TokenType) -> bool {
         matches!(
             token,
             TokenType::Operator(
@@ -2465,8 +2449,6 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     ) -> Self {
         Self {
             mode,
-            #[cfg(feature = "parser-recursive-descent-study")]
-            study_precedence_limit: None,
             boundary,
             recovery_boundary,
             phase: ExpressionPhase::Parse,
@@ -2482,45 +2464,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
 }
 
 #[cfg(feature = "parser-recursive-descent-study")]
-impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
-    /// Resumes the existing recovery policy after a recursively parsed operand.
-    /// Recovery serves C99 §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
-    pub(in crate::translation_phases::parsing) fn study_needs_recovery(
-        &self,
-        token: Option<Token>,
-    ) -> bool {
-        token.is_some_and(|token| self.should_consume_unowned_closer(token.kind))
-            || !self.is_boundary(token.map(|token| token.kind))
-    }
-
-    pub(in crate::translation_phases::parsing) fn study_resume_operand(
-        &mut self,
-        expression: &'tu Expression<'tu>,
-        unary: bool,
-    ) {
-        self.push_operand(expression, unary, unary);
-        self.state = ExpressionParserState::Operator;
-    }
-
-    pub(in crate::translation_phases::parsing) fn study_call_argument_follows(
-        &self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Token,
-    ) -> bool {
-        is_expression_operand_starter(token.kind) && !self.is_strong_grammar_boundary(parser, token)
-    }
-
+impl ExpressionFrame<'_, '_> {
     pub(in crate::translation_phases::parsing) fn study_parameters(
         &self,
-    ) -> (ExpressionMode, ExpressionBoundary) {
-        (self.mode, self.boundary)
-    }
-
-    pub(in crate::translation_phases::parsing) fn with_study_precedence(
-        mut self,
-        limit: u32,
-    ) -> Self {
-        self.study_precedence_limit = Some(limit);
-        self
+    ) -> (ExpressionMode, ExpressionBoundary, ExpressionBoundary) {
+        (self.mode, self.boundary, self.recovery_boundary)
     }
 }

@@ -1,15 +1,23 @@
-//! Recursive phase-7 expression grammar with precedence climbing.
+//! Recursive phase-7 expression grammar with a Double-E precedence reducer.
 //!
-//! C99: §6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106. Prefix and cast
-//! operands recurse; postfix chains and left associative operators iterate.
-//! Conditional middle operands parse full expressions (§6.5.15 paragraph 1,
-//! p. 90; PDF p. 102). Type names and initializer lists retain their frames;
+//! C99: §6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106; §A.2.1, pp. 409-411;
+//! PDF pp. 421-423. Each expression alternates between expecting an
+//! operand and expecting an operator, keeping both on pooled parse-arena
+//! stacks; binary operators reduce by precedence (§6.5 paragraph 3 and
+//! footnote 74, p. 67; PDF p. 79). Grouping, subscripts, call arguments,
+//! prefix, cast and conditional operands recurse. The caller chooses which
+//! delimiters end the expression and keeps ownership of them. Type names,
+//! initializers and extension operands run through [`Parser::rd_child`];
 //! operand constraints and constant evaluation belong to semantic analysis.
 
 use super::StudyMode;
 use crate::{
-    configuration::Feature,
+    configuration::{
+        Feature,
+        FeatureOrigin,
+    },
     translation_phases::{
+        GetPosition,
         SourceVectors,
         parsing::{
             Parser,
@@ -24,22 +32,43 @@ use crate::{
                     ExpressionBoundary,
                     ExpressionFrame,
                     ExpressionMode,
+                    ExpressionOperand,
+                    brace_group_closes_before_parenthesis,
+                    brace_group_continues_expression,
+                    brace_group_is_block,
+                    closer_follows_stray_run,
                 },
                 expression_operators::{
                     LanguageExpressionOperator,
                     binary_operator,
                     is_assignment_operator,
+                    is_expression_operand_starter,
                     is_operator,
                     is_postfix_starter,
                     prefix_operator,
                 },
                 initializer::InitializerFrame,
+                statement::is_statement_keyword,
                 type_name::TypeNameFrame,
             },
+            gnu::{
+                GnuFrame,
+                GnuKind,
+                GnuValue,
+            },
             machine::{
+                ExpressionResult,
+                InitializerResult,
+                ParseAction,
                 ParseFrame,
                 ParseFrameKind,
                 ParseValue,
+            },
+            modern::{
+                ModernFrame,
+                ModernKind,
+                ModernValue,
+                SyntaxOperand,
             },
             recovery::ExpressionTerminator,
             syntax::{
@@ -56,301 +85,286 @@ use crate::{
             FloatTokenType,
             KeywordTokenType,
             OperatorTokenType,
+            Token,
             TokenType,
         },
     },
+    util::bump::ArenaVec,
 };
 
-impl<'tu> Parser<'_, 'tu, '_> {
+impl<'tu, 'p> Parser<'_, 'tu, 'p> {
+    /// C99: `expression` and its subordinate nonterminals, §6.5, pp. 67-94;
+    /// PDF pp. 79-106. `recovery` is the enclosing owner's boundary, which
+    /// nested operands inherit for their recovery decisions.
+    #[inline(never)]
     pub(super) fn rd_expression(
         &mut self,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
-    ) -> Option<&'tu Expression<'tu>> {
-        let errors = self.hard_error_count;
-        let operand = self.rd_precedence(mode_limit(mode), mode, boundary)?;
-        self.rd_finish_expression(operand, mode, boundary, errors)
-    }
-
-    // Keep the large, rarely used recovery frame out of live recursive
-    // activation records, including unoptimized Windows builds.
-    #[inline(never)]
-    fn rd_finish_expression(
-        &mut self,
-        operand: Operand<'tu>,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-        errors: usize,
-    ) -> Option<&'tu Expression<'tu>> {
-        let mut frame = ExpressionFrame::new(self.arena, mode, boundary, errors);
-        if operand.frame_finished || !frame.study_needs_recovery(self.cursor.current()) {
-            return Some(operand.expression);
-        }
-        // Reuse synchronization and diagnostics without rewinding the token
-        // stream or rebuilding the already constructed expression.
-        frame.lend_pooled(&mut self.pools);
-        frame.study_resume_operand(operand.expression, operand.unary);
-        match self.study_frame(ParseFrame::Expression(frame), true)? {
-            | ParseValue::Expression(result) => Some(result.expression),
-            | ParseValue::ConstantExpression(result) => Some(result.expression.0),
-            | _ => unreachable!("recovery returns an expression"),
-        }
-    }
-
-    /// C99: precedence and associativity follow §6.5 paragraph 3 and footnote
-    /// 74, p. 67; PDF p. 79. Lower table levels bind more tightly.
-    #[inline(never)]
-    fn rd_precedence(
-        &mut self,
-        limit: u32,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-    ) -> Option<Operand<'tu>> {
+        recovery: ExpressionBoundary,
+    ) -> Option<ExpressionResult<'tu>> {
         if self.study_fallback()? {
-            return self.rd_expression_fallback(limit, mode, boundary, true);
+            return self.rd_expression_fallback(mode, boundary, recovery);
         }
         if self.study.mode == StudyMode::Growing {
             stacker::maybe_grow(64 * 1024, 1024 * 1024, || {
-                self.rd_precedence_entered(limit, mode, boundary)
+                self.rd_expression_entered(mode, boundary, recovery)
             })
         } else {
-            self.rd_precedence_entered(limit, mode, boundary)
+            self.rd_expression_entered(mode, boundary, recovery)
         }
     }
 
-    fn rd_precedence_entered(
+    fn rd_expression_entered(
         &mut self,
-        limit: u32,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
-    ) -> Option<Operand<'tu>> {
-        let marker = 0_u8;
-        let address = if self.study.stack_samples {
-            std::ptr::from_ref(&marker).addr()
-        } else {
-            0
-        };
-        let active = self.study_enter(ParseFrameKind::Expression, address);
+        recovery: ExpressionBoundary,
+    ) -> Option<ExpressionResult<'tu>> {
+        let active = self.rd_enter(ParseFrameKind::Expression)?;
         self.study.stats.expression_entries += 1;
-        let result = self.rd_precedence_body(limit, mode, boundary);
+        let mut expression = RdExpression {
+            mode,
+            boundary,
+            recovery,
+            operators: ArenaVec::new_in(self.arena),
+            operands: ArenaVec::new_in(self.arena),
+            operand: true,
+            errors: self.hard_error_count,
+            pending_sizeof: None,
+            stray_error_operand: false,
+        };
+        self.pools.operators.lend(&mut expression.operators);
+        self.pools.operands.lend(&mut expression.operands);
+        let result = self.rd_expression_body(&mut expression);
+        self.pools.operators.reclaim(&mut expression.operators);
+        self.pools.operands.reclaim(&mut expression.operands);
         self.study_leave(active);
         result
     }
 
-    fn rd_precedence_body(
+    fn rd_expression_body(
         &mut self,
-        limit: u32,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-    ) -> Option<Operand<'tu>> {
-        let errors = self.hard_error_count;
-        let mut left = self.rd_prefix(mode, boundary)?;
-        while let Some(token) = self.cursor.current() {
-            if limit >= 13 && is_operator(Some(token), OperatorTokenType::QuestionMark) {
-                self.rd_consume();
-                let omitted = is_operator(self.cursor.current(), OperatorTokenType::Colon);
-                let middle = if omitted {
-                    if let Some(colon) = self.cursor.current() {
-                        self.extension(
-                            Feature::OmittedConditionalOperand,
-                            "omitted conditional operand",
-                            colon,
-                        );
-                    }
-                    left.expression
-                } else {
-                    self.rd_expression(
-                        ExpressionMode::Expression,
-                        ExpressionBoundary::Statement(ExpressionTerminator::Colon),
-                    )?
-                };
-                let colon = self.rd_expect(OperatorTokenType::Colon, "conditional expression");
-                let right = self
-                    .rd_precedence(13, ExpressionMode::ConstantExpression, boundary)?
-                    .expression;
-                let mut source = self
-                    .context
-                    .merge_vectors(left.expression.source_vectors, token.source_vectors);
-                if !omitted {
-                    source = self.context.merge_vectors(source, middle.source_vectors);
-                }
-                source = self.context.merge_vectors(source, colon);
-                source = self.context.merge_vectors(source, right.source_vectors);
-                let operators = self.context.merge_vectors(token.source_vectors, colon);
-                let operands = self.alloc_syntax_part(ConditionalExpression {
-                    condition_expression: left.expression,
-                    then_expression:      middle,
-                    else_expression:      right,
-                });
-                left = Operand::other(self.store_expression(
-                    if omitted {
-                        ExpressionType::OmittedConditional(operands)
-                    } else {
-                        ExpressionType::Conditional(operands)
-                    },
-                    source,
-                    Some(operators),
-                    self.hard_error_count > errors,
-                ));
-                continue;
-            }
-            let Some(operator) = binary_operator(token.kind) else {
-                break;
-            };
-            let precedence = LanguageExpressionOperator::Binary {
-                operator,
-                source_vectors: token.source_vectors,
-            }
-            .precedence();
-            if precedence > limit {
-                break;
-            }
-            let invalid_assignment = is_assignment_operator(operator) && !left.unary;
-            if invalid_assignment {
-                self.report(
-                    ParserErrorType::ExpectedStatementExpression(
-                        "unary-expression left operand of assignment",
-                        Some(token.kind),
-                    ),
-                    Some(token),
-                );
-            }
-            self.rd_consume();
-            let right_limit = if is_assignment_operator(operator) {
-                precedence
+        e: &mut RdExpression<'tu, 'p>,
+    ) -> Option<ExpressionResult<'tu>> {
+        loop {
+            let finished = if e.operand {
+                self.rd_operand(e)?
             } else {
-                precedence - 1
+                self.rd_operator(e)?
             };
-            let right = self
-                .rd_precedence(right_limit, ExpressionMode::CastExpression, boundary)?
-                .expression;
-            // The frame reducer retains the error state across both operands
-            // of an invalid assignment production (§6.5.16 paragraph 1).
-            let right = if invalid_assignment {
-                self.mark_expression_recovered(right)
-            } else {
-                right
-            };
-            let source = self
-                .context
-                .merge_vectors(left.expression.source_vectors, token.source_vectors);
-            let source = self.context.merge_vectors(source, right.source_vectors);
-            left = Operand::other(self.store_expression(
-                ExpressionType::Binary {
-                    operator,
-                    left_expression: left.expression,
-                    right_expression: right,
-                },
-                source,
-                Some(token.source_vectors),
-                self.hard_error_count > errors,
-            ));
+            if finished {
+                return Some(self.rd_finish_expression(e));
+            }
         }
-        if self.hard_error_count > errors {
-            left.expression = self.mark_expression_recovered(left.expression);
-        }
-        Some(left)
     }
 
-    /// C99: unary-expression §6.5.3, p. 78; PDF p. 90; cast-expression
-    /// §6.5.4, p. 81; PDF p. 93; postfix-expression §6.5.2, p. 69; PDF p. 81.
-    fn rd_prefix(
-        &mut self,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-    ) -> Option<Operand<'tu>> {
-        let Some(token) = self.cursor.current() else {
-            return self.rd_expression_fallback(2, mode, boundary, true);
-        };
-        if let Some((operator, child_mode)) = prefix_operator(token.kind) {
+    /// One step in operand position. Returns whether the expression ends.
+    ///
+    /// C99: `primary-expression` §6.5.1, p. 69; PDF p. 81; `unary-expression`
+    /// §6.5.3, p. 78; PDF p. 90; `cast-expression` §6.5.4, p. 81; PDF p. 93.
+    fn rd_operand(&mut self, e: &mut RdExpression<'tu, 'p>) -> Option<bool> {
+        let token = self.cursor.current();
+        if let Some(token) = token
+            && is_closing_delimiter(token.kind)
+            && e.consumes_unowned_closer(token.kind)
+        {
+            self.report(
+                ParserErrorType::ExpectedStatementExpression(
+                    "expression operand",
+                    Some(token.kind),
+                ),
+                Some(token),
+            );
+            // The stray closer stands in for the missing operand.
+            self.rd_push_error(e, Some(token));
             self.rd_consume();
-            if operator == UnaryOperator::Extension {
-                self.pedantic_suppression += 1;
+            return Some(true);
+        }
+        let Some(token) = token else {
+            self.report(
+                ParserErrorType::ExpectedStatementExpression("expression operand", None),
+                None,
+            );
+            self.rd_push_error(e, None);
+            return Some(true);
+        };
+        if let TokenType::Keyword(
+            keyword @ (KeywordTokenType::BuiltinVaArg
+            | KeywordTokenType::BuiltinVaStart
+            | KeywordTokenType::BuiltinVaEnd
+            | KeywordTokenType::BuiltinVaCopy
+            | KeywordTokenType::BuiltinOffsetof
+            | KeywordTokenType::BuiltinTypesCompatible
+            | KeywordTokenType::BuiltinChooseExpr
+            | KeywordTokenType::BuiltinConvertVector
+            | KeywordTokenType::BuiltinBitCast),
+        ) = token.kind
+        {
+            let ParseAction::Push(child) = GnuFrame::push(self, GnuKind::Builtin(keyword)) else {
+                unreachable!("a GNU builtin pushes its frame")
+            };
+            let ParseValue::Gnu(GnuValue::Builtin(builtin)) = self.rd_child(child)? else {
+                unreachable!("builtin child protocol")
+            };
+            let expression = self.store_expression(
+                ExpressionType::Builtin(builtin),
+                builtin.source_vectors,
+                None,
+                builtin.recovered,
+            );
+            e.push(expression, true, true);
+            return Some(false);
+        }
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) {
+            self.pedantic_suppression += 1;
+            self.rd_consume();
+            self.rd_prefix(
+                e,
+                UnaryOperator::Extension,
+                token.source_vectors,
+                ExpressionMode::CastExpression,
+            )?;
+            return Some(false);
+        }
+        if is_operator(Some(token), OperatorTokenType::AmpersandAmpersand) {
+            self.extension(Feature::LabelsAsValues, "label address", token);
+            self.rd_consume();
+            self.rd_label_address(e, token.source_vectors);
+            return Some(false);
+        }
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Countof)) {
+            self.rd_consume();
+            self.rd_countof_or_alignof(e, KeywordTokenType::Countof, token.source_vectors)?;
+            return Some(false);
+        }
+        if let TokenType::Keyword(
+            keyword @ (KeywordTokenType::Generic | KeywordTokenType::Alignof),
+        ) = token.kind
+        {
+            if keyword == KeywordTokenType::Alignof {
+                if KeywordTokenType::classify(token.contents, self.context.configuration)
+                    .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu))
+                {
+                    self.rd_consume();
+                    self.rd_countof_or_alignof(e, KeywordTokenType::Alignof, token.source_vectors)?;
+                    return Some(false);
+                }
+                ExpressionFrame::report_alignof_expression(self, token);
             }
-            let operand = self.rd_expression(child_mode, boundary);
-            if operator == UnaryOperator::Extension && !self.resource_limit_reported {
-                self.pedantic_suppression -= 1;
+            let child = self.pooled_modern_frame(if keyword == KeywordTokenType::Generic {
+                ModernKind::Generic
+            } else {
+                ModernKind::Operand {
+                    type_only: false,
+                    constant:  false,
+                }
+            });
+            self.rd_modern_operand(e, keyword, token.source_vectors, child)?;
+            return Some(false);
+        }
+        // A brace group directly inside a call's or statement header's `(`
+        // and closed before its `)` is one error operand even when it holds
+        // statements: skip it whole so the parenthesis keeps its `)`. A `({`
+        // that opens an expression is a GNU statement expression and never
+        // reaches here.
+        if is_operator(Some(token), OperatorTokenType::OpeningCurlyBrace)
+            && is_operator(self.cursor.previous, OperatorTokenType::OpeningParenthesis)
+            && brace_group_closes_before_parenthesis(self)
+        {
+            self.report(
+                ParserErrorType::ExpectedStatementExpression(
+                    "expression operand",
+                    Some(token.kind),
+                ),
+                Some(token),
+            );
+            self.rd_consume();
+            return Some(self.rd_skip_brace_group(e, token.source_vectors));
+        }
+        // A visible typedef spelling is still a syntactically valid primary
+        // expression. At the first initializer operand, do not reinterpret
+        // declaration-shaped lookahead as recovery evidence.
+        let following_kind = self.cursor.following().map(|following| following.kind);
+        let identifier_is_unambiguous_recovery_boundary =
+            matches!(token.kind, TokenType::Identifier)
+                && (matches!(
+                    following_kind,
+                    Some(TokenType::Operator(OperatorTokenType::Colon))
+                ) || e.recovery == ExpressionBoundary::Initializer
+                    && matches!(following_kind, Some(TokenType::Identifier)));
+        let identifier_is_operand = matches!(token.kind, TokenType::Identifier)
+            && !identifier_is_unambiguous_recovery_boundary;
+        let owned_boundary = ExpressionFrame::is_owning_boundary_for(e.boundary, token.kind)
+            || e.recovery != e.boundary
+                && ExpressionFrame::is_owning_boundary_for(e.recovery, token.kind);
+        if owned_boundary || !identifier_is_operand && self.rd_strong_boundary(e, token) {
+            // A declaration-specifier keyword inside this expression's own
+            // delimiters, such as `f(int)` or `(static int)`, is a stray token
+            // when the closer follows: skip to the closer instead of
+            // abandoning the delimiters to a new declaration.
+            let stray_run = if !owned_boundary
+                && matches!(token.kind, TokenType::Keyword(_))
+                && let Some(closer) = e.closer()
+            {
+                closer_follows_stray_run(self, closer, false)
+            } else {
+                None
+            };
+            self.report(
+                ParserErrorType::ExpectedStatementExpression(
+                    "expression operand",
+                    Some(token.kind),
+                ),
+                Some(token),
+            );
+            self.rd_push_error(e, Some(token));
+            if let Some(stray_run) = stray_run {
+                self.rd_skip_stray(stray_run);
             }
-            let operand = operand?;
-            let source = self
-                .context
-                .merge_vectors(token.source_vectors, operand.source_vectors);
-            return Some(Operand::unary(self.store_expression(
-                ExpressionType::Unary {
-                    operator,
-                    operand_expression: operand,
-                },
-                source,
-                Some(token.source_vectors),
-                false,
-            )));
+            return Some(true);
         }
         if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Sizeof)) {
             self.rd_consume();
-            if is_operator(self.cursor.current(), OperatorTokenType::OpeningParenthesis)
-                && ExpressionFrame::parenthesized_type_name_follows(self)
-            {
-                let (ty, type_source) = self.rd_type_name()?;
-                let (kind, operand_source) =
-                    if is_operator(self.cursor.current(), OperatorTokenType::OpeningCurlyBrace) {
-                        let compound = self.rd_compound_literal(ty, type_source)?;
-                        let operand = self.rd_postfix(compound, boundary)?.expression;
-                        (ExpressionType::SizeofExpr(operand), operand.source_vectors)
-                    } else {
-                        (ExpressionType::SizeofType(ty), type_source)
-                    };
-                let source = self
-                    .context
-                    .merge_vectors(token.source_vectors, operand_source);
-                return Some(Operand::unary(self.store_expression(
-                    kind,
-                    source,
-                    Some(token.source_vectors),
-                    ty.recovered,
-                )));
+            self.rd_sizeof(e, token.source_vectors)?;
+            return Some(false);
+        }
+        if let Some((operator, child_mode)) = prefix_operator(token.kind) {
+            if operator == UnaryOperator::Extension {
+                self.pedantic_suppression += 1;
             }
-            let operand = self.rd_expression(ExpressionMode::UnaryExpression, boundary)?;
-            let source = self
-                .context
-                .merge_vectors(token.source_vectors, operand.source_vectors);
-            return Some(Operand::unary(self.store_expression(
-                ExpressionType::SizeofExpr(operand),
-                source,
-                Some(token.source_vectors),
-                false,
-            )));
+            self.rd_consume();
+            self.rd_prefix(e, operator, token.source_vectors, child_mode)?;
+            return Some(false);
         }
         if is_operator(Some(token), OperatorTokenType::OpeningParenthesis) {
-            if ExpressionFrame::parenthesized_type_name_follows(self) {
-                return self.rd_typed_operand(mode, boundary);
-            }
             if is_operator(
                 self.cursor.following(),
                 OperatorTokenType::OpeningCurlyBrace,
             ) {
-                return self.rd_expression_fallback(2, mode, boundary, false);
+                self.extension(Feature::StatementExpressions, "statement expression", token);
+                self.rd_consume();
+                self.rd_statement_expression(e, token.source_vectors)?;
+                return Some(false);
+            }
+            if ExpressionFrame::parenthesized_type_name_follows(self) {
+                let usage = if e.mode == ExpressionMode::UnaryExpression {
+                    TypeNameUse::UnaryCompoundLiteral
+                } else {
+                    TypeNameUse::Cast
+                };
+                self.rd_consume();
+                self.rd_typed_operand(e, token.source_vectors, usage)?;
+                return Some(false);
             }
             self.rd_consume();
-            let child = self.rd_expression(
-                ExpressionMode::Expression,
-                ExpressionBoundary::ClosingParenthesis,
-            )?;
-            let closing =
-                self.rd_expect(OperatorTokenType::ClosingParenthesis, "grouped expression");
-            let source = self
-                .context
-                .merge_vectors(token.source_vectors, child.source_vectors);
-            let source = self.context.merge_vectors(source, closing);
-            let operators = self.context.merge_vectors(token.source_vectors, closing);
-            let expression = self.store_expression(
-                ExpressionType::Parenthesized { expression: child },
-                source,
-                Some(operators),
-                false,
-            );
-            return self.rd_postfix(expression, boundary);
+            self.rd_grouped(e, token.source_vectors)?;
+            return Some(false);
         }
         let kind = match token.kind {
+            | TokenType::Keyword(KeywordTokenType::True) => ExpressionType::Boolean(true),
+            | TokenType::Keyword(KeywordTokenType::False) => ExpressionType::Boolean(false),
+            | TokenType::Keyword(KeywordTokenType::Nullptr) => ExpressionType::Nullptr,
             | TokenType::Identifier => ExpressionType::Identifier(Identifier::from_token(token)),
             | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
             | TokenType::Float(value) => {
@@ -364,283 +378,1153 @@ impl<'tu> Parser<'_, 'tu, '_> {
             },
             | TokenType::Character(value) => ExpressionType::Constant(Constant::Char(value)),
             | TokenType::String(value) => ExpressionType::StringLiteral(value),
-            | TokenType::Keyword(KeywordTokenType::True) => ExpressionType::Boolean(true),
-            | TokenType::Keyword(KeywordTokenType::False) => ExpressionType::Boolean(false),
-            | TokenType::Keyword(KeywordTokenType::Nullptr) => ExpressionType::Nullptr,
-            // Reserved modern/GNU operand syntax and malformed operands retain
-            // frame recovery; the surrounding operators still use this parser.
-            | _ => return self.rd_expression_fallback(2, mode, boundary, true),
-        };
-        self.rd_consume();
-        let expression = self.store_expression(kind, token.source_vectors, None, false);
-        self.rd_postfix(expression, boundary)
-    }
-
-    fn rd_type_name(&mut self) -> Option<(&'tu TypeName<'tu>, SourceVectors)> {
-        let opening = self
-            .cursor
-            .current()
-            .expect("typed operand starts at an opening parenthesis");
-        self.rd_consume();
-        let mut frame = TypeNameFrame::new(self.hard_error_count);
-        if ExpressionFrame::type_name_is_compound_literal(self) {
-            frame = frame.with_storage();
-        }
-        let Some(ParseValue::TypeName(ty)) = self.study_frame(ParseFrame::TypeName(frame), false)
-        else {
-            return None;
-        };
-        let close = self.rd_expect(OperatorTokenType::ClosingParenthesis, "type name");
-        let source = self
-            .context
-            .merge_vectors(opening.source_vectors, ty.source_vectors);
-        Some((ty, self.context.merge_vectors(source, close)))
-    }
-
-    fn rd_compound_literal(
-        &mut self,
-        ty: &'tu TypeName<'tu>,
-        source: SourceVectors,
-    ) -> Option<&'tu Expression<'tu>> {
-        if let Some(token) = self.cursor.current() {
-            self.extension(Feature::CompoundLiterals, "compound literal", token);
-        }
-        let frame = InitializerFrame::new(self.arena, self.hard_error_count, true, true);
-        let Some(ParseValue::Initializer(result)) =
-            self.study_frame(ParseFrame::Initializer(frame), false)
-        else {
-            return None;
-        };
-        let merged = self
-            .context
-            .merge_vectors(source, result.initializer.source_vectors);
-        Some(self.store_expression(
-            ExpressionType::CompoundLiteral {
-                type_name:   ty,
-                initializer: result.initializer,
+            | _ => {
+                self.report(
+                    ParserErrorType::ExpectedStatementExpression(
+                        "expression operand",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+                if is_operator(Some(token), OperatorTokenType::OpeningCurlyBrace) {
+                    self.rd_consume();
+                    return Some(self.rd_skip_brace_group(e, token.source_vectors));
+                }
+                self.rd_push_error(e, Some(token));
+                if binary_operator(token.kind).is_some()
+                    || is_operator(Some(token), OperatorTokenType::QuestionMark)
+                {
+                    // Only the left operand is missing: the operator and its
+                    // right operand still parse normally.
+                    return Some(false);
+                }
+                e.stray_error_operand = true;
+                self.rd_consume();
+                return Some(false);
             },
-            merged,
-            Some(source),
-            result.recovered,
-        ))
+        };
+        let expression = self.store_expression(
+            kind,
+            token.source_vectors,
+            None,
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, true, true);
+        self.rd_consume();
+        Some(false)
     }
 
-    fn rd_typed_operand(
-        &mut self,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-    ) -> Option<Operand<'tu>> {
-        let (ty, source) = self.rd_type_name()?;
-        if is_operator(self.cursor.current(), OperatorTokenType::OpeningCurlyBrace) {
-            let expression = self.rd_compound_literal(ty, source)?;
-            return self.rd_postfix(expression, boundary);
+    /// One step in operator position. Returns whether the expression ends.
+    ///
+    /// C99: postfix suffixes §6.5.2, p. 69; PDF p. 81; binary operators
+    /// §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106.
+    fn rd_operator(&mut self, e: &mut RdExpression<'tu, 'p>) -> Option<bool> {
+        let token = self.cursor.current();
+        if let Some(sizeof_source) = e.pending_sizeof
+            && !token.is_some_and(|token| is_postfix_starter(token.kind))
+        {
+            e.pending_sizeof = None;
+            let operand = e.pop().expression;
+            let source = self
+                .context
+                .merge_vectors(sizeof_source, operand.source_vectors);
+            let expression = self.store_expression(
+                ExpressionType::SizeofExpr(operand),
+                source,
+                Some(sizeof_source),
+                self.hard_error_count > e.errors,
+            );
+            e.push(expression, true, false);
+            return Some(false);
         }
-        if mode == ExpressionMode::UnaryExpression {
-            let token = self.cursor.current();
+        if let Some(token) = token
+            && is_closing_delimiter(token.kind)
+            && e.consumes_unowned_closer(token.kind)
+        {
             self.report(
                 ParserErrorType::ExpectedStatementExpression(
-                    "compound literal initializer",
+                    "operator in expression",
+                    Some(token.kind),
+                ),
+                Some(token),
+            );
+            self.rd_consume();
+            return Some(true);
+        }
+        if e.is_boundary(token.map(|token| token.kind)) {
+            return Some(true);
+        }
+        let Some(token) = token else {
+            return Some(true);
+        };
+        // A brace list right after a `)` this expression consumed reads as a
+        // compound literal whose type name did not parse, as in `(a b){1, 2}`.
+        // Skip the list with the operand as one error operand instead of
+        // leaking its `}` to the enclosing statement. A statement block, as in
+        // `while (f(x) { ... }`, still ends the expression so its owner names
+        // the missing `)`.
+        if is_operator(Some(token), OperatorTokenType::OpeningCurlyBrace)
+            && is_operator(self.cursor.previous, OperatorTokenType::ClosingParenthesis)
+            && !brace_group_is_block(self)
+        {
+            let operand = e.pop().expression;
+            if !operand.recovered {
+                self.report(
+                    ParserErrorType::ExpectedStatementExpression(
+                        "operator before brace list",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+            }
+            let source = self
+                .context
+                .merge_vectors(operand.source_vectors, token.source_vectors);
+            self.rd_consume();
+            return Some(self.rd_skip_brace_group(e, source));
+        }
+        // C99 §6.5.2p1: a postfix suffix applies only to a
+        // `postfix-expression`. Keep the suffix in this expression, applied
+        // to the operand and marked recovered, rather than leaking each of
+        // its tokens into the enclosing production.
+        if is_postfix_starter(token.kind)
+            && !e
+                .operands
+                .last()
+                .is_some_and(|operand| operand.postfix_expression)
+        {
+            self.report(
+                ParserErrorType::ExpectedStatementExpression(
+                    "postfix operator after a non-postfix expression",
+                    Some(token.kind),
+                ),
+                Some(token),
+            );
+        }
+        if let TokenType::Operator(operator) = token.kind {
+            match operator {
+                | OperatorTokenType::OpeningSquareBracket => {
+                    let base = e.pop().expression;
+                    self.rd_consume();
+                    self.rd_subscript(e, base, token.source_vectors)?;
+                    return Some(false);
+                },
+                | OperatorTokenType::OpeningParenthesis => {
+                    let base = e.pop().expression;
+                    self.rd_consume();
+                    self.rd_call(e, base, token.source_vectors)?;
+                    return Some(false);
+                },
+                | OperatorTokenType::Period | OperatorTokenType::Arrow => {
+                    let base = e.pop().expression;
+                    self.rd_consume();
+                    self.rd_member(
+                        e,
+                        base,
+                        operator == OperatorTokenType::Arrow,
+                        token.source_vectors,
+                    );
+                    return Some(false);
+                },
+                | OperatorTokenType::PlusPlus | OperatorTokenType::MinusMinus => {
+                    let base = e.pop().expression;
+                    let source = self
+                        .context
+                        .merge_vectors(base.source_vectors, token.source_vectors);
+                    let expression = self.store_expression(
+                        ExpressionType::Unary {
+                            operator:           if operator == OperatorTokenType::PlusPlus {
+                                UnaryOperator::PostIncrement
+                            } else {
+                                UnaryOperator::PostDecrement
+                            },
+                            operand_expression: base,
+                        },
+                        source,
+                        Some(token.source_vectors),
+                        self.hard_error_count > e.errors,
+                    );
+                    e.push(expression, true, true);
+                    self.rd_consume();
+                    return Some(false);
+                },
+                | _ => {},
+            }
+        }
+        // C99 §6.5.15p1: `?` follows a `logical-OR-expression`, so every
+        // tighter operator (levels below 13) reduces first.
+        if is_operator(Some(token), OperatorTokenType::QuestionMark)
+            && !matches!(
+                e.mode,
+                ExpressionMode::CastExpression | ExpressionMode::UnaryExpression
+            )
+        {
+            while e
+                .operators
+                .last()
+                .is_some_and(|operator| operator.precedence() < 13)
+            {
+                self.rd_reduce_one(e);
+            }
+            self.rd_consume();
+            self.rd_conditional(e, token.source_vectors)?;
+            return Some(false);
+        }
+        // C99: only `expression` absorbs a comma (§6.5.17p1), a
+        // `constant-expression` takes no assignment (§6.6p1), and a cast or
+        // unary operand takes no binary operator (§6.5.3p1, §6.5.4p1).
+        if let Some(operator) = binary_operator(token.kind)
+            && !(operator == BinaryOperator::Comma && e.mode != ExpressionMode::Expression)
+            && !(is_assignment_operator(operator) && e.mode == ExpressionMode::ConstantExpression)
+            && !matches!(
+                e.mode,
+                ExpressionMode::CastExpression | ExpressionMode::UnaryExpression
+            )
+        {
+            let incoming = LanguageExpressionOperator::Binary {
+                operator,
+                source_vectors: token.source_vectors,
+            };
+            while e
+                .operators
+                .last()
+                .is_some_and(|stacked| stacked.has_precedence_over(incoming))
+            {
+                self.rd_reduce_one(e);
+            }
+            // C99 §6.5.16p1: the left operand of an assignment operator is a
+            // `unary-expression`.
+            if is_assignment_operator(operator)
+                && !e
+                    .operands
+                    .last()
+                    .is_some_and(|operand| operand.unary_expression)
+            {
+                self.report(
+                    ParserErrorType::ExpectedStatementExpression(
+                        "unary-expression left operand of assignment",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+            }
+            e.operators.push(incoming);
+            e.operand = true;
+            e.stray_error_operand = false;
+            self.rd_consume();
+            return Some(false);
+        }
+        if let Some(closer) = e.closer() {
+            // Inside delimiters this expression owns, skip a stray run to the
+            // closer that follows it. Without such a closer, the closer
+            // itself is missing: finish quietly so its owner names the
+            // missing `)`, `]`, or `:` at this token.
+            if let Some(stray_run) = closer_follows_stray_run(self, closer, false) {
+                if !e.stray_error_operand {
+                    self.report(
+                        ParserErrorType::ExpectedStatementExpression(
+                            "operator in delimited expression",
+                            Some(token.kind),
+                        ),
+                        Some(token),
+                    );
+                }
+                self.rd_skip_stray(stray_run);
+            }
+            return Some(true);
+        }
+        // The statement that owns the terminator reports the missing `;`
+        // before a statement keyword, and a `;` never continues an
+        // expression: every owner of an expression that does not end at `;`
+        // (an enumerator value) names what it expected there instead.
+        if is_statement_keyword(token.kind)
+            && matches!(
+                e.boundary,
+                ExpressionBoundary::Statement(
+                    ExpressionTerminator::Semicolon | ExpressionTerminator::ForSemicolon
+                )
+            )
+            || is_operator(Some(token), OperatorTokenType::Semicolon)
+        {
+            return Some(true);
+        }
+        self.report(
+            ParserErrorType::ExpectedStatementExpression(
+                "operator in expression",
+                Some(token.kind),
+            ),
+            Some(token),
+        );
+        Some(true)
+    }
+
+    /// Discards `remaining` already-diagnosed tokens before the closer that
+    /// ends a malformed delimited expression.
+    fn rd_skip_stray(&mut self, mut remaining: usize) {
+        while remaining != 0 && self.cursor.current().is_some() {
+            self.rd_consume();
+            remaining -= 1;
+        }
+    }
+
+    /// Skips a brace group whose `{` was just consumed as one error operand.
+    /// Returns whether the expression ends at the end of input.
+    fn rd_skip_brace_group(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        source: SourceVectors,
+    ) -> bool {
+        let mut depth = 1_u32;
+        let mut source = source;
+        loop {
+            let Some(token) = self.cursor.current() else {
+                self.rd_push_error_with_source(e, source, None);
+                return true;
+            };
+            source = self.context.merge_vectors(source, token.source_vectors);
+            match token.kind {
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => depth += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => depth -= 1,
+                | _ => {},
+            }
+            self.rd_consume();
+            if depth == 0 {
+                self.rd_push_error_with_source(e, source, None);
+                return false;
+            }
+        }
+    }
+
+    /// GNU extension: `&& identifier`, the address of a label.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    fn rd_label_address(&mut self, e: &mut RdExpression<'tu, 'p>, source: SourceVectors) {
+        let token = self.cursor.current();
+        if let Some(token) = token.filter(|token| matches!(token.kind, TokenType::Identifier)) {
+            let merged = self.context.merge_vectors(source, token.source_vectors);
+            let expression = self.store_expression(
+                ExpressionType::LabelAddress(Identifier::from_token(token)),
+                merged,
+                Some(source),
+                false,
+            );
+            e.push(expression, true, false);
+            self.rd_consume();
+            return;
+        }
+        self.report(
+            ParserErrorType::ExpectedGnuSyntax(
+                "label identifier after `&&`",
+                token.map(|x| x.kind),
+            ),
+            token,
+        );
+        self.rd_push_error(e, token);
+    }
+
+    /// C2y `_Countof` and GNU `__alignof__`: a parenthesized type name or a
+    /// `unary-expression`, including a compound literal, like `sizeof` in
+    /// C99 §6.5.3 paragraph 1, p. 78; PDF p. 90.
+    fn rd_countof_or_alignof(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        keyword: KeywordTokenType,
+        source: SourceVectors,
+    ) -> Option<()> {
+        if is_operator(self.cursor.current(), OperatorTokenType::OpeningParenthesis)
+            && ExpressionFrame::parenthesized_type_name_follows(self)
+            && !ExpressionFrame::parenthesized_compound_literal_follows(self)
+        {
+            let frame =
+                ModernFrame::operand_after_keyword(self.arena, self.hard_error_count, source);
+            let child = ParseFrame::Modern(self.pools.modern(frame));
+            return self.rd_modern_operand(e, keyword, source, child);
+        }
+        let operand = self
+            .rd_expression(ExpressionMode::UnaryExpression, e.boundary, e.recovery)?
+            .expression;
+        let merged = self.context.merge_vectors(source, operand.source_vectors);
+        let kind = if keyword == KeywordTokenType::Countof {
+            ExpressionType::Countof(SyntaxOperand::Expression(operand))
+        } else {
+            ExpressionType::AlignofExpr(operand)
+        };
+        let expression =
+            self.store_expression(kind, merged, Some(source), self.hard_error_count > e.errors);
+        e.push(expression, true, false);
+        Some(())
+    }
+
+    /// C11 `_Generic` (§6.5.1.1, p. 78; PDF p. 96) and the parenthesized
+    /// operands of `_Alignof` and `_Countof`, owned by the modern frame.
+    fn rd_modern_operand(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        keyword: KeywordTokenType,
+        keyword_source: SourceVectors,
+        child: ParseFrame<'tu, 'p>,
+    ) -> Option<()> {
+        let (kind, source) = match self.rd_child(child)? {
+            | ParseValue::Modern(ModernValue::Generic(x)) =>
+                (ExpressionType::Generic(x), x.source_vectors),
+            | ParseValue::Modern(ModernValue::Operand(operand, source)) => (
+                match (keyword, operand) {
+                    | (KeywordTokenType::Alignof, SyntaxOperand::Type(x)) =>
+                        ExpressionType::AlignofType(x),
+                    | (KeywordTokenType::Alignof, SyntaxOperand::Expression(x)) =>
+                        ExpressionType::AlignofExpr(x),
+                    | (_, operand) => ExpressionType::Countof(operand),
+                },
+                source,
+            ),
+            | returned => unreachable!("ISO expression protocol: {returned:?}"),
+        };
+        let expression = self.store_expression(
+            kind,
+            source,
+            Some(keyword_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, true, keyword == KeywordTokenType::Generic);
+        Some(())
+    }
+
+    /// GNU extension: `( compound-statement )` as an operand.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    fn rd_statement_expression(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        source: SourceVectors,
+    ) -> Option<()> {
+        let statement = self.rd_compound(false)?;
+        let mut merged = self.context.merge_vectors(source, statement.source_vectors);
+        let token = self.cursor.current();
+        let consume = is_operator(token, OperatorTokenType::ClosingParenthesis);
+        if consume {
+            merged = self
+                .context
+                .merge_vectors(merged, token.expect("closer exists").source_vectors);
+        } else {
+            self.report(
+                ParserErrorType::ExpectedGnuSyntax(
+                    "`)` after statement expression",
                     token.map(|x| x.kind),
                 ),
                 token,
             );
         }
-        if matches!(ty.declaration_specifiers.type_specifiers, TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == StructOrUnion::Union)
-        {
-            self.extension_source(Feature::UnionCasts, "cast to union", ty.source_vectors);
-        }
-        let operand = self.rd_expression(ExpressionMode::CastExpression, boundary)?;
-        let merged = self.context.merge_vectors(source, operand.source_vectors);
-        Some(Operand::other(self.store_expression(
-            ExpressionType::Cast {
-                target_type:        ty,
-                operand_expression: operand,
-            },
+        let expression = self.store_expression(
+            ExpressionType::StatementExpression(statement),
             merged,
             Some(source),
-            ty.recovered,
-        )))
+            statement.recovered || !consume,
+        );
+        e.push(expression, true, true);
+        if consume {
+            self.rd_consume();
+        }
+        Some(())
     }
 
-    fn rd_postfix(
+    /// C99 §6.5.1p1: `( expression )`.
+    fn rd_grouped(&mut self, e: &mut RdExpression<'tu, 'p>, opening: SourceVectors) -> Option<()> {
+        let child = self
+            .rd_expression(
+                ExpressionMode::Expression,
+                ExpressionBoundary::ClosingParenthesis,
+                e.recovery,
+            )?
+            .expression;
+        let mut operator_source = opening;
+        let mut source = self.context.merge_vectors(opening, child.source_vectors);
+        let token = self.cursor.current();
+        let consume = if let Some(close) =
+            token.filter(|token| is_operator(Some(*token), OperatorTokenType::ClosingParenthesis))
+        {
+            source = self.context.merge_vectors(source, close.source_vectors);
+            operator_source = self
+                .context
+                .merge_vectors(operator_source, close.source_vectors);
+            true
+        } else {
+            self.report(
+                ParserErrorType::ExpectedClosingParenthesisInStatement(
+                    "grouped expression",
+                    token.map(|token| token.kind),
+                ),
+                token,
+            );
+            false
+        };
+        let expression = self.store_expression(
+            ExpressionType::Parenthesized { expression: child },
+            source,
+            Some(operator_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, true, true);
+        if consume {
+            self.rd_consume();
+        }
+        Some(())
+    }
+
+    /// C99 §6.5.2p1: `postfix-expression [ expression ]`.
+    fn rd_subscript(
         &mut self,
-        mut base: &'tu Expression<'tu>,
-        boundary: ExpressionBoundary,
-    ) -> Option<Operand<'tu>> {
-        while let Some(token) = self.cursor.current() {
-            if !is_postfix_starter(token.kind) {
-                break;
-            }
-            let TokenType::Operator(operator) = token.kind else {
-                unreachable!("postfix starters are punctuators")
-            };
-            let kind;
-            let mut source = if operator == OperatorTokenType::OpeningParenthesis {
-                SourceVectors::default()
-            } else {
-                self.context
-                    .merge_vectors(base.source_vectors, token.source_vectors)
-            };
-            let mut operators = token.source_vectors;
-            match operator {
-                | OperatorTokenType::OpeningSquareBracket => {
-                    self.rd_consume();
-                    let child = self.rd_expression(
-                        ExpressionMode::Expression,
-                        ExpressionBoundary::ClosingSquareBracket,
-                    )?;
-                    let close =
-                        self.rd_expect(OperatorTokenType::ClosingSquareBracket, "subscript");
-                    source = self.context.merge_vectors(source, child.source_vectors);
-                    source = self.context.merge_vectors(source, close);
-                    operators = self.context.merge_vectors(operators, close);
-                    kind = ExpressionType::Binary {
-                        operator:         BinaryOperator::Subscript,
-                        left_expression:  base,
-                        right_expression: child,
-                    };
-                },
-                | OperatorTokenType::OpeningParenthesis => {
-                    self.rd_consume();
-                    let mut call = self.pools.take_call();
-                    call.source_vectors
-                        .extend([base.source_vectors, token.source_vectors]);
-                    call.operator_sources.push(token.source_vectors);
-                    if !is_operator(self.cursor.current(), OperatorTokenType::ClosingParenthesis) {
-                        loop {
-                            let argument = self.rd_expression(
-                                ExpressionMode::AssignmentExpression,
-                                ExpressionBoundary::Argument,
-                            )?;
-                            call.source_vectors.push(argument.source_vectors);
-                            call.arguments.push(argument);
-                            if let Some(comma) = self
-                                .cursor
-                                .current()
-                                .filter(|token| is_operator(Some(*token), OperatorTokenType::Comma))
-                            {
-                                call.source_vectors.push(comma.source_vectors);
-                                call.operator_sources.push(comma.source_vectors);
-                                self.rd_consume();
-                            } else {
-                                let frame = ExpressionFrame::new(
-                                    self.arena,
-                                    ExpressionMode::Expression,
-                                    boundary,
-                                    self.hard_error_count,
-                                );
-                                if self.cursor.current().is_some_and(|token| {
-                                    frame.study_call_argument_follows(self, token)
-                                }) {
-                                    let token = self.cursor.current();
-                                    self.report(
-                                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionCall(
-                                            token.map(|token| token.kind),
-                                        ),
-                                        token,
-                                    );
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    let close =
-                        self.rd_expect(OperatorTokenType::ClosingParenthesis, "function call");
-                    call.source_vectors.push(close);
-                    call.operator_sources.push(close);
-                    source = self.context.merge_vector_list(&call.source_vectors);
-                    operators = self.context.merge_vector_list(&call.operator_sources);
-                    kind = ExpressionType::Call {
-                        function_expression: base,
-                        arguments:           self.alloc_syntax_list(&mut call.arguments),
-                    };
+        e: &mut RdExpression<'tu, 'p>,
+        base: &'tu Expression<'tu>,
+        opening: SourceVectors,
+    ) -> Option<()> {
+        let child = self
+            .rd_expression(
+                ExpressionMode::Expression,
+                ExpressionBoundary::ClosingSquareBracket,
+                e.recovery,
+            )?
+            .expression;
+        let mut operator_source = opening;
+        let mut source = self.context.merge_vectors(base.source_vectors, opening);
+        source = self.context.merge_vectors(source, child.source_vectors);
+        let token = self.cursor.current();
+        let consume = if let Some(close) =
+            token.filter(|token| is_operator(Some(*token), OperatorTokenType::ClosingSquareBracket))
+        {
+            source = self.context.merge_vectors(source, close.source_vectors);
+            operator_source = self
+                .context
+                .merge_vectors(operator_source, close.source_vectors);
+            true
+        } else {
+            self.report(
+                ParserErrorType::ExpectedClosingSquareBracketInSubscript(
+                    token.map(|token| token.kind),
+                ),
+                token,
+            );
+            false
+        };
+        let expression = self.store_expression(
+            ExpressionType::Binary {
+                operator:         BinaryOperator::Subscript,
+                left_expression:  base,
+                right_expression: child,
+            },
+            source,
+            Some(operator_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, true, true);
+        if consume {
+            self.rd_consume();
+        }
+        Some(())
+    }
+
+    /// C99 §6.5.2p1: `postfix-expression ( argument-expression-list(opt) )`.
+    /// Each argument is an `assignment-expression`, so a top-level comma
+    /// separates arguments.
+    fn rd_call(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        base: &'tu Expression<'tu>,
+        opening: SourceVectors,
+    ) -> Option<()> {
+        let mut call = self.pools.take_call();
+        call.source_vectors.extend([base.source_vectors, opening]);
+        call.operator_sources.push(opening);
+        let mut consume = is_operator(self.cursor.current(), OperatorTokenType::ClosingParenthesis);
+        if !consume {
+            loop {
+                let Some(argument) = self.rd_expression(
+                    ExpressionMode::AssignmentExpression,
+                    ExpressionBoundary::Argument,
+                    e.recovery,
+                ) else {
+                    call.arguments.clear();
                     call.source_vectors.clear();
                     call.operator_sources.clear();
                     self.pools.calls.reclaim(call);
-                },
-                | OperatorTokenType::Period | OperatorTokenType::Arrow => {
+                    return None;
+                };
+                call.arguments.push(argument.expression);
+                call.source_vectors.push(argument.expression.source_vectors);
+                let token = self.cursor.current();
+                if let Some(separator) =
+                    token.filter(|token| is_operator(Some(*token), OperatorTokenType::Comma))
+                {
+                    call.source_vectors.push(separator.source_vectors);
+                    call.operator_sources.push(separator.source_vectors);
                     self.rd_consume();
-                    let member = self.cursor.current();
-                    if let Some(member) =
-                        member.filter(|token| matches!(token.kind, TokenType::Identifier))
-                    {
-                        self.rd_consume();
-                        source = self.context.merge_vectors(source, member.source_vectors);
-                        kind = if operator == OperatorTokenType::Period {
-                            ExpressionType::DirectMember {
-                                base_expression: base,
-                                member:          Identifier::from_token(member),
-                            }
-                        } else {
-                            ExpressionType::IndirectMember {
-                                base_expression: base,
-                                member:          Identifier::from_token(member),
-                            }
-                        };
-                    } else {
-                        self.report(
-                            ParserErrorType::ExpectedMemberIdentifier(member.map(|x| x.kind)),
-                            member,
-                        );
-                        kind = ExpressionType::Error;
-                    }
-                },
-                | OperatorTokenType::PlusPlus | OperatorTokenType::MinusMinus => {
-                    self.rd_consume();
-                    kind = ExpressionType::Unary {
-                        operator:           if operator == OperatorTokenType::PlusPlus {
-                            UnaryOperator::PostIncrement
-                        } else {
-                            UnaryOperator::PostDecrement
-                        },
-                        operand_expression: base,
-                    };
-                },
-                | _ => break,
+                    continue;
+                }
+                // A child may return without consuming an enclosing grammar
+                // boundary (for example a label after a malformed
+                // initializer). Avoid retrying the boundary as another call
+                // argument.
+                if let Some(token) = token
+                    && is_expression_operand_starter(token.kind)
+                    && !self.rd_strong_boundary(e, token)
+                {
+                    self.report(
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionCall(Some(
+                            token.kind,
+                        )),
+                        Some(token),
+                    );
+                    continue;
+                }
+                consume = is_operator(token, OperatorTokenType::ClosingParenthesis);
+                if !consume {
+                    self.report(
+                        ParserErrorType::ExpectedClosingParenthesisInStatement(
+                            "function call",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                }
+                break;
             }
-            base = self.store_expression(kind, source, Some(operators), false);
         }
-        Some(Operand {
-            expression:     base,
-            unary:          true,
-            frame_finished: false,
-        })
+        if consume {
+            let close = self.cursor.current().expect("closing parenthesis exists");
+            call.source_vectors.push(close.source_vectors);
+            call.operator_sources.push(close.source_vectors);
+        }
+        let arguments = self.alloc_syntax_list(&mut call.arguments);
+        let source_vectors = self.context.merge_vector_list(&call.source_vectors);
+        let operator_sources = self.context.merge_vector_list(&call.operator_sources);
+        let expression = self.store_expression(
+            ExpressionType::Call {
+                function_expression: base,
+                arguments,
+            },
+            source_vectors,
+            Some(operator_sources),
+            self.hard_error_count > e.errors,
+        );
+        call.source_vectors.clear();
+        call.operator_sources.clear();
+        self.pools.calls.reclaim(call);
+        e.push(expression, true, true);
+        if consume {
+            self.rd_consume();
+        }
+        Some(())
     }
 
+    /// C99 §6.5.2p1: `.` and `->` take an `identifier`.
+    fn rd_member(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        base: &'tu Expression<'tu>,
+        indirect: bool,
+        operator_source: SourceVectors,
+    ) {
+        let token = self.cursor.current();
+        let source = self
+            .context
+            .merge_vectors(base.source_vectors, operator_source);
+        let Some(member) = token.filter(|token| matches!(token.kind, TokenType::Identifier)) else {
+            self.report(
+                ParserErrorType::ExpectedMemberIdentifier(token.map(|token| token.kind)),
+                token,
+            );
+            self.rd_push_error_with_source(e, source, Some(operator_source));
+            return;
+        };
+        let source = self.context.merge_vectors(source, member.source_vectors);
+        let kind = if indirect {
+            ExpressionType::IndirectMember {
+                base_expression: base,
+                member:          Identifier::from_token(member),
+            }
+        } else {
+            ExpressionType::DirectMember {
+                base_expression: base,
+                member:          Identifier::from_token(member),
+            }
+        };
+        let expression = self.store_expression(
+            kind,
+            source,
+            Some(operator_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, true, true);
+        self.rd_consume();
+    }
+
+    /// C99 §6.5.3p1: a prefix operator and its operand, whose `operand_mode`
+    /// the operator selects. GNU `__extension__` suppresses extension
+    /// diagnostics from its keyword through its operand.
+    fn rd_prefix(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        operator: UnaryOperator,
+        operator_source: SourceVectors,
+        operand_mode: ExpressionMode,
+    ) -> Option<()> {
+        let operand = self
+            .rd_expression(operand_mode, e.boundary, e.recovery)?
+            .expression;
+        if operator == UnaryOperator::Extension {
+            self.pedantic_suppression -= 1;
+        }
+        let source = self
+            .context
+            .merge_vectors(operator_source, operand.source_vectors);
+        let expression = self.store_expression(
+            ExpressionType::Unary {
+                operator,
+                operand_expression: operand,
+            },
+            source,
+            Some(operator_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, true, false);
+        Some(())
+    }
+
+    /// C99 §6.5.3p1: `sizeof ( type-name )` when a type name follows `(`,
+    /// otherwise `sizeof unary-expression`.
+    fn rd_sizeof(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        sizeof_source: SourceVectors,
+    ) -> Option<()> {
+        if let Some(opening) = self
+            .cursor
+            .current()
+            .filter(|token| is_operator(Some(*token), OperatorTokenType::OpeningParenthesis))
+            && ExpressionFrame::parenthesized_type_name_follows(self)
+        {
+            self.rd_consume();
+            return self.rd_typed_operand(
+                e,
+                opening.source_vectors,
+                TypeNameUse::Sizeof(sizeof_source),
+            );
+        }
+        let operand = self
+            .rd_expression(ExpressionMode::UnaryExpression, e.boundary, e.recovery)?
+            .expression;
+        let source = self
+            .context
+            .merge_vectors(sizeof_source, operand.source_vectors);
+        let expression = self.store_expression(
+            ExpressionType::SizeofExpr(operand),
+            source,
+            Some(sizeof_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, true, false);
+        Some(())
+    }
+
+    /// The operand a parenthesized `type-name` introduces after its `(` was
+    /// consumed: a cast (§6.5.4, p. 81; PDF p. 93), `sizeof ( type-name )`
+    /// (§6.5.3, p. 78; PDF p. 90), or a compound literal (§6.5.2.5, p. 75;
+    /// PDF p. 87).
+    fn rd_typed_operand(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        opening: SourceVectors,
+        usage: TypeNameUse,
+    ) -> Option<()> {
+        let mut frame = TypeNameFrame::new(self.hard_error_count);
+        if ExpressionFrame::type_name_is_compound_literal(self) {
+            frame = frame.with_storage();
+        }
+        let ParseValue::TypeName(type_name) = self.rd_child(ParseFrame::TypeName(frame))? else {
+            unreachable!("type-name child protocol")
+        };
+        let mut source = self
+            .context
+            .merge_vectors(opening, type_name.source_vectors);
+        let token = self.cursor.current();
+        let consume = if let Some(close) =
+            token.filter(|token| is_operator(Some(*token), OperatorTokenType::ClosingParenthesis))
+        {
+            source = self.context.merge_vectors(source, close.source_vectors);
+            true
+        } else {
+            self.report(
+                ParserErrorType::ExpectedClosingParenthesisInStatement(
+                    "type name",
+                    token.map(|token| token.kind),
+                ),
+                token,
+            );
+            false
+        };
+        // C99 §6.5.2p1: `( type-name ) {` begins a compound literal.
+        let starts_compound_literal = consume
+            && is_operator(
+                self.cursor.following(),
+                OperatorTokenType::OpeningCurlyBrace,
+            )
+            && !self.cursor.lookahead(1).is_some_and(|first| {
+                !matches!(first.kind, TokenType::Identifier)
+                    && (self.declaration_starter(first) || is_statement_keyword(first.kind))
+            });
+        let mut cast = false;
+        if !starts_compound_literal {
+            match usage {
+                | TypeNameUse::Sizeof(sizeof_source) => {
+                    let source = self.context.merge_vectors(sizeof_source, source);
+                    let expression = self.store_expression(
+                        ExpressionType::SizeofType(type_name),
+                        source,
+                        Some(sizeof_source),
+                        self.hard_error_count > e.errors,
+                    );
+                    e.push(expression, true, false);
+                },
+                | TypeNameUse::Cast => cast = true,
+                | TypeNameUse::UnaryCompoundLiteral if consume => {
+                    // A unary operator's operand cannot be a cast, so the `{`
+                    // of a compound literal is missing after the `)`. Report
+                    // it there and keep the operand as a recovered cast.
+                    let following = self.cursor.following();
+                    self.report(
+                        ParserErrorType::ExpectedStatementExpression(
+                            "compound literal initializer",
+                            following.map(|following| following.kind),
+                        ),
+                        following,
+                    );
+                    if following
+                        .is_some_and(|following| is_expression_operand_starter(following.kind))
+                    {
+                        cast = true;
+                    } else {
+                        self.rd_push_error(e, following);
+                    }
+                },
+                | TypeNameUse::UnaryCompoundLiteral => self.rd_push_error(e, token),
+            }
+        }
+        if consume {
+            self.rd_consume();
+        }
+        if starts_compound_literal {
+            return self.rd_compound_literal(e, type_name, source, usage);
+        }
+        if cast {
+            return self.rd_cast(e, type_name, source);
+        }
+        Some(())
+    }
+
+    /// C99 §6.5.2.5p1: `( type-name ) { initializer-list }`.
+    fn rd_compound_literal(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        type_name: &'tu TypeName<'tu>,
+        type_source: SourceVectors,
+        usage: TypeNameUse,
+    ) -> Option<()> {
+        if let Some(token) = self.cursor.current() {
+            self.extension(Feature::CompoundLiterals, "compound literal", token);
+        }
+        let frame = InitializerFrame::new(
+            self.arena,
+            self.hard_error_count,
+            e.closing_parenthesis_is_boundary(),
+            e.closing_square_bracket_is_boundary(),
+        );
+        let ParseValue::Initializer(InitializerResult { initializer, .. }) =
+            self.rd_child(ParseFrame::Initializer(frame))?
+        else {
+            unreachable!("compound-literal initializer protocol")
+        };
+        let source = self
+            .context
+            .merge_vectors(type_source, initializer.source_vectors);
+        let compound = self.store_expression(
+            ExpressionType::CompoundLiteral {
+                type_name,
+                initializer,
+            },
+            source,
+            Some(type_source),
+            self.hard_error_count > e.errors,
+        );
+        if let TypeNameUse::Sizeof(sizeof_source) = usage {
+            e.pending_sizeof = Some(sizeof_source);
+        }
+        e.push(compound, true, true);
+        Some(())
+    }
+
+    /// C99 §6.5.4p1: `( type-name ) cast-expression`.
+    fn rd_cast(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        type_name: &'tu TypeName<'tu>,
+        type_source: SourceVectors,
+    ) -> Option<()> {
+        if matches!(type_name.declaration_specifiers.type_specifiers, TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == StructOrUnion::Union)
+        {
+            self.extension_source(
+                Feature::UnionCasts,
+                "cast to union",
+                type_name.source_vectors,
+            );
+        }
+        let operand = self
+            .rd_expression(ExpressionMode::CastExpression, e.boundary, e.recovery)?
+            .expression;
+        let source = self
+            .context
+            .merge_vectors(type_source, operand.source_vectors);
+        let expression = self.store_expression(
+            ExpressionType::Cast {
+                target_type:        type_name,
+                operand_expression: operand,
+            },
+            source,
+            Some(type_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, false, false);
+        Some(())
+    }
+
+    /// C99 §6.5.15p1: `logical-OR-expression ? expression :
+    /// conditional-expression`, after the `?` was consumed. The middle
+    /// operand is a full `expression`; the last is parsed in
+    /// constant-expression mode (§6.6p1), so assignment and comma end it.
+    fn rd_conditional(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        question_source: SourceVectors,
+    ) -> Option<()> {
+        let token = self.cursor.current();
+        let (middle, colon_source) = if let Some(colon) =
+            token.filter(|token| is_operator(Some(*token), OperatorTokenType::Colon))
+        {
+            self.extension(
+                Feature::OmittedConditionalOperand,
+                "omitted conditional operand",
+                colon,
+            );
+            self.rd_consume();
+            (None, Some(colon.source_vectors))
+        } else {
+            let middle = self
+                .rd_expression(
+                    ExpressionMode::Expression,
+                    ExpressionBoundary::Statement(ExpressionTerminator::Colon),
+                    e.recovery,
+                )?
+                .expression;
+            let token = self.cursor.current();
+            if let Some(colon) =
+                token.filter(|token| is_operator(Some(*token), OperatorTokenType::Colon))
+            {
+                self.rd_consume();
+                (Some(middle), Some(colon.source_vectors))
+            } else {
+                self.report(
+                    ParserErrorType::ExpectedColonInLabel(
+                        "conditional expression",
+                        token.map(|token| token.kind),
+                    ),
+                    token,
+                );
+                (Some(middle), None)
+            }
+        };
+        let final_expression = self
+            .rd_expression(ExpressionMode::ConstantExpression, e.boundary, e.recovery)?
+            .expression;
+        let condition = e.pop().expression;
+        let omitted = middle.is_none();
+        let middle = middle.unwrap_or(condition);
+        let mut source = self
+            .context
+            .merge_vectors(condition.source_vectors, question_source);
+        if !omitted {
+            source = self.context.merge_vectors(source, middle.source_vectors);
+        }
+        if let Some(colon) = colon_source {
+            source = self.context.merge_vectors(source, colon);
+        }
+        source = self
+            .context
+            .merge_vectors(source, final_expression.source_vectors);
+        let operands = self.alloc_syntax_part(ConditionalExpression {
+            condition_expression: condition,
+            then_expression:      middle,
+            else_expression:      final_expression,
+        });
+        let operator_source = colon_source.map_or(question_source, |colon| {
+            self.context.merge_vectors(question_source, colon)
+        });
+        let expression = self.store_expression(
+            if omitted {
+                ExpressionType::OmittedConditional(operands)
+            } else {
+                ExpressionType::Conditional(operands)
+            },
+            source,
+            Some(operator_source),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, false, false);
+        Some(())
+    }
+
+    fn rd_reduce_one(&mut self, e: &mut RdExpression<'tu, 'p>) {
+        let LanguageExpressionOperator::Binary {
+            operator,
+            source_vectors,
+        } = e
+            .operators
+            .pop()
+            .expect("a pending expression operator exists")
+        else {
+            unreachable!("conditional operators reduce when their last operand returns")
+        };
+        let right = self.rd_pop_operand_or_error(e).expression;
+        let left = self.rd_pop_operand_or_error(e).expression;
+        let source = self
+            .context
+            .merge_vectors(left.source_vectors, source_vectors);
+        let source = self.context.merge_vectors(source, right.source_vectors);
+        let expression = self.store_expression(
+            ExpressionType::Binary {
+                operator,
+                left_expression: left,
+                right_expression: right,
+            },
+            source,
+            Some(source_vectors),
+            self.hard_error_count > e.errors,
+        );
+        e.push(expression, false, false);
+    }
+
+    fn rd_pop_operand_or_error(&mut self, e: &mut RdExpression<'tu, 'p>) -> ExpressionOperand<'tu> {
+        if let Some(operand) = e.operands.pop() {
+            return operand;
+        }
+        self.rd_push_error(e, None);
+        e.pop()
+    }
+
+    /// Reduces every pending operator and returns the expression. Whether a
+    /// `constant-expression` (§6.6 paragraph 1, p. 95; PDF p. 107) is in fact
+    /// constant (§6.6 paragraphs 3-10, pp. 95-96; PDF pp. 107-108) is left to
+    /// semantic analysis.
+    fn rd_finish_expression(&mut self, e: &mut RdExpression<'tu, 'p>) -> ExpressionResult<'tu> {
+        while !e.operators.is_empty() {
+            self.rd_reduce_one(e);
+        }
+        let operand = self.rd_pop_operand_or_error(e);
+        let recovered = self.hard_error_count > e.errors;
+        let expression = if recovered {
+            self.mark_expression_recovered(operand.expression)
+        } else {
+            operand.expression
+        };
+        ExpressionResult {
+            expression,
+            recovered,
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn rd_push_error(&mut self, e: &mut RdExpression<'tu, 'p>, anchor: Option<Token>) {
+        let source_vectors = match anchor {
+            | Some(token) if token.source_vectors.length() != 0 => {
+                let mut combined = SourceVectors::default();
+                for index in 0..token.source_vectors.length() as usize {
+                    // Creating an anchor appends to the retained provenance,
+                    // so the token's vectors are read again each time.
+                    let source = &self.context.get_source_vectors(token.source_vectors)[index];
+                    let (position, source_file_index) =
+                        (source.position(self.context), source.source_file_index);
+                    let anchor =
+                        self.context
+                            .create_retained_source_vectors(position, source_file_index, 0);
+                    combined = self.context.merge_vectors(combined, anchor);
+                }
+                combined
+            },
+            | _ => self.missing_syntax_source(),
+        };
+        self.rd_push_error_with_source(e, source_vectors, None);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn rd_push_error_with_source(
+        &mut self,
+        e: &mut RdExpression<'tu, 'p>,
+        source_vectors: SourceVectors,
+        operator_source_vectors: Option<SourceVectors>,
+    ) {
+        let expression = self.store_expression(
+            ExpressionType::Error,
+            source_vectors,
+            operator_source_vectors,
+            true,
+        );
+        // An error operand stands for whatever was meant, so operators that
+        // need a unary or postfix operand do not diagnose it a second time.
+        e.push(expression, true, true);
+    }
+
+    fn rd_strong_boundary(&mut self, e: &RdExpression<'tu, 'p>, token: Token) -> bool {
+        let identifier_precedes_conditional_colon = e.boundary
+            == ExpressionBoundary::Statement(ExpressionTerminator::Colon)
+            && matches!(token.kind, TokenType::Identifier)
+            && is_operator(self.cursor.following(), OperatorTokenType::Colon);
+        // A brace in a statement-level expression ends it only when the group
+        // reads as a statement block, as in `if (value { return; }`. A
+        // misplaced brace list such as `a = {1, 2};` is skipped as one error
+        // operand instead.
+        is_operator(Some(token), OperatorTokenType::OpeningCurlyBrace)
+            && matches!(
+                e.recovery,
+                ExpressionBoundary::Statement(_) | ExpressionBoundary::ClosingParenthesis
+            )
+            && brace_group_is_block(self)
+            && !brace_group_continues_expression(self)
+            || ExpressionFrame::is_strong_grammar_boundary_for(self, token, e.boundary)
+            || e.recovery != e.boundary
+                && !identifier_precedes_conditional_colon
+                && ExpressionFrame::is_strong_grammar_boundary_for(self, token, e.recovery)
+    }
+
+    /// Runs a whole expression subtree on the frame machine for the hybrid
+    /// study mode.
     fn rd_expression_fallback(
         &mut self,
-        limit: u32,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
-        suspend: bool,
-    ) -> Option<Operand<'tu>> {
-        let fallback_mode = if limit > 2 {
-            ExpressionMode::Expression
-        } else {
-            mode
-        };
-        let frame =
-            ExpressionFrame::new(self.arena, fallback_mode, boundary, self.hard_error_count)
-                .with_study_precedence(limit);
-        let result = self.study_frame(ParseFrame::Expression(frame), suspend)?;
-        let expression = match result {
-            | ParseValue::Expression(result) => result.expression,
-            | ParseValue::ConstantExpression(result) => result.expression.0,
+        recovery: ExpressionBoundary,
+    ) -> Option<ExpressionResult<'tu>> {
+        let frame = ExpressionFrame::with_recovery_boundary(
+            self.arena,
+            mode,
+            boundary,
+            recovery,
+            self.hard_error_count,
+        );
+        match self.study_frame(ParseFrame::Expression(frame), true)? {
+            | ParseValue::Expression(result) => Some(result),
+            | ParseValue::ConstantExpression(result) => Some(ExpressionResult {
+                expression: result.expression.0,
+                recovered:  result.recovered,
+            }),
             | _ => unreachable!("expression fallback returns an expression"),
-        };
-        let unary = match expression.kind {
-            | ExpressionType::Cast { .. }
-            | ExpressionType::Conditional(_)
-            | ExpressionType::OmittedConditional(_) => false,
-            | ExpressionType::Binary { operator, .. } => operator == BinaryOperator::Subscript,
-            | _ => true,
-        };
-        Some(Operand {
-            expression,
-            unary,
-            frame_finished: true,
-        })
+        }
     }
 
     pub(super) fn rd_consume(&mut self) {
@@ -649,71 +1533,225 @@ impl<'tu> Parser<'_, 'tu, '_> {
             self.cursor.consume();
         }
     }
-
-    pub(super) fn rd_expect(
-        &mut self,
-        operator: OperatorTokenType,
-        owner: &'static str,
-    ) -> SourceVectors {
-        let token = self.cursor.current();
-        if let Some(token) = token.filter(|token| is_operator(Some(*token), operator)) {
-            self.rd_consume();
-            token.source_vectors
-        } else {
-            let found = token.map(|token| token.kind);
-            let error = match operator {
-                | OperatorTokenType::OpeningParenthesis =>
-                    ParserErrorType::ExpectedOpeningParenthesisInStatement(owner, found),
-                | OperatorTokenType::ClosingParenthesis =>
-                    ParserErrorType::ExpectedClosingParenthesisInStatement(owner, found),
-                | OperatorTokenType::ClosingSquareBracket =>
-                    ParserErrorType::ExpectedClosingSquareBracketInSubscript(found),
-                | OperatorTokenType::Semicolon =>
-                    ParserErrorType::ExpectedSemicolonInStatement(owner, found),
-                | OperatorTokenType::Colon => ParserErrorType::ExpectedColonInLabel(owner, found),
-                | OperatorTokenType::OpeningCurlyBrace =>
-                    ParserErrorType::ExpectedOpeningCurlyBraceInCompoundStatement(found),
-                | OperatorTokenType::ClosingCurlyBrace =>
-                    ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(found),
-                | _ => ParserErrorType::ExpectedIsoSyntax(owner, found),
-            };
-            self.report(error, token);
-            SourceVectors::default()
-        }
-    }
 }
 
+/// One expression's Double-E state: the expected position, the pending
+/// operands and operators, and the recovery flags of the frame grammar.
+///
+/// C99: §6.5, pp. 67-94; PDF pp. 79-106.
+struct RdExpression<'tu, 'p> {
+    mode:                ExpressionMode,
+    boundary:            ExpressionBoundary,
+    recovery:            ExpressionBoundary,
+    operators:           ArenaVec<'p, LanguageExpressionOperator<'tu>>,
+    operands:            ArenaVec<'p, ExpressionOperand<'tu>>,
+    /// Whether an operand, rather than an operator, comes next.
+    operand:             bool,
+    errors:              usize,
+    /// `sizeof` applied to a compound literal waits for its postfix suffixes.
+    pending_sizeof:      Option<SourceVectors>,
+    /// The top operand is an error operand that replaced a stray token
+    /// already diagnosed, so the tokens after it need no second report.
+    stray_error_operand: bool,
+}
+
+/// What a parenthesized `type-name` in operand position introduces.
+///
+/// C99: `Cast` is `( type-name ) cast-expression` (§6.5.4 paragraph 1,
+/// p. 81; PDF p. 93) or a compound literal; `Sizeof` is
+/// `sizeof ( type-name )` (§6.5.3 paragraph 1, p. 78; PDF p. 90) or `sizeof`
+/// applied to a compound literal; `UnaryCompoundLiteral` is the
+/// `unary-expression` operand of `++`, `--`, or `sizeof`, which cannot be a
+/// cast and so must be a compound literal (§6.5.2 paragraph 1, p. 69;
+/// PDF p. 81).
 #[derive(Clone, Copy)]
-struct Operand<'tu> {
-    expression:     &'tu Expression<'tu>,
-    unary:          bool,
-    /// A hybrid/extension handoff already ran the frame's closing recovery.
-    frame_finished: bool,
+enum TypeNameUse {
+    Cast,
+    Sizeof(SourceVectors),
+    UnaryCompoundLiteral,
 }
 
-impl<'tu> Operand<'tu> {
-    fn unary(expression: &'tu Expression<'tu>) -> Self {
-        Self {
+impl<'tu> RdExpression<'tu, '_> {
+    fn push(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        unary_expression: bool,
+        postfix_expression: bool,
+    ) {
+        self.operands.push(ExpressionOperand {
             expression,
-            unary: true,
-            frame_finished: false,
+            unary_expression,
+            postfix_expression,
+        });
+        self.operand = false;
+        self.stray_error_operand = false;
+    }
+
+    fn pop(&mut self) -> ExpressionOperand<'tu> {
+        self.operands
+            .pop()
+            .expect("operator position has an expression operand")
+    }
+
+    fn closing_parenthesis_is_boundary(&self) -> bool {
+        [self.boundary, self.recovery].into_iter().any(|boundary| {
+            matches!(
+                boundary,
+                ExpressionBoundary::ClosingParenthesis
+                    | ExpressionBoundary::Argument
+                    | ExpressionBoundary::Statement(ExpressionTerminator::ClosingParenthesis)
+            )
+        })
+    }
+
+    fn closing_square_bracket_is_boundary(&self) -> bool {
+        [self.boundary, self.recovery].into_iter().any(|boundary| {
+            matches!(
+                boundary,
+                ExpressionBoundary::ClosingSquareBracket
+                    | ExpressionBoundary::ArrayBound
+                    | ExpressionBoundary::Designator
+            )
+        })
+    }
+
+    /// The closer that ends this expression's own delimiters, when the
+    /// boundary is a delimiter whose owner reports it missing.
+    fn closer(&self) -> Option<fn(TokenType) -> bool> {
+        match self.boundary {
+            | ExpressionBoundary::ClosingParenthesis
+            | ExpressionBoundary::Statement(ExpressionTerminator::ClosingParenthesis) =>
+                Some(|token| {
+                    matches!(
+                        token,
+                        TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                    )
+                }),
+            | ExpressionBoundary::ClosingSquareBracket
+            | ExpressionBoundary::ArrayBound
+            | ExpressionBoundary::Designator => Some(|token| {
+                matches!(
+                    token,
+                    TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                )
+            }),
+            | ExpressionBoundary::Argument => Some(|token| {
+                matches!(
+                    token,
+                    TokenType::Operator(
+                        OperatorTokenType::ClosingParenthesis | OperatorTokenType::Comma
+                    )
+                )
+            }),
+            | ExpressionBoundary::Statement(ExpressionTerminator::Colon) =>
+                Some(|token| matches!(token, TokenType::Operator(OperatorTokenType::Colon))),
+            | ExpressionBoundary::Statement(
+                ExpressionTerminator::Semicolon | ExpressionTerminator::ForSemicolon,
+            )
+            | ExpressionBoundary::Initializer
+            | ExpressionBoundary::StructMember
+            | ExpressionBoundary::Enumerator => None,
         }
     }
 
-    fn other(expression: &'tu Expression<'tu>) -> Self {
-        Self {
-            expression,
-            unary: false,
-            frame_finished: false,
+    /// Returns whether the token ends this expression in operator position.
+    ///
+    /// C99: a cast or unary operand ends before any binary operator (§6.5.3
+    /// paragraph 1, p. 78; PDF p. 90; §6.5.4 paragraph 1, p. 81; PDF p. 93);
+    /// an `assignment-expression` ends before a comma (§6.5.16 paragraph 1,
+    /// p. 91; PDF p. 103); a `constant-expression` ends before a comma or an
+    /// assignment operator (§6.6 paragraph 1, p. 95; PDF p. 107).
+    fn is_boundary(&self, token: Option<TokenType>) -> bool {
+        if matches!(
+            self.boundary,
+            ExpressionBoundary::StructMember | ExpressionBoundary::Enumerator
+        ) && matches!(token, Some(TokenType::Keyword(KeywordTokenType::Attribute)))
+        {
+            return true;
+        }
+        if matches!(
+            self.boundary,
+            ExpressionBoundary::Statement(ExpressionTerminator::Colon)
+                | ExpressionBoundary::Designator
+        ) && matches!(
+            token,
+            Some(TokenType::Operator(OperatorTokenType::Ellipsis))
+        ) {
+            return true;
+        }
+        let Some(token) = token else {
+            return true;
+        };
+        if matches!(
+            self.mode,
+            ExpressionMode::CastExpression | ExpressionMode::UnaryExpression
+        ) && !is_postfix_starter(token)
+        {
+            return true;
+        }
+        if self.mode == ExpressionMode::AssignmentExpression
+            && matches!(token, TokenType::Operator(OperatorTokenType::Comma))
+        {
+            return true;
+        }
+        if self.mode == ExpressionMode::ConstantExpression
+            && matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Equals
+                        | OperatorTokenType::PlusEquals
+                        | OperatorTokenType::MinusEquals
+                        | OperatorTokenType::AsteriskEquals
+                        | OperatorTokenType::ForwardSlashEquals
+                        | OperatorTokenType::PercentEquals
+                        | OperatorTokenType::LessThanLessThanEquals
+                        | OperatorTokenType::GreaterThanGreaterThanEquals
+                        | OperatorTokenType::AmpersandEquals
+                        | OperatorTokenType::CaretEquals
+                        | OperatorTokenType::PipeEquals
+                )
+            )
+        {
+            return true;
+        }
+        if self.boundary == ExpressionBoundary::Argument
+            && is_expression_operand_starter(token)
+            && !is_postfix_starter(token)
+            && binary_operator(token).is_none()
+        {
+            return true;
+        }
+        ExpressionFrame::is_owning_boundary_for(self.boundary, token)
+    }
+
+    fn consumes_unowned_closer(&self, token: TokenType) -> bool {
+        match self.boundary {
+            | ExpressionBoundary::Statement(ExpressionTerminator::Semicolon) => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket
+                )
+            ),
+            | ExpressionBoundary::Statement(
+                ExpressionTerminator::ForSemicolon | ExpressionTerminator::ClosingParenthesis,
+            ) => matches!(
+                token,
+                TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+            ),
+            | ExpressionBoundary::Statement(ExpressionTerminator::Colon)
+            | ExpressionBoundary::ClosingParenthesis
+            | ExpressionBoundary::ClosingSquareBracket
+            | ExpressionBoundary::Argument
+            | ExpressionBoundary::Initializer
+            | ExpressionBoundary::ArrayBound
+            | ExpressionBoundary::StructMember
+            | ExpressionBoundary::Enumerator
+            | ExpressionBoundary::Designator => false,
         }
     }
 }
 
-fn mode_limit(mode: ExpressionMode) -> u32 {
-    match mode {
-        | ExpressionMode::Expression => 15,
-        | ExpressionMode::AssignmentExpression => 14,
-        | ExpressionMode::ConstantExpression => 13,
-        | ExpressionMode::CastExpression | ExpressionMode::UnaryExpression => 2,
-    }
+fn is_closing_delimiter(token: TokenType) -> bool {
+    ExpressionFrame::is_closing_delimiter(token)
 }

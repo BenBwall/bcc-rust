@@ -1,18 +1,12 @@
-//! Opt-in phase-7 recursive descent performance experiment.
+//! Opt-in phase-7 recursive descent parser.
 //!
-//! `expressions` implements precedence climbing, prefix and postfix descent;
-//! `statements` implements recursive statement and compound parsing.
-//! Declarations, type names, initializers and extension productions retain the
-//! existing frames. A fallback runs on the same driver and retains its scopes
-//! and provenance. Machine mode is the default, including when this study
-//! feature is compiled.
-//!
-//! Extension atoms/statements and malformed operand recovery use frames.
-//! Operator recovery resumes a frame seeded with the parsed expression;
-//! statement recovery preserves the frame grammar's delimiter and else
-//! ownership. Corpus comparisons check ASTs, provenance and diagnostics,
-//! but do not prove recovery equivalence for arbitrary malformed input.
-//! This remains an experiment rather than the production parser.
+//! `expressions` implements the expression grammar with a recursive
+//! Double-E reducer; `statements` implements statements and compound
+//! blocks. Productions of families that are not yet ported run on the
+//! retained frames through [`Parser::rd_child`], on the same driver, keeping
+//! their scopes and provenance. Machine mode is the default, including when
+//! this study feature is compiled. Recovery reproduces the frame grammar's
+//! diagnostics, synchronization stops and provenance.
 //!
 //! C99: phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22;
 //! expressions §6.5, pp. 67-94; PDF pp. 79-106; statements §6.8,
@@ -41,13 +35,14 @@ use super::{
     frames::expression::ExpressionMode,
     machine::{
         ConstantExpressionResult,
-        ExpressionResult,
         ParseFrame,
         ParseFrameKind,
         ParseValue,
     },
+    recovery::SynchronizationSet,
     syntax::ConstantExpression,
 };
+use crate::translation_phases::SourceVectors;
 
 impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Selects the study algorithm. Call before reading the first root.
@@ -115,19 +110,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     pub(super) fn study_child(&mut self, child: ParseFrame<'tu, 'p>) -> Option<ParseValue<'tu>> {
         match child {
             | ParseFrame::Expression(frame) => {
-                let (mode, boundary) = frame.study_parameters();
-                let expression = self.rd_expression(mode, boundary)?;
-                let recovered = expression.recovered;
+                let (mode, boundary, recovery) = frame.study_parameters();
+                let result = self.rd_expression(mode, boundary, recovery)?;
                 Some(if mode == ExpressionMode::ConstantExpression {
                     ParseValue::ConstantExpression(ConstantExpressionResult {
-                        expression: ConstantExpression(expression),
-                        recovered,
+                        expression: ConstantExpression(result.expression),
+                        recovered:  result.recovered,
                     })
                 } else {
-                    ParseValue::Expression(ExpressionResult {
-                        expression,
-                        recovered,
-                    })
+                    ParseValue::Expression(result)
                 })
             },
             | ParseFrame::Statement(frame) => {
@@ -175,6 +166,20 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             None
         } else {
             value
+        }
+    }
+
+    /// Runs the synchronization scan `set` from recursive grammar code and
+    /// returns the provenance of the tokens it discarded.
+    pub(super) fn rd_recover(&mut self, set: SynchronizationSet) -> Option<SourceVectors> {
+        #[cfg(test)]
+        {
+            let depth = self.frames.len();
+            self.recover(set, depth)
+        }
+        #[cfg(not(test))]
+        {
+            self.recover(set)
         }
     }
 

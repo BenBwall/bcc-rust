@@ -101,7 +101,9 @@ pub(in crate::translation_phases::parsing) fn closer_follows_stray_run(
 /// Returns whether the brace group starting at the current `{` reads as a
 /// statement block rather than a misplaced initializer list: it contains a
 /// `;` or a statement keyword, is empty, or does not close within reach.
-pub(super) fn brace_group_is_block(parser: &mut Parser<'_, '_, '_>) -> bool {
+pub(in crate::translation_phases::parsing) fn brace_group_is_block(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
     let mut depth = 0_usize;
     for index in 0..BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
@@ -139,7 +141,9 @@ pub(super) fn brace_group_is_block(parser: &mut Parser<'_, '_, '_>) -> bool {
 /// C99: a `{` cannot start a primary expression (§6.5.1, p. 69; PDF p. 81),
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
 /// PDF p. 23).
-pub(super) fn brace_group_closes_before_parenthesis(parser: &mut Parser<'_, '_, '_>) -> bool {
+pub(in crate::translation_phases::parsing) fn brace_group_closes_before_parenthesis(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
     matches!(
         token_after_brace_group(parser),
         Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
@@ -150,7 +154,9 @@ pub(super) fn brace_group_closes_before_parenthesis(parser: &mut Parser<'_, '_, 
 /// reach and is followed by `)`, `]`, or `,`: the group then sits inside an
 /// expression, as in `if (x == {}) ...`, rather than being a statement body
 /// left after a missing `)`.
-pub(super) fn brace_group_continues_expression(parser: &mut Parser<'_, '_, '_>) -> bool {
+pub(in crate::translation_phases::parsing) fn brace_group_continues_expression(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
     matches!(
         token_after_brace_group(parser),
         Some(TokenType::Operator(
