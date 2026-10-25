@@ -699,3 +699,14 @@ impl<'p> DeclarationFrame<'_, 'p> {
         }
     }
 }
+
+#[cfg(feature = "parser-recursive-descent-study")]
+impl DeclarationFrame<'_, '_> {
+    /// Construction parameters for the recursive declaration: its grammar
+    /// context and starting hard-error count.
+    pub(in crate::translation_phases::parsing) fn study_parameters(
+        &self,
+    ) -> (DeclarationContext, usize) {
+        (self.context, self.starting_error_count)
+    }
+}

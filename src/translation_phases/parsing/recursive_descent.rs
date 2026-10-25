@@ -1,11 +1,9 @@
 //! Opt-in phase-7 recursive descent parser.
 //!
-//! `expressions` implements the expression grammar with a recursive
-//! Double-E reducer; `statements` implements statements and compound
-//! blocks. Productions of families that are not yet ported run on the
-//! retained frames through [`Parser::rd_child`], on the same driver, keeping
-//! their scopes and provenance. Machine mode is the default, including when
-//! this study feature is compiled. Recovery reproduces the frame grammar's
+//! Each production family has a module of recursive `rd_*` functions; a
+//! family that is not yet ported runs on the retained frames through
+//! [`Parser::rd_child`]. Machine mode is the default, including when this
+//! study feature is compiled. Recovery reproduces the frame grammar's
 //! diagnostics, synchronization stops and provenance.
 //!
 //! C99: phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22;
@@ -13,9 +11,11 @@
 //! pp. 131-139; PDF pp. 143-151. Semantic constraints remain in analysis.
 
 mod declaration_specifiers;
+mod declarations;
 mod enum_specifier;
 mod expressions;
 mod gnu;
+mod initializers;
 mod modern;
 mod msvc;
 mod statements;
@@ -99,6 +99,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 | ParseFrame::Modern(_)
                 | ParseFrame::Gnu(_)
                 | ParseFrame::Msvc(_)
+                | ParseFrame::Declaration(_)
+                | ParseFrame::FunctionDefinition(_)
+                | ParseFrame::Initializer(_)
         )
     }
 
@@ -164,6 +167,22 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 let (keyword, errors) = frame.study_parameters();
                 self.pools.msvc_frames.reclaim(frame);
                 self.rd_msvc(keyword, errors).map(ParseValue::Statement)
+            },
+            | ParseFrame::Declaration(frame) => {
+                let (context, starting_error_count) = frame.study_parameters();
+                self.rd_declaration(context, starting_error_count)
+                    .map(ParseValue::Declaration)
+            },
+            | ParseFrame::FunctionDefinition(frame) => {
+                let (head, starting_error_count) = frame.study_parameters();
+                self.rd_function_definition(head, starting_error_count)
+                    .map(ParseValue::FunctionDefinition)
+            },
+            | ParseFrame::Initializer(frame) => {
+                let (starting_error_count, parenthesis_boundary, bracket_boundary) =
+                    frame.study_parameters();
+                self.rd_initializer(starting_error_count, parenthesis_boundary, bracket_boundary)
+                    .map(ParseValue::Initializer)
             },
             | _ => unreachable!("only recursive grammar families are intercepted"),
         }

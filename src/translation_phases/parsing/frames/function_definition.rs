@@ -397,3 +397,15 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
         }
     }
 }
+
+#[cfg(feature = "parser-recursive-descent-study")]
+impl<'tu> FunctionDefinitionFrame<'tu, '_> {
+    /// Construction parameters for the recursive function definition: its
+    /// completed head and the external declaration's starting hard-error
+    /// count.
+    pub(in crate::translation_phases::parsing) fn study_parameters(
+        &self,
+    ) -> (&'tu Declaration<'tu>, usize) {
+        (self.head, self.starting_error_count)
+    }
+}

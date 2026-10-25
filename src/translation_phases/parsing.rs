@@ -223,6 +223,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
     fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
         #[cfg(feature = "parser-recursive-descent-study")]
         {
+            if self.study.enabled() {
+                return self.rd_root();
+            }
             match self.drive_until(None)? {
                 | ParseValue::ExternalDeclaration(root) => Some(root),
                 | _ => unreachable!("translation-unit driver returns an external declaration"),

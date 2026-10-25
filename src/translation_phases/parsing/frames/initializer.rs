@@ -310,7 +310,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         ),
                         token,
                     );
-                    let closing_bracket_follows = Self::closing_bracket_follows(parser, token);
+                    let closing_bracket_follows = closing_bracket_follows(parser, token);
                     self.designation_state().synchronized_designator =
                         Some(SynchronizedDesignator {
                             expression,
@@ -614,11 +614,12 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 #[derive(Debug)]
 pub(in crate::translation_phases::parsing) struct DesignationState<'tu, 'p> {
     pub(in crate::translation_phases::parsing) current_designators: ArenaVec<'p, Designator<'tu>>,
-    current_designation: Option<&'tu Designation<'tu>>,
-    designation_source_vectors: Option<SourceVectors>,
-    designation_equals_source_vectors: Option<SourceVectors>,
-    current_designator_source: Option<SourceVectors>,
-    current_designation_recovered: bool,
+    pub(in crate::translation_phases::parsing) current_designation: Option<&'tu Designation<'tu>>,
+    pub(in crate::translation_phases::parsing) designation_source_vectors: Option<SourceVectors>,
+    pub(in crate::translation_phases::parsing) designation_equals_source_vectors:
+        Option<SourceVectors>,
+    pub(in crate::translation_phases::parsing) current_designator_source: Option<SourceVectors>,
+    pub(in crate::translation_phases::parsing) current_designation_recovered: bool,
     synchronized_designator: Option<SynchronizedDesignator<'tu>>,
 }
 
@@ -673,6 +674,19 @@ pub(in crate::translation_phases::parsing) struct InitializerFrame<'tu, 'p> {
     closing_square_bracket_is_caller_boundary: bool,
 }
 
+#[cfg(feature = "parser-recursive-descent-study")]
+impl InitializerFrame<'_, '_> {
+    /// Construction parameters for the recursive initializer: the starting
+    /// hard-error count and whether `)` and `]` belong to the caller.
+    pub(in crate::translation_phases::parsing) fn study_parameters(&self) -> (usize, bool, bool) {
+        (
+            self.starting_error_count,
+            self.closing_parenthesis_is_caller_boundary,
+            self.closing_square_bracket_is_caller_boundary,
+        )
+    }
+}
+
 /// Recovery state for an array designator whose `]` was not where expected.
 ///
 /// C99: the designator form is `[ constant-expression ]`, §6.7.8
@@ -703,7 +717,7 @@ enum ListBoundary {
 
 impl<'p> DesignationState<'_, 'p> {
     /// Clears the state for the next element while keeping list capacity.
-    fn reset(&mut self) {
+    pub(in crate::translation_phases::parsing) fn reset(&mut self) {
         self.current_designators.clear();
         self.current_designation = None;
         self.designation_source_vectors = None;
@@ -987,66 +1001,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     ))
     }
 
-    /// Whether this array designator's `]` follows `token` before the list,
-    /// declaration, or an enclosing delimiter ends.
-    ///
-    /// C99 §6.7.8p1: a designator is `[ constant-expression ]`, so a
-    /// top-level `,` or `=` inside one is a single syntax error when a `]`
-    /// still closes it, e.g. `[1, 2] = 3`. Without that `]`, as in
-    /// `{ [1 = 2 }`, the `,` or `=` is where the bracket went missing. The
-    /// scan is bounded so repeated errors in one long list stay linear.
-    fn closing_bracket_follows(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>) -> bool {
-        const SCAN_LIMIT: usize = 32;
-        let mut depth = DelimiterDepth::default();
-        let mut next = token;
-        for index in 0..SCAN_LIMIT {
-            let Some(token) = next else {
-                return false;
-            };
-            let at_top_level = depth.is_top_level();
-            match token.kind {
-                | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
-                    if depth.brackets == 0 {
-                        return at_top_level;
-                    }
-                    depth.brackets -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
-                    depth.brackets += 1;
-                },
-                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
-                    depth.parentheses += 1;
-                },
-                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) => {
-                    if depth.parentheses == 0 {
-                        return false;
-                    }
-                    depth.parentheses -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
-                    depth.braces += 1;
-                },
-                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
-                    if depth.braces == 0 {
-                        return false;
-                    }
-                    depth.braces -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
-                | kind if at_top_level
-                    && (is_statement_keyword(kind)
-                        || !matches!(kind, TokenType::Identifier)
-                            && parser.declaration_starter(token)) =>
-                {
-                    return false;
-                },
-                | _ => {},
-            }
-            next = parser.cursor.lookahead(index);
-        }
-        false
-    }
-
     fn finish_designation(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         let designation = self.designation_state();
         let recovered = designation.current_designation_recovered
@@ -1120,7 +1074,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             })
         {
             return if matches!(self.phase, InitializerPhase::ElementOrClose)
-                && Self::gnu_designator_element_follows(parser)
+                && gnu_designator_element_follows(parser)
             {
                 ListBoundary::None
             } else {
@@ -1144,105 +1098,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 );
         if !starts_declaration_or_statement {
             ListBoundary::None
-        } else if Self::closing_brace_follows(parser) {
+        } else if closing_brace_follows(parser) {
             ListBoundary::MalformedElement
         } else {
             ListBoundary::MissingClose
         }
-    }
-
-    /// Whether the current `identifier :` begins a GNU `field: value`
-    /// element rather than a label after an unclosed list: its value ends at
-    /// a `,` or `}` before any `;` or statement keyword at depth zero.
-    /// A scan that runs out of lookahead keeps the element, so long values
-    /// stay initializers.
-    ///
-    /// C99: labels are §6.8.1 paragraph 1, p. 131; PDF p. 143. The
-    /// initializer-list grammar (§6.7.8 paragraph 1, p. 125; PDF p. 137)
-    /// has no top-level `;`. GNU `field:` designators and statement-expression
-    /// values extend that grammar; nested delimiters may contain statements.
-    fn gnu_designator_element_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
-        const SCAN_LIMIT: usize = 64;
-        let mut parentheses = 0_u32;
-        let mut braces = 0_u32;
-        // Lookahead 0 is the colon.
-        for index in 1..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(index) else {
-                return false;
-            };
-            match token.kind {
-                | TokenType::Operator(
-                    OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
-                ) => parentheses += 1,
-                | TokenType::Operator(
-                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
-                ) => {
-                    if parentheses == 0 {
-                        return false;
-                    }
-                    parentheses -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => braces += 1,
-                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
-                    if braces == 0 {
-                        return parentheses == 0;
-                    }
-                    braces -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::Comma)
-                    if parentheses == 0 && braces == 0 =>
-                    return true,
-                | TokenType::Operator(OperatorTokenType::Semicolon)
-                    if parentheses == 0 && braces == 0 =>
-                    return false,
-                | kind if parentheses == 0 && braces == 0 && is_statement_keyword(kind) =>
-                    return false,
-                | _ => {},
-            }
-        }
-        true
-    }
-
-    /// Whether this list's `}` follows the current token before a `;`, a
-    /// statement keyword, or an unmatched closer.
-    ///
-    /// C99 §6.7.8p1: no initializer contains a `;`, so a keyword that would
-    /// otherwise start a following declaration or statement is a malformed
-    /// element when the list's own `}` comes first, as in `{ 1, int 0 }`.
-    /// The scan is bounded so repeated errors in one long list stay linear.
-    fn closing_brace_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
-        const SCAN_LIMIT: usize = 64;
-        let mut nesting = 0_u32;
-        for index in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(index) else {
-                return false;
-            };
-            match token.kind {
-                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
-                    if nesting == 0 {
-                        return true;
-                    }
-                    nesting -= 1;
-                },
-                | TokenType::Operator(
-                    OperatorTokenType::OpeningParenthesis
-                    | OperatorTokenType::OpeningSquareBracket
-                    | OperatorTokenType::OpeningCurlyBrace,
-                ) => nesting += 1,
-                | TokenType::Operator(
-                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
-                ) => {
-                    if nesting == 0 {
-                        return false;
-                    }
-                    nesting -= 1;
-                },
-                | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
-                | kind if is_statement_keyword(kind) => return false,
-                | _ => {},
-            }
-        }
-        false
     }
 
     /// Stores the finished list's elements and braces, emptying the element
@@ -1291,4 +1151,164 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             closing_square_bracket_is_caller_boundary,
         }
     }
+}
+
+/// Whether this array designator's `]` follows `token` before the list,
+/// declaration, or an enclosing delimiter ends.
+///
+/// C99 §6.7.8p1: a designator is `[ constant-expression ]`, so a
+/// top-level `,` or `=` inside one is a single syntax error when a `]`
+/// still closes it, e.g. `[1, 2] = 3`. Without that `]`, as in
+/// `{ [1 = 2 }`, the `,` or `=` is where the bracket went missing. The
+/// scan is bounded so repeated errors in one long list stay linear.
+pub(in crate::translation_phases::parsing) fn closing_bracket_follows(
+    parser: &mut Parser<'_, '_, '_>,
+    token: Option<Token>,
+) -> bool {
+    const SCAN_LIMIT: usize = 32;
+    let mut depth = DelimiterDepth::default();
+    let mut next = token;
+    for index in 0..SCAN_LIMIT {
+        let Some(token) = next else {
+            return false;
+        };
+        let at_top_level = depth.is_top_level();
+        match token.kind {
+            | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
+                if depth.brackets == 0 {
+                    return at_top_level;
+                }
+                depth.brackets -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
+                depth.brackets += 1;
+            },
+            | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
+                depth.parentheses += 1;
+            },
+            | TokenType::Operator(OperatorTokenType::ClosingParenthesis) => {
+                if depth.parentheses == 0 {
+                    return false;
+                }
+                depth.parentheses -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
+                depth.braces += 1;
+            },
+            | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                if depth.braces == 0 {
+                    return false;
+                }
+                depth.braces -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
+            | kind if at_top_level
+                && (is_statement_keyword(kind)
+                    || !matches!(kind, TokenType::Identifier)
+                        && parser.declaration_starter(token)) =>
+            {
+                return false;
+            },
+            | _ => {},
+        }
+        next = parser.cursor.lookahead(index);
+    }
+    false
+}
+
+/// Whether the current `identifier :` begins a GNU `field: value`
+/// element rather than a label after an unclosed list: its value ends at
+/// a `,` or `}` before any `;` or statement keyword at depth zero.
+/// A scan that runs out of lookahead keeps the element, so long values
+/// stay initializers.
+///
+/// C99: labels are §6.8.1 paragraph 1, p. 131; PDF p. 143. The
+/// initializer-list grammar (§6.7.8 paragraph 1, p. 125; PDF p. 137)
+/// has no top-level `;`. GNU `field:` designators and statement-expression
+/// values extend that grammar; nested delimiters may contain statements.
+pub(in crate::translation_phases::parsing) fn gnu_designator_element_follows(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
+    const SCAN_LIMIT: usize = 64;
+    let mut parentheses = 0_u32;
+    let mut braces = 0_u32;
+    // Lookahead 0 is the colon.
+    for index in 1..SCAN_LIMIT {
+        let Some(token) = parser.cursor.lookahead(index) else {
+            return false;
+        };
+        match token.kind {
+            | TokenType::Operator(
+                OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
+            ) => parentheses += 1,
+            | TokenType::Operator(
+                OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+            ) => {
+                if parentheses == 0 {
+                    return false;
+                }
+                parentheses -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => braces += 1,
+            | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                if braces == 0 {
+                    return parentheses == 0;
+                }
+                braces -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::Comma) if parentheses == 0 && braces == 0 =>
+                return true,
+            | TokenType::Operator(OperatorTokenType::Semicolon)
+                if parentheses == 0 && braces == 0 =>
+                return false,
+            | kind if parentheses == 0 && braces == 0 && is_statement_keyword(kind) =>
+                return false,
+            | _ => {},
+        }
+    }
+    true
+}
+
+/// Whether this list's `}` follows the current token before a `;`, a
+/// statement keyword, or an unmatched closer.
+///
+/// C99 §6.7.8p1: no initializer contains a `;`, so a keyword that would
+/// otherwise start a following declaration or statement is a malformed
+/// element when the list's own `}` comes first, as in `{ 1, int 0 }`.
+/// The scan is bounded so repeated errors in one long list stay linear.
+pub(in crate::translation_phases::parsing) fn closing_brace_follows(
+    parser: &mut Parser<'_, '_, '_>,
+) -> bool {
+    const SCAN_LIMIT: usize = 64;
+    let mut nesting = 0_u32;
+    for index in 0..SCAN_LIMIT {
+        let Some(token) = parser.cursor.lookahead(index) else {
+            return false;
+        };
+        match token.kind {
+            | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                if nesting == 0 {
+                    return true;
+                }
+                nesting -= 1;
+            },
+            | TokenType::Operator(
+                OperatorTokenType::OpeningParenthesis
+                | OperatorTokenType::OpeningSquareBracket
+                | OperatorTokenType::OpeningCurlyBrace,
+            ) => nesting += 1,
+            | TokenType::Operator(
+                OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+            ) => {
+                if nesting == 0 {
+                    return false;
+                }
+                nesting -= 1;
+            },
+            | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
+            | kind if is_statement_keyword(kind) => return false,
+            | _ => {},
+        }
+    }
+    false
 }
