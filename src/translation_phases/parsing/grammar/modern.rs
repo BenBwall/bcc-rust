@@ -51,7 +51,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
     /// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
     /// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    pub(super) fn rd_modern(
+    pub(super) fn parse_modern(
         &mut self,
         kind: ModernKind,
         keyword: Option<SourceVectors>,
@@ -60,9 +60,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         let entry = self.enter_production(ProductionKind::Modern)?;
         let result = match self.cursor.current() {
             | Some(token) if kind == ModernKind::Attributes && keyword.is_none() => self
-                .rd_attribute_specifier(token, starting_errors)
+                .parse_attribute_specifier(token, starting_errors)
                 .map(ModernValue::Attributes),
-            | _ => self.rd_iso_construct(kind, keyword, starting_errors),
+            | _ => self.parse_iso_construct(kind, keyword, starting_errors),
         };
         self.leave_production(entry);
         result
@@ -72,7 +72,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// p. 145; PDF p. 163. C11: §6.7.2.4 paragraph 1, p. 121; PDF p. 139;
     /// §6.7.5 paragraph 1, p. 127; PDF p. 145. C23: §6.7.3.6 paragraph 1,
     /// p. 117; PDF p. 130.
-    fn rd_iso_construct(
+    fn parse_iso_construct(
         &mut self,
         kind: ModernKind,
         keyword_source: Option<SourceVectors>,
@@ -86,9 +86,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if let TokenType::Keyword(spelling) = token.kind {
                 keyword = Some(spelling);
             }
-            self.rd_iso_own(kind, &mut source, token);
+            self.own_iso_token(kind, &mut source, token);
         }
-        self.rd_iso_punctuation(
+        self.expect_iso_punctuation(
             kind,
             &mut source,
             OperatorTokenType::OpeningParenthesis,
@@ -116,7 +116,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     token,
                 );
             }
-            SyntaxOperand::Type(self.rd_type_name_syntax(self.hard_error_count, false)?)
+            SyntaxOperand::Type(self.parse_type_name(self.hard_error_count, false)?)
         } else {
             let mode = if kind == ModernKind::Assertion
                 || matches!(kind, ModernKind::Operand { constant: true, .. })
@@ -138,7 +138,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             } else {
                 ExpressionBoundary::Argument
             };
-            SyntaxOperand::Expression(self.rd_expression_ending_at(mode, boundary)?.expression)
+            SyntaxOperand::Expression(self.parse_expression_ending_at(mode, boundary)?.expression)
         };
         self.context.merge_into(&mut source, operand.source());
         let mut message = None;
@@ -147,27 +147,27 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         let parsed = if matches!(kind, ModernKind::Operand { .. }) {
             Some(())
         } else if kind == ModernKind::Assertion {
-            message = self.rd_assertion_message(kind, &mut source);
+            message = self.parse_assertion_message(kind, &mut source);
             Some(())
         } else {
-            self.rd_generic_associations(kind, &mut source, &mut associations)
+            self.parse_generic_associations(kind, &mut source, &mut associations)
         };
         let value = parsed.map(|()| {
-            self.rd_iso_punctuation(
+            self.expect_iso_punctuation(
                 kind,
                 &mut source,
                 OperatorTokenType::ClosingParenthesis,
                 "`)` in ISO construct",
             );
             if kind == ModernKind::Assertion {
-                self.rd_iso_punctuation(
+                self.expect_iso_punctuation(
                     kind,
                     &mut source,
                     OperatorTokenType::Semicolon,
                     "`;` after static assertion",
                 );
             }
-            self.rd_iso_value(
+            self.parse_iso_value(
                 kind,
                 source,
                 operand,
@@ -182,7 +182,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// The optional message of a static assertion. C23 permits none.
     /// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
-    fn rd_assertion_message(
+    fn parse_assertion_message(
         &mut self,
         kind: ModernKind,
         source: &mut Option<SourceVectors>,
@@ -191,11 +191,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         if let Some(comma) = token
             && matches!(comma.kind, TokenType::Operator(OperatorTokenType::Comma))
         {
-            self.rd_iso_own(kind, source, comma);
+            self.own_iso_token(kind, source, comma);
             if let Some(token) = self.cursor.current()
                 && matches!(token.kind, TokenType::String(_))
             {
-                self.rd_iso_own(kind, source, token);
+                self.own_iso_token(kind, source, token);
                 return Some(token);
             }
             iso_expected(
@@ -217,13 +217,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Parses `, generic-assoc-list`.
     /// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
-    fn rd_generic_associations(
+    fn parse_generic_associations(
         &mut self,
         kind: ModernKind,
         source: &mut Option<SourceVectors>,
         associations: &mut ArenaVec<'p, GenericAssociation<'tu>>,
     ) -> Option<()> {
-        self.rd_iso_punctuation(
+        self.expect_iso_punctuation(
             kind,
             source,
             OperatorTokenType::Comma,
@@ -233,20 +233,20 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             let type_name = if let Some(token) = self.cursor.current()
                 && matches!(token.kind, TokenType::Keyword(KeywordTokenType::Default))
             {
-                self.rd_iso_own(kind, source, token);
+                self.own_iso_token(kind, source, token);
                 None
             } else {
-                let x = self.rd_type_name_syntax(self.hard_error_count, false)?;
+                let x = self.parse_type_name(self.hard_error_count, false)?;
                 self.context.merge_into(source, x.source_vectors);
                 Some(x)
             };
-            self.rd_iso_punctuation(
+            self.expect_iso_punctuation(
                 kind,
                 source,
                 OperatorTokenType::Colon,
                 "`:` in generic association",
             );
-            let returned = self.rd_expression_ending_at(
+            let returned = self.parse_expression_ending_at(
                 ExpressionMode::AssignmentExpression,
                 ExpressionBoundary::Argument,
             )?;
@@ -259,14 +259,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if let Some(token) = self.cursor.current()
                 && matches!(token.kind, TokenType::Operator(OperatorTokenType::Comma))
             {
-                self.rd_iso_own(kind, source, token);
+                self.own_iso_token(kind, source, token);
             } else {
                 return Some(());
             }
         }
     }
 
-    fn rd_iso_value(
+    fn parse_iso_value(
         &mut self,
         kind: ModernKind,
         source: Option<SourceVectors>,
@@ -319,14 +319,19 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
     }
 
-    fn rd_iso_own(&mut self, kind: ModernKind, source: &mut Option<SourceVectors>, token: Token) {
+    fn own_iso_token(
+        &mut self,
+        kind: ModernKind,
+        source: &mut Option<SourceVectors>,
+        token: Token,
+    ) {
         if kind != ModernKind::Attributes {
             self.merge_source(source, token);
         }
-        self.rd_consume();
+        self.consume_token();
     }
 
-    fn rd_iso_punctuation(
+    fn expect_iso_punctuation(
         &mut self,
         kind: ModernKind,
         source: &mut Option<SourceVectors>,
@@ -337,7 +342,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         if let Some(token) = token
             && matches!(token.kind, TokenType::Operator(actual) if actual == operator)
         {
-            self.rd_iso_own(kind, source, token);
+            self.own_iso_token(kind, source, token);
         } else {
             iso_expected(self, token, position);
         }
@@ -351,7 +356,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// MSVC extension: Microsoft Learn, "declspec".
     /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
     /// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    fn rd_attribute_specifier(
+    fn parse_attribute_specifier(
         &mut self,
         token: Token,
         starting_errors: usize,
@@ -386,8 +391,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             },
         };
         state.tokens.push(token);
-        self.rd_consume();
-        let parsed = self.rd_attribute_body(&mut state, openers);
+        self.consume_token();
+        let parsed = self.parse_attribute_body(&mut state, openers);
         let value = parsed.map(|()| {
             let source_vectors = self.cursor.source_since(state.start);
             let recovered = self.hard_error_count > starting_errors;
@@ -407,7 +412,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         value
     }
 
-    fn rd_attribute_body(
+    fn parse_attribute_body(
         &mut self,
         state: &mut AttributeState<'tu, 'p>,
         openers: usize,
@@ -422,7 +427,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             {
                 state.tokens.push(token);
                 state.delimiters.push(OperatorTokenType::ClosingParenthesis);
-                self.rd_consume();
+                self.consume_token();
             } else {
                 attribute_expected(
                     self,
@@ -438,11 +443,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             }
         }
         loop {
-            match self.rd_attribute_token(state) {
+            match self.parse_attribute_token(state) {
                 | AttributeStep::Token => {},
                 | AttributeStep::Finish => return Some(()),
                 | AttributeStep::Argument =>
-                    if !self.rd_attribute_argument(state)? {
+                    if !self.parse_attribute_argument(state)? {
                         return Some(());
                     },
             }
@@ -452,14 +457,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Consumes one balanced attribute token, checking the specifier's
     /// outer name, prefix, argument and separator structure.
     /// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    fn rd_attribute_token(&mut self, state: &mut AttributeState<'tu, 'p>) -> AttributeStep {
+    fn parse_attribute_token(&mut self, state: &mut AttributeState<'tu, 'p>) -> AttributeStep {
         let Some(token) = self.cursor.current() else {
             attribute_expected(self, state.syntax, None, closer_component(state.syntax));
             return AttributeStep::Finish;
         };
         // Leave caller boundaries unconsumed, but keep semicolons
         // within standard balanced-token arguments (C23 §6.7.13.2p1).
-        if self.rd_attribute_caller_owns(state, token) {
+        if self.attribute_caller_owns(state, token) {
             attribute_expected(
                 self,
                 state.syntax,
@@ -535,7 +540,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                     ) =>
                 {
-                    argument = self.rd_attribute_argument_starts(state);
+                    argument = self.attribute_argument_starts(state);
                     state.position = AfterArguments;
                     true
                 },
@@ -595,7 +600,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             }
         }
         state.tokens.push(token);
-        self.rd_consume();
+        self.consume_token();
         if state.delimiters.is_empty() {
             AttributeStep::Finish
         } else if argument {
@@ -611,7 +616,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// their name is `aligned`. Records the operand's name index when the
     /// operand at the current `(` is parsed as an expression.
     /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
-    fn rd_attribute_argument_starts(&mut self, state: &mut AttributeState<'tu, 'p>) -> bool {
+    fn attribute_argument_starts(&mut self, state: &mut AttributeState<'tu, 'p>) -> bool {
         let name_is = |parser: &Self, token: &Token, names: &[&str]| {
             let name = parser
                 .context
@@ -683,7 +688,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// reports their number as an argument error, as Clang does. Returns
     /// whether the specifier continues.
     /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
-    fn rd_attribute_argument(&mut self, state: &mut AttributeState<'tu, 'p>) -> Option<bool> {
+    fn parse_attribute_argument(&mut self, state: &mut AttributeState<'tu, 'p>) -> Option<bool> {
         let list = state.tokens.iter().rev().nth(1).is_some_and(|token| {
             let name = self
                 .context
@@ -702,7 +707,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         {
             return Some(true);
         }
-        let returned = self.rd_expression_ending_at(
+        let returned = self.parse_expression_ending_at(
             if list {
                 ExpressionMode::Expression
             } else {
@@ -728,7 +733,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             )
         }) {
             attribute_expected(self, state.syntax, token, closer_component(state.syntax));
-            if token.is_none_or(|token| self.rd_attribute_caller_owns(state, token)) {
+            if token.is_none_or(|token| self.attribute_caller_owns(state, token)) {
                 return Some(false);
             }
         }
@@ -742,14 +747,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// tokens allow semicolons, while GNU and MSVC arguments are expressions
     /// and retain semicolons as recovery boundaries.
     /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    fn rd_attribute_caller_owns(&self, state: &AttributeState<'tu, 'p>, token: Token) -> bool {
+    fn attribute_caller_owns(&self, state: &AttributeState<'tu, 'p>, token: Token) -> bool {
         let TokenType::Operator(op) = token.kind else {
             return false;
         };
         match op {
             | OperatorTokenType::Semicolon if state.syntax == AttributeSyntax::Standard =>
                 state.delimiters.len() <= outer_depth(state.syntax)
-                    || !self.rd_standard_argument_closes(state),
+                    || !self.standard_argument_closes(state),
             | OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace => !state
                 .delimiters
                 .contains(&OperatorTokenType::ClosingCurlyBrace),
@@ -765,7 +770,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// so malformed input cannot swallow the declarations that follow it. The
     /// scan is bounded; a longer argument is treated as unclosed.
     /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    fn rd_standard_argument_closes(&self, state: &AttributeState<'tu, 'p>) -> bool {
+    fn standard_argument_closes(&self, state: &AttributeState<'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 1024;
         let mut open = &state.delimiters[outer_depth(state.syntax)..];
         let mut nested = 0_usize;

@@ -75,19 +75,19 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// C99: §6.7 paragraph 1, p. 97; PDF p. 109; §6.7.2.1 paragraph 1,
     /// p. 101; PDF p. 113. `implicit_name_allowed` is false for parameter
     /// declarations, whose bare identifier is not an implicit-`int` name.
-    pub(in crate::translation_phases::parsing) fn rd_declaration_specifiers(
+    pub(in crate::translation_phases::parsing) fn parse_declaration_specifiers(
         &mut self,
         mode: SpecifierMode,
         implicit_name_allowed: bool,
     ) -> Option<DeclarationSpecifiers<'tu>> {
         let entry = self.enter_production(ProductionKind::DeclarationSpecifiers)?;
         let mut list = SpecifierList::new(mode, implicit_name_allowed);
-        let result = self.rd_specifier_list(&mut list);
+        let result = self.parse_specifier_list(&mut list);
         self.leave_production(entry);
         result
     }
 
-    fn rd_specifier_list(
+    fn parse_specifier_list(
         &mut self,
         list: &mut SpecifierList<'tu>,
     ) -> Option<DeclarationSpecifiers<'tu>> {
@@ -127,7 +127,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 );
                 list.consumed = true;
                 self.merge_source(&mut list.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             if let TokenType::Keyword(
@@ -135,16 +135,16 @@ impl<'tu> Parser<'_, 'tu, '_> {
             ) = token.kind
             {
                 list.apply_gnu_type(self, keyword, token);
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             if list.apply_float128(self, token) || list.apply_msvc(self, token) {
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             if self.attribute_starter(Some(token)) {
                 let returned =
-                    self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+                    self.parse_modern(ModernKind::Attributes, None, self.hard_error_count)?;
                 let ModernValue::Attributes(attributes) = returned else {
                     unexpected_return!("attribute protocol: {returned:?}")
                 };
@@ -171,11 +171,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         )
                     })
                 {
-                    self.rd_specifier_operand(list, keyword, token)?;
+                    self.parse_specifier_operand(list, keyword, token)?;
                     continue;
                 }
                 if list.apply_keyword(self, keyword, token) {
-                    self.rd_consume();
+                    self.consume_token();
                     continue;
                 }
             }
@@ -186,7 +186,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 // The keyword stays for diagnostics and type-conflict
                 // provenance; the child consumes it as the first token it
                 // owns, then this list reprocesses the token after it.
-                let index = self.rd_struct_or_union_specifier()?;
+                let index = self.parse_struct_or_union_specifier()?;
                 list.specifiers
                     .type_specifiers
                     .make_struct_or_union(self, index, token);
@@ -201,7 +201,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 let EnumSpecifierResult {
                     index,
                     stopped_before_declaration,
-                } = self.rd_enum_specifier()?;
+                } = self.parse_enum_specifier()?;
                 list.specifiers
                     .type_specifiers
                     .make_enum(self, index, token);
@@ -214,7 +214,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 continue;
             }
             if list.apply_storage_class(self, token) || list.apply_ordinary(self, token) {
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             list.finish_before(self, token);
@@ -224,7 +224,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
 
     /// Parses the parenthesized operand of `_Alignas`, `_BitInt`, `typeof`,
     /// `typeof_unqual`, or the `_Atomic(...)` type specifier.
-    fn rd_specifier_operand(
+    fn parse_specifier_operand(
         &mut self,
         list: &mut SpecifierList<'tu>,
         keyword: KeywordTokenType,
@@ -251,7 +251,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 .type_specifiers
                 .report_conflict(self, token.contents, token);
         }
-        let returned = self.rd_modern(
+        let returned = self.parse_modern(
             ModernKind::Operand {
                 type_only: keyword == KeywordTokenType::Atomic,
                 constant:  matches!(

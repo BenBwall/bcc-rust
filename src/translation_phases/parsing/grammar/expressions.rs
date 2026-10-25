@@ -93,22 +93,23 @@ use crate::{
 impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Parses an expression of `mode` that `boundary` ends, for a caller
     /// whose own recovery boundary is the same.
-    pub(super) fn rd_expression_ending_at(
+    pub(super) fn parse_expression_ending_at(
         &mut self,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
     ) -> Option<ExpressionResult<'tu>> {
-        self.rd_expression(mode, boundary, boundary)
+        self.parse_expression(mode, boundary, boundary)
     }
 
     /// Parses a `constant-expression` that `boundary` ends and owns.
     ///
     /// C99: §6.6 paragraph 1, p. 95; PDF p. 107.
-    pub(super) fn rd_constant_expression(
+    pub(super) fn parse_constant_expression(
         &mut self,
         boundary: ExpressionBoundary,
     ) -> Option<ConstantExpressionResult<'tu>> {
-        let result = self.rd_expression_ending_at(ExpressionMode::ConstantExpression, boundary)?;
+        let result =
+            self.parse_expression_ending_at(ExpressionMode::ConstantExpression, boundary)?;
         Some(ConstantExpressionResult {
             expression: ConstantExpression(result.expression),
             recovered:  result.recovered,
@@ -119,14 +120,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// PDF pp. 79-106. `recovery` is the enclosing owner's boundary, which
     /// nested operands inherit for their recovery decisions.
     #[inline(never)]
-    pub(super) fn rd_expression(
+    pub(super) fn parse_expression(
         &mut self,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
         recovery: ExpressionBoundary,
     ) -> Option<ExpressionResult<'tu>> {
         let active = self.enter_production(ProductionKind::Expression)?;
-        let mut expression = RdExpression {
+        let mut expression = ExpressionParts {
             mode,
             boundary,
             recovery,
@@ -139,25 +140,25 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         };
         self.pools.operators.lend(&mut expression.operators);
         self.pools.operands.lend(&mut expression.operands);
-        let result = self.rd_expression_body(&mut expression);
+        let result = self.parse_expression_body(&mut expression);
         self.pools.operators.reclaim(&mut expression.operators);
         self.pools.operands.reclaim(&mut expression.operands);
         self.leave_production(active);
         result
     }
 
-    fn rd_expression_body(
+    fn parse_expression_body(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
     ) -> Option<ExpressionResult<'tu>> {
         loop {
             let finished = if e.operand {
-                self.rd_operand(e)?
+                self.parse_operand(e)?
             } else {
-                self.rd_operator(e)?
+                self.parse_operator(e)?
             };
             if finished {
-                return Some(self.rd_finish_expression(e));
+                return Some(self.finish_expression(e));
             }
         }
     }
@@ -166,7 +167,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: `primary-expression` §6.5.1, p. 69; PDF p. 81; `unary-expression`
     /// §6.5.3, p. 78; PDF p. 90; `cast-expression` §6.5.4, p. 81; PDF p. 93.
-    fn rd_operand(&mut self, e: &mut RdExpression<'tu, 'p>) -> Option<bool> {
+    fn parse_operand(&mut self, e: &mut ExpressionParts<'tu, 'p>) -> Option<bool> {
         let token = self.cursor.current();
         if let Some(token) = token
             && is_closing_delimiter(token.kind)
@@ -180,8 +181,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 Some(token),
             );
             // The stray closer stands in for the missing operand.
-            self.rd_push_error(e, Some(token));
-            self.rd_consume();
+            self.push_error_operand(e, Some(token));
+            self.consume_token();
             return Some(true);
         }
         let Some(token) = token else {
@@ -189,7 +190,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 ParserErrorType::ExpectedStatementExpression("expression operand", None),
                 None,
             );
-            self.rd_push_error(e, None);
+            self.push_error_operand(e, None);
             return Some(true);
         };
         if let TokenType::Keyword(
@@ -205,7 +206,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         ) = token.kind
         {
             let GnuValue::Builtin(builtin) =
-                self.rd_gnu(GnuKind::Builtin(keyword), self.hard_error_count)?
+                self.parse_gnu(GnuKind::Builtin(keyword), self.hard_error_count)?
             else {
                 unreachable!("builtin child protocol")
             };
@@ -220,8 +221,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
         if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) {
             self.pedantic_suppression += 1;
-            self.rd_consume();
-            self.rd_prefix(
+            self.consume_token();
+            self.parse_prefix(
                 e,
                 UnaryOperator::Extension,
                 token.source_vectors,
@@ -231,13 +232,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
         if is_operator(Some(token), OperatorTokenType::AmpersandAmpersand) {
             self.extension(Feature::LabelsAsValues, "label address", token);
-            self.rd_consume();
-            self.rd_label_address(e, token.source_vectors);
+            self.consume_token();
+            self.parse_label_address(e, token.source_vectors);
             return Some(false);
         }
         if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Countof)) {
-            self.rd_consume();
-            self.rd_countof_or_alignof(e, KeywordTokenType::Countof, token.source_vectors)?;
+            self.consume_token();
+            self.parse_countof_or_alignof(e, KeywordTokenType::Countof, token.source_vectors)?;
             return Some(false);
         }
         if let TokenType::Keyword(
@@ -248,8 +249,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 if KeywordTokenType::classify(token.contents, self.context.configuration)
                     .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu))
                 {
-                    self.rd_consume();
-                    self.rd_countof_or_alignof(e, KeywordTokenType::Alignof, token.source_vectors)?;
+                    self.consume_token();
+                    self.parse_countof_or_alignof(
+                        e,
+                        KeywordTokenType::Alignof,
+                        token.source_vectors,
+                    )?;
                     return Some(false);
                 }
                 report_alignof_expression(self, token);
@@ -262,7 +267,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     constant:  false,
                 }
             };
-            self.rd_modern_operand(e, keyword, token.source_vectors, kind, None)?;
+            self.parse_modern_operand(e, keyword, token.source_vectors, kind, None)?;
             return Some(false);
         }
         // A brace group directly inside a call's or statement header's `(`
@@ -281,8 +286,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 ),
                 Some(token),
             );
-            self.rd_consume();
-            return Some(self.rd_skip_brace_group(e, token.source_vectors));
+            self.consume_token();
+            return Some(self.skip_brace_group(e, token.source_vectors));
         }
         // A visible typedef spelling is still a syntactically valid primary
         // expression. At the first initializer operand, do not reinterpret
@@ -299,7 +304,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             && !identifier_is_unambiguous_recovery_boundary;
         let owned_boundary = is_owning_boundary_for(e.boundary, token.kind)
             || e.recovery != e.boundary && is_owning_boundary_for(e.recovery, token.kind);
-        if owned_boundary || !identifier_is_operand && self.rd_strong_boundary(e, token) {
+        if owned_boundary || !identifier_is_operand && self.at_strong_boundary(e, token) {
             // A declaration-specifier keyword inside this expression's own
             // delimiters, such as `f(int)` or `(static int)`, is a stray token
             // when the closer follows: skip to the closer instead of
@@ -319,23 +324,23 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 ),
                 Some(token),
             );
-            self.rd_push_error(e, Some(token));
+            self.push_error_operand(e, Some(token));
             if let Some(stray_run) = stray_run {
-                self.rd_skip_stray(stray_run);
+                self.skip_stray_tokens(stray_run);
             }
             return Some(true);
         }
         if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Sizeof)) {
-            self.rd_consume();
-            self.rd_sizeof(e, token.source_vectors)?;
+            self.consume_token();
+            self.parse_sizeof(e, token.source_vectors)?;
             return Some(false);
         }
         if let Some((operator, child_mode)) = prefix_operator(token.kind) {
             if operator == UnaryOperator::Extension {
                 self.pedantic_suppression += 1;
             }
-            self.rd_consume();
-            self.rd_prefix(e, operator, token.source_vectors, child_mode)?;
+            self.consume_token();
+            self.parse_prefix(e, operator, token.source_vectors, child_mode)?;
             return Some(false);
         }
         if is_operator(Some(token), OperatorTokenType::OpeningParenthesis) {
@@ -344,8 +349,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 OperatorTokenType::OpeningCurlyBrace,
             ) {
                 self.extension(Feature::StatementExpressions, "statement expression", token);
-                self.rd_consume();
-                self.rd_statement_expression(e, token.source_vectors)?;
+                self.consume_token();
+                self.parse_statement_expression(e, token.source_vectors)?;
                 return Some(false);
             }
             if parenthesized_type_name_follows(self) {
@@ -354,12 +359,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 } else {
                     TypeNameUse::Cast
                 };
-                self.rd_consume();
-                self.rd_typed_operand(e, token.source_vectors, usage)?;
+                self.consume_token();
+                self.parse_typed_operand(e, token.source_vectors, usage)?;
                 return Some(false);
             }
-            self.rd_consume();
-            self.rd_grouped(e, token.source_vectors)?;
+            self.consume_token();
+            self.parse_grouped(e, token.source_vectors)?;
             return Some(false);
         }
         let kind = match token.kind {
@@ -388,10 +393,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     Some(token),
                 );
                 if is_operator(Some(token), OperatorTokenType::OpeningCurlyBrace) {
-                    self.rd_consume();
-                    return Some(self.rd_skip_brace_group(e, token.source_vectors));
+                    self.consume_token();
+                    return Some(self.skip_brace_group(e, token.source_vectors));
                 }
-                self.rd_push_error(e, Some(token));
+                self.push_error_operand(e, Some(token));
                 if binary_operator(token.kind).is_some()
                     || is_operator(Some(token), OperatorTokenType::QuestionMark)
                 {
@@ -400,7 +405,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     return Some(false);
                 }
                 e.stray_error_operand = true;
-                self.rd_consume();
+                self.consume_token();
                 return Some(false);
             },
         };
@@ -411,7 +416,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.hard_error_count > e.errors,
         );
         e.push(expression, true, true);
-        self.rd_consume();
+        self.consume_token();
         Some(false)
     }
 
@@ -419,7 +424,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: postfix suffixes §6.5.2, p. 69; PDF p. 81; binary operators
     /// §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106.
-    fn rd_operator(&mut self, e: &mut RdExpression<'tu, 'p>) -> Option<bool> {
+    fn parse_operator(&mut self, e: &mut ExpressionParts<'tu, 'p>) -> Option<bool> {
         let token = self.cursor.current();
         if let Some(sizeof_source) = e.pending_sizeof
             && !token.is_some_and(|token| is_postfix_starter(token.kind))
@@ -449,7 +454,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 ),
                 Some(token),
             );
-            self.rd_consume();
+            self.consume_token();
             return Some(true);
         }
         if e.is_boundary(token.map(|token| token.kind)) {
@@ -481,8 +486,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             let source = self
                 .context
                 .merge_vectors(operand.source_vectors, token.source_vectors);
-            self.rd_consume();
-            return Some(self.rd_skip_brace_group(e, source));
+            self.consume_token();
+            return Some(self.skip_brace_group(e, source));
         }
         // C99 §6.5.2p1: a postfix suffix applies only to a
         // `postfix-expression`. Keep the suffix in this expression, applied
@@ -506,20 +511,20 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             match operator {
                 | OperatorTokenType::OpeningSquareBracket => {
                     let base = e.pop().expression;
-                    self.rd_consume();
-                    self.rd_subscript(e, base, token.source_vectors)?;
+                    self.consume_token();
+                    self.parse_subscript(e, base, token.source_vectors)?;
                     return Some(false);
                 },
                 | OperatorTokenType::OpeningParenthesis => {
                     let base = e.pop().expression;
-                    self.rd_consume();
-                    self.rd_call(e, base, token.source_vectors)?;
+                    self.consume_token();
+                    self.parse_call(e, base, token.source_vectors)?;
                     return Some(false);
                 },
                 | OperatorTokenType::Period | OperatorTokenType::Arrow => {
                     let base = e.pop().expression;
-                    self.rd_consume();
-                    self.rd_member(
+                    self.consume_token();
+                    self.parse_member(
                         e,
                         base,
                         operator == OperatorTokenType::Arrow,
@@ -546,7 +551,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         self.hard_error_count > e.errors,
                     );
                     e.push(expression, true, true);
-                    self.rd_consume();
+                    self.consume_token();
                     return Some(false);
                 },
                 | _ => {},
@@ -565,10 +570,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 .last()
                 .is_some_and(|operator| operator.precedence() < 13)
             {
-                self.rd_reduce_one(e);
+                self.reduce_operator(e);
             }
-            self.rd_consume();
-            self.rd_conditional(e, token.source_vectors)?;
+            self.consume_token();
+            self.parse_conditional(e, token.source_vectors)?;
             return Some(false);
         }
         // C99: only `expression` absorbs a comma (§6.5.17p1), a
@@ -591,7 +596,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 .last()
                 .is_some_and(|stacked| stacked.has_precedence_over(incoming))
             {
-                self.rd_reduce_one(e);
+                self.reduce_operator(e);
             }
             // C99 §6.5.16p1: the left operand of an assignment operator is a
             // `unary-expression`.
@@ -612,7 +617,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             e.operators.push(incoming);
             e.operand = true;
             e.stray_error_operand = false;
-            self.rd_consume();
+            self.consume_token();
             return Some(false);
         }
         if let Some(closer) = e.closer() {
@@ -630,7 +635,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         Some(token),
                     );
                 }
-                self.rd_skip_stray(stray_run);
+                self.skip_stray_tokens(stray_run);
             }
             return Some(true);
         }
@@ -661,25 +666,25 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Discards `remaining` already-diagnosed tokens before the closer that
     /// ends a malformed delimited expression.
-    fn rd_skip_stray(&mut self, mut remaining: usize) {
+    fn skip_stray_tokens(&mut self, mut remaining: usize) {
         while remaining != 0 && self.cursor.current().is_some() {
-            self.rd_consume();
+            self.consume_token();
             remaining -= 1;
         }
     }
 
     /// Skips a brace group whose `{` was just consumed as one error operand.
     /// Returns whether the expression ends at the end of input.
-    fn rd_skip_brace_group(
+    fn skip_brace_group(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         source: SourceVectors,
     ) -> bool {
         let mut depth = 1_u32;
         let mut source = source;
         loop {
             let Some(token) = self.cursor.current() else {
-                self.rd_push_error_with_source(e, source, None);
+                self.push_error_operand_with_source(e, source, None);
                 return true;
             };
             source = self.context.merge_vectors(source, token.source_vectors);
@@ -688,9 +693,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => depth -= 1,
                 | _ => {},
             }
-            self.rd_consume();
+            self.consume_token();
             if depth == 0 {
-                self.rd_push_error_with_source(e, source, None);
+                self.push_error_operand_with_source(e, source, None);
                 return false;
             }
         }
@@ -698,7 +703,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// GNU extension: `&& identifier`, the address of a label.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
-    fn rd_label_address(&mut self, e: &mut RdExpression<'tu, 'p>, source: SourceVectors) {
+    fn parse_label_address(&mut self, e: &mut ExpressionParts<'tu, 'p>, source: SourceVectors) {
         let token = self.cursor.current();
         if let Some(token) = token.filter(|token| matches!(token.kind, TokenType::Identifier)) {
             let merged = self.context.merge_vectors(source, token.source_vectors);
@@ -709,7 +714,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 false,
             );
             e.push(expression, true, false);
-            self.rd_consume();
+            self.consume_token();
             return;
         }
         self.report(
@@ -719,15 +724,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             ),
             token,
         );
-        self.rd_push_error(e, token);
+        self.push_error_operand(e, token);
     }
 
     /// C2y `_Countof` and GNU `__alignof__`: a parenthesized type name or a
     /// `unary-expression`, including a compound literal, like `sizeof` in
     /// C99 §6.5.3 paragraph 1, p. 78; PDF p. 90.
-    fn rd_countof_or_alignof(
+    fn parse_countof_or_alignof(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         keyword: KeywordTokenType,
         source: SourceVectors,
     ) -> Option<()> {
@@ -739,10 +744,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 type_only: true,
                 constant:  false,
             };
-            return self.rd_modern_operand(e, keyword, source, kind, Some(source));
+            return self.parse_modern_operand(e, keyword, source, kind, Some(source));
         }
         let operand = self
-            .rd_expression(ExpressionMode::UnaryExpression, e.boundary, e.recovery)?
+            .parse_expression(ExpressionMode::UnaryExpression, e.boundary, e.recovery)?
             .expression;
         let merged = self.context.merge_vectors(source, operand.source_vectors);
         let kind = if keyword == KeywordTokenType::Countof {
@@ -760,15 +765,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// operands of `_Alignof` and `_Countof`, parsed by the ISO construct
     /// grammar. `opened` is the keyword's provenance when the caller already
     /// consumed it and the construct starts at `(`.
-    fn rd_modern_operand(
+    fn parse_modern_operand(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         keyword: KeywordTokenType,
         keyword_source: SourceVectors,
         construct: ModernKind,
         opened: Option<SourceVectors>,
     ) -> Option<()> {
-        let (kind, source) = match self.rd_modern(construct, opened, self.hard_error_count)? {
+        let (kind, source) = match self.parse_modern(construct, opened, self.hard_error_count)? {
             | ModernValue::Generic(x) => (ExpressionType::Generic(x), x.source_vectors),
             | ModernValue::Operand(operand, source) => (
                 match (keyword, operand) {
@@ -794,12 +799,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// GNU extension: `( compound-statement )` as an operand.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
-    fn rd_statement_expression(
+    fn parse_statement_expression(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         source: SourceVectors,
     ) -> Option<()> {
-        let statement = self.rd_compound(false)?;
+        let statement = self.parse_compound(false)?;
         let mut merged = self.context.merge_vectors(source, statement.source_vectors);
         let token = self.cursor.current();
         let consume = is_operator(token, OperatorTokenType::ClosingParenthesis);
@@ -824,15 +829,19 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         );
         e.push(expression, true, true);
         if consume {
-            self.rd_consume();
+            self.consume_token();
         }
         Some(())
     }
 
     /// C99 §6.5.1p1: `( expression )`.
-    fn rd_grouped(&mut self, e: &mut RdExpression<'tu, 'p>, opening: SourceVectors) -> Option<()> {
+    fn parse_grouped(
+        &mut self,
+        e: &mut ExpressionParts<'tu, 'p>,
+        opening: SourceVectors,
+    ) -> Option<()> {
         let child = self
-            .rd_expression(
+            .parse_expression(
                 ExpressionMode::Expression,
                 ExpressionBoundary::ClosingParenthesis,
                 e.recovery,
@@ -867,20 +876,20 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         );
         e.push(expression, true, true);
         if consume {
-            self.rd_consume();
+            self.consume_token();
         }
         Some(())
     }
 
     /// C99 §6.5.2p1: `postfix-expression [ expression ]`.
-    fn rd_subscript(
+    fn parse_subscript(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         base: &'tu Expression<'tu>,
         opening: SourceVectors,
     ) -> Option<()> {
         let child = self
-            .rd_expression(
+            .parse_expression(
                 ExpressionMode::Expression,
                 ExpressionBoundary::ClosingSquareBracket,
                 e.recovery,
@@ -919,7 +928,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         );
         e.push(expression, true, true);
         if consume {
-            self.rd_consume();
+            self.consume_token();
         }
         Some(())
     }
@@ -927,9 +936,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// C99 §6.5.2p1: `postfix-expression ( argument-expression-list(opt) )`.
     /// Each argument is an `assignment-expression`, so a top-level comma
     /// separates arguments.
-    fn rd_call(
+    fn parse_call(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         base: &'tu Expression<'tu>,
         opening: SourceVectors,
     ) -> Option<()> {
@@ -939,7 +948,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         let mut consume = is_operator(self.cursor.current(), OperatorTokenType::ClosingParenthesis);
         if !consume {
             loop {
-                let Some(argument) = self.rd_expression(
+                let Some(argument) = self.parse_expression(
                     ExpressionMode::AssignmentExpression,
                     ExpressionBoundary::Argument,
                     e.recovery,
@@ -958,7 +967,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 {
                     call.source_vectors.push(separator.source_vectors);
                     call.operator_sources.push(separator.source_vectors);
-                    self.rd_consume();
+                    self.consume_token();
                     continue;
                 }
                 // A child may return without consuming an enclosing grammar
@@ -967,7 +976,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 // argument.
                 if let Some(token) = token
                     && is_expression_operand_starter(token.kind)
-                    && !self.rd_strong_boundary(e, token)
+                    && !self.at_strong_boundary(e, token)
                 {
                     self.report(
                         ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionCall(Some(
@@ -1012,15 +1021,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         self.pools.calls.reclaim(call);
         e.push(expression, true, true);
         if consume {
-            self.rd_consume();
+            self.consume_token();
         }
         Some(())
     }
 
     /// C99 §6.5.2p1: `.` and `->` take an `identifier`.
-    fn rd_member(
+    fn parse_member(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         base: &'tu Expression<'tu>,
         indirect: bool,
         operator_source: SourceVectors,
@@ -1034,7 +1043,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 ParserErrorType::ExpectedMemberIdentifier(token.map(|token| token.kind)),
                 token,
             );
-            self.rd_push_error_with_source(e, source, Some(operator_source));
+            self.push_error_operand_with_source(e, source, Some(operator_source));
             return;
         };
         let source = self.context.merge_vectors(source, member.source_vectors);
@@ -1056,21 +1065,21 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.hard_error_count > e.errors,
         );
         e.push(expression, true, true);
-        self.rd_consume();
+        self.consume_token();
     }
 
     /// C99 §6.5.3p1: a prefix operator and its operand, whose `operand_mode`
     /// the operator selects. GNU `__extension__` suppresses extension
     /// diagnostics from its keyword through its operand.
-    fn rd_prefix(
+    fn parse_prefix(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         operator: UnaryOperator,
         operator_source: SourceVectors,
         operand_mode: ExpressionMode,
     ) -> Option<()> {
         let operand = self
-            .rd_expression(operand_mode, e.boundary, e.recovery)?
+            .parse_expression(operand_mode, e.boundary, e.recovery)?
             .expression;
         if operator == UnaryOperator::Extension {
             self.pedantic_suppression -= 1;
@@ -1093,9 +1102,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// C99 §6.5.3p1: `sizeof ( type-name )` when a type name follows `(`,
     /// otherwise `sizeof unary-expression`.
-    fn rd_sizeof(
+    fn parse_sizeof(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         sizeof_source: SourceVectors,
     ) -> Option<()> {
         if let Some(opening) = self
@@ -1104,15 +1113,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             .filter(|token| is_operator(Some(*token), OperatorTokenType::OpeningParenthesis))
             && parenthesized_type_name_follows(self)
         {
-            self.rd_consume();
-            return self.rd_typed_operand(
+            self.consume_token();
+            return self.parse_typed_operand(
                 e,
                 opening.source_vectors,
                 TypeNameUse::Sizeof(sizeof_source),
             );
         }
         let operand = self
-            .rd_expression(ExpressionMode::UnaryExpression, e.boundary, e.recovery)?
+            .parse_expression(ExpressionMode::UnaryExpression, e.boundary, e.recovery)?
             .expression;
         let source = self
             .context
@@ -1131,14 +1140,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// consumed: a cast (§6.5.4, p. 81; PDF p. 93), `sizeof ( type-name )`
     /// (§6.5.3, p. 78; PDF p. 90), or a compound literal (§6.5.2.5, p. 75;
     /// PDF p. 87).
-    fn rd_typed_operand(
+    fn parse_typed_operand(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         opening: SourceVectors,
         usage: TypeNameUse,
     ) -> Option<()> {
         let compound_literal = type_name_is_compound_literal(self);
-        let type_name = self.rd_type_name_syntax(self.hard_error_count, compound_literal)?;
+        let type_name = self.parse_type_name(self.hard_error_count, compound_literal)?;
         let mut source = self
             .context
             .merge_vectors(opening, type_name.source_vectors);
@@ -1199,28 +1208,28 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     {
                         cast = true;
                     } else {
-                        self.rd_push_error(e, following);
+                        self.push_error_operand(e, following);
                     }
                 },
-                | TypeNameUse::UnaryCompoundLiteral => self.rd_push_error(e, token),
+                | TypeNameUse::UnaryCompoundLiteral => self.push_error_operand(e, token),
             }
         }
         if consume {
-            self.rd_consume();
+            self.consume_token();
         }
         if starts_compound_literal {
-            return self.rd_compound_literal(e, type_name, source, usage);
+            return self.parse_compound_literal(e, type_name, source, usage);
         }
         if cast {
-            return self.rd_cast(e, type_name, source);
+            return self.parse_cast(e, type_name, source);
         }
         Some(())
     }
 
     /// C99 §6.5.2.5p1: `( type-name ) { initializer-list }`.
-    fn rd_compound_literal(
+    fn parse_compound_literal(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         type_name: &'tu TypeName<'tu>,
         type_source: SourceVectors,
         usage: TypeNameUse,
@@ -1228,7 +1237,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         if let Some(token) = self.cursor.current() {
             self.extension(Feature::CompoundLiterals, "compound literal", token);
         }
-        let InitializerResult { initializer, .. } = self.rd_initializer(
+        let InitializerResult { initializer, .. } = self.parse_initializer(
             self.hard_error_count,
             e.closing_parenthesis_is_boundary(),
             e.closing_square_bracket_is_boundary(),
@@ -1253,9 +1262,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     }
 
     /// C99 §6.5.4p1: `( type-name ) cast-expression`.
-    fn rd_cast(
+    fn parse_cast(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         type_name: &'tu TypeName<'tu>,
         type_source: SourceVectors,
     ) -> Option<()> {
@@ -1268,7 +1277,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             );
         }
         let operand = self
-            .rd_expression(ExpressionMode::CastExpression, e.boundary, e.recovery)?
+            .parse_expression(ExpressionMode::CastExpression, e.boundary, e.recovery)?
             .expression;
         let source = self
             .context
@@ -1290,9 +1299,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// conditional-expression`, after the `?` was consumed. The middle
     /// operand is a full `expression`; the last is parsed in
     /// constant-expression mode (§6.6p1), so assignment and comma end it.
-    fn rd_conditional(
+    fn parse_conditional(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         question_source: SourceVectors,
     ) -> Option<()> {
         let token = self.cursor.current();
@@ -1304,11 +1313,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 "omitted conditional operand",
                 colon,
             );
-            self.rd_consume();
+            self.consume_token();
             (None, Some(colon.source_vectors))
         } else {
             let middle = self
-                .rd_expression(
+                .parse_expression(
                     ExpressionMode::Expression,
                     ExpressionBoundary::Statement(ExpressionTerminator::Colon),
                     e.recovery,
@@ -1318,7 +1327,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if let Some(colon) =
                 token.filter(|token| is_operator(Some(*token), OperatorTokenType::Colon))
             {
-                self.rd_consume();
+                self.consume_token();
                 (Some(middle), Some(colon.source_vectors))
             } else {
                 self.report(
@@ -1332,7 +1341,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             }
         };
         let final_expression = self
-            .rd_expression(ExpressionMode::ConstantExpression, e.boundary, e.recovery)?
+            .parse_expression(ExpressionMode::ConstantExpression, e.boundary, e.recovery)?
             .expression;
         let condition = e.pop().expression;
         let omitted = middle.is_none();
@@ -1371,7 +1380,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         Some(())
     }
 
-    fn rd_reduce_one(&mut self, e: &mut RdExpression<'tu, 'p>) {
+    fn reduce_operator(&mut self, e: &mut ExpressionParts<'tu, 'p>) {
         let LanguageExpressionOperator::Binary {
             operator,
             source_vectors,
@@ -1379,8 +1388,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             .operators
             .pop()
             .expect("a pending expression operator exists");
-        let right = self.rd_pop_operand_or_error(e).expression;
-        let left = self.rd_pop_operand_or_error(e).expression;
+        let right = self.pop_operand_or_error(e).expression;
+        let left = self.pop_operand_or_error(e).expression;
         let source = self
             .context
             .merge_vectors(left.source_vectors, source_vectors);
@@ -1398,11 +1407,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         e.push(expression, false, false);
     }
 
-    fn rd_pop_operand_or_error(&mut self, e: &mut RdExpression<'tu, 'p>) -> ExpressionOperand<'tu> {
+    fn pop_operand_or_error(&mut self, e: &mut ExpressionParts<'tu, 'p>) -> ExpressionOperand<'tu> {
         if let Some(operand) = e.operands.pop() {
             return operand;
         }
-        self.rd_push_error(e, None);
+        self.push_error_operand(e, None);
         e.pop()
     }
 
@@ -1410,11 +1419,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// `constant-expression` (§6.6 paragraph 1, p. 95; PDF p. 107) is in fact
     /// constant (§6.6 paragraphs 3-10, pp. 95-96; PDF pp. 107-108) is left to
     /// semantic analysis.
-    fn rd_finish_expression(&mut self, e: &mut RdExpression<'tu, 'p>) -> ExpressionResult<'tu> {
+    fn finish_expression(&mut self, e: &mut ExpressionParts<'tu, 'p>) -> ExpressionResult<'tu> {
         while !e.operators.is_empty() {
-            self.rd_reduce_one(e);
+            self.reduce_operator(e);
         }
-        let operand = self.rd_pop_operand_or_error(e);
+        let operand = self.pop_operand_or_error(e);
         let recovered = self.hard_error_count > e.errors;
         let expression = if recovered {
             self.mark_expression_recovered(operand.expression)
@@ -1429,7 +1438,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     #[cold]
     #[inline(never)]
-    fn rd_push_error(&mut self, e: &mut RdExpression<'tu, 'p>, anchor: Option<Token>) {
+    fn push_error_operand(&mut self, e: &mut ExpressionParts<'tu, 'p>, anchor: Option<Token>) {
         let source_vectors = match anchor {
             | Some(token) if token.source_vectors.length() != 0 => {
                 let mut combined = SourceVectors::default();
@@ -1448,14 +1457,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             },
             | _ => self.missing_syntax_source(),
         };
-        self.rd_push_error_with_source(e, source_vectors, None);
+        self.push_error_operand_with_source(e, source_vectors, None);
     }
 
     #[cold]
     #[inline(never)]
-    fn rd_push_error_with_source(
+    fn push_error_operand_with_source(
         &mut self,
-        e: &mut RdExpression<'tu, 'p>,
+        e: &mut ExpressionParts<'tu, 'p>,
         source_vectors: SourceVectors,
         operator_source_vectors: Option<SourceVectors>,
     ) {
@@ -1470,7 +1479,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         e.push(expression, true, true);
     }
 
-    fn rd_strong_boundary(&mut self, e: &RdExpression<'tu, 'p>, token: Token) -> bool {
+    fn at_strong_boundary(&mut self, e: &ExpressionParts<'tu, 'p>, token: Token) -> bool {
         let identifier_precedes_conditional_colon = e.boundary
             == ExpressionBoundary::Statement(ExpressionTerminator::Colon)
             && matches!(token.kind, TokenType::Identifier)
@@ -1492,7 +1501,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 && is_strong_grammar_boundary_for(self, token, e.recovery)
     }
 
-    pub(super) fn rd_consume(&mut self) {
+    pub(super) fn consume_token(&mut self) {
         if let Some(token) = self.cursor.current() {
             self.suppress_token_diagnostic(token);
             self.cursor.consume();
@@ -1504,7 +1513,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 /// operands and operators, and the recovery flags of the frame grammar.
 ///
 /// C99: §6.5, pp. 67-94; PDF pp. 79-106.
-struct RdExpression<'tu, 'p> {
+struct ExpressionParts<'tu, 'p> {
     mode:                ExpressionMode,
     boundary:            ExpressionBoundary,
     recovery:            ExpressionBoundary,
@@ -1536,7 +1545,7 @@ enum TypeNameUse {
     UnaryCompoundLiteral,
 }
 
-impl<'tu> RdExpression<'tu, '_> {
+impl<'tu> ExpressionParts<'tu, '_> {
     fn push(
         &mut self,
         expression: &'tu Expression<'tu>,

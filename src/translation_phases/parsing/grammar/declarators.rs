@@ -99,18 +99,18 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         reason = "The outer `None` is a terminal resource failure; the inner one is the typed, \
                   recoverable absence of a declarator."
     )]
-    pub(super) fn rd_declarator(
+    pub(super) fn parse_declarator(
         &mut self,
         mode: DeclaratorMode,
     ) -> Option<Option<Declarator<'tu>>> {
-        self.rd_declarator_entered(mode)
+        self.parse_declarator_with_name(mode)
             .map(|(declarator, _)| declarator)
     }
 
     /// Parses a declarator and reports whether it declares an identifier,
     /// directly or through a parenthesized nested declarator.
     #[inline(never)]
-    fn rd_declarator_entered(
+    fn parse_declarator_with_name(
         &mut self,
         mode: DeclaratorMode,
     ) -> Option<(Option<Declarator<'tu>>, bool)> {
@@ -128,7 +128,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         self.pools
             .direct_declarators
             .lend(&mut parts.direct_declarators);
-        let result = self.rd_declarator_body(&mut parts);
+        let result = self.parse_declarator_body(&mut parts);
         self.pools.pointer_levels.reclaim(&mut parts.pointer_levels);
         self.pools
             .direct_declarators
@@ -142,13 +142,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         reason = "The outer `None` is a terminal resource failure; the inner one is the typed, \
                   recoverable absence of a declarator."
     )]
-    fn rd_declarator_body(
+    fn parse_declarator_body(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
     ) -> Option<Option<Declarator<'tu>>> {
-        self.rd_pointer(parts)?;
-        if self.rd_direct_declarator_base(parts)? {
-            self.rd_declarator_suffixes(parts)?;
+        self.parse_pointer(parts)?;
+        if self.parse_direct_declarator_base(parts)? {
+            self.parse_declarator_suffixes(parts)?;
         }
         // `None` is a typed, recoverable absence used by optional abstract
         // declarators and by callers that issue the contextual
@@ -176,14 +176,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// and attributes immediately following it.
     ///
     /// C99: pointer declarators are §6.7.5.1, p. 115; PDF p. 127.
-    fn rd_pointer(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<()> {
+    fn parse_pointer(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<()> {
         loop {
             let token = self.cursor.current();
-            if self.rd_ms_modifier(parts, token, true) {
+            if self.parse_ms_modifier(parts, token, true) {
                 continue;
             }
             if self.attribute_starter(token) {
-                let attributes = self.rd_declarator_attributes(parts)?;
+                let attributes = self.parse_declarator_attributes(parts)?;
                 parts
                     .direct_declarators
                     .push(DirectDeclarator::Attributes(attributes));
@@ -199,16 +199,16 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 qualifiers: TypeQualifiers::empty(),
                 attributes: None,
             });
-            self.rd_consume();
+            self.consume_token();
             break;
         }
         loop {
             let token = self.cursor.current();
-            if self.rd_ms_modifier(parts, token, false) {
+            if self.parse_ms_modifier(parts, token, false) {
                 continue;
             }
             if self.attribute_starter(token) {
-                let attributes = self.rd_declarator_attributes(parts)?;
+                let attributes = self.parse_declarator_attributes(parts)?;
                 // C23 §6.7.7.2p1: attributes after a `*` appertain to that
                 // pointer.
                 let level = parts
@@ -235,7 +235,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 level.qualifiers.insert(qualifier);
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             if !is_operator(token, OperatorTokenType::Asterisk) {
@@ -247,7 +247,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             });
             let token = token.expect("asterisk token exists");
             self.merge_source(&mut parts.source_vectors, token);
-            self.rd_consume();
+            self.consume_token();
         }
     }
 
@@ -256,14 +256,17 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: direct-declarator is §6.7.5 paragraph 1, p. 114; PDF p. 126;
     /// direct-abstract-declarator is §6.7.6 paragraph 1, p. 122; PDF p. 134.
-    fn rd_direct_declarator_base(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<bool> {
+    fn parse_direct_declarator_base(
+        &mut self,
+        parts: &mut DeclaratorParts<'tu, 'p>,
+    ) -> Option<bool> {
         loop {
             let token = self.cursor.current();
-            if self.rd_ms_modifier(parts, token, true) {
+            if self.parse_ms_modifier(parts, token, true) {
                 continue;
             }
             if self.attribute_starter(token) {
-                let attributes = self.rd_declarator_attributes(parts)?;
+                let attributes = self.parse_declarator_attributes(parts)?;
                 parts
                     .direct_declarators
                     .push(DirectDeclarator::Attributes(attributes));
@@ -279,7 +282,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     .push(DirectDeclarator::Identifier(Identifier::from_token(token)));
                 parts.has_direct_declarator = true;
                 parts.named = true;
-                self.rd_consume();
+                self.consume_token();
                 return Some(true);
             }
             // In a named declarator, `(` must group another declarator. In
@@ -287,13 +290,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if is_operator(token, OperatorTokenType::OpeningParenthesis) {
                 let token = token.expect("opening-parenthesis token exists");
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 if parts.mode != DeclaratorMode::Named
-                    && self.rd_abstract_parenthesis_is_function(parts)?
+                    && self.abstract_parenthesis_is_function(parts)?
                 {
                     return Some(true);
                 }
-                self.rd_parenthesized_declarator(parts, token.source_vectors)?;
+                self.parse_parenthesized_declarator(parts, token.source_vectors)?;
                 return Some(true);
             }
             if parts.mode != DeclaratorMode::Named
@@ -323,7 +326,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// grouping, §6.7.6 footnote 128, p. 122; PDF p. 134; an identifier that
     /// could be a typedef name or a parameter name is taken as a typedef
     /// name, §6.7.5.3 paragraph 11, p. 119; PDF p. 131.
-    fn rd_abstract_parenthesis_is_function(
+    fn abstract_parenthesis_is_function(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
     ) -> Option<bool> {
@@ -333,7 +336,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             parts.direct_declarators.push(empty_function(self, true));
             parts.has_direct_declarator = true;
             self.merge_source(&mut parts.source_vectors, token);
-            self.rd_consume();
+            self.consume_token();
             return Some(true);
         }
         let prototype = is_operator(token, OperatorTokenType::Ellipsis)
@@ -349,7 +352,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 })
             };
         if prototype {
-            self.rd_function_parameters(parts, false)?;
+            self.parse_function_parameters(parts, false)?;
         }
         Some(prototype)
     }
@@ -359,12 +362,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// C99: parenthesized direct-declarator is §6.7.5, p. 114; PDF p. 126;
     /// it binds as the unparenthesized declarator, paragraph 6, p. 115;
     /// PDF p. 127.
-    fn rd_parenthesized_declarator(
+    fn parse_parenthesized_declarator(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
         opening: SourceVectors,
     ) -> Option<()> {
-        let (declarator, named) = self.rd_declarator_entered(parts.mode)?;
+        let (declarator, named) = self.parse_declarator_with_name(parts.mode)?;
         let Some(declarator) = declarator else {
             let token = self.cursor.current();
             self.report(
@@ -398,7 +401,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             .push(DirectDeclarator::Parenthesized(parenthesized));
         if let Some(token) = closing {
             self.merge_source(&mut parts.source_vectors, token);
-            self.rd_consume();
+            self.consume_token();
         } else {
             let token = self.cursor.current();
             self.report(
@@ -416,10 +419,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: array and function declarators are §6.7.5.2-§6.7.5.3,
     /// pp. 116-121; PDF pp. 128-133.
-    fn rd_declarator_suffixes(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<()> {
+    fn parse_declarator_suffixes(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<()> {
         loop {
             let token = self.cursor.current();
-            if self.rd_ms_modifier(parts, token, true) {
+            if self.parse_ms_modifier(parts, token, true) {
                 continue;
             }
             if token.is_some_and(|token| {
@@ -427,7 +430,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     || matches!(token.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
                         && token.uses_ambiguous_asm(self.context.configuration)
             }) {
-                let value = self.rd_gnu(GnuKind::Asm { label: true }, self.hard_error_count)?;
+                let value = self.parse_gnu(GnuKind::Asm { label: true }, self.hard_error_count)?;
                 let GnuValue::Asm(asm) = value else {
                     unexpected_return!("asm label child protocol: {value:?}")
                 };
@@ -439,7 +442,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 continue;
             }
             if self.attribute_starter(token) {
-                let attributes = self.rd_declarator_attributes(parts)?;
+                let attributes = self.parse_declarator_attributes(parts)?;
                 parts
                     .direct_declarators
                     .push(DirectDeclarator::Attributes(attributes));
@@ -448,13 +451,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             let more = if is_operator(token, OperatorTokenType::OpeningSquareBracket) {
                 let token = token.expect("opening-square-bracket token exists");
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
-                self.rd_array_suffix(parts)?
+                self.consume_token();
+                self.parse_array_suffix(parts)?
             } else if is_operator(token, OperatorTokenType::OpeningParenthesis) {
                 let token = token.expect("opening-parenthesis token exists");
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
-                self.rd_function_suffix(parts)?
+                self.consume_token();
+                self.parse_function_suffix(parts)?
             } else {
                 false
             };
@@ -471,12 +474,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: the four array suffix forms of §6.7.5 paragraph 1, p. 114;
     /// PDF p. 126, and §6.7.6 paragraph 1, p. 122; PDF p. 134.
-    fn rd_array_suffix(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<bool> {
+    fn parse_array_suffix(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<bool> {
         let mut array = ArraySuffix::default();
         loop {
             let token = self.cursor.current();
             if self.attribute_starter(token) {
-                let attributes = self.rd_declarator_attributes(parts)?;
+                let attributes = self.parse_declarator_attributes(parts)?;
                 parts
                     .direct_declarators
                     .push(DirectDeclarator::Attributes(attributes));
@@ -504,7 +507,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 array.qualifiers.insert(qualifier);
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             if let Some(token) = token
@@ -516,7 +519,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 array.is_static = true;
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             if is_array_pointer_marker(self, token) {
@@ -542,8 +545,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 array.is_pointer = true;
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
-                return Some(self.rd_array_pointer_close(parts, array));
+                self.consume_token();
+                return Some(self.parse_array_pointer_close(parts, array));
             }
             if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
                 let token = token.expect("closing-square-bracket token exists");
@@ -556,7 +559,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 parts.push_array(&mut array);
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 return Some(true);
             }
             if token.is_none() {
@@ -568,7 +571,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 return Some(false);
             }
             let index = self
-                .rd_expression_ending_at(
+                .parse_expression_ending_at(
                     ExpressionMode::AssignmentExpression,
                     ExpressionBoundary::ArrayBound,
                 )?
@@ -578,14 +581,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             array.assignment_expression = Some(index);
             self.context
                 .merge_into(&mut parts.source_vectors, source_vectors);
-            return Some(self.rd_array_close(parts, array));
+            return Some(self.parse_array_close(parts, array));
         }
     }
 
     /// Requires the `]` after the VLA `*` marker. Extra input is diagnosed
     /// specifically, then recovery runs to the owning bracket or an
     /// enclosing declaration boundary.
-    fn rd_array_pointer_close(
+    fn parse_array_pointer_close(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
         mut array: ArraySuffix<'tu>,
@@ -596,14 +599,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 let token = token.expect("closing-square-bracket token exists");
                 parts.push_array(&mut array);
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 return true;
             }
             if is_operator(token, OperatorTokenType::Asterisk) {
                 let token = token.expect("asterisk token exists");
                 self.report(ParserErrorType::PointerSpecifiedTwice, Some(token));
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             if let Some(token) = token {
@@ -619,15 +622,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     None,
                 );
             }
-            self.rd_recover_array_bound(parts);
-            return self.rd_array_close(parts, array);
+            self.recover_array_bound(parts);
+            return self.parse_array_close(parts, array);
         }
     }
 
     /// Closes an array suffix after its bound or after recovery. A token
     /// that belongs to an enclosing production repairs the absent `]` and
     /// finishes the declarator without consuming it.
-    fn rd_array_close(
+    fn parse_array_close(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
         mut array: ArraySuffix<'tu>,
@@ -638,7 +641,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 let token = token.expect("closing-square-bracket token exists");
                 parts.push_array(&mut array);
                 self.merge_source(&mut parts.source_vectors, token);
-                self.rd_consume();
+                self.consume_token();
                 return true;
             }
             if is_operator(token, OperatorTokenType::Comma)
@@ -665,11 +668,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 ),
                 token,
             );
-            self.rd_recover_array_bound(parts);
+            self.recover_array_bound(parts);
         }
     }
 
-    fn rd_recover_array_bound(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) {
+    fn recover_array_bound(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) {
         let recovered = self.recover(SynchronizationSet {
             kind:   SynchronizationKind::ArrayBound,
             target: ProductionKind::Declarator,
@@ -687,7 +690,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// C99: `( parameter-type-list )` and `( identifier-list? )`, §6.7.5
     /// paragraph 1, p. 114; PDF p. 126; abstract declarators take only
     /// `( parameter-type-list? )`, §6.7.6 paragraph 1, p. 122; PDF p. 134.
-    fn rd_function_suffix(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<bool> {
+    fn parse_function_suffix(&mut self, parts: &mut DeclaratorParts<'tu, 'p>) -> Option<bool> {
         let allow_k_and_r = parts.named;
         let token = self.cursor.current();
         if is_operator(token, OperatorTokenType::ClosingParenthesis) {
@@ -696,7 +699,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             parts.has_direct_declarator = true;
             let token = token.expect("closing-parenthesis token exists");
             self.merge_source(&mut parts.source_vectors, token);
-            self.rd_consume();
+            self.consume_token();
             return Some(true);
         }
         if token.is_none() {
@@ -706,16 +709,16 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             );
             return Some(false);
         }
-        self.rd_function_parameters(parts, allow_k_and_r)?;
+        self.parse_function_parameters(parts, allow_k_and_r)?;
         Some(true)
     }
 
-    fn rd_function_parameters(
+    fn parse_function_parameters(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
         allow_k_and_r: bool,
     ) -> Option<()> {
-        let list = self.rd_parameter_list(allow_k_and_r)?;
+        let list = self.parse_parameter_list(allow_k_and_r)?;
         self.context
             .merge_into(&mut parts.source_vectors, list.source_vectors);
         parts.direct_declarators.push(list.direct_declarator);
@@ -726,7 +729,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Consumes a Microsoft calling convention, or with `type_modifiers` a
     /// Microsoft type modifier, as a direct-declarator entry.
     /// MSVC extension: Microsoft Learn, "Microsoft-Specific Modifiers".
-    fn rd_ms_modifier(
+    fn parse_ms_modifier(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
         token: Option<Token>,
@@ -740,7 +743,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 .direct_declarators
                 .push(DirectDeclarator::MsModifier(keyword, token.source_vectors));
             self.merge_source(&mut parts.source_vectors, token);
-            self.rd_consume();
+            self.consume_token();
             return true;
         }
         false
@@ -749,11 +752,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Parses an attribute-specifier sequence at a declarator attachment
     /// point and merges its provenance into the declarator.
     /// C23: §6.7.7.1 paragraph 1, p. 126; PDF p. 139.
-    fn rd_declarator_attributes(
+    fn parse_declarator_attributes(
         &mut self,
         parts: &mut DeclaratorParts<'tu, 'p>,
     ) -> Option<&'tu AttributeSpecifier<'tu>> {
-        let value = self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+        let value = self.parse_modern(ModernKind::Attributes, None, self.hard_error_count)?;
         let ModernValue::Attributes(attributes) = value else {
             unexpected_return!("declarator attributes protocol: {value:?}")
         };

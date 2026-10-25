@@ -67,7 +67,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// identifier-list are §6.7.5, p. 114; PDF p. 126; function declarator
     /// rules are §6.7.5.3, pp. 118-121; PDF pp. 130-133.
     #[inline(never)]
-    pub(super) fn rd_parameter_list(
+    pub(super) fn parse_parameter_list(
         &mut self,
         allow_k_and_r: bool,
     ) -> Option<ParameterListResult<'tu>> {
@@ -84,7 +84,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         self.pools.parameters.lend(&mut list.parameters);
         self.pools.identifiers.lend(&mut list.identifiers);
         self.pools.source_vectors.lend(&mut list.source_vectors);
-        let result = self.rd_parameter_list_body(&mut list, allow_k_and_r);
+        let result = self.parse_parameter_list_body(&mut list, allow_k_and_r);
         self.pools.parameters.reclaim(&mut list.parameters);
         self.pools.identifiers.reclaim(&mut list.identifiers);
         self.pools.source_vectors.reclaim(&mut list.source_vectors);
@@ -98,7 +98,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: a visible typedef name selects a parameter declaration
     /// (§6.7.5.3 paragraph 11, p. 119; PDF p. 131).
-    fn rd_parameter_list_body(
+    fn parse_parameter_list_body(
         &mut self,
         list: &mut ParameterListParts<'tu, 'p>,
         allow_k_and_r: bool,
@@ -116,9 +116,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             );
             list.is_variadic = true;
             list.source_vectors.push(token.source_vectors);
-            self.rd_consume();
-            self.rd_close_after_ellipsis(list);
-            return Some(self.rd_finish_prototype(list));
+            self.consume_token();
+            self.close_after_ellipsis(list);
+            return Some(self.finish_prototype(list));
         }
         if allow_k_and_r
             && token.is_some_and(|token| {
@@ -144,7 +144,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     token,
                 );
             }
-            self.rd_identifier_list(list)?;
+            self.parse_identifier_list(list)?;
             // Both successful and recovered exits close prototype scope
             // before the enclosing declarator resumes.
             self.pedantic_suppression = list.suppression_entry;
@@ -155,14 +155,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 source_vectors:    self.context.merge_vector_list(&list.source_vectors),
             });
         }
-        self.rd_parameter_type_list(list)?;
-        Some(self.rd_finish_prototype(list))
+        self.parse_parameter_type_list(list)?;
+        Some(self.finish_prototype(list))
     }
 
     /// Parses an identifier list after its first identifier was seen.
     ///
     /// C99: identifier-list, §6.7.5 paragraph 1, p. 114; PDF p. 126.
-    fn rd_identifier_list(&mut self, list: &mut ParameterListParts<'tu, 'p>) -> Option<()> {
+    fn parse_identifier_list(&mut self, list: &mut ParameterListParts<'tu, 'p>) -> Option<()> {
         let mut diagnosed_mixed_parameter = false;
         'items: loop {
             let Some(token) = self.cursor.current() else {
@@ -186,12 +186,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     );
                 }
                 diagnosed_mixed_parameter = true;
-                let specifiers = self.rd_parameter_specifiers()?;
+                let specifiers = self.parse_parameter_specifiers()?;
                 list.source_vectors.push(specifiers.source_vectors);
                 let token = self.cursor.current();
                 if !is_operator(token, OperatorTokenType::Comma)
                     && !is_operator(token, OperatorTokenType::ClosingParenthesis)
-                    && let Some(declarator) = self.rd_declarator(DeclaratorMode::MaybeAbstract)?
+                    && let Some(declarator) =
+                        self.parse_declarator(DeclaratorMode::MaybeAbstract)?
                 {
                     list.source_vectors.push(declarator.source_vectors);
                 }
@@ -202,7 +203,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 // belongs to the same prototype-style list; reporting it
                 // again would only repeat that diagnosis.
                 list.source_vectors.push(token.source_vectors);
-                self.rd_consume();
+                self.consume_token();
             } else if !matches!(token.kind, TokenType::Identifier) {
                 // Typedef names are declaration starters, handled above.
                 self.report(
@@ -211,11 +212,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     ),
                     Some(token),
                 );
-                self.rd_recover_parameter(list, SynchronizationKind::KAndRParameter);
+                self.recover_parameter(list, SynchronizationKind::KAndRParameter);
             } else {
                 list.identifiers.push(Identifier::from_token(token));
                 list.source_vectors.push(token.source_vectors);
-                self.rd_consume();
+                self.consume_token();
             }
             loop {
                 self.pedantic_suppression = list.suppression_entry;
@@ -223,13 +224,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 if is_operator(token, OperatorTokenType::Comma) {
                     let token = token.expect("comma token exists");
                     list.source_vectors.push(token.source_vectors);
-                    self.rd_consume();
+                    self.consume_token();
                     continue 'items;
                 }
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     list.source_vectors.push(token.source_vectors);
-                    self.rd_consume();
+                    self.consume_token();
                     return Some(());
                 }
                 self.report(
@@ -267,7 +268,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         )
                     )
                 });
-                self.rd_recover_parameter(
+                self.recover_parameter(
                     list,
                     if declarator_follows {
                         SynchronizationKind::Parameter
@@ -284,22 +285,22 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: `parameter-list , ...` (§6.7.5 paragraph 1, p. 114; PDF p. 126;
     /// §6.7.5.3 paragraph 9, p. 119; PDF p. 131).
-    fn rd_parameter_type_list(&mut self, list: &mut ParameterListParts<'tu, 'p>) -> Option<()> {
+    fn parse_parameter_type_list(&mut self, list: &mut ParameterListParts<'tu, 'p>) -> Option<()> {
         'parameters: loop {
-            self.rd_parameter_declaration(list)?;
+            self.parse_parameter_declaration(list)?;
             loop {
                 self.pedantic_suppression = list.suppression_entry;
                 let token = self.cursor.current();
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     list.source_vectors.push(token.source_vectors);
-                    self.rd_consume();
+                    self.consume_token();
                     return Some(());
                 }
                 if is_operator(token, OperatorTokenType::Comma) {
                     let token = token.expect("comma token exists");
                     list.source_vectors.push(token.source_vectors);
-                    self.rd_consume();
+                    self.consume_token();
                     // A closing delimiter here means the comma had no
                     // following parameter, which gets its own diagnostic
                     // rather than a specifier cascade.
@@ -308,8 +309,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         let token = token.expect("ellipsis token exists");
                         list.is_variadic = true;
                         list.source_vectors.push(token.source_vectors);
-                        self.rd_consume();
-                        self.rd_close_after_ellipsis(list);
+                        self.consume_token();
+                        self.close_after_ellipsis(list);
                         return Some(());
                     }
                     if is_operator(token, OperatorTokenType::ClosingParenthesis) {
@@ -321,7 +322,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                             Some(token),
                         );
                         list.source_vectors.push(token.source_vectors);
-                        self.rd_consume();
+                        self.consume_token();
                         return Some(());
                     }
                     if is_operator(token, OperatorTokenType::Semicolon)
@@ -355,7 +356,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 if token.is_some_and(|token| self.declaration_starter(token)) {
                     continue 'parameters;
                 }
-                self.rd_recover_parameter(list, SynchronizationKind::Parameter);
+                self.recover_parameter(list, SynchronizationKind::Parameter);
             }
         }
     }
@@ -365,8 +366,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// entries (C99 §6.2.1p4 and p7).
     ///
     /// C99: parameter-declaration, §6.7.5 paragraph 1, p. 114; PDF p. 126.
-    fn rd_parameter_declaration(&mut self, list: &mut ParameterListParts<'tu, 'p>) -> Option<()> {
-        let specifiers = self.rd_parameter_specifiers()?;
+    fn parse_parameter_declaration(
+        &mut self,
+        list: &mut ParameterListParts<'tu, 'p>,
+    ) -> Option<()> {
+        let specifiers = self.parse_parameter_specifiers()?;
         // parameter-declaration permits an absent abstract declarator, so a
         // separator can complete the parameter immediately.
         let token = self.cursor.current();
@@ -381,7 +385,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             list.source_vectors.push(specifiers.source_vectors);
             return Some(());
         }
-        let declarator = self.rd_declarator(DeclaratorMode::MaybeAbstract)?;
+        let declarator = self.parse_declarator(DeclaratorMode::MaybeAbstract)?;
         if let Some(identifier) = declarator.and_then(Declarator::identifier)
             && self
                 .scopes
@@ -404,20 +408,20 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         Some(())
     }
 
-    fn rd_parameter_specifiers(&mut self) -> Option<DeclarationSpecifiers<'tu>> {
-        self.rd_declaration_specifiers(SpecifierMode::Declaration, false)
+    fn parse_parameter_specifiers(&mut self) -> Option<DeclarationSpecifiers<'tu>> {
+        self.parse_declaration_specifiers(SpecifierMode::Declaration, false)
     }
 
     /// Requires `)` immediately after `...`: the ellipsis is terminal in
     /// the grammar, so the owning `)` is the only legal continuation.
-    fn rd_close_after_ellipsis(&mut self, list: &mut ParameterListParts<'tu, 'p>) {
+    fn close_after_ellipsis(&mut self, list: &mut ParameterListParts<'tu, 'p>) {
         let mut can_unwind_variadic_recovery = false;
         loop {
             let token = self.cursor.current();
             if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                 let token = token.expect("closing-parenthesis token exists");
                 list.source_vectors.push(token.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 return;
             }
             let Some(token) = token else {
@@ -441,7 +445,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             }
             let follows_comma = is_operator(Some(token), OperatorTokenType::Comma);
             can_unwind_variadic_recovery = !follows_comma;
-            self.rd_recover_parameter(
+            self.recover_parameter(
                 list,
                 if follows_comma {
                     SynchronizationKind::VariadicTrailingParameter
@@ -459,7 +463,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// declarations (C99 §6.2.1p4). Names a definition can rebuild from its
     /// parameter declarators need no copy; anything else, such as an
     /// enumerator declared in an array bound, is retained.
-    fn rd_finish_prototype(
+    fn finish_prototype(
         &mut self,
         list: &mut ParameterListParts<'tu, 'p>,
     ) -> ParameterListResult<'tu> {
@@ -479,7 +483,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
     }
 
-    fn rd_recover_parameter(
+    fn recover_parameter(
         &mut self,
         list: &mut ParameterListParts<'tu, 'p>,
         kind: SynchronizationKind,

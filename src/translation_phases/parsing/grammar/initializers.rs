@@ -70,7 +70,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// the initializer when the caller owns them.
     ///
     /// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
-    pub(super) fn rd_initializer(
+    pub(super) fn parse_initializer(
         &mut self,
         starting_error_count: usize,
         closing_parenthesis_is_caller_boundary: bool,
@@ -95,8 +95,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.pools.initializers.lend(&mut list.elements);
             self.pools.source_vectors.lend(&mut list.source_vectors);
             list.source_vectors.push(opening.source_vectors);
-            self.rd_consume();
-            let result = self.rd_braced_initializer(&mut list, starting_error_count);
+            self.consume_token();
+            let result = self.parse_braced_initializer(&mut list, starting_error_count);
             self.pools.initializers.reclaim(&mut list.elements);
             self.pools.source_vectors.reclaim(&mut list.source_vectors);
             let mut designation = list.designation;
@@ -104,19 +104,19 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.pools.designations.reclaim(designation);
             result
         } else {
-            self.rd_scalar_initializer(starting_error_count)
+            self.parse_scalar_initializer(starting_error_count)
         };
         self.leave_production(entry);
         result
     }
 
     /// C99 §6.7.8p1: a scalar initializer is an `assignment-expression`.
-    fn rd_scalar_initializer(
+    fn parse_scalar_initializer(
         &mut self,
         starting_error_count: usize,
     ) -> Option<InitializerResult<'tu>> {
         let expression = self
-            .rd_expression_ending_at(
+            .parse_expression_ending_at(
                 ExpressionMode::AssignmentExpression,
                 ExpressionBoundary::Initializer,
             )?
@@ -135,7 +135,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: `{ initializer-list }` and `{ initializer-list , }`, §6.7.8
     /// paragraph 1, p. 125; PDF p. 137.
-    fn rd_braced_initializer(
+    fn parse_braced_initializer(
         &mut self,
         list: &mut BracedList<'tu, 'p>,
         starting_error_count: usize,
@@ -143,12 +143,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         let mut next = ListStep::ElementOrClose;
         loop {
             next = match next {
-                | ListStep::ElementOrClose => self.rd_element_or_close(list)?,
+                | ListStep::ElementOrClose => self.parse_element_or_close(list)?,
                 | ListStep::SkipMalformedElement => {
-                    self.rd_skip_malformed_element(list);
+                    self.skip_malformed_element(list);
                     ListStep::Separator
                 },
-                | ListStep::Separator => self.rd_initializer_separator(list),
+                | ListStep::Separator => self.parse_initializer_separator(list),
                 | ListStep::Finish => break,
             };
         }
@@ -168,7 +168,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         Some(InitializerResult { initializer })
     }
 
-    fn rd_element_or_close(&mut self, list: &mut BracedList<'tu, 'p>) -> Option<ListStep> {
+    fn parse_element_or_close(&mut self, list: &mut BracedList<'tu, 'p>) -> Option<ListStep> {
         loop {
             let token = self.cursor.current();
             if let Some(close) = token
@@ -181,7 +181,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 list.closing_brace_source_vectors = Some(close.source_vectors);
                 list.source_vectors.push(close.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 return Some(ListStep::Finish);
             }
             if list.is_unowned_closing_delimiter(token) {
@@ -197,10 +197,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         .expect("an unowned closing delimiter exists")
                         .source_vectors,
                 );
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
-            match self.rd_list_boundary(list, token, true) {
+            match self.initializer_list_boundary(list, token, true) {
                 | ListBoundary::None => {},
                 | ListBoundary::MissingClose => {
                     self.report(
@@ -225,13 +225,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 },
             }
             list.designation.reset();
-            self.rd_designation(list)?;
-            let element = self.rd_initializer(
+            self.parse_designation(list)?;
+            let element = self.parse_initializer(
                 self.hard_error_count,
                 list.closing_parenthesis_is_caller_boundary,
                 list.closing_square_bracket_is_caller_boundary,
             )?;
-            self.rd_push_element(list, element.initializer);
+            self.push_initializer_element(list, element.initializer);
             return Some(ListStep::Separator);
         }
     }
@@ -241,7 +241,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: `designation` is `designator-list =`, §6.7.8 paragraph 1,
     /// p. 125; PDF p. 137.
-    fn rd_designation(&mut self, list: &mut BracedList<'tu, 'p>) -> Option<()> {
+    fn parse_designation(&mut self, list: &mut BracedList<'tu, 'p>) -> Option<()> {
         loop {
             let token = self.cursor.current();
             if let Some(token) = token
@@ -259,7 +259,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     source_vectors: token.source_vectors,
                     recovered: false,
                 });
-                self.rd_consume();
+                self.consume_token();
                 if let Some(colon) = self.cursor.current() {
                     list.merge_designation_source(self, colon.source_vectors);
                     let designator = list
@@ -271,8 +271,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         .context
                         .merge_vectors(designator.source_vectors, colon.source_vectors);
                 }
-                self.rd_finish_designation(list);
-                self.rd_consume();
+                self.finish_designation(list);
+                self.consume_token();
                 return Some(());
             }
             if let Some(period) =
@@ -285,8 +285,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 );
                 list.merge_designation_source(self, period.source_vectors);
                 list.designation.current_designator_source = Some(period.source_vectors);
-                self.rd_consume();
-                self.rd_field_designator(list);
+                self.consume_token();
+                self.parse_field_designator(list);
                 continue;
             }
             if let Some(opening) = token
@@ -299,19 +299,19 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 );
                 list.merge_designation_source(self, opening.source_vectors);
                 list.designation.current_designator_source = Some(opening.source_vectors);
-                self.rd_consume();
-                self.rd_array_designator(list)?;
+                self.consume_token();
+                self.parse_array_designator(list)?;
                 continue;
             }
             if !list.designation.current_designators.is_empty() {
-                self.rd_designation_equals(list);
+                self.parse_designation_equals(list);
             }
             return Some(());
         }
     }
 
     /// C99 §6.7.8p1: designator `. identifier`, after its `.`.
-    fn rd_field_designator(&mut self, list: &mut BracedList<'tu, 'p>) {
+    fn parse_field_designator(&mut self, list: &mut BracedList<'tu, 'p>) {
         let token = self.cursor.current();
         let Some(identifier) = token.filter(|token| matches!(token.kind, TokenType::Identifier))
         else {
@@ -350,7 +350,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             source_vectors,
             recovered: false,
         });
-        self.rd_consume();
+        self.consume_token();
     }
 
     /// Parses `constant-expression ]` after a designator's `[`, continuing
@@ -359,12 +359,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: designator `[ constant-expression ]`, §6.7.8 paragraph 1,
     /// p. 125; PDF p. 137; ranges are an extension to it.
-    fn rd_array_designator(&mut self, list: &mut BracedList<'tu, 'p>) -> Option<()> {
+    fn parse_array_designator(&mut self, list: &mut BracedList<'tu, 'p>) -> Option<()> {
         let (expression, expression_recovered) = loop {
             let ExpressionResult {
                 expression,
                 recovered,
-            } = self.rd_expression(
+            } = self.parse_expression(
                 ExpressionMode::ConstantExpression,
                 ExpressionBoundary::Designator,
                 ExpressionBoundary::Initializer,
@@ -399,7 +399,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             let lower = self.context.merge_vectors(opening, lower_source);
             list.designation.current_designator_source =
                 Some(self.context.merge_vectors(lower, ellipsis.source_vectors));
-            self.rd_consume();
+            self.consume_token();
         };
         let expression_source = expression.expression().source_vectors;
         let operator_source_vectors = list
@@ -418,14 +418,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 .context
                 .merge_vectors(source_vectors, close.source_vectors);
             list.merge_designation_source(self, close.source_vectors);
-            self.rd_push_array_designator(
+            self.push_array_designator(
                 list,
                 expression,
                 source_vectors,
                 Some(close.source_vectors),
                 expression_recovered,
             );
-            self.rd_consume();
+            self.consume_token();
             return Some(());
         }
         self.report(
@@ -446,18 +446,18 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     .merge_vectors(source_vectors, close.source_vectors);
                 list.merge_designation_source(self, close.source_vectors);
                 if depth.brackets == 0 {
-                    self.rd_push_array_designator(
+                    self.push_array_designator(
                         list,
                         expression,
                         source_vectors,
                         Some(close.source_vectors),
                         true,
                     );
-                    self.rd_consume();
+                    self.consume_token();
                     return Some(());
                 }
                 depth.brackets -= 1;
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             // Nested delimiters cannot transfer a comma, `=`, or weak grammar
@@ -465,14 +465,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             // boundaries still stop the scan despite an unmatched sibling
             // delimiter.
             let Some(token) = token.filter(|&token| {
-                !self.rd_at_array_designator_sync_boundary(
-                    list,
-                    token,
-                    depth,
-                    closing_bracket_follows,
-                )
+                !self.at_array_designator_sync_boundary(list, token, depth, closing_bracket_follows)
             }) else {
-                self.rd_push_array_designator(list, expression, source_vectors, None, true);
+                self.push_array_designator(list, expression, source_vectors, None, true);
                 return Some(());
             };
             match token.kind {
@@ -499,7 +494,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 .context
                 .merge_vectors(source_vectors, token.source_vectors);
             list.merge_designation_source(self, token.source_vectors);
-            self.rd_consume();
+            self.consume_token();
         }
     }
 
@@ -508,7 +503,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: `designation` is `designator-list =`, §6.7.8 paragraph 1,
     /// p. 125; PDF p. 137.
-    fn rd_designation_equals(&mut self, list: &mut BracedList<'tu, 'p>) {
+    fn parse_designation_equals(&mut self, list: &mut BracedList<'tu, 'p>) {
         let token = self.cursor.current();
         let consume = if let Some(equals) =
             token.filter(|token| is_operator_token(*token, OperatorTokenType::Equals))
@@ -547,16 +542,16 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             list.designation.current_designation_recovered = true;
             false
         };
-        self.rd_finish_designation(list);
+        self.finish_designation(list);
         if consume {
-            self.rd_consume();
+            self.consume_token();
         }
     }
 
     /// Skips a malformed element that a declaration or statement keyword
     /// starts while this list's own `}` still follows, and stores it as an
     /// error element.
-    fn rd_skip_malformed_element(&mut self, list: &mut BracedList<'tu, 'p>) {
+    fn skip_malformed_element(&mut self, list: &mut BracedList<'tu, 'p>) {
         let mut nesting = 0_u32;
         let mut source = None;
         loop {
@@ -589,7 +584,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 | _ => {},
             }
             self.context.merge_into(&mut source, token.source_vectors);
-            self.rd_consume();
+            self.consume_token();
         }
         let source_vectors = source.unwrap_or_else(|| self.missing_syntax_source());
         let expression = self.store_expression(ExpressionType::Error, source_vectors, None, true);
@@ -598,12 +593,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             source_vectors,
             recovered: true,
         });
-        self.rd_push_element(list, element);
+        self.push_initializer_element(list, element);
     }
 
     /// C99 §6.7.8p1: `,` continues the list, and a `,` before `}` is the
     /// trailing-comma form.
-    fn rd_initializer_separator(&mut self, list: &mut BracedList<'tu, 'p>) -> ListStep {
+    fn parse_initializer_separator(&mut self, list: &mut BracedList<'tu, 'p>) -> ListStep {
         loop {
             let token = self.cursor.current();
             if let Some(comma) =
@@ -614,7 +609,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     .expect("a separator follows one initializer element")
                     .comma_source_vectors = Some(comma.source_vectors);
                 list.source_vectors.push(comma.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 return ListStep::ElementOrClose;
             }
             if let Some(close) = token
@@ -622,7 +617,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             {
                 list.closing_brace_source_vectors = Some(close.source_vectors);
                 list.source_vectors.push(close.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 return ListStep::Finish;
             }
             if list.is_unowned_closing_delimiter(token) {
@@ -639,10 +634,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 );
                 // The element before the stray closer is complete, so a
                 // following `,` or `}` is still this list's separator.
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
-            let boundary = self.rd_list_boundary(list, token, false);
+            let boundary = self.initializer_list_boundary(list, token, false);
             self.report(
                 ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
                     token.map(|token| token.kind),
@@ -660,7 +655,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     }
 
     /// Appends one element, with any designation that preceded it.
-    fn rd_push_element(&mut self, list: &mut BracedList<'tu, 'p>, element: &'tu Initializer<'tu>) {
+    fn push_initializer_element(
+        &mut self,
+        list: &mut BracedList<'tu, 'p>,
+        element: &'tu Initializer<'tu>,
+    ) {
         let initializer_source = element.source_vectors;
         let current_designation = list.designation.current_designation.take();
         let source_vectors = current_designation.map_or(initializer_source, |designation| {
@@ -676,7 +675,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         list.source_vectors.push(source_vectors);
     }
 
-    fn rd_push_array_designator(
+    fn push_array_designator(
         &mut self,
         list: &mut BracedList<'tu, 'p>,
         expression: ConstantExpression<'tu>,
@@ -707,7 +706,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         designation.current_designation_recovered |= recovered;
     }
 
-    fn rd_finish_designation(&mut self, list: &mut BracedList<'tu, 'p>) {
+    fn finish_designation(&mut self, list: &mut BracedList<'tu, 'p>) {
         let designation = &mut list.designation;
         let recovered = designation.current_designation_recovered
             || designation
@@ -727,7 +726,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         designation.current_designation = Some(index);
     }
 
-    fn rd_at_array_designator_sync_boundary(
+    fn at_array_designator_sync_boundary(
         &mut self,
         list: &BracedList<'tu, 'p>,
         token: Token,
@@ -760,7 +759,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Classifies a token that may end this list. `at_element` is whether an
     /// element or the closing `}` is expected, rather than a separator.
-    fn rd_list_boundary(
+    fn initializer_list_boundary(
         &mut self,
         list: &BracedList<'tu, 'p>,
         token: Option<Token>,

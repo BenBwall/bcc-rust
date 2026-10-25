@@ -88,7 +88,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// (§6.8.4.1 paragraph 3, p. 134; PDF p. 146); `block_item` admits a
     /// C23 label without a statement at the end of a block.
     #[inline(never)]
-    pub(super) fn rd_statement(
+    pub(super) fn parse_statement(
         &mut self,
         scope: Option<ScopeKind>,
         block_item: bool,
@@ -99,13 +99,13 @@ impl<'tu> Parser<'_, 'tu, '_> {
         if let Some(scope) = scope {
             self.scopes.enter_scope(scope);
         }
-        let mut statement = RdStatement {
+        let mut statement = StatementParts {
             source: None,
             errors: self.hard_error_count,
             block_item,
             leave_else,
         };
-        let result = self.rd_statement_body(&mut statement);
+        let result = self.parse_statement_body(&mut statement);
         if !self.resource_limit_reported {
             self.scopes.restore_depth(depth);
         }
@@ -113,8 +113,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
         result
     }
 
-    fn rd_statement_body(&mut self, s: &mut RdStatement) -> Option<&'tu Statement<'tu>> {
-        let kind = match self.rd_statement_kind(s)? {
+    fn parse_statement_body(&mut self, s: &mut StatementParts) -> Option<&'tu Statement<'tu>> {
+        let kind = match self.parse_statement_kind(s)? {
             | Built::Kind(kind) => kind,
             | Built::Existing(statement) => return Some(statement),
         };
@@ -126,7 +126,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         }))
     }
 
-    fn rd_statement_kind(&mut self, s: &mut RdStatement) -> Option<Built<'tu>> {
+    fn parse_statement_kind(&mut self, s: &mut StatementParts) -> Option<Built<'tu>> {
         let token = self.cursor.current();
         if let Some(token) = token
             && let TokenType::Keyword(
@@ -149,9 +149,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     )
                 })
             {
-                return self.rd_gnu_statement(s, GnuKind::Asm { label: false });
+                return self.parse_gnu_statement(s, GnuKind::Asm { label: false });
             }
-            let statement = self.rd_msvc(keyword, self.hard_error_count)?;
+            let statement = self.parse_msvc(keyword, self.hard_error_count)?;
             return Some(Built::Existing(statement));
         }
         if let Some(token) = token {
@@ -161,18 +161,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 | _ => None,
             };
             if let Some(kind) = kind {
-                return self.rd_gnu_statement(s, kind);
+                return self.parse_gnu_statement(s, kind);
             }
         }
         if self.attribute_starter(token) {
             let ModernValue::Attributes(attributes) =
-                self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?
+                self.parse_modern(ModernKind::Attributes, None, self.hard_error_count)?
             else {
                 unreachable!("statement attributes protocol")
             };
             s.source = Some(attributes.source_vectors);
-            let statement = self.rd_statement(None, s.block_item, s.leave_else)?;
-            self.rd_merge_statement(s, statement);
+            let statement = self.parse_statement(None, s.block_item, s.leave_else)?;
+            self.merge_child_statement(s, statement);
             let node = self.alloc_syntax(AttributedStatement {
                 attributes,
                 statement,
@@ -180,11 +180,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
             return Some(Built::Kind(StatementType::Attributed(node)));
         }
         if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
-            return Some(Built::Existing(self.rd_compound(false)?));
+            return Some(Built::Existing(self.parse_compound(false)?));
         }
         // C99 §6.8.3p1, p3: a lone `;` is the null statement.
         if is_operator(token, OperatorTokenType::Semicolon) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
             return Some(Built::Kind(StatementType::Null));
         }
         // C99 §6.8.1p1: `identifier :` declares a label, which has function
@@ -197,29 +197,29 @@ impl<'tu> Parser<'_, 'tu, '_> {
             if let Some(labels) = self.label_scopes.innermost_mut() {
                 _ = labels.definitions.insert(identifier.name);
             }
-            self.rd_own_current(s);
-            self.rd_close(s, OperatorTokenType::Colon, "identifier label");
-            return self.rd_labeled(s, LabelPrefix::Identifier(identifier));
+            self.own_statement_token(s);
+            self.close_statement_part(s, OperatorTokenType::Colon, "identifier label");
+            return self.parse_labeled(s, LabelPrefix::Identifier(identifier));
         }
         if let Some(token) = token
             && let TokenType::Keyword(keyword) = token.kind
         {
             match keyword {
                 | KeywordTokenType::Return => {
-                    self.rd_own_current(s);
-                    return self.rd_return(s);
+                    self.own_statement_token(s);
+                    return self.parse_return(s);
                 },
                 | KeywordTokenType::Break | KeywordTokenType::Continue => {
-                    self.rd_own_current(s);
-                    return Some(self.rd_simple_jump(s, keyword == KeywordTokenType::Break));
+                    self.own_statement_token(s);
+                    return Some(self.parse_simple_jump(s, keyword == KeywordTokenType::Break));
                 },
                 | KeywordTokenType::Goto => {
-                    self.rd_own_current(s);
-                    return self.rd_goto(s);
+                    self.own_statement_token(s);
+                    return self.parse_goto(s);
                 },
                 | KeywordTokenType::Case => {
-                    self.rd_own_current(s);
-                    return self.rd_case(s);
+                    self.own_statement_token(s);
+                    return self.parse_case(s);
                 },
                 | KeywordTokenType::Default => {
                     // C99 §6.8.4.2p3: at most one `default` label per
@@ -238,20 +238,20 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     {
                         switch.has_default = true;
                     }
-                    self.rd_own_current(s);
-                    self.rd_close(s, OperatorTokenType::Colon, "default label");
-                    return self.rd_labeled(s, LabelPrefix::Default);
+                    self.own_statement_token(s);
+                    self.close_statement_part(s, OperatorTokenType::Colon, "default label");
+                    return self.parse_labeled(s, LabelPrefix::Default);
                 },
                 | KeywordTokenType::If => {
                     self.scopes.enter_scope(ScopeKind::ImplicitSelection);
-                    self.rd_own_current(s);
-                    return self.rd_header_statement(s, HeaderKind::If);
+                    self.own_statement_token(s);
+                    return self.parse_header_statement(s, HeaderKind::If);
                 },
                 | KeywordTokenType::Switch => {
                     self.scopes.enter_scope(ScopeKind::ImplicitSelection);
                     self.switch_scopes.push(SwitchScope::default());
-                    self.rd_own_current(s);
-                    let kind = self.rd_header_statement(s, HeaderKind::Switch);
+                    self.own_statement_token(s);
+                    let kind = self.parse_header_statement(s, HeaderKind::Switch);
                     if kind.is_some() {
                         let _switch_scope = self
                             .switch_scopes
@@ -262,18 +262,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 },
                 | KeywordTokenType::While => {
                     self.scopes.enter_scope(ScopeKind::ImplicitIteration);
-                    self.rd_own_current(s);
-                    return self.rd_header_statement(s, HeaderKind::While);
+                    self.own_statement_token(s);
+                    return self.parse_header_statement(s, HeaderKind::While);
                 },
                 | KeywordTokenType::Do => {
                     self.scopes.enter_scope(ScopeKind::ImplicitIteration);
-                    self.rd_own_current(s);
-                    return self.rd_do(s);
+                    self.own_statement_token(s);
+                    return self.parse_do(s);
                 },
                 | KeywordTokenType::For => {
                     self.scopes.enter_scope(ScopeKind::ImplicitIteration);
-                    self.rd_own_current(s);
-                    return self.rd_for(s);
+                    self.own_statement_token(s);
+                    return self.parse_for(s);
                 },
                 | KeywordTokenType::Sizeof | KeywordTokenType::Extension => {},
                 | _ if self.declaration_starter(token) => {
@@ -281,7 +281,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         ParserErrorType::ExpectedStatement(Some(token.kind)),
                         Some(token),
                     );
-                    return Some(self.rd_recovered_statement(s));
+                    return Some(self.recover_statement(s));
                 },
                 | _ => {},
             }
@@ -299,7 +299,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 ParserErrorType::ExpectedStatement(Some(token.kind)),
                 Some(token),
             );
-            return Some(self.rd_recovered_statement(s));
+            return Some(self.recover_statement(s));
         }
         // A closing delimiter or label colon cannot start any statement or
         // expression; skip just that token so the following statement parses
@@ -318,7 +318,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 ParserErrorType::ExpectedStatement(Some(token.kind)),
                 Some(token),
             );
-            self.rd_own_current(s);
+            self.own_statement_token(s);
             return Some(Built::Kind(StatementType::Null));
         }
         let stray_else = token
@@ -330,25 +330,25 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 token,
             );
             if stray_else && !s.leave_else {
-                self.rd_own_current(s);
+                self.own_statement_token(s);
             }
             return Some(Built::Kind(StatementType::Null));
         }
         // C99 §6.8.3p1: `expression-statement`.
-        let slot = self.rd_statement_expression_slot(
+        let slot = self.parse_statement_expression_slot(
             s,
             ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
         )?;
-        self.rd_close(s, OperatorTokenType::Semicolon, "expression statement");
+        self.close_statement_part(s, OperatorTokenType::Semicolon, "expression statement");
         Some(Built::Kind(StatementType::Expression(slot)))
     }
 
     /// GNU extension: `__asm__` statements and `__label__` declarations.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-    fn rd_gnu_statement(&mut self, s: &mut RdStatement, kind: GnuKind) -> Option<Built<'tu>> {
+    fn parse_gnu_statement(&mut self, s: &mut StatementParts, kind: GnuKind) -> Option<Built<'tu>> {
         Some(Built::Kind(
-            match self.rd_gnu(kind, self.hard_error_count)? {
+            match self.parse_gnu(kind, self.hard_error_count)? {
                 | GnuValue::Asm(asm) => {
                     s.source = Some(asm.source_vectors);
                     StatementType::Asm(asm)
@@ -364,7 +364,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
 
     /// Skips a declaration-shaped substatement after its diagnostic and
     /// keeps a following `;` as a null statement.
-    fn rd_recovered_statement(&mut self, s: &mut RdStatement) -> Built<'tu> {
+    fn recover_statement(&mut self, s: &mut StatementParts) -> Built<'tu> {
         let recovered = self.recover(SynchronizationSet {
             kind:   SynchronizationKind::Statement,
             target: ProductionKind::Statement,
@@ -373,13 +373,13 @@ impl<'tu> Parser<'_, 'tu, '_> {
             self.context.merge_into(&mut s.source, recovered);
         }
         if is_operator(self.cursor.current(), OperatorTokenType::Semicolon) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
         }
         Built::Kind(StatementType::Null)
     }
 
     /// C99 §6.8.6p1: `return expression(opt) ;`, after the keyword.
-    fn rd_return(&mut self, s: &mut RdStatement) -> Option<Built<'tu>> {
+    fn parse_return(&mut self, s: &mut StatementParts) -> Option<Built<'tu>> {
         let token = self.cursor.current();
         let identifier_continues_expression = token
             .is_some_and(|token| matches!(token.kind, TokenType::Identifier))
@@ -390,7 +390,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 ) || is_postfix_starter(following.kind)
             });
         if is_operator(token, OperatorTokenType::Semicolon) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
             return Some(Built::Kind(StatementType::Return(None)));
         }
         let expression = if at_expression_boundary(token, ExpressionTerminator::Semicolon)
@@ -402,26 +402,26 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             None
         } else {
-            Some(self.rd_statement_expression_slot(
+            Some(self.parse_statement_expression_slot(
                 s,
                 ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
             )?)
         };
-        self.rd_close(s, OperatorTokenType::Semicolon, "return statement");
+        self.close_statement_part(s, OperatorTokenType::Semicolon, "return statement");
         Some(Built::Kind(StatementType::Return(expression)))
     }
 
     /// C99 §6.8.6p1: `break ;` and `continue ;`, after the keyword. C2y
     /// named loops add `break identifier ;`; without that `;` the identifier
     /// more likely starts the next statement after a `break` missing its own.
-    fn rd_simple_jump(&mut self, s: &mut RdStatement, is_break: bool) -> Built<'tu> {
+    fn parse_simple_jump(&mut self, s: &mut StatementParts, is_break: bool) -> Built<'tu> {
         if let Some(token) = self.cursor.current()
             && matches!(token.kind, TokenType::Identifier)
             && is_operator(self.cursor.following(), OperatorTokenType::Semicolon)
         {
             self.extension(Feature::NamedLoops, "named loop control", token);
-            self.rd_own_current(s);
-            self.rd_close(s, OperatorTokenType::Semicolon, "named jump statement");
+            self.own_statement_token(s);
+            self.close_statement_part(s, OperatorTokenType::Semicolon, "named jump statement");
             let identifier = Identifier::from_token(token);
             return Built::Kind(if is_break {
                 StatementType::NamedBreak(identifier)
@@ -429,7 +429,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 StatementType::NamedContinue(identifier)
             });
         }
-        self.rd_close(s, OperatorTokenType::Semicolon, "jump statement");
+        self.close_statement_part(s, OperatorTokenType::Semicolon, "jump statement");
         Built::Kind(if is_break {
             StatementType::Break
         } else {
@@ -440,15 +440,15 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// C99 §6.8.6p1: `goto identifier ;`, after the keyword, plus the GNU
     /// computed `goto * expression ;`. The target is checked against the
     /// function's labels later (§6.8.6.1p1).
-    fn rd_goto(&mut self, s: &mut RdStatement) -> Option<Built<'tu>> {
+    fn parse_goto(&mut self, s: &mut StatementParts) -> Option<Built<'tu>> {
         let token = self.cursor.current();
         if let Some(token) = token
             && is_operator(Some(token), OperatorTokenType::Asterisk)
         {
             self.extension(Feature::LabelsAsValues, "computed goto", token);
-            self.rd_own_current(s);
+            self.own_statement_token(s);
             let expression = self
-                .rd_expression(
+                .parse_expression(
                     ExpressionMode::Expression,
                     ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
                     ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
@@ -456,7 +456,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 .expression;
             self.context
                 .merge_into(&mut s.source, expression.source_vectors);
-            self.rd_close(s, OperatorTokenType::Semicolon, "computed goto");
+            self.close_statement_part(s, OperatorTokenType::Semicolon, "computed goto");
             return Some(Built::Kind(StatementType::ComputedGoto(
                 ExpressionSlot::Parsed(expression),
             )));
@@ -468,7 +468,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             if let Some(labels) = self.label_scopes.innermost_mut() {
                 _ = labels.references.insert(identifier.name);
             }
-            self.rd_own_current(s);
+            self.own_statement_token(s);
             identifier
         } else {
             self.report(
@@ -480,14 +480,14 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.missing_syntax_source(),
             )
         };
-        self.rd_close(s, OperatorTokenType::Semicolon, "goto statement");
+        self.close_statement_part(s, OperatorTokenType::Semicolon, "goto statement");
         Some(Built::Kind(StatementType::Goto(identifier)))
     }
 
     /// C99 §6.8.1p1: `case constant-expression :`, after the keyword, plus
     /// the C2y/GNU case range. The integer-constant requirement (§6.8.4.2p3)
     /// is semantic.
-    fn rd_case(&mut self, s: &mut RdStatement) -> Option<Built<'tu>> {
+    fn parse_case(&mut self, s: &mut StatementParts) -> Option<Built<'tu>> {
         if at_expression_boundary(self.cursor.current(), ExpressionTerminator::Colon) {
             let token = self.cursor.current();
             self.report(
@@ -498,15 +498,15 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 token,
             );
             let missing = ConstantExpressionSlot::Missing(self.missing_syntax_source());
-            return self.rd_case_colon(s, missing);
+            return self.parse_case_colon(s, missing);
         }
-        let lower = self.rd_case_value(s)?;
+        let lower = self.parse_case_value(s)?;
         let Some(ellipsis) = self
             .cursor
             .current()
             .filter(|token| is_operator(Some(*token), OperatorTokenType::Ellipsis))
         else {
-            return self.rd_case_colon(s, lower);
+            return self.parse_case_colon(s, lower);
         };
         // C2y N3370 extends C99 §6.8.1p1, p. 131; PDF p. 143. Earlier modes
         // require GNU support; keep the range for recovery.
@@ -521,29 +521,29 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 Some(ellipsis),
             );
         }
-        self.rd_own_current(s);
-        let upper = self.rd_case_value(s)?;
-        self.rd_close(s, OperatorTokenType::Colon, "case range");
-        self.rd_labeled(s, LabelPrefix::Range(lower, upper))
+        self.own_statement_token(s);
+        let upper = self.parse_case_value(s)?;
+        self.close_statement_part(s, OperatorTokenType::Colon, "case range");
+        self.parse_labeled(s, LabelPrefix::Range(lower, upper))
     }
 
-    fn rd_case_value(&mut self, s: &mut RdStatement) -> Option<ConstantExpressionSlot<'tu>> {
+    fn parse_case_value(&mut self, s: &mut StatementParts) -> Option<ConstantExpressionSlot<'tu>> {
         let expression = self
-            .rd_expression(
+            .parse_expression(
                 ExpressionMode::ConstantExpression,
                 ExpressionBoundary::Statement(ExpressionTerminator::Colon),
                 ExpressionBoundary::Statement(ExpressionTerminator::Colon),
             )?
             .expression;
-        self.rd_merge_slot(s, expression.source_vectors);
+        self.merge_statement_slot(s, expression.source_vectors);
         Some(ConstantExpressionSlot::Parsed(ConstantExpression(
             expression,
         )))
     }
 
-    fn rd_case_colon(
+    fn parse_case_colon(
         &mut self,
-        s: &mut RdStatement,
+        s: &mut StatementParts,
         value: ConstantExpressionSlot<'tu>,
     ) -> Option<Built<'tu>> {
         loop {
@@ -551,8 +551,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
             if is_operator(token, OperatorTokenType::Semicolon)
                 && is_operator(self.cursor.following(), OperatorTokenType::Colon)
             {
-                self.rd_report_missing(OperatorTokenType::Colon, "case label");
-                self.rd_own_current(s);
+                self.report_missing_operator(OperatorTokenType::Colon, "case label");
+                self.own_statement_token(s);
                 continue;
             }
             // A leftover run such as the `, 3` of `case 2, 3:` is skipped to
@@ -566,7 +566,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 )
                 .is_some()
             {
-                self.rd_report_missing(OperatorTokenType::Colon, "case label");
+                self.report_missing_operator(OperatorTokenType::Colon, "case label");
                 let recovered = self.recover(SynchronizationSet {
                     kind:   SynchronizationKind::StatementExpression(ExpressionTerminator::Colon),
                     target: ProductionKind::Statement,
@@ -576,8 +576,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 }
                 continue;
             }
-            self.rd_close(s, OperatorTokenType::Colon, "case label");
-            return self.rd_labeled(s, LabelPrefix::Case(value));
+            self.close_statement_part(s, OperatorTokenType::Colon, "case label");
+            return self.parse_labeled(s, LabelPrefix::Case(value));
         }
     }
 
@@ -585,7 +585,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// the end of a block.
     ///
     /// C99: `labeled-statement`, §6.8.1 paragraph 1, p. 131; PDF p. 143.
-    fn rd_labeled(&mut self, s: &mut RdStatement, prefix: LabelPrefix<'tu>) -> Option<Built<'tu>> {
+    fn parse_labeled(
+        &mut self,
+        s: &mut StatementParts,
+        prefix: LabelPrefix<'tu>,
+    ) -> Option<Built<'tu>> {
         let token = self.cursor.current();
         if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
             if !s.block_item {
@@ -607,7 +611,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 source_vectors: s.source.unwrap_or_default(),
                 recovered:      false,
             });
-            return Some(Built::Kind(self.rd_label(prefix, child)));
+            return Some(Built::Kind(self.parse_label(prefix, child)));
         }
         // C99 §6.8.1p1: `identifier :` is another label even when the
         // identifier names a typedef; labels have their own name space
@@ -633,20 +637,20 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 "label before declaration",
                 token.expect("declaration exists"),
             );
-            let declaration = self.rd_block_declaration(DeclarationContext::Block)?;
+            let declaration = self.parse_block_declaration(DeclarationContext::Block)?;
             self.alloc_syntax(Statement {
                 kind:           StatementType::Declaration(declaration),
                 source_vectors: declaration.source_vectors,
                 recovered:      declaration.recovered,
             })
         } else {
-            self.rd_statement(None, s.block_item, s.leave_else)?
+            self.parse_statement(None, s.block_item, s.leave_else)?
         };
-        self.rd_merge_statement(s, child);
-        Some(Built::Kind(self.rd_label(prefix, child)))
+        self.merge_child_statement(s, child);
+        Some(Built::Kind(self.parse_label(prefix, child)))
     }
 
-    fn rd_label(
+    fn parse_label(
         &mut self,
         prefix: LabelPrefix<'tu>,
         statement: &'tu Statement<'tu>,
@@ -668,11 +672,15 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// after the keyword. C23 admits a declaration in a selection header.
     ///
     /// C99: §6.8.4, p. 133; PDF p. 145; §6.8.5, p. 135; PDF p. 147.
-    fn rd_header_statement(&mut self, s: &mut RdStatement, kind: HeaderKind) -> Option<Built<'tu>> {
+    fn parse_header_statement(
+        &mut self,
+        s: &mut StatementParts,
+        kind: HeaderKind,
+    ) -> Option<Built<'tu>> {
         if is_operator(self.cursor.current(), OperatorTokenType::OpeningParenthesis) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
         } else {
-            self.rd_report_missing(OperatorTokenType::OpeningParenthesis, kind.name());
+            self.report_missing_operator(OperatorTokenType::OpeningParenthesis, kind.name());
         }
         let token = self.cursor.current();
         let expression = if matches!(kind, HeaderKind::If | HeaderKind::Switch)
@@ -684,7 +692,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 "selection declaration",
                 token.expect("declaration exists"),
             );
-            self.rd_selection_header(s)?
+            self.parse_selection_header(s)?
         } else if at_expression_boundary(token, ExpressionTerminator::ClosingParenthesis) {
             self.report(
                 ParserErrorType::ExpectedStatementExpression(
@@ -695,25 +703,28 @@ impl<'tu> Parser<'_, 'tu, '_> {
             );
             ExpressionSlot::Missing(self.missing_syntax_source())
         } else {
-            self.rd_statement_expression_slot(s, ExpressionBoundary::ClosingParenthesis)?
+            self.parse_statement_expression_slot(s, ExpressionBoundary::ClosingParenthesis)?
         };
-        self.rd_header_closing(s, kind.name());
-        let body = self.rd_statement(
+        self.parse_header_closing(s, kind.name());
+        let body = self.parse_statement(
             Some(kind.scope_kind()),
             false,
             kind == HeaderKind::If || s.leave_else,
         )?;
-        self.rd_merge_statement(s, body);
+        self.merge_child_statement(s, body);
         Some(Built::Kind(match kind {
             | HeaderKind::If => {
                 // C99 §6.8.4.1p3: `else` binds to the nearest `if`.
                 let else_statement = if self.cursor.current().is_some_and(|token| {
                     matches!(token.kind, TokenType::Keyword(KeywordTokenType::Else))
                 }) {
-                    self.rd_own_current(s);
-                    let otherwise =
-                        self.rd_statement(Some(ScopeKind::ImplicitSelection), false, s.leave_else)?;
-                    self.rd_merge_statement(s, otherwise);
+                    self.own_statement_token(s);
+                    let otherwise = self.parse_statement(
+                        Some(ScopeKind::ImplicitSelection),
+                        false,
+                        s.leave_else,
+                    )?;
+                    self.merge_child_statement(s, otherwise);
                     Some(otherwise)
                 } else {
                     None
@@ -736,8 +747,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
     }
 
     /// C23: `if ( declaration expression(opt) )` and the same for `switch`.
-    fn rd_selection_header(&mut self, s: &mut RdStatement) -> Option<ExpressionSlot<'tu>> {
-        let declaration = self.rd_block_declaration(DeclarationContext::SelectionHeader)?;
+    fn parse_selection_header(&mut self, s: &mut StatementParts) -> Option<ExpressionSlot<'tu>> {
+        let declaration = self.parse_block_declaration(DeclarationContext::SelectionHeader)?;
         s.source = Some(
             self.context
                 .merge_vectors(s.source.unwrap_or_default(), declaration.source_vectors),
@@ -758,7 +769,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             }
             None
         } else {
-            Some(self.rd_statement_expression_slot(s, ExpressionBoundary::ClosingParenthesis)?)
+            Some(self.parse_statement_expression_slot(s, ExpressionBoundary::ClosingParenthesis)?)
         };
         let header = self.alloc_syntax(SelectionHeader {
             declaration,
@@ -769,21 +780,21 @@ impl<'tu> Parser<'_, 'tu, '_> {
 
     /// The `)` closing a statement header. A `;` directly before that `)`
     /// is reported and owned by the header.
-    fn rd_header_closing(&mut self, s: &mut RdStatement, owner: &'static str) {
+    fn parse_header_closing(&mut self, s: &mut StatementParts, owner: &'static str) {
         loop {
             let token = self.cursor.current();
             if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                self.rd_own_current(s);
+                self.own_statement_token(s);
                 return;
             }
-            self.rd_report_missing(OperatorTokenType::ClosingParenthesis, owner);
+            self.report_missing_operator(OperatorTokenType::ClosingParenthesis, owner);
             if is_operator(token, OperatorTokenType::Semicolon)
                 && is_operator(
                     self.cursor.following(),
                     OperatorTokenType::ClosingParenthesis,
                 )
             {
-                self.rd_own_current(s);
+                self.own_statement_token(s);
                 continue;
             }
             return;
@@ -791,14 +802,14 @@ impl<'tu> Parser<'_, 'tu, '_> {
     }
 
     /// C99 §6.8.5p1: `do statement while ( expression ) ;`, after `do`.
-    fn rd_do(&mut self, s: &mut RdStatement) -> Option<Built<'tu>> {
-        let body = self.rd_statement(Some(ScopeKind::ImplicitIteration), false, s.leave_else)?;
-        self.rd_merge_statement(s, body);
+    fn parse_do(&mut self, s: &mut StatementParts) -> Option<Built<'tu>> {
+        let body = self.parse_statement(Some(ScopeKind::ImplicitIteration), false, s.leave_else)?;
+        self.merge_child_statement(s, body);
         let token = self.cursor.current();
         if token
             .is_some_and(|token| matches!(token.kind, TokenType::Keyword(KeywordTokenType::While)))
         {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
         } else {
             self.report(
                 ParserErrorType::ExpectedWhileAfterDoBody(token.map(|token| token.kind)),
@@ -817,9 +828,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
             }
         }
         if is_operator(self.cursor.current(), OperatorTokenType::OpeningParenthesis) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
         } else {
-            self.rd_report_missing(OperatorTokenType::OpeningParenthesis, "do-while statement");
+            self.report_missing_operator(
+                OperatorTokenType::OpeningParenthesis,
+                "do-while statement",
+            );
         }
         let token = self.cursor.current();
         let expression = if at_expression_boundary(token, ExpressionTerminator::ClosingParenthesis)
@@ -833,10 +847,10 @@ impl<'tu> Parser<'_, 'tu, '_> {
             );
             ExpressionSlot::Missing(self.missing_syntax_source())
         } else {
-            self.rd_statement_expression_slot(s, ExpressionBoundary::ClosingParenthesis)?
+            self.parse_statement_expression_slot(s, ExpressionBoundary::ClosingParenthesis)?
         };
-        self.rd_header_closing(s, "do-while statement");
-        self.rd_close(s, OperatorTokenType::Semicolon, "do-while statement");
+        self.parse_header_closing(s, "do-while statement");
+        self.close_statement_part(s, OperatorTokenType::Semicolon, "do-while statement");
         Some(Built::Kind(StatementType::DoWhile {
             condition_expression: expression,
             body_statement:       body,
@@ -846,18 +860,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// C99 §6.8.5p1: `for ( clause ; expression(opt) ; expression(opt) )
     /// statement`, after `for`. The declaration clause of §6.8.5.3p1 declares
     /// names in scope for the rest of the header and the body.
-    fn rd_for(&mut self, s: &mut RdStatement) -> Option<Built<'tu>> {
+    fn parse_for(&mut self, s: &mut StatementParts) -> Option<Built<'tu>> {
         if is_operator(self.cursor.current(), OperatorTokenType::OpeningParenthesis) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
         } else {
-            self.rd_report_missing(OperatorTokenType::OpeningParenthesis, "for statement");
+            self.report_missing_operator(OperatorTokenType::OpeningParenthesis, "for statement");
         }
         let token = self.cursor.current();
         let initializer = if is_operator(token, OperatorTokenType::Semicolon) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
             None
         } else if token.is_none() || is_operator(token, OperatorTokenType::ClosingParenthesis) {
-            self.rd_report_missing(OperatorTokenType::Semicolon, "for initializer");
+            self.report_missing_operator(OperatorTokenType::Semicolon, "for initializer");
             None
         } else if token.is_some_and(|token| self.declaration_starter(token))
             && self.extension_precedes_declaration()
@@ -869,7 +883,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 "for declaration",
                 token.expect("declaration starts here"),
             );
-            let declaration = self.rd_block_declaration(DeclarationContext::ForInitializer)?;
+            let declaration = self.parse_block_declaration(DeclarationContext::ForInitializer)?;
             self.context
                 .merge_into(&mut s.source, declaration.source_vectors);
             // A for-initializer declaration ends at the header's `)` without
@@ -878,35 +892,38 @@ impl<'tu> Parser<'_, 'tu, '_> {
             if is_operator(self.cursor.current(), OperatorTokenType::ClosingParenthesis)
                 && !is_operator(self.cursor.previous, OperatorTokenType::Semicolon)
             {
-                self.rd_report_missing(OperatorTokenType::Semicolon, "for initializer");
+                self.report_missing_operator(OperatorTokenType::Semicolon, "for initializer");
             }
             Some(ForInitializer::Declaration(declaration))
         } else {
-            let slot = self.rd_statement_expression_slot(
+            let slot = self.parse_statement_expression_slot(
                 s,
                 ExpressionBoundary::Statement(ExpressionTerminator::ForSemicolon),
             )?;
-            self.rd_close(s, OperatorTokenType::Semicolon, "for initializer");
+            self.close_statement_part(s, OperatorTokenType::Semicolon, "for initializer");
             Some(ForInitializer::Expression(slot))
         };
         let token = self.cursor.current();
         let (condition, mut iteration, header_open) =
             if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
-                self.rd_report_missing(OperatorTokenType::Semicolon, "for condition");
-                self.rd_report_missing(OperatorTokenType::ClosingParenthesis, "for statement");
+                self.report_missing_operator(OperatorTokenType::Semicolon, "for condition");
+                self.report_missing_operator(
+                    OperatorTokenType::ClosingParenthesis,
+                    "for statement",
+                );
                 (None, None, false)
             } else if is_operator(token, OperatorTokenType::Semicolon) {
-                self.rd_own_current(s);
+                self.own_statement_token(s);
                 (None, None, true)
             } else if token.is_none() || is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                self.rd_report_missing(OperatorTokenType::Semicolon, "for condition");
+                self.report_missing_operator(OperatorTokenType::Semicolon, "for condition");
                 (None, None, true)
             } else {
-                let condition = self.rd_statement_expression_slot(
+                let condition = self.parse_statement_expression_slot(
                     s,
                     ExpressionBoundary::Statement(ExpressionTerminator::ForSemicolon),
                 )?;
-                self.rd_close(s, OperatorTokenType::Semicolon, "for condition");
+                self.close_statement_part(s, OperatorTokenType::Semicolon, "for condition");
                 (Some(condition), None, true)
             };
         if header_open {
@@ -914,7 +931,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             loop {
                 let token = self.cursor.current();
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    self.rd_own_current(s);
+                    self.own_statement_token(s);
                     closed = true;
                     break;
                 }
@@ -924,16 +941,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         OperatorTokenType::ClosingParenthesis,
                     )
                 {
-                    self.rd_report_missing(OperatorTokenType::ClosingParenthesis, "for statement");
-                    self.rd_own_current(s);
+                    self.report_missing_operator(
+                        OperatorTokenType::ClosingParenthesis,
+                        "for statement",
+                    );
+                    self.own_statement_token(s);
                     continue;
                 }
                 if token.is_some() {
-                    iteration =
-                        Some(self.rd_statement_expression_slot(
-                            s,
-                            ExpressionBoundary::ClosingParenthesis,
-                        )?);
+                    iteration = Some(self.parse_statement_expression_slot(
+                        s,
+                        ExpressionBoundary::ClosingParenthesis,
+                    )?);
                 }
                 break;
             }
@@ -941,17 +960,20 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 loop {
                     let token = self.cursor.current();
                     if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                        self.rd_own_current(s);
+                        self.own_statement_token(s);
                         break;
                     }
-                    self.rd_report_missing(OperatorTokenType::ClosingParenthesis, "for statement");
+                    self.report_missing_operator(
+                        OperatorTokenType::ClosingParenthesis,
+                        "for statement",
+                    );
                     if is_operator(token, OperatorTokenType::Semicolon)
                         && is_operator(
                             self.cursor.following(),
                             OperatorTokenType::ClosingParenthesis,
                         )
                     {
-                        self.rd_own_current(s);
+                        self.own_statement_token(s);
                         continue;
                     }
                     // An extra `;` clause ends the iteration expression, and
@@ -965,15 +987,15 @@ impl<'tu> Parser<'_, 'tu, '_> {
                             if self.cursor.current().is_none() {
                                 break;
                             }
-                            self.rd_own_current(s);
+                            self.own_statement_token(s);
                         }
                     }
                     break;
                 }
             }
         }
-        let body = self.rd_statement(Some(ScopeKind::ImplicitIteration), false, s.leave_else)?;
-        self.rd_merge_statement(s, body);
+        let body = self.parse_statement(Some(ScopeKind::ImplicitIteration), false, s.leave_else)?;
+        self.merge_child_statement(s, body);
         let clauses = self.alloc_syntax_part(ForStatement {
             initializer,
             condition_expression: condition,
@@ -988,7 +1010,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// A function body predeclares `__func__` as if declared just after its
     /// `{` (§6.4.2.2 paragraph 1, p. 52; PDF p. 64).
     #[inline(never)]
-    pub(super) fn rd_compound(&mut self, function_body: bool) -> Option<&'tu Statement<'tu>> {
+    pub(super) fn parse_compound(&mut self, function_body: bool) -> Option<&'tu Statement<'tu>> {
         let active = self.enter_production(ProductionKind::CompoundStatement)?;
         let depth = self.scopes.depth();
         self.scopes.enter_scope(ScopeKind::Block);
@@ -996,7 +1018,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         self.pools.source_vectors.lend(&mut sources);
         let mut items = ArenaVec::new_in(self.arena);
         self.pools.block_items.lend(&mut items);
-        let result = self.rd_compound_body(function_body, &mut sources, &mut items);
+        let result = self.parse_compound_body(function_body, &mut sources, &mut items);
         self.pools.block_items.reclaim(&mut items);
         self.pools.source_vectors.reclaim(&mut sources);
         if !self.resource_limit_reported {
@@ -1006,7 +1028,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         result
     }
 
-    fn rd_compound_body(
+    fn parse_compound_body(
         &mut self,
         function_body: bool,
         sources: &mut ArenaVec<'_, SourceVectors>,
@@ -1024,7 +1046,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     .get_or_insert_with(|| self.context.string_cache.intern("__func__"));
                 self.scopes.publish(name, NameClass::Ordinary);
             }
-            self.rd_consume();
+            self.consume_token();
         } else {
             self.report(
                 ParserErrorType::ExpectedOpeningCurlyBraceInCompoundStatement(
@@ -1045,7 +1067,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             };
             if is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace) {
                 sources.push(token.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 break;
             }
             // C99 §6.8.1p1: `identifier :` begins a labeled statement even
@@ -1065,7 +1087,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         token,
                     );
                 }
-                let declaration = self.rd_block_declaration(DeclarationContext::Block)?;
+                let declaration = self.parse_block_declaration(DeclarationContext::Block)?;
                 if declaration.is_definition_head() {
                     let mut extension = declaration.declaration_specifiers.extensions;
                     let mut suppressed = false;
@@ -1081,7 +1103,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         );
                     }
                     let definition =
-                        self.rd_function_definition(declaration, self.hard_error_count)?;
+                        self.parse_function_definition(declaration, self.hard_error_count)?;
                     sources.push(definition.source_vectors);
                     items.push(BlockItem::FunctionDefinition(definition));
                 } else {
@@ -1089,7 +1111,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     items.push(BlockItem::Declaration(declaration));
                 }
             } else {
-                let child = self.rd_statement(None, true, false)?;
+                let child = self.parse_statement(None, true, false)?;
                 sources.push(child.source_vectors);
                 items.push(BlockItem::Statement(child));
                 // A GNU `__label__` declaration opens the block before its
@@ -1108,48 +1130,48 @@ impl<'tu> Parser<'_, 'tu, '_> {
         }))
     }
 
-    fn rd_block_declaration(
+    fn parse_block_declaration(
         &mut self,
         context: DeclarationContext,
     ) -> Option<&'tu crate::translation_phases::parsing::declaration_syntax::Declaration<'tu>> {
-        self.rd_declaration(context, self.hard_error_count)
+        self.parse_declaration(context, self.hard_error_count)
     }
 
-    fn rd_statement_expression_slot(
+    fn parse_statement_expression_slot(
         &mut self,
-        s: &mut RdStatement,
+        s: &mut StatementParts,
         boundary: ExpressionBoundary,
     ) -> Option<ExpressionSlot<'tu>> {
         let expression = self
-            .rd_expression(ExpressionMode::Expression, boundary, boundary)?
+            .parse_expression(ExpressionMode::Expression, boundary, boundary)?
             .expression;
-        self.rd_merge_slot(s, expression.source_vectors);
+        self.merge_statement_slot(s, expression.source_vectors);
         Some(ExpressionSlot::Parsed(expression))
     }
 
     /// Consumes the current token into the statement's source.
-    fn rd_own_current(&mut self, s: &mut RdStatement) {
+    fn own_statement_token(&mut self, s: &mut StatementParts) {
         let token = self.cursor.current().expect("owned statement token exists");
         self.merge_source(&mut s.source, token);
-        self.rd_consume();
+        self.consume_token();
     }
 
     /// Ends a statement part at its `;` or `:`, or reports it missing and
     /// leaves the token to be read again.
-    fn rd_close(
+    fn close_statement_part(
         &mut self,
-        s: &mut RdStatement,
+        s: &mut StatementParts,
         operator: OperatorTokenType,
         position: &'static str,
     ) {
         if is_operator(self.cursor.current(), operator) {
-            self.rd_own_current(s);
+            self.own_statement_token(s);
         } else {
-            self.rd_report_missing(operator, position);
+            self.report_missing_operator(operator, position);
         }
     }
 
-    fn rd_report_missing(&mut self, operator: OperatorTokenType, position: &'static str) {
+    fn report_missing_operator(&mut self, operator: OperatorTokenType, position: &'static str) {
         let token = self.cursor.current();
         let found = token.map(|token| token.kind);
         let error = match operator {
@@ -1163,12 +1185,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
         self.report(error, token);
     }
 
-    fn rd_merge_statement(&mut self, s: &mut RdStatement, statement: &'tu Statement<'tu>) {
+    fn merge_child_statement(&mut self, s: &mut StatementParts, statement: &'tu Statement<'tu>) {
         self.context
             .merge_into(&mut s.source, statement.source_vectors);
     }
 
-    fn rd_merge_slot(&mut self, s: &mut RdStatement, source: SourceVectors) {
+    fn merge_statement_slot(&mut self, s: &mut StatementParts, source: SourceVectors) {
         if source.length() > 0 {
             self.context.merge_into(&mut s.source, source);
         }
@@ -1176,7 +1198,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
 }
 
 /// One statement's accumulated provenance and ownership flags.
-struct RdStatement {
+struct StatementParts {
     source:     Option<SourceVectors>,
     errors:     usize,
     /// C23 permits standalone labels among compound block items, not as a

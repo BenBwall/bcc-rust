@@ -34,18 +34,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
     ///
     /// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
     #[inline(never)]
-    pub(super) fn rd_type_name_syntax(
+    pub(super) fn parse_type_name(
         &mut self,
         starting_error_count: usize,
         compound_literal: bool,
     ) -> Option<&'tu TypeName<'tu>> {
         let entry = self.enter_production(ProductionKind::TypeName)?;
-        let result = self.rd_type_name_body(starting_error_count, compound_literal);
+        let result = self.parse_type_name_body(starting_error_count, compound_literal);
         self.leave_production(entry);
         result
     }
 
-    fn rd_type_name_body(
+    fn parse_type_name_body(
         &mut self,
         starting_error_count: usize,
         compound_literal: bool,
@@ -55,13 +55,13 @@ impl<'tu> Parser<'_, 'tu, '_> {
         } else {
             SpecifierMode::TypeName
         };
-        let declaration_specifiers = self.rd_declaration_specifiers(mode, true)?;
+        let declaration_specifiers = self.parse_declaration_specifiers(mode, true)?;
         let declarator = if self
             .cursor
             .current()
             .is_some_and(|token| is_abstract_declarator_starter(token.kind))
         {
-            self.rd_declarator(DeclaratorMode::Abstract)?
+            self.parse_declarator(DeclaratorMode::Abstract)?
         } else {
             None
         };

@@ -58,7 +58,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     /// GNU extension: GCC manual, "Local Labels".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-    pub(super) fn rd_gnu(
+    pub(super) fn parse_gnu(
         &mut self,
         kind: GnuKind,
         starting_errors: usize,
@@ -73,16 +73,16 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             {
                 self.extension(Feature::GnuAsm, "__asm", token);
             }
-            self.rd_gnu_own(&mut source, token);
+            self.own_gnu_token(&mut source, token);
         }
         let result = match kind {
             | GnuKind::Asm { label } => self
-                .rd_gnu_asm(label, source, starting_errors)
+                .parse_gnu_asm(label, source, starting_errors)
                 .map(GnuValue::Asm),
             | GnuKind::Builtin(keyword) => self
-                .rd_gnu_builtin(keyword, source, starting_errors)
+                .parse_gnu_builtin(keyword, source, starting_errors)
                 .map(GnuValue::Builtin),
-            | GnuKind::LocalLabels => Some(self.rd_local_labels(source)),
+            | GnuKind::LocalLabels => Some(self.parse_local_labels(source)),
         };
         self.leave_production(entry);
         result
@@ -93,7 +93,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// C99: extension to §6.8, p. 131; PDF p. 143 and §6.7.5, p. 114; PDF p.
     /// 126. GNU extension: GCC manual, "Extended Asm".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-    fn rd_gnu_asm(
+    fn parse_gnu_asm(
         &mut self,
         label: bool,
         mut source: Option<SourceVectors>,
@@ -111,9 +111,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         self.pools.asm_operands.lend(&mut asm.operands);
         self.pools.identifiers.lend(&mut asm.labels);
         if !label {
-            self.rd_asm_qualifiers(&mut asm.qualifiers, &mut source);
+            self.parse_asm_qualifiers(&mut asm.qualifiers, &mut source);
         }
-        self.rd_gnu_punctuation(
+        self.expect_gnu_punctuation(
             &mut source,
             OperatorTokenType::OpeningParenthesis,
             "`(` in GNU construct",
@@ -122,7 +122,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             && matches!(token.kind, TokenType::String(_))
         {
             asm.template = Some(token);
-            self.rd_gnu_own(&mut source, token);
+            self.own_gnu_token(&mut source, token);
         } else {
             gnu_expected(
                 self,
@@ -130,7 +130,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 "string literal asm template or label",
             );
         }
-        let parsed = self.rd_asm_sections(label, &mut asm, &mut source);
+        let parsed = self.parse_asm_sections(label, &mut asm, &mut source);
         let value = parsed.map(|()| {
             if !label && asm.qualifiers.goto != (asm.sections == 4) {
                 gnu_expected(
@@ -142,13 +142,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if asm.qualifiers.goto && asm.sections == 4 && asm.labels.is_empty() {
                 gnu_expected(self, self.cursor.current(), "label in asm goto section");
             }
-            self.rd_gnu_punctuation(
+            self.expect_gnu_punctuation(
                 &mut source,
                 OperatorTokenType::ClosingParenthesis,
                 "`)` in GNU construct",
             );
             if !label {
-                self.rd_gnu_punctuation(
+                self.expect_gnu_punctuation(
                     &mut source,
                     OperatorTokenType::Semicolon,
                     "`;` after GNU statement",
@@ -178,7 +178,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// GNU extension: GCC manual, "Extended Asm", "Qualifiers".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-    fn rd_asm_qualifiers(
+    fn parse_asm_qualifiers(
         &mut self,
         qualifiers: &mut AsmQualifiers,
         source: &mut Option<SourceVectors>,
@@ -193,7 +193,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if std::mem::replace(qualifier, true) {
                 gnu_expected(self, Some(token), "distinct asm qualifier");
             }
-            self.rd_gnu_own(source, token);
+            self.own_gnu_token(source, token);
         }
     }
 
@@ -201,7 +201,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// the closing `)` or at an operand the sections cannot continue past.
     /// GNU extension: GCC manual, "Extended Asm".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-    fn rd_asm_sections(
+    fn parse_asm_sections(
         &mut self,
         label: bool,
         asm: &mut AsmState<'tu, 'p>,
@@ -214,7 +214,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if asm.sections > 4 || label {
                 gnu_expected(self, Some(colon), "`)` after asm sections");
             }
-            self.rd_gnu_own(source, colon);
+            self.own_gnu_token(source, colon);
             let mut requires_operand = false;
             loop {
                 let token = self.cursor.current();
@@ -234,13 +234,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     }
                     continue 'sections;
                 }
-                if !self.rd_asm_operand(asm, source)? {
+                if !self.parse_asm_operand(asm, source)? {
                     return Some(());
                 }
                 if let Some(comma) = self.cursor.current()
                     && matches!(comma.kind, TokenType::Operator(OperatorTokenType::Comma))
                 {
-                    self.rd_gnu_own(source, comma);
+                    self.own_gnu_token(source, comma);
                     requires_operand = true;
                 } else {
                     continue 'sections;
@@ -255,7 +255,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// malformed, which ends the sections.
     /// GNU extension: GCC manual, "Extended Asm".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-    fn rd_asm_operand(
+    fn parse_asm_operand(
         &mut self,
         asm: &mut AsmState<'tu, 'p>,
         source: &mut Option<SourceVectors>,
@@ -266,7 +266,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 && matches!(token.kind, TokenType::Identifier)
             {
                 asm.labels.push(Identifier::from_token(token));
-                self.rd_gnu_own(source, token);
+                self.own_gnu_token(source, token);
                 return Some(true);
             }
             gnu_expected(self, token, "asm goto label");
@@ -277,7 +277,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 && matches!(token.kind, TokenType::String(_))
             {
                 asm.clobbers.push(token);
-                self.rd_gnu_own(source, token);
+                self.own_gnu_token(source, token);
                 return Some(true);
             }
             gnu_expected(self, token, "string literal asm clobber");
@@ -290,12 +290,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
             )
         {
-            self.rd_gnu_own(source, token);
+            self.own_gnu_token(source, token);
             if let Some(token) = self.cursor.current()
                 && matches!(token.kind, TokenType::Identifier)
             {
                 name = Some(Identifier::from_token(token));
-                self.rd_gnu_own(source, token);
+                self.own_gnu_token(source, token);
             } else {
                 gnu_expected(
                     self,
@@ -303,7 +303,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     "identifier in asm operand name",
                 );
             }
-            self.rd_gnu_punctuation(
+            self.expect_gnu_punctuation(
                 source,
                 OperatorTokenType::ClosingSquareBracket,
                 "`]` in asm operand name",
@@ -317,14 +317,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             gnu_expected(self, self.cursor.current(), "string literal asm constraint");
             return Some(false);
         };
-        self.rd_gnu_own(source, constraint);
+        self.own_gnu_token(source, constraint);
         if let Some(token) = self.cursor.current()
             && matches!(
                 token.kind,
                 TokenType::Operator(OperatorTokenType::OpeningParenthesis)
             )
         {
-            self.rd_gnu_own(source, token);
+            self.own_gnu_token(source, token);
         } else {
             gnu_expected(
                 self,
@@ -333,7 +333,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             );
             return Some(false);
         }
-        let expression = self.rd_gnu_expression(
+        let expression = self.parse_gnu_expression(
             source,
             ExpressionMode::Expression,
             ExpressionBoundary::ClosingParenthesis,
@@ -344,7 +344,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             expression,
             output: asm.sections == 1,
         });
-        self.rd_gnu_punctuation(
+        self.expect_gnu_punctuation(
             source,
             OperatorTokenType::ClosingParenthesis,
             "`)` after asm operand expression",
@@ -359,7 +359,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     /// GNU extension: GCC manual, "Offsetof".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
-    fn rd_gnu_builtin(
+    fn parse_gnu_builtin(
         &mut self,
         keyword: KeywordTokenType,
         mut source: Option<SourceVectors>,
@@ -382,17 +382,17 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             gnu_expected(self, self.cursor.current(), "`(` in GNU construct");
             Some(false)
         } else {
-            self.rd_gnu_punctuation(
+            self.expect_gnu_punctuation(
                 &mut source,
                 OperatorTokenType::OpeningParenthesis,
                 "`(` in GNU construct",
             );
-            self.rd_builtin_operands(keyword, &mut source, &mut operands, &mut members)
+            self.parse_builtin_operands(keyword, &mut source, &mut operands, &mut members)
                 .map(|()| true)
         };
         let value = parsed.map(|close| {
             if close {
-                self.rd_gnu_punctuation(
+                self.expect_gnu_punctuation(
                     &mut source,
                     OperatorTokenType::ClosingParenthesis,
                     "`)` in GNU construct",
@@ -415,7 +415,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         value
     }
 
-    fn rd_builtin_operands(
+    fn parse_builtin_operands(
         &mut self,
         keyword: KeywordTokenType,
         source: &mut Option<SourceVectors>,
@@ -437,7 +437,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 | _ => false,
             };
             let operand = if type_operand {
-                SyntaxOperand::Type(self.rd_type_name_syntax(self.hard_error_count, false)?)
+                SyntaxOperand::Type(self.parse_type_name(self.hard_error_count, false)?)
             } else {
                 let mode = if keyword == KeywordTokenType::BuiltinChooseExpr && operands.is_empty()
                 {
@@ -446,7 +446,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     ExpressionMode::AssignmentExpression
                 };
                 SyntaxOperand::Expression(
-                    self.rd_expression_ending_at(mode, ExpressionBoundary::Argument)?
+                    self.parse_expression_ending_at(mode, ExpressionBoundary::Argument)?
                         .expression,
                 )
             };
@@ -455,13 +455,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if operands.len() >= count {
                 return Some(());
             }
-            self.rd_gnu_punctuation(
+            self.expect_gnu_punctuation(
                 source,
                 OperatorTokenType::Comma,
                 "`,` between builtin operands",
             );
             if keyword == KeywordTokenType::BuiltinOffsetof {
-                return self.rd_offsetof_members(source, members);
+                return self.parse_offsetof_members(source, members);
             }
         }
     }
@@ -470,7 +470,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// GNU extension: GCC manual, "Offsetof".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
     /// C99: §7.17 paragraph 3, p. 254; PDF p. 266.
-    fn rd_offsetof_members(
+    fn parse_offsetof_members(
         &mut self,
         source: &mut Option<SourceVectors>,
         members: &mut ArenaVec<'p, OffsetMember<'tu>>,
@@ -489,25 +489,25 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 return Some(());
             };
             members.push(OffsetMember::Field(Identifier::from_token(field)));
-            self.rd_gnu_own(source, field);
+            self.own_gnu_token(source, field);
             loop {
                 let Some(token) = self.cursor.current() else {
                     return Some(());
                 };
                 match token.kind {
                     | TokenType::Operator(OperatorTokenType::Period) => {
-                        self.rd_gnu_own(source, token);
+                        self.own_gnu_token(source, token);
                         continue 'field;
                     },
                     | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
-                        self.rd_gnu_own(source, token);
-                        let expression = self.rd_gnu_expression(
+                        self.own_gnu_token(source, token);
+                        let expression = self.parse_gnu_expression(
                             source,
                             ExpressionMode::Expression,
                             ExpressionBoundary::ClosingSquareBracket,
                         )?;
                         members.push(OffsetMember::Index(expression));
-                        self.rd_gnu_punctuation(
+                        self.expect_gnu_punctuation(
                             source,
                             OperatorTokenType::ClosingSquareBracket,
                             "`]` in offsetof member path",
@@ -522,7 +522,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// `identifier-list ;` after `__label__`.
     /// GNU extension: GCC manual, "Local Labels".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-    fn rd_local_labels(&mut self, mut source: Option<SourceVectors>) -> GnuValue<'tu> {
+    fn parse_local_labels(&mut self, mut source: Option<SourceVectors>) -> GnuValue<'tu> {
         let mut labels = ArenaVec::new_in(self.arena);
         self.pools.identifiers.lend(&mut labels);
         loop {
@@ -530,7 +530,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 && matches!(token.kind, TokenType::Identifier)
             {
                 labels.push(Identifier::from_token(token));
-                self.rd_gnu_own(&mut source, token);
+                self.own_gnu_token(&mut source, token);
             } else {
                 gnu_expected(
                     self,
@@ -542,12 +542,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if let Some(token) = self.cursor.current()
                 && matches!(token.kind, TokenType::Operator(OperatorTokenType::Comma))
             {
-                self.rd_gnu_own(&mut source, token);
+                self.own_gnu_token(&mut source, token);
             } else {
                 break;
             }
         }
-        self.rd_gnu_punctuation(
+        self.expect_gnu_punctuation(
             &mut source,
             OperatorTokenType::Semicolon,
             "`;` after GNU statement",
@@ -560,23 +560,23 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         value
     }
 
-    fn rd_gnu_expression(
+    fn parse_gnu_expression(
         &mut self,
         source: &mut Option<SourceVectors>,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
     ) -> Option<&'tu Expression<'tu>> {
-        let expression = self.rd_expression_ending_at(mode, boundary)?.expression;
+        let expression = self.parse_expression_ending_at(mode, boundary)?.expression;
         self.context.merge_into(source, expression.source_vectors);
         Some(expression)
     }
 
-    fn rd_gnu_own(&mut self, source: &mut Option<SourceVectors>, token: Token) {
+    fn own_gnu_token(&mut self, source: &mut Option<SourceVectors>, token: Token) {
         self.merge_source(source, token);
-        self.rd_consume();
+        self.consume_token();
     }
 
-    fn rd_gnu_punctuation(
+    fn expect_gnu_punctuation(
         &mut self,
         source: &mut Option<SourceVectors>,
         operator: OperatorTokenType,
@@ -586,7 +586,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         if let Some(token) = token
             && matches!(token.kind, TokenType::Operator(actual) if actual == operator)
         {
-            self.rd_gnu_own(source, token);
+            self.own_gnu_token(source, token);
         } else {
             gnu_expected(self, token, position);
         }

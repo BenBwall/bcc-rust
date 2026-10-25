@@ -80,14 +80,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: structure and union specifiers, member declarations, and
     /// bit-fields are §6.7.2.1, pp. 101-104; PDF pp. 113-116.
-    pub(in crate::translation_phases::parsing) fn rd_struct_or_union_specifier(
+    pub(in crate::translation_phases::parsing) fn parse_struct_or_union_specifier(
         &mut self,
     ) -> Option<&'tu StructOrUnionSpecifier<'tu>> {
         let entry = self.enter_production(ProductionKind::StructOrUnionSpecifier)?;
         let mut record = Record::new(self);
         let result = self
-            .rd_record(&mut record)
-            .map(|()| self.rd_record_finish(&mut record));
+            .parse_record(&mut record)
+            .map(|()| self.finish_record(&mut record));
         self.pools.struct_members.reclaim(&mut record.declarations);
         self.pools
             .struct_declarators
@@ -99,7 +99,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         result
     }
 
-    fn rd_record(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
+    fn parse_record(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
         record.suppression_entry = self.pedantic_suppression;
         let Some(token) = self.cursor.current() else {
             self.report(ParserErrorType::ExpectedStructOrUnionKeyword(None), None);
@@ -117,10 +117,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             },
         };
         record.source_vectors.push(token.source_vectors);
-        self.rd_consume();
+        self.consume_token();
 
         while self.attribute_starter(self.cursor.current()) {
-            self.rd_record_attributes(record)?;
+            self.parse_record_attributes(record)?;
         }
         // The grammar allows either a tagged reference, a tagged definition,
         // or an anonymous definition. Record the tag first and decide
@@ -131,7 +131,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         {
             record.identifier = Some(Identifier::from_token(token));
             record.source_vectors.push(token.source_vectors);
-            self.rd_consume();
+            self.consume_token();
             if !is_operator(self.cursor.current(), OperatorTokenType::OpeningCurlyBrace) {
                 return Some(());
             }
@@ -153,8 +153,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         record.body_started = true;
         record.pack_position = self.cursor.consumed;
         record.source_vectors.push(token.source_vectors);
-        self.rd_consume();
-        self.rd_record_members(record)?;
+        self.consume_token();
+        self.parse_record_members(record)?;
 
         // Microsoft's `__declspec` after a record body is a declaration
         // specifier of the enclosing declaration, as in MSVC and Clang:
@@ -166,14 +166,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 matches!(token.kind, TokenType::Keyword(KeywordTokenType::Declspec))
             })
         {
-            self.rd_record_attributes(record)?;
+            self.parse_record_attributes(record)?;
         }
         Some(())
     }
 
     /// Parses tag attributes before the tag or after the body.
-    fn rd_record_attributes(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
-        let returned = self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+    fn parse_record_attributes(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
+        let returned = self.parse_modern(ModernKind::Attributes, None, self.hard_error_count)?;
         let ModernValue::Attributes(x) = returned else {
             unexpected_return!("aggregate attributes protocol: {returned:?}")
         };
@@ -187,14 +187,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     }
 
     /// Parses member declarations through the body's `}`, which it owns.
-    fn rd_record_members(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
+    fn parse_record_members(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
         loop {
             let token = self.cursor.current();
             if token.is_some_and(|x| {
                 matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert))
             }) {
                 let returned =
-                    self.rd_modern(ModernKind::Assertion, None, self.hard_error_count)?;
+                    self.parse_modern(ModernKind::Assertion, None, self.hard_error_count)?;
                 let ModernValue::Assertion(assertion) = returned else {
                     unexpected_return!("member assertion protocol: {returned:?}")
                 };
@@ -217,7 +217,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     self.extension(Feature::EmptyStructs, "empty struct or union", token);
                 }
                 record.source_vectors.push(token.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 return Some(());
             }
             let Some(token) = token else {
@@ -238,13 +238,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     token,
                 );
                 record.source_vectors.push(token.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 continue;
             }
             record.member_source = None;
             record.current_member_declarator_source = None;
-            let specifiers = self.rd_declaration_specifiers(SpecifierMode::StructMember, true)?;
-            if !self.rd_struct_declaration(record, specifiers)? {
+            let specifiers =
+                self.parse_declaration_specifiers(SpecifierMode::StructMember, true)?;
+            if !self.parse_struct_declaration(record, specifiers)? {
                 return Some(());
             }
         }
@@ -255,7 +256,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// `}` is missing and the specifier ends here.
     ///
     /// C99: §6.7.2.1 paragraph 1, p. 101; PDF p. 113.
-    fn rd_struct_declaration(
+    fn parse_struct_declaration(
         &mut self,
         record: &mut Record<'tu, 'p>,
         specifiers: DeclarationSpecifiers<'tu>,
@@ -269,10 +270,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 TokenType::Operator(OperatorTokenType::Semicolon)
             )
         {
-            self.rd_member_declares_nothing(specifiers, token);
+            self.member_declares_nothing(specifiers, token);
             self.merge_source(&mut record.member_source, token);
             record.finish_member(self);
-            self.rd_consume();
+            self.consume_token();
             return Some(true);
         }
         // A leading colon is the unnamed-bit-field alternative; it
@@ -287,10 +288,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 self.merge_source(&mut record.member_source, token);
                 self.merge_source(&mut record.current_member_declarator_source, token);
                 record.member_declarator = None;
-                self.rd_consume();
-                self.rd_bit_field_width(record)?;
+                self.consume_token();
+                self.parse_bit_field_width(record)?;
             } else {
-                let declarator = self.rd_declarator(DeclaratorMode::Named)?;
+                let declarator = self.parse_declarator(DeclaratorMode::Named)?;
                 record.member_declarator = declarator;
                 if let Some(source_vectors) = declarator.map(|declarator| declarator.source_vectors)
                 {
@@ -308,8 +309,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 {
                     self.merge_source(&mut record.member_source, token);
                     self.merge_source(&mut record.current_member_declarator_source, token);
-                    self.rd_consume();
-                    self.rd_bit_field_width(record)?;
+                    self.consume_token();
+                    self.parse_bit_field_width(record)?;
                 } else {
                     let source_vectors = record
                         .current_member_declarator_source
@@ -323,7 +324,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     });
                 }
             }
-            match self.rd_after_struct_declarator(record)? {
+            match self.parse_after_struct_declarator(record)? {
                 | DeclaratorListEnd::Comma => {},
                 | DeclaratorListEnd::Member => return Some(true),
                 | DeclaratorListEnd::Body => return Some(false),
@@ -333,7 +334,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// C99 §6.7.2.1p1: a struct-declaration needs a struct-declarator-list;
     /// C99 has no anonymous members.
-    fn rd_member_declares_nothing(&mut self, specifiers: DeclarationSpecifiers<'tu>, token: Token) {
+    fn member_declares_nothing(&mut self, specifiers: DeclarationSpecifiers<'tu>, token: Token) {
         let anonymous = matches!(
             specifiers.type_specifiers,
             TypeSpecifiers::StructOrUnion(x)
@@ -373,11 +374,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Parses the constant-expression bit-field width after its `:` and
     /// commits the member declarator.
-    fn rd_bit_field_width(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
+    fn parse_bit_field_width(&mut self, record: &mut Record<'tu, 'p>) -> Option<()> {
         let ConstantExpressionResult {
             expression: index,
             recovered,
-        } = self.rd_constant_expression(ExpressionBoundary::StructMember)?;
+        } = self.parse_constant_expression(ExpressionBoundary::StructMember)?;
         record.width_recovered = recovered;
         let source_vectors = index.expression().source_vectors;
         self.context
@@ -398,7 +399,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     }
 
     /// Requires `,` or `;` after one struct declarator.
-    fn rd_after_struct_declarator(
+    fn parse_after_struct_declarator(
         &mut self,
         record: &mut Record<'tu, 'p>,
     ) -> Option<DeclaratorListEnd> {
@@ -406,7 +407,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             let token = self.cursor.current();
             if self.attribute_starter(token) {
                 let returned =
-                    self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+                    self.parse_modern(ModernKind::Attributes, None, self.hard_error_count)?;
                 let ModernValue::Attributes(x) = returned else {
                     panic!("bit-field attribute child protocol");
                 };
@@ -433,14 +434,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             if is_operator(token, OperatorTokenType::Comma) {
                 let token = token.expect("comma token exists");
                 self.merge_source(&mut record.member_source, token);
-                self.rd_consume();
+                self.consume_token();
                 return Some(DeclaratorListEnd::Comma);
             }
             if is_operator(token, OperatorTokenType::Semicolon) {
                 let token = token.expect("semicolon token exists");
                 self.merge_source(&mut record.member_source, token);
                 record.finish_member(self);
-                self.rd_consume();
+                self.consume_token();
                 return Some(DeclaratorListEnd::Member);
             }
             if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
@@ -470,7 +471,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     // The malformed terminator is diagnosed, so a `}` or
                     // following member that ends this one is not.
                     record.resuming_after_member_recovery = true;
-                    self.rd_consume();
+                    self.consume_token();
                     continue;
                 }
                 self.report(
@@ -514,10 +515,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
     }
 
-    fn rd_record_finish(
-        &mut self,
-        record: &mut Record<'tu, 'p>,
-    ) -> &'tu StructOrUnionSpecifier<'tu> {
+    fn finish_record(&mut self, record: &mut Record<'tu, 'p>) -> &'tu StructOrUnionSpecifier<'tu> {
         self.pedantic_suppression = record.suppression_entry;
         let declaration_list = record
             .body_started

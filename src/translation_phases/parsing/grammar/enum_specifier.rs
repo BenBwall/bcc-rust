@@ -74,14 +74,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// C99: enumeration specifiers and enumerators are §6.7.2.2,
     /// pp. 105-106; PDF pp. 117-118; tags are §6.7.2.3, pp. 106-107;
     /// PDF pp. 118-119.
-    pub(in crate::translation_phases::parsing) fn rd_enum_specifier(
+    pub(in crate::translation_phases::parsing) fn parse_enum_specifier(
         &mut self,
     ) -> Option<EnumSpecifierResult<'tu>> {
         let entry = self.enter_production(ProductionKind::EnumSpecifier)?;
         let mut enumeration = Enumeration::new(self);
         let result = self
-            .rd_enumeration(&mut enumeration)
-            .map(|()| self.rd_enumeration_finish(&mut enumeration));
+            .parse_enumeration(&mut enumeration)
+            .map(|()| self.finish_enumeration(&mut enumeration));
         self.pools.enumerators.reclaim(&mut enumeration.enumerators);
         self.pools
             .source_vectors
@@ -90,7 +90,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         result
     }
 
-    fn rd_enumeration(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
+    fn parse_enumeration(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
         let Some(token) = self.cursor.current() else {
             self.report(ParserErrorType::ExpectedEnumKeyword(None), None);
             return Some(());
@@ -102,7 +102,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             );
         }
         enumeration.source_vectors.push(token.source_vectors);
-        self.rd_consume();
+        self.consume_token();
 
         // Like tag specifiers for aggregates, an enum can be a tagged
         // reference, tagged definition, or anonymous definition.
@@ -110,7 +110,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         loop {
             let token = self.cursor.current();
             if !named && self.attribute_starter(token) {
-                enumeration.attributes = Some(self.rd_enum_attributes(enumeration, false)?);
+                enumeration.attributes = Some(self.parse_enum_attributes(enumeration, false)?);
                 continue;
             }
             if is_operator(token, OperatorTokenType::Colon) && underlying_type_follows(self) {
@@ -130,8 +130,8 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     token,
                 );
                 enumeration.source_vectors.push(token.source_vectors);
-                self.rd_consume();
-                self.rd_underlying_type(enumeration)?;
+                self.consume_token();
+                self.parse_underlying_type(enumeration)?;
                 named = true;
                 continue;
             }
@@ -141,7 +141,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             {
                 enumeration.name = Some(Identifier::from_token(token));
                 enumeration.source_vectors.push(token.source_vectors);
-                self.rd_consume();
+                self.consume_token();
                 named = true;
                 continue;
             }
@@ -164,19 +164,19 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         enumeration.body_started = true;
         enumeration.body_starting_error_count = self.hard_error_count;
         enumeration.source_vectors.push(token.source_vectors);
-        self.rd_consume();
-        self.rd_enumerator_list(enumeration)?;
+        self.consume_token();
+        self.parse_enumerator_list(enumeration)?;
         while self.attribute_starter(self.cursor.current()) {
-            enumeration.attributes = Some(self.rd_enum_attributes(enumeration, false)?);
+            enumeration.attributes = Some(self.parse_enum_attributes(enumeration, false)?);
         }
         Some(())
     }
 
     /// Parses the C23 enum-type-specifier after its `:`.
     /// C23: §6.7.3.3 paragraph 1, p. 109; PDF p. 122.
-    fn rd_underlying_type(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
+    fn parse_underlying_type(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
         enumeration.body_starting_error_count = self.hard_error_count;
-        let specifiers = self.rd_declaration_specifiers(SpecifierMode::TypeName, true)?;
+        let specifiers = self.parse_declaration_specifiers(SpecifierMode::TypeName, true)?;
         let x = self.alloc_syntax(TypeName {
             declaration_specifiers: specifiers,
             declarator:             None,
@@ -195,12 +195,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Parses one attribute group of the tag or, with `enumerator`, of the
     /// enumerator in progress, and returns the extended attribute chain.
-    fn rd_enum_attributes(
+    fn parse_enum_attributes(
         &mut self,
         enumeration: &mut Enumeration<'tu, 'p>,
         enumerator: bool,
     ) -> Option<&'tu SpecifierExtension<'tu>> {
-        let returned = self.rd_modern(ModernKind::Attributes, None, self.hard_error_count)?;
+        let returned = self.parse_modern(ModernKind::Attributes, None, self.hard_error_count)?;
         let ModernValue::Attributes(x) = returned else {
             unexpected_return!("enum attributes protocol: {returned:?}")
         };
@@ -224,7 +224,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Parses enumerators through the body's `}`, which it owns, or stops
     /// before the token where a malformed list ends.
-    fn rd_enumerator_list(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
+    fn parse_enumerator_list(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
         let mut position = ListPosition::EnumeratorOrClose;
         loop {
             let token = self.cursor.current();
@@ -245,7 +245,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                             );
                         }
                         enumeration.source_vectors.push(token.source_vectors);
-                        self.rd_consume();
+                        self.consume_token();
                         return Some(());
                     }
                     if let Some(token) = token
@@ -254,7 +254,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         enumeration.current_enumerator = Some(Identifier::from_token(token));
                         enumeration.current_enumerator_source = Some(token.source_vectors);
                         enumeration.source_vectors.push(token.source_vectors);
-                        self.rd_consume();
+                        self.consume_token();
                         ListPosition::AfterEnumeratorName
                     } else if is_operator(token, OperatorTokenType::Semicolon) || token.is_none() {
                         self.report(
@@ -278,7 +278,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         }
                         // A stray `)` cannot end the list; its `}` follows.
                         enumeration.source_vectors.push(token.source_vectors);
-                        self.rd_consume();
+                        self.consume_token();
                         ListPosition::EnumeratorOrClose
                     } else if let Some(misplaced) = token
                         && misplaced_enumerator(self, misplaced)
@@ -294,7 +294,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                             token,
                         );
                         enumeration.source_vectors.push(misplaced.source_vectors);
-                        self.rd_consume();
+                        self.consume_token();
                         ListPosition::AfterEnumeratorName
                     } else {
                         self.report(
@@ -304,14 +304,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                             token,
                         );
                         enumeration.resuming_after_error = true;
-                        self.rd_enum_recover(enumeration);
+                        self.recover_enumeration(enumeration);
                         ListPosition::AfterEnumerator
                     }
                 },
                 | ListPosition::AfterEnumeratorName => {
                     if self.attribute_starter(token) {
                         enumeration.enumerator_attributes =
-                            Some(self.rd_enum_attributes(enumeration, true)?);
+                            Some(self.parse_enum_attributes(enumeration, true)?);
                         continue;
                     }
                     // The constant-expression is optional. Finalize
@@ -322,14 +322,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     {
                         enumeration.source_vectors.push(token.source_vectors);
                         self.merge_source(&mut enumeration.current_enumerator_source, token);
-                        self.rd_consume();
-                        self.rd_enumerator_value(enumeration)?;
+                        self.consume_token();
+                        self.parse_enumerator_value(enumeration)?;
                     } else {
                         enumeration.finish_enumerator(self, None);
                     }
                     ListPosition::AfterEnumerator
                 },
-                | ListPosition::AfterEnumerator => self.rd_after_enumerator(enumeration, token),
+                | ListPosition::AfterEnumerator => self.parse_after_enumerator(enumeration, token),
                 | ListPosition::End => return Some(()),
             };
         }
@@ -337,11 +337,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Parses an explicit enumerator value after its `=` and completes the
     /// enumerator.
-    fn rd_enumerator_value(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
+    fn parse_enumerator_value(&mut self, enumeration: &mut Enumeration<'tu, 'p>) -> Option<()> {
         let ConstantExpressionResult {
             expression: index,
             recovered,
-        } = self.rd_constant_expression(ExpressionBoundary::Enumerator)?;
+        } = self.parse_constant_expression(ExpressionBoundary::Enumerator)?;
         enumeration.resuming_after_error = recovered;
         let source_vectors = index.expression().source_vectors;
         enumeration.source_vectors.push(source_vectors);
@@ -353,7 +353,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Requires `,` or `}` after one enumerator and returns the next list
     /// position.
-    fn rd_after_enumerator(
+    fn parse_after_enumerator(
         &mut self,
         enumeration: &mut Enumeration<'tu, 'p>,
         token: Option<Token>,
@@ -370,13 +370,13 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 self.extension(Feature::TrailingEnumComma, "trailing enum comma", token);
             }
             enumeration.source_vectors.push(token.source_vectors);
-            self.rd_consume();
+            self.consume_token();
             return ListPosition::EnumeratorOrClose;
         }
         if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
             let token = token.expect("closing-curly-brace token exists");
             enumeration.source_vectors.push(token.source_vectors);
-            self.rd_consume();
+            self.consume_token();
             return ListPosition::End;
         }
         let error = ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
@@ -398,7 +398,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             // following `,` or `}` is still the separator.
             let token = token.expect("closing-parenthesis token exists");
             enumeration.source_vectors.push(token.source_vectors);
-            self.rd_consume();
+            self.consume_token();
             return ListPosition::AfterEnumerator;
         }
         if token.is_some_and(|token| matches!(token.kind, TokenType::Identifier)) {
@@ -413,7 +413,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             // again as an enumerator.
             self.report(error, token);
             enumeration.source_vectors.push(misplaced.source_vectors);
-            self.rd_consume();
+            self.consume_token();
             return ListPosition::AfterEnumeratorName;
         }
         if token.is_some_and(|token| self.declaration_starter(token)) {
@@ -426,11 +426,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             return ListPosition::End;
         }
         enumeration.resuming_after_error = true;
-        self.rd_enum_recover(enumeration);
+        self.recover_enumeration(enumeration);
         ListPosition::AfterEnumerator
     }
 
-    fn rd_enum_recover(&mut self, enumeration: &mut Enumeration<'tu, 'p>) {
+    fn recover_enumeration(&mut self, enumeration: &mut Enumeration<'tu, 'p>) {
         if let Some(recovered) = self.recover(SynchronizationSet {
             kind:   SynchronizationKind::EnumeratorValue,
             target: ProductionKind::EnumSpecifier,
@@ -439,7 +439,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
     }
 
-    fn rd_enumeration_finish(
+    fn finish_enumeration(
         &mut self,
         enumeration: &mut Enumeration<'tu, 'p>,
     ) -> EnumSpecifierResult<'tu> {

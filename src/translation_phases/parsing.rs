@@ -236,8 +236,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.limits.external_declarations,
             );
         }
-        let Some(root) =
-            self.rd_external_declaration(self.hard_error_count, self.context.pending_errors.len())
+        let Some(root) = self
+            .parse_external_declaration(self.hard_error_count, self.context.pending_errors.len())
         else {
             return self.failure.take();
         };

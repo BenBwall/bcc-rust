@@ -110,19 +110,19 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: external-declaration, §6.9 paragraph 1, p. 140; PDF p. 152;
     /// its file-scope position is paragraph 4, p. 140; PDF p. 152.
-    pub(in crate::translation_phases::parsing) fn rd_external_declaration(
+    pub(in crate::translation_phases::parsing) fn parse_external_declaration(
         &mut self,
         starting_error_count: usize,
         starting_diagnostic_count: usize,
     ) -> Option<ExternalDeclaration<'tu>> {
         let entry = self.enter_production(ProductionKind::ExternalDeclaration)?;
         let result =
-            self.rd_external_declaration_body(starting_error_count, starting_diagnostic_count);
+            self.parse_external_declaration_body(starting_error_count, starting_diagnostic_count);
         self.leave_production(entry);
         result
     }
 
-    fn rd_external_declaration_body(
+    fn parse_external_declaration_body(
         &mut self,
         starting_error_count: usize,
         starting_diagnostic_count: usize,
@@ -132,14 +132,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 || matches!(token.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
                     && token.contents == KeywordTokenType::MsAsm.cache_id()
         }) {
-            let value = self.rd_gnu(GnuKind::Asm { label: false }, self.hard_error_count)?;
+            let value = self.parse_gnu(GnuKind::Asm { label: false }, self.hard_error_count)?;
             let GnuValue::Asm(asm) = value else {
                 panic!("file asm child protocol");
             };
             return Some(ExternalDeclaration::Asm(asm));
         }
         let declaration =
-            self.rd_declaration(DeclarationContext::External, self.hard_error_count)?;
+            self.parse_declaration(DeclarationContext::External, self.hard_error_count)?;
         let token = self.cursor.current();
         // C99 §6.9.1p1: `declaration-specifiers declarator
         // declaration-list? compound-statement`.
@@ -147,7 +147,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                 || token.is_some_and(|token| self.declaration_starter(token)));
         if is_definition {
-            let definition = self.rd_function_definition(declaration, starting_error_count)?;
+            let definition = self.parse_function_definition(declaration, starting_error_count)?;
             return Some(if definition.recovered {
                 ExternalDeclaration::RecoveredFunctionDefinition(definition)
             } else {
@@ -202,7 +202,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ///
     /// C99: declaration, init-declarator-list, and init-declarator are §6.7,
     /// p. 97; PDF p. 109.
-    pub(in crate::translation_phases::parsing) fn rd_declaration(
+    pub(in crate::translation_phases::parsing) fn parse_declaration(
         &mut self,
         context: DeclarationContext,
         starting_error_count: usize,
@@ -220,7 +220,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             .init_declarators
             .lend(&mut shell.init_declarators);
         self.pools.source_vectors.lend(&mut shell.source_vectors);
-        let result = self.rd_declaration_body(&mut shell);
+        let result = self.parse_declaration_body(&mut shell);
         self.pools
             .init_declarators
             .reclaim(&mut shell.init_declarators);
@@ -229,7 +229,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         result
     }
 
-    fn rd_declaration_body(
+    fn parse_declaration_body(
         &mut self,
         shell: &mut DeclarationShell<'tu, 'p>,
     ) -> Option<&'tu Declaration<'tu>> {
@@ -242,14 +242,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.pedantic_suppression += 1;
             self.merge_source(&mut leading_extension, token);
             shell.source_vectors.push(token.source_vectors);
-            self.rd_consume();
+            self.consume_token();
         }
         if self
             .cursor
             .current()
             .is_some_and(|x| matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert)))
         {
-            let value = self.rd_modern(ModernKind::Assertion, None, self.hard_error_count)?;
+            let value = self.parse_modern(ModernKind::Assertion, None, self.hard_error_count)?;
             self.pedantic_suppression = shell.suppression_entry;
             let ModernValue::Assertion(assertion) = value else {
                 unreachable!("assertion declaration protocol: {value:?}")
@@ -265,7 +265,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         }
         // Specifiers are a child production because tag specifiers own
         // complete struct/union/enum bodies.
-        let mut specifiers = self.rd_declaration_specifiers(SpecifierMode::Declaration, true)?;
+        let mut specifiers = self.parse_declaration_specifiers(SpecifierMode::Declaration, true)?;
         if let Some(source_vectors) = leading_extension {
             specifiers.extensions = Some(self.alloc_syntax(SpecifierExtension {
                 kind: SpecifierExtensionKind::ExtensionMarker,
@@ -299,9 +299,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 self.report(error, token);
             }
             shell.source_vectors.push(semicolon.source_vectors);
-            self.rd_consume();
+            self.consume_token();
         } else {
-            self.rd_init_declarator_list(shell, specifiers)?;
+            self.parse_init_declarator_list(shell, specifiers)?;
         }
         self.pedantic_suppression = shell.suppression_entry;
         // Arena insertion is the reduction boundary: all child slices and
@@ -322,7 +322,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// function-definition head, or stops before a token its parent owns.
     ///
     /// C99: init-declarator-list, §6.7 paragraph 1, p. 97; PDF p. 109.
-    fn rd_init_declarator_list(
+    fn parse_init_declarator_list(
         &mut self,
         shell: &mut DeclarationShell<'tu, 'p>,
         specifiers: DeclarationSpecifiers<'tu>,
@@ -332,14 +332,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             TypeSpecifiers::Extended(ExtendedType::AutoType)
         );
         'declarators: loop {
-            let declarator = self.rd_declarator(DeclaratorMode::Named)?;
+            let declarator = self.parse_declarator(DeclaratorMode::Named)?;
             let Some(declarator) = declarator else {
                 let token = self.cursor.current();
                 self.report(
                     ParserErrorType::ExpectedDeclaratorInDeclaration(token.map(|token| token.kind)),
                     token,
                 );
-                if self.rd_declaration_recover(shell) {
+                if self.recover_declaration(shell) {
                     continue 'declarators;
                 }
                 return Some(());
@@ -367,11 +367,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 self.scopes.publish(identifier.name, class);
             }
             loop {
-                match self.rd_after_declarator(shell) {
+                match self.parse_after_declarator(shell) {
                     | AfterDeclarator::NextDeclarator => continue 'declarators,
                     | AfterDeclarator::Finish => return Some(()),
                     | AfterDeclarator::Initializer(equals_source) => {
-                        let result = self.rd_initializer(
+                        let result = self.parse_initializer(
                             self.hard_error_count,
                             matches!(
                                 shell.context,
@@ -408,7 +408,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Classifies the token following a completed declarator or
     /// initializer, consuming the separator it owns.
-    fn rd_after_declarator(&mut self, shell: &mut DeclarationShell<'tu, 'p>) -> AfterDeclarator {
+    fn parse_after_declarator(&mut self, shell: &mut DeclarationShell<'tu, 'p>) -> AfterDeclarator {
         let token = self.cursor.current();
         let has_sole_uninitialized_declarator = matches!(
             shell.init_declarators.as_slice(),
@@ -485,7 +485,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             )
         }) {
             shell.source_vectors.push(separator.source_vectors);
-            self.rd_consume();
+            self.consume_token();
             return match separator.kind {
                 | TokenType::Operator(OperatorTokenType::Comma) => AfterDeclarator::NextDeclarator,
                 | TokenType::Operator(OperatorTokenType::Equals) =>
@@ -523,7 +523,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.report(continuation_error, token);
             if shell.context == DeclarationContext::External {
                 shell.source_vectors.push(close.source_vectors);
-                self.rd_consume();
+                self.consume_token();
             }
             return AfterDeclarator::Finish;
         }
@@ -544,7 +544,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             return AfterDeclarator::Finish;
         }
         self.report(continuation_error, token);
-        if self.rd_declaration_recover(shell) {
+        if self.recover_declaration(shell) {
             AfterDeclarator::NextDeclarator
         } else {
             AfterDeclarator::Finish
@@ -554,7 +554,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// Synchronizes after a missing declarator or a rejected continuation,
     /// then consumes the separator recovery stopped before, if this
     /// declaration owns it. Returns whether another declarator follows.
-    fn rd_declaration_recover(&mut self, shell: &mut DeclarationShell<'tu, 'p>) -> bool {
+    fn recover_declaration(&mut self, shell: &mut DeclarationShell<'tu, 'p>) -> bool {
         let set = SynchronizationSet {
             kind:   shell.recovery_kind(),
             target: ProductionKind::Declaration,
@@ -573,7 +573,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         });
         if let Some(owned) = owned {
             shell.source_vectors.push(owned.source_vectors);
-            self.rd_consume();
+            self.consume_token();
         }
         is_operator(owned, OperatorTokenType::Comma)
     }
@@ -584,7 +584,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     /// recovered.
     ///
     /// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
-    pub(in crate::translation_phases::parsing) fn rd_function_definition(
+    pub(in crate::translation_phases::parsing) fn parse_function_definition(
         &mut self,
         head: &'tu Declaration<'tu>,
         starting_error_count: usize,
@@ -606,12 +606,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         let entry_scope_depth = self.scopes.depth();
         self.scopes.enter_scope(ScopeKind::Function);
         self.label_scopes.enter();
-        self.rd_publish_parameters(declarator);
+        self.publish_parameters(declarator);
 
         let mut declaration_list = ArenaVec::new_in(self.arena);
         self.pools.declarations.lend(&mut declaration_list);
         let mut source_vectors = Some(head.source_vectors);
-        let body = self.rd_function_body(head, &mut declaration_list, &mut source_vectors);
+        let body = self.parse_function_body(head, &mut declaration_list, &mut source_vectors);
         let result = body.map(|body| {
             self.pedantic_suppression = suppression_entry;
             self.switch_floor = switch_floor_entry;
@@ -637,7 +637,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Publishes the parameter names of a definition's function declarator
     /// into its function scope.
-    fn rd_publish_parameters(&mut self, declarator: Declarator<'tu>) {
+    fn publish_parameters(&mut self, declarator: Declarator<'tu>) {
         match declarator.function_suffix() {
             | None => {},
             | Some(DirectDeclarator::Function { parameter_list, .. }) => {
@@ -706,7 +706,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
 
     /// Parses the old-style declaration list and the compound body, or
     /// synthesizes a recovered empty body.
-    fn rd_function_body(
+    fn parse_function_body(
         &mut self,
         head: &'tu Declaration<'tu>,
         declaration_list: &mut ArenaVec<'p, &'tu Declaration<'tu>>,
@@ -718,7 +718,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         loop {
             let token = self.cursor.current();
             if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
-                return self.rd_definition_compound(source_vectors);
+                return self.parse_definition_compound(source_vectors);
             }
             if token.is_some_and(|token| self.declaration_starter(token)) {
                 // C99 §6.9.1p5: no declaration list follows a parameter type
@@ -732,8 +732,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         token,
                     );
                 }
-                let declaration = self
-                    .rd_declaration(DeclarationContext::OldStyleParameter, self.hard_error_count)?;
+                let declaration = self.parse_declaration(
+                    DeclarationContext::OldStyleParameter,
+                    self.hard_error_count,
+                )?;
                 self.context
                     .merge_into(source_vectors, declaration.source_vectors);
                 declaration_list.push(declaration);
@@ -792,15 +794,15 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     recovered:      true,
                 }));
             }
-            return self.rd_definition_compound(source_vectors);
+            return self.parse_definition_compound(source_vectors);
         }
     }
 
-    fn rd_definition_compound(
+    fn parse_definition_compound(
         &mut self,
         source_vectors: &mut Option<SourceVectors>,
     ) -> Option<&'tu Statement<'tu>> {
-        let body = self.rd_compound(true)?;
+        let body = self.parse_compound(true)?;
         self.context.merge_into(source_vectors, body.source_vectors);
         Some(body)
     }

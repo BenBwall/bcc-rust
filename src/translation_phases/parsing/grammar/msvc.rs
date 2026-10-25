@@ -49,7 +49,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
     /// MSVC extension: Microsoft Learn, "try-finally statement".
     /// <https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement>
-    pub(super) fn rd_msvc(
+    pub(super) fn parse_msvc(
         &mut self,
         keyword: KeywordTokenType,
         starting_errors: usize,
@@ -68,12 +68,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 tokens.push(token);
             }
             self.merge_source(&mut source, token);
-            self.rd_consume();
+            self.consume_token();
         }
         let result = match keyword {
-            | KeywordTokenType::Try => self.rd_seh(source, starting_errors),
-            | KeywordTokenType::Leave => Some(self.rd_seh_leave(source, starting_errors)),
-            | _ => Some(self.rd_ms_asm(&mut tokens, source, starting_errors)),
+            | KeywordTokenType::Try => self.parse_seh(source, starting_errors),
+            | KeywordTokenType::Leave => Some(self.parse_seh_leave(source, starting_errors)),
+            | _ => Some(self.parse_ms_asm(&mut tokens, source, starting_errors)),
         };
         self.pools.opaque_tokens.reclaim(&mut tokens);
         self.leave_production(entry);
@@ -86,12 +86,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
     /// MSVC extension: Microsoft Learn, "try-finally statement".
     /// <https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement>
-    fn rd_seh(
+    fn parse_seh(
         &mut self,
         mut source: Option<SourceVectors>,
         starting_errors: usize,
     ) -> Option<&'tu Statement<'tu>> {
-        let body = self.rd_seh_compound(&mut source)?;
+        let body = self.parse_seh_compound(&mut source)?;
         let mut filter = None;
         let mut handler_keyword = None;
         let handler = if let Some(token) = self.cursor.current()
@@ -101,15 +101,15 @@ impl<'tu> Parser<'_, 'tu, '_> {
             ) {
             handler_keyword = Some(token);
             self.merge_source(&mut source, token);
-            self.rd_consume();
+            self.consume_token();
             if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Except)) {
-                self.rd_seh_punctuation(
+                self.expect_seh_punctuation(
                     &mut source,
                     OperatorTokenType::OpeningParenthesis,
                     "`(` before SEH filter",
                 );
                 let expression = self
-                    .rd_expression_ending_at(
+                    .parse_expression_ending_at(
                         ExpressionMode::Expression,
                         ExpressionBoundary::ClosingParenthesis,
                     )?
@@ -117,20 +117,20 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 filter = Some(expression);
                 self.context
                     .merge_into(&mut source, expression.source_vectors);
-                self.rd_seh_punctuation(
+                self.expect_seh_punctuation(
                     &mut source,
                     OperatorTokenType::ClosingParenthesis,
                     "`)` after SEH filter",
                 );
             }
-            self.rd_seh_compound(&mut source)?
+            self.parse_seh_compound(&mut source)?
         } else {
             ms_expected(
                 self,
                 self.cursor.current(),
                 "`__except` or `__finally` after SEH body",
             );
-            self.rd_seh_missing(source)
+            self.missing_seh_statement(source)
         };
         let source_vectors = source.unwrap_or_default();
         let recovered = self.hard_error_count > starting_errors;
@@ -147,7 +147,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         }))
     }
 
-    fn rd_seh_compound(
+    fn parse_seh_compound(
         &mut self,
         source: &mut Option<SourceVectors>,
     ) -> Option<&'tu Statement<'tu>> {
@@ -157,7 +157,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
             )
         }) {
-            let child = self.rd_compound(false)?;
+            let child = self.parse_compound(false)?;
             self.context.merge_into(source, child.source_vectors);
             Some(child)
         } else {
@@ -166,12 +166,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 self.cursor.current(),
                 "compound statement in SEH construct",
             );
-            Some(self.rd_seh_missing(*source))
+            Some(self.missing_seh_statement(*source))
         }
     }
 
     /// A recovered placeholder for a missing SEH compound.
-    fn rd_seh_missing(&mut self, source: Option<SourceVectors>) -> &'tu Statement<'tu> {
+    fn missing_seh_statement(&mut self, source: Option<SourceVectors>) -> &'tu Statement<'tu> {
         self.alloc_syntax(Statement {
             kind:           StatementType::Expression(ExpressionSlot::Missing(
                 source.unwrap_or_default(),
@@ -183,7 +183,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
 
     /// MSVC extension: Microsoft Learn, "try-except statement", `__leave`.
     /// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
-    fn rd_seh_leave(
+    fn parse_seh_leave(
         &mut self,
         mut source: Option<SourceVectors>,
         starting_errors: usize,
@@ -195,7 +195,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             )
         {
             self.merge_source(&mut source, token);
-            self.rd_consume();
+            self.consume_token();
         } else {
             ms_expected(self, self.cursor.current(), "`;` after `__leave`");
         }
@@ -214,7 +214,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// C99: extension to §6.8, p. 131; PDF p. 143.
     /// MSVC extension: Microsoft Learn, "__asm".
     /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
-    fn rd_ms_asm(
+    fn parse_ms_asm(
         &mut self,
         tokens: &mut ArenaVec<'_, Token>,
         mut source: Option<SourceVectors>,
@@ -236,7 +236,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             delimiters.push(OperatorTokenType::ClosingCurlyBrace);
             tokens.push(opening);
             self.merge_source(&mut source, opening);
-            self.rd_consume();
+            self.consume_token();
         }
         loop {
             let token = self.cursor.current();
@@ -309,7 +309,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             }
             tokens.push(token);
             self.merge_source(&mut source, token);
-            self.rd_consume();
+            self.consume_token();
             if finished {
                 break;
             }
@@ -332,7 +332,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         })
     }
 
-    fn rd_seh_punctuation(
+    fn expect_seh_punctuation(
         &mut self,
         source: &mut Option<SourceVectors>,
         operator: OperatorTokenType,
@@ -343,7 +343,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             && matches!(token.kind, TokenType::Operator(actual) if actual == operator)
         {
             self.merge_source(source, token);
-            self.rd_consume();
+            self.consume_token();
         } else {
             ms_expected(self, token, component);
         }
