@@ -320,28 +320,31 @@ fn gcc_scalar_builtins_execute_in_all_stages() {
 
 #[test]
 fn overflow_predicate_effect_analysis_has_linear_work() {
-    const DEPTH: usize = 2048;
-    let source = format!(
-        "int main(void){{int x=1,i=0;int r=__builtin_add_overflow_p(1,2,{}++i{});return r||i!=1;}}",
-        "x&&(".repeat(DEPTH),
-        ")".repeat(DEPTH)
-    );
-    crate::test_support::EFFECT_RECIPE_STEPS.with(|steps| steps.set(0));
-    with_module(
-        &source,
-        Target::LinuxGnu,
-        false,
-        Profile::PreAbi,
-        |module, target| {
-            let steps = crate::test_support::EFFECT_RECIPE_STEPS.with(std::cell::Cell::get);
-            eprintln!("overflow effect recipes: {steps} lowering steps for depth {DEPTH}");
-            assert!(
-                steps <= 4 * DEPTH,
-                "effect recipes took {steps} lowering steps for a {DEPTH}-deep chain"
-            );
-            assert_eq!(interpret(module, target).0, 0);
-        },
-    );
+    crate::test_support::on_compilation_stack(|| {
+        const DEPTH: usize = 2048;
+        let source = format!(
+            "int main(void){{int x=1,i=0;int r=__builtin_add_overflow_p(1,2,{}++i{});return \
+             r||i!=1;}}",
+            "x&&(".repeat(DEPTH),
+            ")".repeat(DEPTH)
+        );
+        crate::test_support::EFFECT_RECIPE_STEPS.with(|steps| steps.set(0));
+        with_module(
+            &source,
+            Target::LinuxGnu,
+            false,
+            Profile::PreAbi,
+            |module, target| {
+                let steps = crate::test_support::EFFECT_RECIPE_STEPS.with(std::cell::Cell::get);
+                eprintln!("overflow effect recipes: {steps} lowering steps for depth {DEPTH}");
+                assert!(
+                    steps <= 4 * DEPTH,
+                    "effect recipes took {steps} lowering steps for a {DEPTH}-deep chain"
+                );
+                assert_eq!(interpret(module, target).0, 0);
+            },
+        );
+    });
 }
 
 #[test]

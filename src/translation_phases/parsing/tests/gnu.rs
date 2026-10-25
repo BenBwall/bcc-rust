@@ -16,64 +16,66 @@ use crate::{
 
 #[test]
 fn nested_alignment_operands_have_linear_parser_work() {
-    use super::super::modern::AttributeSpecifier;
-    let depth = 1024;
-    for (prefix, suffix, attribute_count) in [
-        (
-            "int value __attribute__((aligned(",
-            "))); int following;\n",
-            depth + 1,
-        ),
-        ("_Alignas(", ") int value; int following;\n", depth),
-    ] {
-        let mut source = String::from(prefix);
-        for _ in 0..depth {
-            source.push_str("sizeof(int __attribute__((aligned(");
-        }
-        source.push('8');
-        for _ in 0..depth {
-            source.push_str("))))");
-        }
-        source.push_str(suffix);
-        with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
-            assert!(p.errors.is_empty(), "{:?}", p.errors);
-            assert_eq!(p.items.len(), 2);
-            let attributes: Vec<_> = p.parser.syntax.iter::<AttributeSpecifier<'_>>().collect();
-            assert_eq!(attributes.len(), attribute_count);
-            assert!(
-                attributes
-                    .iter()
-                    .all(|a| a.arguments.len() == 1 && !a.recovered)
-            );
-            assert!(
-                p.parser.cursor.alignment_work <= 2 * source.len(),
-                "{} alignment token visits/copies for {} input bytes",
-                p.parser.cursor.alignment_work,
-                source.len()
-            );
-            for attribute in &attributes {
-                for argument in attribute.arguments {
-                    assert_eq!(
-                        p.parser
-                            .context
-                            .string_cache
-                            .at(attribute.tokens[argument.index].contents),
-                        "aligned"
-                    );
-                }
+    crate::test_support::on_compilation_stack(|| {
+        use super::super::modern::AttributeSpecifier;
+        let depth = 1024;
+        for (prefix, suffix, attribute_count) in [
+            (
+                "int value __attribute__((aligned(",
+                "))); int following;\n",
+                depth + 1,
+            ),
+            ("_Alignas(", ") int value; int following;\n", depth),
+        ] {
+            let mut source = String::from(prefix);
+            for _ in 0..depth {
+                source.push_str("sizeof(int __attribute__((aligned(");
             }
-            let outer = attributes
-                .iter()
-                .max_by_key(|attribute| attribute.tokens.len())
-                .unwrap();
-            let original: String = outer
-                .tokens
-                .iter()
-                .map(|token| super::sourced_text(p, token.source_vectors))
-                .collect();
-            assert_eq!(super::sourced_text(p, outer.source_vectors), original);
-        });
-    }
+            source.push('8');
+            for _ in 0..depth {
+                source.push_str("))))");
+            }
+            source.push_str(suffix);
+            with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
+                assert!(p.errors.is_empty(), "{:?}", p.errors);
+                assert_eq!(p.items.len(), 2);
+                let attributes: Vec<_> = p.parser.syntax.iter::<AttributeSpecifier<'_>>().collect();
+                assert_eq!(attributes.len(), attribute_count);
+                assert!(
+                    attributes
+                        .iter()
+                        .all(|a| a.arguments.len() == 1 && !a.recovered)
+                );
+                assert!(
+                    p.parser.cursor.alignment_work <= 2 * source.len(),
+                    "{} alignment token visits/copies for {} input bytes",
+                    p.parser.cursor.alignment_work,
+                    source.len()
+                );
+                for attribute in &attributes {
+                    for argument in attribute.arguments {
+                        assert_eq!(
+                            p.parser
+                                .context
+                                .string_cache
+                                .at(attribute.tokens[argument.index].contents),
+                            "aligned"
+                        );
+                    }
+                }
+                let outer = attributes
+                    .iter()
+                    .max_by_key(|attribute| attribute.tokens.len())
+                    .unwrap();
+                let original: String = outer
+                    .tokens
+                    .iter()
+                    .map(|token| super::sourced_text(p, token.source_vectors))
+                    .collect();
+                assert_eq!(super::sourced_text(p, outer.source_vectors), original);
+            });
+        }
+    });
 }
 
 #[test]
@@ -643,26 +645,28 @@ fn gnu_nodes_preserve_typed_children_and_inspection() {
 
 #[test]
 fn gnu_nesting_and_builtin_expression_delimiters_use_frames() {
-    let mut expression = "1".to_owned();
-    for _ in 0..256 {
-        expression = format!("({{ {expression}; }})");
-    }
-    let source = format!("int f(void){{return {expression};}}\n");
-    with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
-        assert!(p.errors.is_empty(), "{:?}", p.errors);
-    });
-    let mut expression = "1".to_owned();
-    for _ in 0..256 {
-        expression = format!("__builtin_choose_expr(1,{expression},3)");
-    }
-    let source = format!("int f(void){{return {expression};}}\n");
-    with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
-        assert!(p.errors.is_empty(), "{:?}", p.errors);
-    });
-    let source = "int f(int x){__asm__(\"\":\"=r\"((x,x)):\"r\"(x,x)); return \
-                  __builtin_offsetof(struct S,a[1,2].b);}\n";
-    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
-        assert!(p.errors.is_empty(), "{:?}", p.errors);
+    crate::test_support::on_compilation_stack(|| {
+        let mut expression = "1".to_owned();
+        for _ in 0..256 {
+            expression = format!("({{ {expression}; }})");
+        }
+        let source = format!("int f(void){{return {expression};}}\n");
+        with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+        });
+        let mut expression = "1".to_owned();
+        for _ in 0..256 {
+            expression = format!("__builtin_choose_expr(1,{expression},3)");
+        }
+        let source = format!("int f(void){{return {expression};}}\n");
+        with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+        });
+        let source = "int f(int x){__asm__(\"\":\"=r\"((x,x)):\"r\"(x,x)); return \
+                      __builtin_offsetof(struct S,a[1,2].b);}\n";
+        with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+        });
     });
 }
 

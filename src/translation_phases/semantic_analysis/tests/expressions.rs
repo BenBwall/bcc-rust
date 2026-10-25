@@ -578,13 +578,15 @@ fn undeclared_operand_suppresses_dependent_diagnostics() {
 
 #[test]
 fn one_hundred_thousand_expression_nodes_do_not_recurse() {
-    for expression in [
-        format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000)),
-        format!("{}1", "!".repeat(100_000)),
-        format!("1{}", "+1".repeat(100_000)),
-    ] {
-        accepts(&format!("void f(void) {{ {expression}; }}"));
-    }
+    crate::test_support::on_compilation_stack(|| {
+        for expression in [
+            format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000)),
+            format!("{}1", "!".repeat(100_000)),
+            format!("1{}", "+1".repeat(100_000)),
+        ] {
+            accepts(&format!("void f(void) {{ {expression}; }}"));
+        }
+    });
 }
 
 #[test]

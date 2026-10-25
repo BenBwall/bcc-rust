@@ -29,6 +29,15 @@ std::thread_local! {
     pub(crate) static THREAD_PREFILTER_EDGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Runs a test body on a demand-paged compilation stack, as the command line
+/// runs compilation, for fixtures that nest deeper than libtest's thread
+/// stack holds. The reservation is never committed up front, so parallel
+/// tests can still fork child processes.
+pub(crate) fn on_compilation_stack<R: Send>(body: impl FnOnce() -> R + Send) -> R {
+    crate::with_compilation_stack(16 * 1024 * 1024 * 1024, body)
+        .expect("reserve a test compilation stack")
+}
+
 use std::{
     path::{
         Path,

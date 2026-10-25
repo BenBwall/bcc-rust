@@ -60,7 +60,7 @@ The language parser is a recursive descent parser: each production is a `parse_*
 
 Double-E is the precedence reducer inside the expression production. Productions return typed syntax directly; `None` only propagates a recorded terminal resource failure. Recovery scans through `Parser::recover` with production-specific synchronization sets. The language parser and preprocessor evaluator intentionally own independent reducers because their operands, outputs, diagnostics, and legal operators differ.
 
-The parser covers whole translation units, expressions, type names, initializers, declarations, functions, compounds, statements, recovery, and inspection. Keep syntax parsing separate from semantic analysis, which consumes the finished `ParsedTranslationUnit` and never feeds back into the parser. Library tests get a 1 GiB lazily committed thread stack through `RUST_MIN_STACK` in `.cargo/config.toml`; deep-nesting tests rely on it.
+The parser covers whole translation units, expressions, type names, initializers, declarations, functions, compounds, statements, recovery, and inspection. Keep syntax parsing separate from semantic analysis, which consumes the finished `ParsedTranslationUnit` and never feeds back into the parser. A test whose fixture nests deeper than libtest's thread stack holds wraps its body in `test_support::on_compilation_stack`, which runs it on a reserved stack as the command line does; do not raise `RUST_MIN_STACK` instead, since committed thread stacks make forking child processes fail under parallel tests.
 
 ## First-party skills
 

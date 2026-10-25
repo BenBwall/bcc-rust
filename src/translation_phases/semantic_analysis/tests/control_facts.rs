@@ -303,56 +303,58 @@ fn m1_parameter_actions_and_cast_effects_are_retained_once() {
 
 #[test]
 fn m1_deep_region_construction_and_jump_queries_are_bounded() {
-    for depth in [128usize, 2_048, 16_384] {
-        for enters in [false, true] {
-            let mut source = String::from("void f(int n){outside:;");
-            if enters {
-                source.push_str("goto inside;");
-            }
-            for level in 0..depth {
-                write!(source, "{{typedef int T{level}[n];").unwrap();
-                if !enters {
-                    source.push_str("goto outside;");
-                }
-            }
-            source.push_str("inside:;");
-            if enters {
-                for _ in 0..depth {
+    crate::test_support::on_compilation_stack(|| {
+        for depth in [128usize, 2_048, 16_384] {
+            for enters in [false, true] {
+                let mut source = String::from("void f(int n){outside:;");
+                if enters {
                     source.push_str("goto inside;");
                 }
+                for level in 0..depth {
+                    write!(source, "{{typedef int T{level}[n];").unwrap();
+                    if !enters {
+                        source.push_str("goto outside;");
+                    }
+                }
+                source.push_str("inside:;");
+                if enters {
+                    for _ in 0..depth {
+                        source.push_str("goto inside;");
+                    }
+                }
+                for _ in 0..=depth {
+                    source.push('}');
+                }
+                with_source(&source, |context, s| {
+                    assert_eq!(context.pending_error_count(), usize::from(enters));
+                    let facts = &s.control;
+                    assert_eq!(facts.jumps.len(), depth + usize::from(enters));
+                    assert_eq!(facts.construction_work, 5 * facts.regions.len());
+                    let queries = facts.statements.len() + facts.jumps.len() + usize::from(enters);
+                    let logarithm = usize::try_from(facts.regions.len().bit_width()).unwrap();
+                    assert!(
+                        facts.query_work <= queries * (3 * logarithm + 4),
+                        "{} for {queries} queries",
+                        facts.query_work
+                    );
+                    println!(
+                        "M1 depth={depth} enters={enters} regions={} statements={} jumps={} \
+                         construction={} query={} tu_used={} tu_committed={}",
+                        facts.regions.len(),
+                        facts.statements.len(),
+                        facts.jumps.len(),
+                        facts.construction_work,
+                        facts.query_work,
+                        context.tu_arena().used(),
+                        context.tu_arena().committed()
+                    );
+                });
             }
-            for _ in 0..=depth {
-                source.push('}');
-            }
-            with_source(&source, |context, s| {
-                assert_eq!(context.pending_error_count(), usize::from(enters));
-                let facts = &s.control;
-                assert_eq!(facts.jumps.len(), depth + usize::from(enters));
-                assert_eq!(facts.construction_work, 5 * facts.regions.len());
-                let queries = facts.statements.len() + facts.jumps.len() + usize::from(enters);
-                let logarithm = usize::try_from(facts.regions.len().bit_width()).unwrap();
-                assert!(
-                    facts.query_work <= queries * (3 * logarithm + 4),
-                    "{} for {queries} queries",
-                    facts.query_work
-                );
-                println!(
-                    "M1 depth={depth} enters={enters} regions={} statements={} jumps={} \
-                     construction={} query={} tu_used={} tu_committed={}",
-                    facts.regions.len(),
-                    facts.statements.len(),
-                    facts.jumps.len(),
-                    facts.construction_work,
-                    facts.query_work,
-                    context.tu_arena().used(),
-                    context.tu_arena().committed()
-                );
-            });
         }
-    }
-    assert!(!std::mem::needs_drop::<Region>());
-    assert!(!std::mem::needs_drop::<StatementFacts<'_>>());
-    assert!(!std::mem::needs_drop::<JumpFacts>());
-    assert!(!std::mem::needs_drop::<SwitchFacts<'_>>());
-    assert!(!std::mem::needs_drop::<BoundSiteFacts<'_>>());
+        assert!(!std::mem::needs_drop::<Region>());
+        assert!(!std::mem::needs_drop::<StatementFacts<'_>>());
+        assert!(!std::mem::needs_drop::<JumpFacts>());
+        assert!(!std::mem::needs_drop::<SwitchFacts<'_>>());
+        assert!(!std::mem::needs_drop::<BoundSiteFacts<'_>>());
+    });
 }

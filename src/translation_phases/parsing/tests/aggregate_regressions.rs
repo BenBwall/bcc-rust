@@ -319,34 +319,36 @@ fn qualified_variable_length_marker_is_rejected_in_every_abstract_suffix() {
 /// an abstract one does not.
 #[test]
 fn deeply_nested_function_declarators_track_whether_they_are_named() {
-    let depth = 2_000;
-    let source = format!("int {}x{};", "(*".repeat(depth), ")()".repeat(depth));
-    with_parse(&source, |parsed| {
-        assert_eq!(errors(parsed), []);
-        let declaration = declaration(parsed, 0);
-        let [init_declarator] = declaration.init_declarators.as_slice() else {
-            panic!("expected one declarator")
-        };
-        let directs = init_declarator.declarator.kind;
-        assert!(matches!(
-            directs.last(),
-            Some(DirectDeclarator::KAndRStyleFunction { .. })
-        ));
-    });
+    crate::test_support::on_compilation_stack(|| {
+        let depth = 2_000;
+        let source = format!("int {}x{};", "(*".repeat(depth), ")()".repeat(depth));
+        with_parse(&source, |parsed| {
+            assert_eq!(errors(parsed), []);
+            let declaration = declaration(parsed, 0);
+            let [init_declarator] = declaration.init_declarators.as_slice() else {
+                panic!("expected one declarator")
+            };
+            let directs = init_declarator.declarator.kind;
+            assert!(matches!(
+                directs.last(),
+                Some(DirectDeclarator::KAndRStyleFunction { .. })
+            ));
+        });
 
-    // A named parenthesized declarator accepts an identifier list; an
-    // abstract one parses its contents as a prototype.
-    with_parse("int (*(*f)(a))(b);", |named| {
-        assert_eq!(errors(named), []);
-    });
-    with_parse("void p(int (*)());", |abstract_parameter| {
-        assert_eq!(errors(abstract_parameter), []);
-    });
-    with_parse("void p(int (*)(a));", |parameter| {
-        assert!(
-            !errors(parameter).is_empty(),
-            "an abstract function suffix has no identifier list"
-        );
+        // A named parenthesized declarator accepts an identifier list; an
+        // abstract one parses its contents as a prototype.
+        with_parse("int (*(*f)(a))(b);", |named| {
+            assert_eq!(errors(named), []);
+        });
+        with_parse("void p(int (*)());", |abstract_parameter| {
+            assert_eq!(errors(abstract_parameter), []);
+        });
+        with_parse("void p(int (*)(a));", |parameter| {
+            assert!(
+                !errors(parameter).is_empty(),
+                "an abstract function suffix has no identifier list"
+            );
+        });
     });
 }
 

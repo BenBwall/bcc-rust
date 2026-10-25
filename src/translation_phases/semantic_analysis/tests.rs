@@ -237,22 +237,24 @@ fn constraints_are_structured_and_source_backed() {
 
 #[test]
 fn deeply_nested_pointer_and_blocks_do_not_recurse() {
-    let pointers = format!("int {}p;", "*".repeat(100_000));
-    with_source(&pointers, |context, s| {
-        assert_eq!(context.pending_error_count(), 0);
-        assert_eq!(
-            s.types.layout(s.bindings[0].ty),
-            Some(Layout { size: 8, align: 8 })
+    crate::test_support::on_compilation_stack(|| {
+        let pointers = format!("int {}p;", "*".repeat(100_000));
+        with_source(&pointers, |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            assert_eq!(
+                s.types.layout(s.bindings[0].ty),
+                Some(Layout { size: 8, align: 8 })
+            );
+        });
+        let blocks = format!(
+            "void f(void) {{{}int x;{}}}",
+            "{".repeat(10_000),
+            "}".repeat(10_000)
         );
-    });
-    let blocks = format!(
-        "void f(void) {{{}int x;{}}}",
-        "{".repeat(10_000),
-        "}".repeat(10_000)
-    );
-    with_source(&blocks, |context, s| {
-        assert_eq!(context.pending_error_count(), 0);
-        assert!(s.scopes.len() > 10_000);
+        with_source(&blocks, |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            assert!(s.scopes.len() > 10_000);
+        });
     });
 }
 
@@ -605,9 +607,11 @@ fn packed_enum_attributes_retain_the_selected_compatible_type() {
 
 #[test]
 fn deeply_nested_conditional_constants_use_cached_models() {
-    let source = format!("enum E {{A={}1}}; int a[A];", "0?0:".repeat(25_000));
-    with_source(&source, |context, _| {
-        assert_eq!(context.pending_error_count(), 0);
+    crate::test_support::on_compilation_stack(|| {
+        let source = format!("enum E {{A={}1}}; int a[A];", "0?0:".repeat(25_000));
+        with_source(&source, |context, _| {
+            assert_eq!(context.pending_error_count(), 0);
+        });
     });
 }
 

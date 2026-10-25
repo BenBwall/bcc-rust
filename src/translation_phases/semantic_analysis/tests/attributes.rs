@@ -99,76 +99,76 @@ fn alignas_runtime_array_types_reject_weakened_alignment() {
 
 #[test]
 fn nested_alignment_operands_retain_their_constant_results() {
-    for depth in [32, 1024] {
-        let source = format!(
-            "int value __attribute__((aligned({}8{}))); int following;",
-            "sizeof(int __attribute__((aligned(".repeat(depth),
-            "))))".repeat(depth)
-        );
-        with_source(&source, |context, sema| {
-            assert_eq!(
-                context.error_count(),
-                0,
-                "{:?}",
-                context.take_pending_errors()
+    crate::test_support::on_compilation_stack(|| {
+        for depth in [32, 1024] {
+            let source = format!(
+                "int value __attribute__((aligned({}8{}))); int following;",
+                "sizeof(int __attribute__((aligned(".repeat(depth),
+                "))))".repeat(depth)
             );
-            for name in ["value", "following"] {
-                let binding = sema
-                    .bindings
-                    .iter()
-                    .find(|binding| context.string_cache.at(binding.name.name) == name)
-                    .unwrap();
+            with_source(&source, |context, sema| {
                 assert_eq!(
-                    sema.types.layout(binding.ty),
-                    Some(Layout { size: 4, align: 4 })
+                    context.error_count(),
+                    0,
+                    "{:?}",
+                    context.take_pending_errors()
                 );
-            }
-        });
-    }
+                for name in ["value", "following"] {
+                    let binding = sema
+                        .bindings
+                        .iter()
+                        .find(|binding| context.string_cache.at(binding.name.name) == name)
+                        .unwrap();
+                    assert_eq!(
+                        sema.types.layout(binding.ty),
+                        Some(Layout { size: 4, align: 4 })
+                    );
+                }
+            });
+        }
+    });
 }
 
 #[test]
 fn alignment_constant_expressions_keep_constraint_diagnostics() {
-    with_source(
-        "[[vendor::aligned(!; arbitrary, {tokens})]] int object; int following;",
-        |context, _| {
+    crate::test_support::on_compilation_stack(|| {
+        with_source(
+            "[[vendor::aligned(!; arbitrary, {tokens})]] int object; int following;",
+            |context, _| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{:?}",
+                    context.take_pending_errors()
+                );
+            },
+        );
+        for argument in ["sizeof(char)+2", "_Alignof(int)+1", "n"] {
+            let source = format!(
+                "void f(int n) {{ int a __attribute__((aligned({argument}))); int following; }}"
+            );
+            with_source(&source, |context, sema| {
+                let errors = context.take_pending_errors();
+                assert!(errors.iter().any(|error| matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::InvalidAlignmentAttribute)), "{argument}: {errors:?}");
+                assert!(sema.bindings.iter().any(|binding| {
+                    context.string_cache.at(binding.name.name) == "following"
+                        && !sema.types.unanalyzed(binding.ty)
+                }));
+            });
+        }
+        let source = format!(
+            "typedef int T; int x __attribute__((aligned({}sizeof(T)*2{}))); int following;",
+            "(".repeat(2000),
+            ")".repeat(2000)
+        );
+        with_source(&source, |context, _| {
             assert_eq!(
                 context.error_count(),
                 0,
                 "{:?}",
                 context.take_pending_errors()
             );
-        },
-    );
-    for argument in ["sizeof(char)+2", "_Alignof(int)+1", "n"] {
-        let source = format!(
-            "void f(int n) {{ int a __attribute__((aligned({argument}))); int following; }}"
-        );
-        with_source(&source, |context, sema| {
-            let errors = context.take_pending_errors();
-            assert!(errors.iter().any(|error| matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::InvalidAlignmentAttribute)), "{argument}: {errors:?}");
-            assert!(
-                sema.bindings
-                    .iter()
-                    .any(
-                        |binding| context.string_cache.at(binding.name.name) == "following"
-                            && !sema.types.unanalyzed(binding.ty)
-                    )
-            );
         });
-    }
-    let source = format!(
-        "typedef int T; int x __attribute__((aligned({}sizeof(T)*2{}))); int following;",
-        "(".repeat(2000),
-        ")".repeat(2000)
-    );
-    with_source(&source, |context, _| {
-        assert_eq!(
-            context.error_count(),
-            0,
-            "{:?}",
-            context.take_pending_errors()
-        );
     });
 }
 

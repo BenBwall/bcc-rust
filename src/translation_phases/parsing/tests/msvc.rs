@@ -435,16 +435,18 @@ fn every_vendor_input_prefix_terminates_and_restores_machine_state() {
 
 #[test]
 fn deeply_nested_seh_uses_the_explicit_frame_stack() {
-    let source = format!(
-        "int f(void){{ {} __leave; {} }}\n",
-        "__try {".repeat(256),
-        "} __finally {}".repeat(256)
-    );
-    with_parse_configuration(
-        &source,
-        CompilerConfiguration::default().with_msvc_feature(MsvcFeature::Seh, true),
-        |p| assert!(p.errors.is_empty(), "{:?}", p.errors),
-    );
+    crate::test_support::on_compilation_stack(|| {
+        let source = format!(
+            "int f(void){{ {} __leave; {} }}\n",
+            "__try {".repeat(256),
+            "} __finally {}".repeat(256)
+        );
+        with_parse_configuration(
+            &source,
+            CompilerConfiguration::default().with_msvc_feature(MsvcFeature::Seh, true),
+            |p| assert!(p.errors.is_empty(), "{:?}", p.errors),
+        );
+    });
 }
 
 #[test]

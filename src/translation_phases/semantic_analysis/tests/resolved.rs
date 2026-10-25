@@ -389,77 +389,79 @@ fn m3_member_facts_keep_owner_qualifiers_alignment_and_bit_fields() {
 
 #[test]
 fn m3_deep_wrappers_and_labeled_tails_have_bounded_work() {
-    let wrappers = [
-        ("(", ")"),
-        ("__extension__ (", ")"),
-        ("_Generic(0,int:(", "),default:0)"),
-        ("__builtin_choose_expr(1,(", "),0)"),
-    ];
-    for depth in [128usize, 2_048, 16_384] {
-        let mut source = String::from("int f(int);int g(void){");
-        for i in 0..depth {
-            source.push_str(wrappers[i % wrappers.len()].0);
-        }
-        source.push('f');
-        for i in (0..depth).rev() {
-            source.push_str(wrappers[i % wrappers.len()].1);
-        }
-        source.push_str("(3);return ({");
-        for i in 0..depth {
-            write!(source, "L{i}:").unwrap();
-        }
-        source.push_str("4;});}");
-        with_source(&source, |context, sema| {
-            assert_eq!(
-                context.error_count(),
-                0,
-                "{:?}",
-                context.take_pending_errors()
-            );
-            let work = sema.resolved.work;
-            assert!(work[0] <= 2 * sema.expressions.len());
-            assert_eq!(work[1], sema.control.statements.len());
-            for info in sema.expressions {
-                if matches!(
-                    info.expression.kind,
-                    ExpressionType::Parenthesized { .. }
-                        | ExpressionType::Generic(_)
-                        | ExpressionType::Unary {
-                            operator: UnaryOperator::Extension,
-                            ..
-                        }
-                ) {
-                    assert!(sema.designation(info.expression).is_some());
-                }
+    crate::test_support::on_compilation_stack(|| {
+        let wrappers = [
+            ("(", ")"),
+            ("__extension__ (", ")"),
+            ("_Generic(0,int:(", "),default:0)"),
+            ("__builtin_choose_expr(1,(", "),0)"),
+        ];
+        for depth in [128usize, 2_048, 16_384] {
+            let mut source = String::from("int f(int);int g(void){");
+            for i in 0..depth {
+                source.push_str(wrappers[i % wrappers.len()].0);
             }
-            let call = sema
-                .expressions
-                .iter()
-                .find_map(|info| sema.call_facts(info.expression))
-                .unwrap();
-            assert!(matches!(call.callee, Callee::Direct { .. }));
-            let tail = sema
-                .expressions
-                .iter()
-                .find_map(|info| sema.statement_expression_facts(info.expression))
-                .unwrap();
-            assert!(tail.value_tail.is_some());
-            println!(
-                "M3 depth={depth} expressions={} statements={} designation_steps={} tail_steps={} \
-                 tu_used={} tu_committed={}",
-                sema.expressions.len(),
-                sema.control.statements.len(),
-                work[0],
-                work[1],
-                context.tu_arena().used(),
-                context.tu_arena().committed()
-            );
-        });
-    }
-    assert!(!std::mem::needs_drop::<facts::resolved::Designation<'_>>());
-    assert!(!std::mem::needs_drop::<CallFacts<'_>>());
-    assert!(!std::mem::needs_drop::<facts::resolved::MemberFacts>());
-    assert!(!std::mem::needs_drop::<
-        facts::resolved::StatementExpressionFacts<'_>,
-    >());
+            source.push('f');
+            for i in (0..depth).rev() {
+                source.push_str(wrappers[i % wrappers.len()].1);
+            }
+            source.push_str("(3);return ({");
+            for i in 0..depth {
+                write!(source, "L{i}:").unwrap();
+            }
+            source.push_str("4;});}");
+            with_source(&source, |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{:?}",
+                    context.take_pending_errors()
+                );
+                let work = sema.resolved.work;
+                assert!(work[0] <= 2 * sema.expressions.len());
+                assert_eq!(work[1], sema.control.statements.len());
+                for info in sema.expressions {
+                    if matches!(
+                        info.expression.kind,
+                        ExpressionType::Parenthesized { .. }
+                            | ExpressionType::Generic(_)
+                            | ExpressionType::Unary {
+                                operator: UnaryOperator::Extension,
+                                ..
+                            }
+                    ) {
+                        assert!(sema.designation(info.expression).is_some());
+                    }
+                }
+                let call = sema
+                    .expressions
+                    .iter()
+                    .find_map(|info| sema.call_facts(info.expression))
+                    .unwrap();
+                assert!(matches!(call.callee, Callee::Direct { .. }));
+                let tail = sema
+                    .expressions
+                    .iter()
+                    .find_map(|info| sema.statement_expression_facts(info.expression))
+                    .unwrap();
+                assert!(tail.value_tail.is_some());
+                println!(
+                    "M3 depth={depth} expressions={} statements={} designation_steps={} \
+                     tail_steps={} tu_used={} tu_committed={}",
+                    sema.expressions.len(),
+                    sema.control.statements.len(),
+                    work[0],
+                    work[1],
+                    context.tu_arena().used(),
+                    context.tu_arena().committed()
+                );
+            });
+        }
+        assert!(!std::mem::needs_drop::<facts::resolved::Designation<'_>>());
+        assert!(!std::mem::needs_drop::<CallFacts<'_>>());
+        assert!(!std::mem::needs_drop::<facts::resolved::MemberFacts>());
+        assert!(!std::mem::needs_drop::<
+            facts::resolved::StatementExpressionFacts<'_>,
+        >());
+    });
 }

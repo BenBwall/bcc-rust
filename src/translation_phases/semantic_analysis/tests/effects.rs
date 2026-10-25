@@ -351,57 +351,59 @@ fn m5_recipes_schedule_only_effects_and_conditions() {
 /// for deep operators, selections and nested statement expressions alike.
 #[test]
 fn m5_deep_effect_production_is_linear() {
-    for depth in [128usize, 2_048, 16_384] {
-        let mut source = String::from("int f(int);int g;int t(void){return ");
-        for i in 0..depth {
-            source.push_str(match i % 4 {
-                | 0 => "g&&(",
-                | 1 => "g?(",
-                | 2 => "_Generic(0,int:(",
-                | _ => "({g++;",
+    crate::test_support::on_compilation_stack(|| {
+        for depth in [128usize, 2_048, 16_384] {
+            let mut source = String::from("int f(int);int g;int t(void){return ");
+            for i in 0..depth {
+                source.push_str(match i % 4 {
+                    | 0 => "g&&(",
+                    | 1 => "g?(",
+                    | 2 => "_Generic(0,int:(",
+                    | _ => "({g++;",
+                });
+            }
+            source.push_str("f(g++)");
+            for i in (0..depth).rev() {
+                source.push_str(match i % 4 {
+                    | 0 => ")",
+                    | 1 => "):g++",
+                    | 2 => "),default:f(0))",
+                    | _ => ";})",
+                });
+            }
+            source.push_str(";}");
+            with_source(&source, |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{:?}",
+                    context.take_pending_errors()
+                );
+                let work = sema.effects.work;
+                let expressions = sema.expressions.len();
+                let statements = sema.control.statements.len();
+                assert!(
+                    work <= 4 * expressions + statements,
+                    "{work} effect steps for {expressions} expressions and {statements} statements"
+                );
+                let mut line = String::new();
+                write!(
+                    line,
+                    "M5 depth={depth} expressions={expressions} statements={statements} \
+                     effect_steps={work} tu_used={}",
+                    context.tu_arena().used()
+                )
+                .unwrap();
+                println!("{line}");
             });
         }
-        source.push_str("f(g++)");
-        for i in (0..depth).rev() {
-            source.push_str(match i % 4 {
-                | 0 => ")",
-                | 1 => "):g++",
-                | 2 => "),default:f(0))",
-                | _ => ";})",
-            });
-        }
-        source.push_str(";}");
-        with_source(&source, |context, sema| {
-            assert_eq!(
-                context.error_count(),
-                0,
-                "{:?}",
-                context.take_pending_errors()
-            );
-            let work = sema.effects.work;
-            let expressions = sema.expressions.len();
-            let statements = sema.control.statements.len();
-            assert!(
-                work <= 4 * expressions + statements,
-                "{work} effect steps for {expressions} expressions and {statements} statements"
-            );
-            let mut line = String::new();
-            write!(
-                line,
-                "M5 depth={depth} expressions={expressions} statements={statements} \
-                 effect_steps={work} tu_used={}",
-                context.tu_arena().used()
-            )
-            .unwrap();
-            println!("{line}");
-        });
-    }
-    assert!(!std::mem::needs_drop::<EffectRecipe<'_>>());
-    assert_eq!(
-        size_of::<facts::effects::ExpressionEffects>(),
-        4,
-        "two contexts of one effect byte and one recipe byte"
-    );
+        assert!(!std::mem::needs_drop::<EffectRecipe<'_>>());
+        assert_eq!(
+            size_of::<facts::effects::ExpressionEffects>(),
+            4,
+            "two contexts of one effect byte and one recipe byte"
+        );
+    });
 }
 
 /// A label address in the destination operand of an overflow predicate is

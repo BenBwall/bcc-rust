@@ -286,19 +286,21 @@ fn identifier_list_diagnostic_at_end_of_input_has_no_typedef_note() {
 /// probes per lookup and O(n^2) for the translation unit.
 #[test]
 fn typedef_lookups_in_deep_block_nesting_use_a_bounded_number_of_probes() {
-    let depth = 2_000;
-    let source = format!(
-        "typedef int T;\nvoid g(void) {{{}{}}}\n",
-        "{ T x;".repeat(depth),
-        "}".repeat(depth)
-    );
-    with_parse(&source, |parsed| {
-        assert_eq!(errors(parsed), Vec::<&ParserErrorType<'_>>::new());
-        let probes = parsed.parser.scopes.lookup_probes.get();
-        assert!(
-            probes <= 64 * depth,
-            "{probes} scope probes for {depth} nested lookups"
+    crate::test_support::on_compilation_stack(|| {
+        let depth = 2_000;
+        let source = format!(
+            "typedef int T;\nvoid g(void) {{{}{}}}\n",
+            "{ T x;".repeat(depth),
+            "}".repeat(depth)
         );
+        with_parse(&source, |parsed| {
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType<'_>>::new());
+            let probes = parsed.parser.scopes.lookup_probes.get();
+            assert!(
+                probes <= 64 * depth,
+                "{probes} scope probes for {depth} nested lookups"
+            );
+        });
     });
 }
 

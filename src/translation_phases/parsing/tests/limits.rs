@@ -69,25 +69,27 @@ fn an_early_prototype_record_survives_later_parameter_lists() {
 
 #[test]
 fn parenthesized_declarators_meet_the_c99_floor_and_stress_the_heap_stack() {
-    for depth in [63, 4_096] {
-        let source = format!("int {}deep{};\n", "(".repeat(depth), ")".repeat(depth));
-        with_parse(&source, |parsed| {
-            assert_eq!(parsed.items.len(), 1);
-            assert!(
-                parser_errors(parsed).next().is_none(),
-                "{:#?}",
-                parsed.errors
-            );
-            assert!(
-                parsed.parser.max_depth > depth,
-                "every parenthesized declarator is a nested production"
-            );
-            assert!(
-                parsed.parser.context.source_segment_count() <= depth * 8 + 32,
-                "source provenance must grow linearly with grammar depth"
-            );
-        });
-    }
+    crate::test_support::on_compilation_stack(|| {
+        for depth in [63, 4_096] {
+            let source = format!("int {}deep{};\n", "(".repeat(depth), ")".repeat(depth));
+            with_parse(&source, |parsed| {
+                assert_eq!(parsed.items.len(), 1);
+                assert!(
+                    parser_errors(parsed).next().is_none(),
+                    "{:#?}",
+                    parsed.errors
+                );
+                assert!(
+                    parsed.parser.max_depth > depth,
+                    "every parenthesized declarator is a nested production"
+                );
+                assert!(
+                    parsed.parser.context.source_segment_count() <= depth * 8 + 32,
+                    "source provenance must grow linearly with grammar depth"
+                );
+            });
+        }
+    });
 }
 
 #[test]
@@ -306,32 +308,34 @@ fn long_declaration_lists_keep_source_storage_linear() {
 
 #[test]
 fn source_storage_is_linear_in_token_count() {
-    // Frames merge provenance one token or child at a time; each fetched
-    // token must be stored once rather than re-copied for every enclosing
-    // construct.
-    let source_segments = |count: usize| {
-        let source = format!(
-            "struct S {{ int a : 3; int (*f)(int); }};\nint f(int x) {{ int t[2] = {{ [1] = {}x{} \
-             }}; {} return t[0]; }}\n",
-            "(".repeat(count),
-            ")".repeat(count),
-            "if (x) { x = (x + 1) * (x - 2) / 3; } ".repeat(count),
-        );
-        with_parse(&source, |parsed| {
-            assert!(
-                parser_errors(parsed).next().is_none(),
-                "{:#?}",
-                parsed.errors
+    crate::test_support::on_compilation_stack(|| {
+        // Frames merge provenance one token or child at a time; each fetched
+        // token must be stored once rather than re-copied for every enclosing
+        // construct.
+        let source_segments = |count: usize| {
+            let source = format!(
+                "struct S {{ int a : 3; int (*f)(int); }};\nint f(int x) {{ int t[2] = {{ [1] = \
+                 {}x{} }}; {} return t[0]; }}\n",
+                "(".repeat(count),
+                ")".repeat(count),
+                "if (x) { x = (x + 1) * (x - 2) / 3; } ".repeat(count),
             );
-            parsed.parser.context.source_segment_count()
-        })
-    };
-    let small = source_segments(256);
-    let large = source_segments(1_024);
-    assert!(
-        large <= small * 5,
-        "source storage grew superlinearly: {small} -> {large} segments"
-    );
+            with_parse(&source, |parsed| {
+                assert!(
+                    parser_errors(parsed).next().is_none(),
+                    "{:#?}",
+                    parsed.errors
+                );
+                parsed.parser.context.source_segment_count()
+            })
+        };
+        let small = source_segments(256);
+        let large = source_segments(1_024);
+        assert!(
+            large <= small * 5,
+            "source storage grew superlinearly: {small} -> {large} segments"
+        );
+    });
 }
 
 #[test]

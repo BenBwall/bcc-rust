@@ -63,29 +63,31 @@ fn source_segments_after_parsing(source: &str) -> usize {
 
 #[test]
 fn an_error_under_deep_nesting_keeps_provenance_linear() {
-    // Every enclosing cast used to copy the growing provenance of the
-    // error operand, so 6000 casts exceeded the 40 million segment budget.
-    let depth = 2_000;
-    let source = format!(
-        "typedef int T; int a;\nvoid g(void){{ a = {}; }}\nint y = ;\n",
-        "(T)".repeat(depth)
-    );
-    let segments = source_segments_after_parsing(&source);
-    assert!(
-        segments < 50 * depth,
-        "{segments} segments for depth {depth}"
-    );
+    crate::test_support::on_compilation_stack(|| {
+        // Every enclosing cast used to copy the growing provenance of the
+        // error operand, so 6000 casts exceeded the 40 million segment budget.
+        let depth = 2_000;
+        let source = format!(
+            "typedef int T; int a;\nvoid g(void){{ a = {}; }}\nint y = ;\n",
+            "(T)".repeat(depth)
+        );
+        let segments = source_segments_after_parsing(&source);
+        assert!(
+            segments < 50 * depth,
+            "{segments} segments for depth {depth}"
+        );
 
-    let source = format!(
-        "int f(int);\nvoid g(void){{ {}x +{}; }}\n",
-        "f(".repeat(depth),
-        ")".repeat(depth)
-    );
-    let segments = source_segments_after_parsing(&source);
-    assert!(
-        segments < 50 * depth,
-        "{segments} segments for depth {depth}"
-    );
+        let source = format!(
+            "int f(int);\nvoid g(void){{ {}x +{}; }}\n",
+            "f(".repeat(depth),
+            ")".repeat(depth)
+        );
+        let segments = source_segments_after_parsing(&source);
+        assert!(
+            segments < 50 * depth,
+            "{segments} segments for depth {depth}"
+        );
+    });
 }
 
 #[test]
@@ -117,13 +119,15 @@ fn inspection_lists_do_while_body_before_condition() {
 
 #[test]
 fn deeply_nested_inspection_has_bounded_indentation_and_explicit_depth() {
-    let source = format!("int f(void) {{ return {}1; }}\n", "- ".repeat(1000));
-    let tree = located_tree(&source);
-    assert!(tree.len() < 200_000, "{} output bytes", tree.len());
-    assert!(
-        tree.contains("[depth="),
-        "deep indentation must retain its actual depth"
-    );
+    crate::test_support::on_compilation_stack(|| {
+        let source = format!("int f(void) {{ return {}1; }}\n", "- ".repeat(1000));
+        let tree = located_tree(&source);
+        assert!(tree.len() < 200_000, "{} output bytes", tree.len());
+        assert!(
+            tree.contains("[depth="),
+            "deep indentation must retain its actual depth"
+        );
+    });
 }
 
 #[test]

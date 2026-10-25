@@ -555,30 +555,35 @@ fn folded_switch_rejects_a_case_label_in_a_type_name() {
 /// through nested `__typeof__` operands and casts (PR #117 review).
 #[test]
 fn noreturn_types_have_no_native_stack_limit() {
-    let operand = format!("{}p{}", "(__typeof__(".repeat(10_000), "))0".repeat(10_000));
-    clean(&format!(
-        "void (*p)(void); void t(void) {{ __typeof__({operand}) x = 0; (void)x; ({operand})(); }}"
-    ));
+    crate::test_support::on_compilation_stack(|| {
+        let operand = format!("{}p{}", "(__typeof__(".repeat(10_000), "))0".repeat(10_000));
+        clean(&format!(
+            "void (*p)(void); void t(void) {{ __typeof__({operand}) x = 0; (void)x; \
+             ({operand})(); }}"
+        ));
+    });
 }
 
 #[test]
 fn statement_analysis_has_no_native_stack_limit() {
-    for prefix in ["if(1)", "while(1)", "{"] {
-        let mut source = String::from("void f(void) {");
-        source.push_str(&prefix.repeat(10_000));
-        source.push(';');
-        if prefix == "{" {
-            source.push_str(&"}".repeat(10_000));
+    crate::test_support::on_compilation_stack(|| {
+        for prefix in ["if(1)", "while(1)", "{"] {
+            let mut source = String::from("void f(void) {");
+            source.push_str(&prefix.repeat(10_000));
+            source.push(';');
+            if prefix == "{" {
+                source.push_str(&"}".repeat(10_000));
+            }
+            source.push('}');
+            clean(&source);
         }
-        source.push('}');
+        let mut source = String::from("void f(int n) {switch(n) {");
+        for n in 0..10_000 {
+            write!(source, "case {n}:").unwrap();
+        }
+        source.push_str(";}}");
         clean(&source);
-    }
-    let mut source = String::from("void f(int n) {switch(n) {");
-    for n in 0..10_000 {
-        write!(source, "case {n}:").unwrap();
-    }
-    source.push_str(";}}");
-    clean(&source);
+    });
 }
 
 #[test]
@@ -863,91 +868,93 @@ fn unused_static_functions_follow_their_warning_group() {
 /// another order.
 #[test]
 fn emission_model_queries_stay_linear() {
-    let length = 64_000;
-    let size = 20_000;
-    let depth = 16_000;
-    let mut table = format!("static const int t[{size}] = {{");
-    for index in 0..size {
-        write!(table, "{},", index % 7).unwrap();
-    }
-    table.push_str("}; int f(void) { int r = 0; ");
-    for index in 0..size {
-        write!(table, "if (t[{index}]) r++; ").unwrap();
-    }
-    table.push_str("return r; }");
-    let reverse = |count| {
-        let mut source = format!("static const int t[{count}] = {{");
-        for index in (0..count).rev() {
-            write!(source, "[{index}]={},", index % 7).unwrap();
+    crate::test_support::on_compilation_stack(|| {
+        let length = 64_000;
+        let size = 20_000;
+        let depth = 16_000;
+        let mut table = format!("static const int t[{size}] = {{");
+        for index in 0..size {
+            write!(table, "{},", index % 7).unwrap();
         }
-        source.push_str("}; int f(void) { if (t[1]) return 1; return 0; }");
-        source
-    };
-    let repeated_strlen = format!(
-        "static const char s[] = \"{}\"; int f(void) {{ int r=0; {} return r; }}",
-        "a".repeat(length),
-        "if (__builtin_strlen(s)) r++;".repeat(400)
-    );
-    let mut blocks = String::from("__attribute__((noreturn)) void die(void); void f(void) { ");
-    for index in 0..depth {
-        write!(blocks, "l{index}: {{ die(); ").unwrap();
-    }
-    blocks.push_str(&"}".repeat(depth + 1));
-    let assignment = format!(
-        "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} = 1; }}",
-        "a[".repeat(depth),
-        " = 1]".repeat(depth)
-    );
-    let compound = format!(
-        "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} += 1; }}",
-        "a[".repeat(depth),
-        " += 1]".repeat(depth)
-    );
-    let arguments = format!(
-        "void abort(void); int g(int, int); void f(void) {{ abort(), {}0{}; }}",
-        "g(".repeat(depth),
-        ", 0)".repeat(depth)
-    );
-    let msvc = crate::configuration::CompilerConfiguration::default()
-        .with_target(crate::target::Target::WindowsMsvc);
-    for (source, configuration, budget) in [
-        (
-            format!(
-                "static const char s[] = \"{}\"; int f(void) {{ if (__builtin_strlen(s) == 0) \
-                 return 1; return 0; }}",
-                "a".repeat(length)
-            ),
-            None,
-            15,
-        ),
-        (table, None, 15),
-        (reverse(size), None, 15),
-        // Keep the original budgets; this larger independent row rejects
-        // the quadratic painter after parsing cost is paid as well.
-        (reverse(600_000), None, 40),
-        (repeated_strlen.clone(), None, 15),
-        (
-            repeated_strlen.replace("char s[]", "char *const s"),
-            None,
-            15,
-        ),
-        (blocks, None, 15),
-        (assignment, None, 15),
-        (compound, None, 15),
-        (arguments, Some(msvc), 15),
-    ] {
-        let start = std::time::Instant::now();
-        match configuration {
-            | Some(configuration) => with_configuration(&source, configuration, |_, _| {}),
-            | None => with_source(&source, |_, _| {}),
+        table.push_str("}; int f(void) { int r = 0; ");
+        for index in 0..size {
+            write!(table, "if (t[{index}]) r++; ").unwrap();
         }
-        assert!(
-            start.elapsed().as_secs() < budget,
-            "{:?} (limit {budget}s): {}",
-            start.elapsed(),
-            &source[..80]
+        table.push_str("return r; }");
+        let reverse = |count| {
+            let mut source = format!("static const int t[{count}] = {{");
+            for index in (0..count).rev() {
+                write!(source, "[{index}]={},", index % 7).unwrap();
+            }
+            source.push_str("}; int f(void) { if (t[1]) return 1; return 0; }");
+            source
+        };
+        let repeated_strlen = format!(
+            "static const char s[] = \"{}\"; int f(void) {{ int r=0; {} return r; }}",
+            "a".repeat(length),
+            "if (__builtin_strlen(s)) r++;".repeat(400)
         );
-    }
+        let mut blocks = String::from("__attribute__((noreturn)) void die(void); void f(void) { ");
+        for index in 0..depth {
+            write!(blocks, "l{index}: {{ die(); ").unwrap();
+        }
+        blocks.push_str(&"}".repeat(depth + 1));
+        let assignment = format!(
+            "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} = 1; }}",
+            "a[".repeat(depth),
+            " = 1]".repeat(depth)
+        );
+        let compound = format!(
+            "void abort(void); int a[4]; void f(void) {{ abort(), {}a[0]{} += 1; }}",
+            "a[".repeat(depth),
+            " += 1]".repeat(depth)
+        );
+        let arguments = format!(
+            "void abort(void); int g(int, int); void f(void) {{ abort(), {}0{}; }}",
+            "g(".repeat(depth),
+            ", 0)".repeat(depth)
+        );
+        let msvc = crate::configuration::CompilerConfiguration::default()
+            .with_target(crate::target::Target::WindowsMsvc);
+        for (source, configuration, budget) in [
+            (
+                format!(
+                    "static const char s[] = \"{}\"; int f(void) {{ if (__builtin_strlen(s) == 0) \
+                     return 1; return 0; }}",
+                    "a".repeat(length)
+                ),
+                None,
+                15,
+            ),
+            (table, None, 15),
+            (reverse(size), None, 15),
+            // Keep the original budgets; this larger independent row rejects
+            // the quadratic painter after parsing cost is paid as well.
+            (reverse(600_000), None, 40),
+            (repeated_strlen.clone(), None, 15),
+            (
+                repeated_strlen.replace("char s[]", "char *const s"),
+                None,
+                15,
+            ),
+            (blocks, None, 15),
+            (assignment, None, 15),
+            (compound, None, 15),
+            (arguments, Some(msvc), 15),
+        ] {
+            let start = std::time::Instant::now();
+            match configuration {
+                | Some(configuration) => with_configuration(&source, configuration, |_, _| {}),
+                | None => with_source(&source, |_, _| {}),
+            }
+            assert!(
+                start.elapsed().as_secs() < budget,
+                "{:?} (limit {budget}s): {}",
+                start.elapsed(),
+                &source[..80]
+            );
+        }
+    });
 }
 
 /// The fold evaluator recurses only as deep as keeps it within a 1 MiB

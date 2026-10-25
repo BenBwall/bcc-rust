@@ -1212,19 +1212,21 @@ fn each_unary_spelling_maps_to_its_ast_operator() {
 
 #[test]
 fn deeply_nested_expressions_use_heap_backed_parser_frames() {
-    let depth = 4_096;
-    let source = format!(
-        "int f(void) {{ return {}1{}; }}\n",
-        "(".repeat(depth),
-        ")".repeat(depth)
-    );
-    with_parse(&source, |parsed| {
-        assert!(
-            parser_errors(parsed).next().is_none(),
-            "{:#?}",
-            parsed.errors
+    crate::test_support::on_compilation_stack(|| {
+        let depth = 4_096;
+        let source = format!(
+            "int f(void) {{ return {}1{}; }}\n",
+            "(".repeat(depth),
+            ")".repeat(depth)
         );
-        assert!(parsed.parser.max_depth > depth);
+        with_parse(&source, |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(parsed.parser.max_depth > depth);
+        });
     });
 }
 
