@@ -113,14 +113,30 @@ Exit:
   intentionally unsupported, or a semantic-analysis responsibility;
 - no typed future-child seam remains for supported C99 syntax.
 
+### Phase 06: Recursive descent
+
+Replace the explicit frame machine with a recursive descent parser. Every
+production family becomes `parse_*` methods on `Parser` in
+`parsing/grammar/`, with the frames' diagnostics, recovery stops, provenance,
+and scope timing unchanged; the whole parser test suite ran against both
+implementations while families were ported, and the frames were then deleted.
+The command line always compiles on a worker whose 100 GiB stack is reserved
+but committed on demand. `Parser::enter_production` counts every production
+entry against `--max-nesting-depth` (default 2^18), so deep input reports a
+resource diagnostic instead of overflowing the stack.
+
+Exit: no frame, action, or study mode remains; the parser-relevant C99
+translation floors and the deep-nesting regressions pass on native recursion;
+the nesting limit is configurable and its boundary is tested.
+
 ## Maintenance contracts
 
 `Parser::parse_translation_unit` returns the shared caller and behavior-test
 interface, `ParsedTranslationUnit<'tu>`, whose source-ordered roots refer to
-immutable syntax nodes in the translation-unit arena. `next_item` drives the
-same machine one external declaration at a time over the already
+immutable syntax nodes in the translation-unit arena. `next_item` runs the
+same root loop one external declaration at a time over the already
 preprocessed token array; the batch pipeline finishes preprocessing before
-either begins. Keep private frame phases and parse-arena working state behind
+either begins. Keep production internals and parse-arena working state behind
 that interface. Function prototypes remain declarations; only definitions
 with bodies become function-definition nodes. Preserve source order in block
 items, arguments, initializer elements, and designators through immutable
@@ -130,14 +146,14 @@ arena lists.
 
 | Decision or boundary | Owner |
 | --- | --- |
-| Declaration versus function definition | `ExternalDeclarationFrame` |
-| Declaration terminator `;` | `DeclarationFrame` |
-| Old-style parameter declarations and function body | `FunctionDefinitionFrame`, using declaration and compound children |
-| Block braces, block scope, and ordered block items | `CompoundStatementFrame` |
-| Statement keywords, header parentheses, `for` semicolons, label colon, and nearest unmatched `else` | `StatementFrame` |
-| Array-declarator closing bracket | `DeclaratorFrame` |
-| Initializer braces, element commas, designations, and designator brackets | `InitializerFrame` |
-| Grouping, call/subscript markers, and conditional `?`/`:` pairing | `ExpressionFrame` |
+| Declaration versus function definition | `parse_external_declaration` |
+| Declaration terminator `;` | `parse_declaration` |
+| Old-style parameter declarations and function body | `parse_function_definition`, using declaration and compound productions |
+| Block braces, block scope, and ordered block items | `parse_compound` |
+| Statement keywords, header parentheses, `for` semicolons, label colon, and nearest unmatched `else` | `parse_statement` |
+| Array-declarator closing bracket | `parse_declarator` |
+| Initializer braces, element commas, designations, and designator brackets | `parse_initializer` |
+| Grouping, call/subscript markers, and conditional `?`/`:` pairing | `parse_expression` |
 
 An expression child leaves its caller's delimiter unconsumed. Nested grouping,
 calls, subscripts, and conditional operands change which delimiter is active.
@@ -158,14 +174,14 @@ to the right. Test nested middle and right operands separately, and distinguish
 Typedef classification uses the name visible at the exact token position.
 Label lookahead takes precedence inside blocks: `T:` is a label even when `T`
 is a typedef name. Member identifiers after `.` or `->` use their own namespace.
-The scope-owning frame restores its entry depth on success, recovery, and EOF.
+The scope-owning production restores its entry depth on success, recovery, and EOF.
 Function label and switch state have separate lifetimes from ordinary names.
 
 ### Recovery and validation
 
-Recognized GNU alignment operands use ordinary expression frames once. Attribute
+Recognized GNU alignment operands use the ordinary expression production once. Attribute
 token lists are slices of one lazily retained phase-6 array, and their provenance
-shares the adjacent parser-token source ranges. One explicit-stack delimiter
+shares the adjacent parser-token source ranges. One delimiter
 index answers subsequent operand-boundary queries in constant time, including
 semicolon, brace, mismatch and EOF recovery. Nested `aligned` operands inside
 either GNU attributes or `_Alignas` therefore retain linear parser work and
@@ -174,7 +190,7 @@ The attribute node uses eight additional bytes for its slice length; descendant
 token arrays are shared. The 1,024-level regression bounds token visits/copies
 and checks retained operands and provenance; semantic tests check their results.
 
-For each frame phase, specify its delimiters, accepted child values, unconsumed
+For each production, specify its delimiters, accepted child syntax, unconsumed
 stop tokens, EOF result, synchronization policy, state restoration, returned
 syntax, and progress before reprocessing lookahead. A recovered child marks the
 smallest enclosing inexact node. Preserve absent optional syntax separately
@@ -183,8 +199,8 @@ from missing required syntax, recovered syntax, and an error node.
 Test malformed children at separators, owned and enclosing closers, following
 declaration/statement starts, and EOF. Include declaration/declarator, function/
 compound, statement/expression, expression/type-name, and initializer/designator
-boundaries. Verify that following valid input survives and that frames, pending
-children, recovery state, scopes, and reducer scratch return to their documented
+boundaries. Verify that following valid input survives and that nesting depth,
+recovery state, scopes, and reducer scratch return to their documented
 terminal state. Bounded property tests and truncations must prove termination
 without input-triggered panics.
 

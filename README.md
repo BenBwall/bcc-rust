@@ -119,14 +119,17 @@ main source.
 `Parser::parse_translation_unit` returns an ordered `ParsedTranslationUnit`
 whose roots borrow the syntax tree from the translation-unit arena. Declarations, prototype-style and old-style
 function definitions, blocks, every C99 statement family, expressions, type
-names, and initializers run through one explicit frame stack in the parse arena.
+names, and initializers are parsed by recursive descent on the compilation
+worker's reserved stack.
 Malformed input retains repaired syntax where meaningful, produces a
 provenance-only external error node for pure top-level garbage, and emits
 structured FIFO diagnostics with recovery context.
 
 Parser resource limits follow representation bounds: `usize` for root and
-syntax-node counts, `u32` for frame/scope depth, and each provenance arena's
-`u32` index space. There is no fixed aggregate source-segment budget. Flat syntax
+syntax-node counts and each provenance arena's `u32` index space. Nesting depth
+is bounded by `--max-nesting-depth=N` (default 2^18 active productions), which
+keeps recursion far inside the reserved stack: deeper input stops with a
+resource diagnostic rather than a stack overflow. There is no fixed aggregate source-segment budget. Flat syntax
 lists collect provenance once instead of repeatedly copying their growing prefix.
 
 Phase 05 is complete. The parser meets the parser-relevant C99 minimum
@@ -459,7 +462,7 @@ system's virtual memory, each dropped when its lifetime ends. The
 translation-unit arena keeps source text, interned strings, diagnostics, and
 the syntax tree; the preprocessing arena keeps lexed files and macros until
 preprocessing ends; an expansion arena is reset between top-level macro
-expansions; and the parse arena keeps the parser's frames and scopes until
+expansions; and the parse arena keeps the parser's scratch pools and scopes until
 parsing ends. The token array, source provenance, string cache, parsed roots,
 and file-scope typedef set each grow in place in a region of their own.
 Every region reserves its address space when first used and commits memory
@@ -502,7 +505,7 @@ runs and report their minimum alongside Criterion estimates. Separate full
 pipeline time from `Parser only` time; preprocessing changes can otherwise look
 like parser improvements. Track peak commit and peak working set from the
 `memory` harness, the arena high-water marks, source-vector growth, and driver
-steps per token when changing storage, provenance, or frame scheduling.
+steps per token when changing storage, provenance, or parser scheduling.
 
 Keep syntax trees, diagnostics, recovery, and ordered source provenance
 equivalent. Exercise macro/include locations, malformed-input continuation,
@@ -785,7 +788,7 @@ describes the layout.
 | [`src/translation_phases/initial_processing.rs`](src/translation_phases/initial_processing.rs) | Defines the phase 1-2 diagnostics (a missing or escaped final newline) and recognizes a line splice at the end of a file. |
 | [`src/translation_phases/preprocessor_tokenizer.rs`](src/translation_phases/preprocessor_tokenizer.rs) and [`preprocessor_tokenizer/`](src/translation_phases/preprocessor_tokenizer/) | Lexes each source buffer completely when it is opened (phases 1-3: trigraphs, line splices, comments, and preprocessing tokens) and replays its tokens to preprocessing, retaining source provenance. The entry file holds the lexing loop; `splicing.rs`, `positions.rs`, `storage.rs`, and `scanning/` hold the details. |
 | [`src/translation_phases/preprocessing.rs`](src/translation_phases/preprocessing.rs) and [`preprocessing/`](src/translation_phases/preprocessing/) | Handles macros, directives, includes, conditional preprocessing, literals, and conversion to parser-facing tokens. It owns the preprocessor-expression evaluator and its values and diagnostics. The entry file holds the macro-replacing reader; `runtime/` holds the preprocessor's working state, and `directives/` and `macro_expansion/` hold one file per concern. |
-| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver loop in the entry file; the declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames in `frames/` (one file per frame, plus the expression frame's operator table and lookahead helpers); the GNU, MSVC, and newer-standard extension frames in `extensions/`; syntax nodes, which live in the translation-unit arena; scopes; and parser diagnostics. |
+| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the parser's root loop in the entry file; the recursive-descent productions in `grammar/` (declarations, specifiers, declarators, parameter lists, tags, type names, statements, expressions with their operator table and lookahead helpers, initializers, and the GNU, MSVC, and newer-standard extension productions); the extension syntax types in `extensions/`; syntax nodes, which live in the translation-unit arena; scopes; and parser diagnostics. |
 | [`src/translation_phases/semantic_analysis.rs`](src/translation_phases/semantic_analysis.rs) and [`semantic_analysis/`](src/translation_phases/semantic_analysis/) | Analyzes the finished syntax tree: types and the target data model, scopes, bindings and linkage, expressions and constant evaluation, initializers, statements, and function definitions, with semantic diagnostics. The entry file holds the work-list loop; `builtins/` holds the builtin and intrinsic families. |
 | [`src/translation_phases.rs`](src/translation_phases.rs) | Maps the whole compiler and re-exports the shared translation-phase interface and diagnostic plumbing from `interface.rs` and `errors.rs`; [`context.rs`](src/translation_phases/context.rs) and [`provenance.rs`](src/translation_phases/provenance.rs) hold the compilation context and source provenance. |
 | [`src/util/`](src/util/) | Provides the virtual-memory regions, the arena allocator and its vectors, strings, queues, and lists (in `memory/`), the per-compilation region vector and bit set and interned strings (in `collections/`), and the lexer's byte scans. |
@@ -798,20 +801,25 @@ describes the layout.
 
 ## Parser direction
 
-The language parser uses one explicit control stack of specialized, resumable
-frames. `Parser` borrows the translation context and owns the token cursor,
-frame stack, typed child result, syntax-node count, scope and label state,
-recovery state, and representation-based resource ceilings. Production parsing
-allows as many external declarations and syntax nodes as their `usize` counters
-can represent. Frame depth follows the `u32` width of stored scope depths.
+The language parser is a recursive descent parser: each production is a
+`parse_*` method on `Parser` that calls the productions it is built from.
+`Parser` borrows the translation context and owns the token cursor, nesting
+depth, scratch pools, syntax-node count, scope and label state, recovery state,
+and resource ceilings. The command line always compiles on a worker thread whose
+100 GiB stack is reserved but committed only as recursion touches it, so the
+parser never checks for or grows its stack. Every production entry counts
+against `--max-nesting-depth` (default 2^18); that limit is far deeper than GCC
+or Clang compile on their default stacks, and far shallower than what would
+exhaust the reservation. Production parsing allows as many external
+declarations and syntax nodes as their `usize` counters can represent.
 There is no aggregate source-segment ceiling: each provenance arena checks its
 own `u32` index space. Source-vector range starts use all 32 index bits; their
 lengths use 30 bits because the top two bits identify the arena. The parser's
 working state lives in the parse arena; the syntax nodes it builds are immutable
 and live in the translation-unit arena.
 
-`ExpressionFrame` owns Double-E-style operator/operand reduction alongside
-`TypeNameFrame` and `InitializerFrame`, and all supported statement and
+The expression production owns Double-E-style operator/operand reduction
+alongside the type-name and initializer productions, and all supported statement and
 declaration expression sites contain parsed expressions. The preprocessor evaluator
 retains its independent reducer. Phase 05 closes the parser through structured
 diagnostics, cross-family recovery, syntax provenance, compatibility fixtures,

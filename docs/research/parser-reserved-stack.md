@@ -1,5 +1,14 @@
 # Reserved native-stack follow-up
 
+> **Status (2026-10-25):** recursive descent is now bcc's only parser
+> (`src/translation_phases/parsing/grammar/`); the frame machine, the study
+> modes and their harness (`parser-recursive-descent-study`, `stacker`,
+> `examples/parser_study`, `scripts/parser_study*`) were removed. The command
+> line always runs on the reserved compilation stack, and nesting is bounded
+> by `--max-nesting-depth`. This report is kept as the record of the
+> measurements behind that decision; its commands need the source revision
+> it names.
+
 Follow-up: [whole-compilation worker and recursive lowering](recursive-lowering.md).
 
 Follow-up: [recovery parity and Windows validation](parser-recovery-windows.md)

@@ -1,5 +1,14 @@
 # Parser frame and recursion audit
 
+> **Status (2026-10-25):** recursive descent is now bcc's only parser
+> (`src/translation_phases/parsing/grammar/`); the frame machine, the study
+> modes and their harness (`parser-recursive-descent-study`, `stacker`,
+> `examples/parser_study`, `scripts/parser_study*`) were removed. The command
+> line always runs on the reserved compilation stack, and nesting is bounded
+> by `--max-nesting-depth`. This report is kept as the record of the
+> measurements behind that decision; its commands need the source revision
+> it names.
+
 Date: 2026-10-21. Baseline source: `9c11aca8167245020f4308697d0883152b49e3ca`.
 Source references below describe that baseline unless explicitly marked as
 subsequent study work. The study harness and experimental parser are described

@@ -1,5 +1,14 @@
 # Recursive lowering on a compilation worker
 
+> **Status (2026-10-25):** recursive descent is now bcc's only parser
+> (`src/translation_phases/parsing/grammar/`); the frame machine, the study
+> modes and their harness (`parser-recursive-descent-study`, `stacker`,
+> `examples/parser_study`, `scripts/parser_study*`) were removed. The command
+> line always runs on the reserved compilation stack, and nesting is bounded
+> by `--max-nesting-depth`. This report is kept as the record of the
+> measurements behind that decision; its commands need the source revision
+> it names.
+
 2026-10-22. Follow-up to [the parser study](parser-recovery-windows.md).
 The opt-in implementation and Linux/native Windows release/debug validation
 are complete.

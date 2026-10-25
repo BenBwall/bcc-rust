@@ -1,5 +1,14 @@
 # Parser study grammar corpus
 
+> **Status (2026-10-25):** recursive descent is now bcc's only parser
+> (`src/translation_phases/parsing/grammar/`); the frame machine, the study
+> modes and their harness (`parser-recursive-descent-study`, `stacker`,
+> `examples/parser_study`, `scripts/parser_study*`) were removed. The command
+> line always runs on the reserved compilation stack, and nesting is bounded
+> by `--max-nesting-depth`. This report is kept as the record of the
+> measurements behind that decision; its commands need the source revision
+> it names.
+
 `python scripts/parser_study_cases.py` writes 150 small, header-free translation
 units and `manifest.json` to `.scratch/parser-study/grammar`. It requires only the
 Python standard library. The default corpus has 87 **valid**, 21 **extension**,
