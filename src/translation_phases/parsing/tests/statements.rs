@@ -238,15 +238,7 @@ fn old_style_definition_keeps_its_parameter_declaration_list() {
                     parsed.errors
                 );
                 assert!(parsed.parser.scopes.nested_scopes.is_empty());
-                assert!(
-                    parsed
-                        .parser
-                        .trace
-                        .iter()
-                        .map(|event| event.depth)
-                        .max()
-                        .is_some_and(|depth| depth > 127)
-                );
+                assert!(parsed.parser.max_depth > 127);
             });
         },
     );
@@ -1639,10 +1631,6 @@ fn premature_eof_unwinds_every_phase_03_frame_family() {
             assert!(parsed.errors.iter().all(|error| match error {
                 | TranslationError::Parsing(error) => {
                     error.source_vectors.length() > 0
-                        && !matches!(
-                            error.error_type,
-                            ParserErrorType::ParserFrameConsumedAtEndOfInput(_)
-                        )
                 },
                 | _ => true,
             }));
@@ -1717,43 +1705,6 @@ fn missing_function_body_at_eof_retains_a_zero_width_source_location() {
 }
 
 #[test]
-fn statement_delimiter_trace_names_the_owning_frame() {
-    with_parse(
-        "int f(void) { int item; if (condition) return; }\n",
-        |parsed| {
-            let brace_events = parsed.parser.trace.iter().filter(|event| {
-                event.action == "consume"
-                    && matches!(
-                        event.token,
-                        Some(TokenType::Operator(
-                            OperatorTokenType::OpeningCurlyBrace
-                                | OperatorTokenType::ClosingCurlyBrace
-                        ))
-                    )
-            });
-            assert!(
-                brace_events
-                    .clone()
-                    .all(|event| event.frame == "compound-statement")
-            );
-            assert_eq!(brace_events.count(), 2);
-
-            assert!(parsed.parser.trace.iter().any(|event| {
-                event.frame == "declaration"
-                    && event.action == "consume"
-                    && event.token == Some(TokenType::Operator(OperatorTokenType::Semicolon))
-            }));
-            assert!(parsed.parser.trace.iter().any(|event| {
-                event.frame == "statement"
-                    && event.action == "consume"
-                    && event.token
-                        == Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
-            }));
-        },
-    );
-}
-
-#[test]
 fn blocks_and_definition_parameters_meet_the_c99_translation_floor() {
     let nested = format!(
         "int deep(void) {{{}{}{} }}\n",
@@ -1771,15 +1722,7 @@ fn blocks_and_definition_parameters_meet_the_c99_translation_floor() {
             "{:#?}",
             parsed.errors
         );
-        assert!(
-            parsed
-                .parser
-                .trace
-                .iter()
-                .map(|event| event.depth)
-                .max()
-                .is_some_and(|depth| depth > 127)
-        );
+        assert!(parsed.parser.max_depth > 127);
 
         let parameters = (0..127)
             .map(|index| format!("int parameter_{index}"))

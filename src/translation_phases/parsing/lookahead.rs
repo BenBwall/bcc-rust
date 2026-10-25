@@ -12,16 +12,18 @@
 //! §6.2.1 paragraph 7, p. 30; PDF p. 42. Attributes and vendor keywords are
 //! extensions to these C99 productions.
 
-use super::{
-    Parser,
-    frames::expression_operators::is_operator,
-    syntax::Identifier,
-};
-use crate::translation_phases::preprocessing::{
-    KeywordTokenType,
-    OperatorTokenType,
-    Token,
-    TokenType,
+use crate::translation_phases::{
+    parsing::{
+        Parser,
+        grammar::expression_operators::is_operator,
+        syntax::Identifier,
+    },
+    preprocessing::{
+        KeywordTokenType,
+        OperatorTokenType,
+        Token,
+        TokenType,
+    },
 };
 
 impl Parser<'_, '_, '_> {

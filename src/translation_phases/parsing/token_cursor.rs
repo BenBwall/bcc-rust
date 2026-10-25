@@ -61,12 +61,6 @@ pub(super) struct TokenCursor<'tu, 'p> {
 }
 
 impl Upstream {
-    /// Number of phase-6 tokens available to parser benchmarks.
-    #[cfg(feature = "benchmarking-internals")]
-    pub(super) fn token_count(&self) -> usize {
-        self.tokens.len()
-    }
-
     /// Runs the whole of `preprocessor`, so parsing never interleaves with
     /// preprocessing.
     pub(super) fn preprocess_all<'tu>(

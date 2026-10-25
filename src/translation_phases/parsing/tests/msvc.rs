@@ -424,8 +424,8 @@ fn every_vendor_input_prefix_terminates_and_restores_machine_state() {
                 &prefix,
                 CompilerConfiguration::default().with_msvc_extensions(true),
                 |p| {
-                    assert!(p.parser.frames.is_empty());
-                    assert!(p.parser.returned.is_none());
+                    assert_eq!(p.parser.depth, 0);
+                    assert!(p.parser.failure.is_none());
                     assert_eq!(p.parser.scopes.depth(), 0);
                 },
             );

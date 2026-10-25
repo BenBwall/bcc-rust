@@ -1224,15 +1224,7 @@ fn deeply_nested_expressions_use_heap_backed_parser_frames() {
             "{:#?}",
             parsed.errors
         );
-        assert!(
-            parsed
-                .parser
-                .trace
-                .iter()
-                .map(|event| event.depth)
-                .max()
-                .is_some_and(|maximum| maximum > depth)
-        );
+        assert!(parsed.parser.max_depth > depth);
     });
 }
 

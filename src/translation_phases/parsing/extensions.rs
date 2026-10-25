@@ -31,10 +31,7 @@ pub(crate) mod modern;
 pub(crate) mod gnu;
 pub(crate) mod msvc;
 
-use super::{
-    Parser,
-    syntax,
-};
+use super::Parser;
 use crate::translation_phases::{
     SourceVectors,
     preprocessing::Token,

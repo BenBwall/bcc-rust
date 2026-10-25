@@ -469,8 +469,8 @@ fn malformed_gnu_prefixes_terminate_and_restore_machine_state() {
                 CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
                 |p| {
                     assert_eq!(p.parser.scopes.depth(), 0, "{source} at {end}");
-                    assert!(p.parser.frames.is_empty());
-                    assert!(p.parser.returned.is_none());
+                    assert_eq!(p.parser.depth, 0);
+                    assert!(p.parser.failure.is_none());
                     assert_eq!(p.parser.pedantic_suppression, 0, "{source} at {end}");
                     assert_eq!(p.parser.switch_floor, 0);
                 },
@@ -493,8 +493,8 @@ fn ambiguous_asm_prefixes_restore_frames_and_scopes() {
                         .with_msvc_feature(crate::configuration::MsvcFeature::Asm, msvc),
                     |p| {
                         assert_eq!(p.parser.scopes.depth(), 0, "{source} at {end}");
-                        assert!(p.parser.frames.is_empty());
-                        assert!(p.parser.returned.is_none());
+                        assert_eq!(p.parser.depth, 0);
+                        assert!(p.parser.failure.is_none());
                     },
                 );
             }

@@ -67,3 +67,9 @@ rustflags = [
     "-C", "link-arg=-Wl,--undefined=__divtf3,--undefined=fmodf128",
     "-C", "link-arg=-Wl,--undefined=lgamma_r,--undefined=lgammaf_r",
 ]
+
+# The parser recurses natively on its grammar. Give libtest's threads a 1 GiB
+# stack; it is reserved lazily, so only the pages a deep test touches are
+# committed.
+[env]
+RUST_MIN_STACK = "1073741824"

@@ -24,7 +24,6 @@ mod input;
 mod inspection;
 #[cfg(feature = "recursive-lowering-study")]
 mod lowering_study;
-mod parser_study;
 mod prepared;
 mod preprocessing;
 mod semantic;
@@ -45,12 +44,6 @@ pub use inspection::{
 pub use measurements::{
     ArenaUsage,
     arena_usage,
-};
-pub use parser_study::{
-    ParserStudyMode,
-    StudyMeasurement,
-    StudyPrepared,
-    with_study_source,
 };
 pub use prepared::{
     PreparedParse,

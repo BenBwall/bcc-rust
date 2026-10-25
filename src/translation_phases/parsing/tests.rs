@@ -156,8 +156,7 @@ fn with_parse_with<R>(
         &mut context,
         limits.unwrap_or_default(),
         &parse_arena,
-    )
-    .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
+    );
     let mut items = Vec::new();
     while let Some(item) = parser.next_item() {
         items.push(item);

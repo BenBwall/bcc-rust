@@ -15,7 +15,7 @@ use std::cell::Cell;
 
 use super::{
     Parser,
-    machine::ParseFrameKind,
+    grammar::ProductionKind,
 };
 use crate::{
     translation_phases::{
@@ -81,7 +81,8 @@ impl Parser<'_, '_, '_> {
                 if self.pedantic_suppression != 0
                     || matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) =>
                 self.context.suppress_extension(suppressed),
-            | Some(TokenDiagnostic::Constant(index)) if self.active_frame == ParseFrameKind::Msvc =>
+            | Some(TokenDiagnostic::Constant(index))
+                if self.active_production == ProductionKind::Msvc =>
                 self.context.withdraw_pending_error(index),
             | _ => {},
         }

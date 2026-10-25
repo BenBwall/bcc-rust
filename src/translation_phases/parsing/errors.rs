@@ -18,7 +18,7 @@ use std::fmt::{
 
 use super::{
     Parser,
-    machine::ParseFrameKind,
+    grammar::ProductionKind,
     syntax::StorageClass,
 };
 use crate::{
@@ -135,7 +135,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 error_type.severity()
             },
             warning_group,
-            frame: self.active_frame,
+            frame: self.active_production,
             expected: error_type.expected_syntax(),
             found: token.map(|token| token.kind),
             found_spelling,
@@ -255,7 +255,7 @@ pub(crate) struct ParserError<'tu> {
             reason = "Only parser tests assert on this diagnostic field."
         )
     )]
-    pub(crate) frame:             ParseFrameKind,
+    pub(crate) frame:             ProductionKind,
     #[cfg_attr(
         not(test),
         expect(
@@ -299,8 +299,6 @@ pub(crate) enum ParserDiagnosticCode {
     Constraint,
     /// A diagnostic C99 does not require (footnote 8, p. 11; PDF p. 23).
     Quality,
-    /// A bcc-rust bug, not a property of the input.
-    InternalInvariant,
     /// A bcc-rust resource ceiling; see `ParserResource`.
     ResourceLimit,
 }
@@ -314,7 +312,7 @@ pub(crate) enum ParserDiagnosticCode {
 pub(crate) enum ParserResource {
     ExternalDeclarations,
     SyntaxNodes,
-    FrameDepth,
+    NestingDepth,
     SourceSegments,
 }
 
@@ -389,7 +387,7 @@ pub(crate) struct RecoverySummary {
         not(test),
         expect(dead_code, reason = "Only parser tests assert on this recovery field.")
     )]
-    pub(crate) owner:            ParseFrameKind,
+    pub(crate) owner:            ProductionKind,
     pub(crate) discarded:        Option<SourceVectors>,
     pub(crate) discarded_tokens: usize,
     #[cfg_attr(
@@ -423,9 +421,6 @@ pub(crate) enum ParserErrorType<'tu> {
         resource: ParserResource,
         limit:    usize,
     },
-    /// Internal invariant failure: a typed frame attempted to consume EOF.
-    /// C99: implementation guard supporting §5.1.1.3, p. 11; PDF p. 23.
-    ParserFrameConsumedAtEndOfInput(ParseFrameKind),
     /// A function-definition head was not followed by its compound body.
     /// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
     ExpectedFunctionBody(Option<TokenType>),
@@ -834,7 +829,7 @@ impl ParserResource {
         match self {
             | Self::ExternalDeclarations => "external declaration",
             | Self::SyntaxNodes => "syntax node",
-            | Self::FrameDepth => "nesting depth",
+            | Self::NestingDepth => "nesting depth",
             | Self::SourceSegments => "source segment",
         }
     }
@@ -894,7 +889,6 @@ impl ParserErrorType<'_> {
     pub(super) fn code(&self) -> ParserDiagnosticCode {
         match self {
             | Self::ResourceLimitExceeded { .. } => ParserDiagnosticCode::ResourceLimit,
-            | Self::ParserFrameConsumedAtEndOfInput(..) => ParserDiagnosticCode::InternalInvariant,
             | Self::ConstSpecifiedTwice
             | Self::VolatileSpecifiedTwice
             | Self::RestrictSpecifiedTwice
@@ -1076,7 +1070,6 @@ impl ParserErrorType<'_> {
             | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList =>
                 ExpectedSyntax::OwnedDelimiter,
             | Self::ResourceLimitExceeded { .. }
-            | Self::ParserFrameConsumedAtEndOfInput(..)
             | Self::DeclarationListAfterParameterTypeList
             | Self::ExpectedStructOrUnionKeyword(..)
             | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
@@ -1140,17 +1133,11 @@ impl ParserErrorType<'_> {
                 resource.description()
             ))
             .label("parsing stopped here")
-            .note(if *resource == ParserResource::FrameDepth {
+            .note(if *resource == ParserResource::NestingDepth {
                 "raise the limit with --max-nesting-depth=N, or simplify this input"
             } else {
                 "bcc bounds parser memory and nesting; split or simplify this input"
             }),
-            | Self::ParserFrameConsumedAtEndOfInput(frame) => new(format_in!(
-                arena,
-                "internal compiler error: the {} parser read past the end of input",
-                frame.label()
-            ))
-            .note("this is a bug in bcc; please report it with the input that triggered it"),
             | Self::ExpectedFunctionBody(token) =>
                 expected_with_label("a function body", "expected `{`", *token),
             | Self::DeclarationListAfterParameterTypeList =>
@@ -1674,8 +1661,7 @@ impl GetSeverity for ParserErrorType<'_> {
             | ParserDiagnosticCode::Quality => ErrorSeverity::Warning,
             | ParserDiagnosticCode::Syntax
             | ParserDiagnosticCode::Constraint
-            | ParserDiagnosticCode::ResourceLimit
-            | ParserDiagnosticCode::InternalInvariant => ErrorSeverity::Error,
+            | ParserDiagnosticCode::ResourceLimit => ErrorSeverity::Error,
         }
     }
 }

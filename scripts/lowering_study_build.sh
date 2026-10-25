@@ -24,7 +24,6 @@ case "${1:-build}" in
         cargo clippy --all-targets --features benchmarking-internals -- -D warnings
         cargo clippy --all-targets --features recursive-lowering-study -- -D warnings
         cargo test --features recursive-lowering-study,benchmarking-internals --lib -- --test-threads=2
-        cargo test --features parser-recursive-descent-study --example parser_study -- --test-threads=1
         cargo test --example parser_stack_probe -- --test-threads=1
         ;;
     *) echo "usage: $0 build|checks" >&2; exit 2 ;;

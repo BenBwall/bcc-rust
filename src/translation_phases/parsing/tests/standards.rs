@@ -347,7 +347,7 @@ fn case_ranges_require_native_or_gnu_support_and_preserve_following_input() {
                             .as_deref(),
                         Some("following")
                     );
-                    assert!(p.parser.frames.is_empty());
+                    assert_eq!(p.parser.depth, 0);
                     assert_eq!(p.parser.pedantic_suppression, 0);
                 });
             }
@@ -428,8 +428,8 @@ fn modern_grammar_truncations_terminate_with_restored_state() {
                 mode(CStandard::C2y, ExtensionPolicy::Warn),
                 |p| {
                     assert_eq!(p.parser.scopes.depth(), 0, "{source:?} at {end}");
-                    assert!(p.parser.frames.is_empty(), "{source:?} at {end}");
-                    assert!(p.parser.returned.is_none(), "{source:?} at {end}");
+                    assert_eq!(p.parser.depth, 0, "{source:?} at {end}");
+                    assert!(p.parser.failure.is_none(), "{source:?} at {end}");
                 },
             );
         }
@@ -975,8 +975,8 @@ fn variadic_and_fixed_enum_recovery_terminates_at_every_prefix() {
                 mode(CStandard::C23, ExtensionPolicy::Deny),
                 |p| {
                     assert_eq!(p.parser.scopes.depth(), 0, "{source} at {end}");
-                    assert!(p.parser.frames.is_empty());
-                    assert!(p.parser.returned.is_none());
+                    assert_eq!(p.parser.depth, 0);
+                    assert!(p.parser.failure.is_none());
                 },
             );
         }

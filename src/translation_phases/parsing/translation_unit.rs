@@ -95,10 +95,3 @@ impl Debug for CompactRoot<'_, '_> {
 pub(crate) struct PreprocessedTranslationUnit {
     pub(super) upstream: token_cursor::Upstream,
 }
-
-#[cfg(feature = "benchmarking-internals")]
-impl PreprocessedTranslationUnit {
-    pub(crate) fn study_token_count(&self) -> usize {
-        self.upstream.token_count()
-    }
-}

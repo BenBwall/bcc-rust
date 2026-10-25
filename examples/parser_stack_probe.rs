@@ -1,6 +1,4 @@
 //! Portable native-stack reservation probe, independent of parser/LLVM linking.
-//! Use `scripts/parser_study_windows.py` to cross-build this same source with
-//! repository lint settings and the actual reserved-stack modules.
 #![expect(
     unused_crate_dependencies,
     reason = "This standalone probe exercises only the worker stack implementation."
@@ -120,5 +118,5 @@ fn touch(
 }
 
 #[cfg(test)]
-#[path = "parser_study/probe_runner_tests.rs"]
+#[path = "parser_stack_probe/probe_runner_tests.rs"]
 mod runner_tests;

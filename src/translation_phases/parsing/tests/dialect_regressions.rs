@@ -56,7 +56,7 @@ fn assert_clean_parse(parsed: &Parsed<'_, '_>, source: &str) {
         "{source}\n{:?}",
         parsed.errors
     );
-    assert!(parsed.parser.frames.is_empty(), "{source}");
+    assert_eq!(parsed.parser.depth, 0, "{source}");
     assert_eq!(parsed.parser.pedantic_suppression, 0, "{source}");
 }
 
@@ -267,7 +267,7 @@ fn incomplete_standard_attributes_recover_at_semicolons_outside_arguments() {
                     "{source}: {:?}",
                     p.errors
                 );
-                assert!(p.parser.frames.is_empty());
+                assert_eq!(p.parser.depth, 0);
                 assert_eq!(p.parser.pedantic_suppression, 0);
                 assert_eq!(p.items.len(), 2);
                 assert!(declaration(p, 0).recovered);
