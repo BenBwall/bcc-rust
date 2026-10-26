@@ -374,6 +374,36 @@ mod tests {
     }
 
     #[test]
+    fn line_maps_find_functions_by_their_assembler_names() {
+        let output = compile(
+            "int f(void) __asm__(\"g\");\nint f(void) {\n    return 0;\n}\n",
+            &ExplorerOptions::default(),
+        );
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        let [mapping] = &*output.line_map else {
+            panic!("{:#?}", output.line_map);
+        };
+        assert_eq!(mapping.function, "f");
+        assert_eq!((mapping.source.start, mapping.source.end), (2, 4));
+        for (text, range, header) in [
+            (&output.ir, mapping.ir, "function @g("),
+            (&output.ir_abi, mapping.ir_abi, "function @g("),
+            (&output.asm, mapping.asm, "g:"),
+        ] {
+            let range = range.unwrap_or_else(|| panic!("{mapping:#?}"));
+            let first = text
+                .as_deref()
+                .unwrap()
+                .lines()
+                .nth(range.start as usize - 1);
+            assert!(
+                first.is_some_and(|line| line.trim_start().starts_with(header)),
+                "{first:?}"
+            );
+        }
+    }
+
+    #[test]
     fn host_files_are_never_found_or_read() {
         let host = temporary("host.h");
         std::fs::write(&host, "int host_header;\n").unwrap();

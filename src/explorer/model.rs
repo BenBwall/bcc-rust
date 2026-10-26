@@ -135,7 +135,8 @@ pub struct ExplorerInstruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExplorerLineMapping {
-    /// The function's name.
+    /// The function's name in C. Each output names it by the symbol it is
+    /// emitted as, which an `__asm__` label can change.
     pub function: String,
     /// The definition's physical lines in the source, which `#line` does
     /// not change.

@@ -294,6 +294,7 @@ impl<'tu> Stages<'_, '_, 'tu> {
         }
         self.output.line_map = line_map::map(
             &unit,
+            &sema,
             self.context,
             INPUT,
             [Some(ir.as_str()), Some(ir_abi.as_str()), asm.as_deref()],
