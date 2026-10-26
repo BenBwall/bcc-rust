@@ -468,6 +468,32 @@ impl<'s> Terminator<'s> {
         first.iter().chain(rest.iter().map(|(_, edge)| edge))
     }
 
+    /// The number of edges [`Self::edges`] yields, in constant time.
+    pub(super) fn edge_count(&self) -> usize {
+        match self {
+            | Self::Jump(_) => 1,
+            | Self::Brif(..) => 2,
+            | Self::IndirectBr(_, edges) => edges.len(),
+            | Self::Switch { cases, .. } => 1 + cases.len(),
+            | Self::Return(_) | Self::Unreachable => 0,
+        }
+    }
+
+    /// The edge at `index` in [`Self::edges`] order, in constant time: a
+    /// large `switch` would otherwise make every lookup linear.
+    pub(super) fn edge(&self, index: usize) -> Option<&Edge<'s>> {
+        match self {
+            | Self::Jump(edge) => (index == 0).then_some(edge),
+            | Self::Brif(_, edges) => edges.get(index),
+            | Self::IndirectBr(_, edges) => edges.get(index),
+            | Self::Switch { default, cases, .. } => match index.checked_sub(1) {
+                | None => Some(default),
+                | Some(case) => cases.get(case).map(|(_, edge)| edge),
+            },
+            | Self::Return(_) | Self::Unreachable => None,
+        }
+    }
+
     fn edge_mut(&mut self, index: u32) -> &mut Edge<'s> {
         let index = index as usize;
         match self {
