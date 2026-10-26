@@ -81,7 +81,8 @@ use crate::{
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// The name a call's callee designates when it is a fortify wrapper bcc
     /// bypasses ([`FunctionRecord::forwards_variadic`]): the function
-    /// designator through parentheses, `&` and `*` (`(*sprintf)(...)`
+    /// designator through compile-time selections, parentheses, `&` and `*`
+    /// (`_Generic(0, int: sprintf)(...)` and `(*sprintf)(...)`
     /// calls `sprintf`, C99 §6.5.3.2p4, p. 79; PDF p. 91), resolved to a
     /// function with external linkage, which denotes the wrapper's function
     /// (§6.2.2p2, p. 30; PDF p. 42). A parameter or local of the same name
@@ -92,6 +93,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use crate::translation_phases::parsing::syntax::UnaryOperator;
         let mut designator = callee;
         loop {
+            // A compile-time selection (`_Generic`, `__builtin_choose_expr`,
+            // `__extension__`) designates its chosen operand.
+            designator = self.selected_designator(designator);
             designator = match designator.kind {
                 | ExpressionType::Parenthesized { expression } => expression,
                 | ExpressionType::Unary {

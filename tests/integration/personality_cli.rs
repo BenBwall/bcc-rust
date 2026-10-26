@@ -1273,6 +1273,41 @@ mod tests {
         let mut strict = vec!["-Werror"];
         strict.extend(forms);
         assert_eq!(directory.bcc("--gcc-mode", &strict).status.code(), Some(1));
+        // Compile-time selections designate their chosen operand, so a
+        // callee selected by `_Generic`, `__builtin_choose_expr` or
+        // `__extension__` is the wrapper too (GCC calls __sprintf_chk).
+        directory.write(
+            "selected.c",
+            "#include <stdio.h>\nint a(char *b, const char *s) { return _Generic(0, int: \
+             sprintf)(b, \"%s\", s); }\nint c(char *b, const char *s) { return \
+             __builtin_choose_expr(1, sprintf, 0)(b, \"%s\", s); }\nint d(char *b, const char *s) \
+             { return (__extension__ sprintf)(b, \"%s\", s); }\nint e(char *b, const char *s) { \
+             return (*_Generic(0, int: &sprintf))(b, \"%s\", s); }\nint h(int (*sprintf)(int)) { \
+             return _Generic(0, int: sprintf)(7); }\n",
+        );
+        let selected = [
+            "-O2",
+            "-D_FORTIFY_SOURCE=2",
+            "-c",
+            "selected.c",
+            "-o",
+            "selected.o",
+        ];
+        let output = directory.bcc("--gcc-mode", &selected);
+        succeeds(&output);
+        let warnings = stderr(&output);
+        for place in ["2:57", "3:65", "4:55", "5:60"] {
+            assert!(
+                warnings.contains(&format!(
+                    "selected.c:{place}: warning: _FORTIFY_SOURCE checks for `sprintf`"
+                )),
+                "{place}: {warnings}"
+            );
+        }
+        assert_eq!(warnings.matches(": warning:").count(), 4, "{warnings}");
+        let mut strict = vec!["-Werror"];
+        strict.extend(selected);
+        assert_eq!(directory.bcc("--gcc-mode", &strict).status.code(), Some(1));
         directory.write(
             "shadow.c",
             "#include <stdio.h>\nint h(int (*sprintf)(int)) { return sprintf(7); }\nint k(void) { \
