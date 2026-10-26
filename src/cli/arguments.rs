@@ -300,6 +300,9 @@ enum LanguageFlag {
     Hosted(bool),
     /// `-fgnu89-inline` or `-fno-gnu89-inline`.
     Gnu89Inline(bool),
+    /// `-ffloatn-types` or `-fno-floatn-types`, bcc's own switch for the
+    /// `_FloatN` keywords a GCC identity provides.
+    InterchangeFloatTypes(bool),
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
 }
@@ -321,6 +324,8 @@ impl LanguageFlag {
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
+            | "-ffloatn-types" => return Some(Self::InterchangeFloatTypes(true)),
+            | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
             | _ => {},
         }
         if Relocation::parse(text).is_some() {
@@ -381,6 +386,8 @@ impl LanguageFlag {
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
+            | Self::InterchangeFloatTypes(enabled) =>
+                configuration.with_interchange_float_types(enabled),
         }
     }
 }

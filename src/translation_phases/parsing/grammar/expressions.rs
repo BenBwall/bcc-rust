@@ -374,11 +374,35 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             | TokenType::Identifier => ExpressionType::Identifier(Identifier::from_token(token)),
             | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
             | TokenType::Float(value) => {
-                if matches!(
+                let binary128 = matches!(
                     value,
                     FloatTokenType::Float128(_) | FloatTokenType::ImaginaryFloat128(_)
-                ) {
+                );
+                // `f128` names `_Float128`, the type `q` names.
+                let interchange_binary128 = binary128
+                    && self
+                        .context
+                        .string_cache
+                        .at(token.contents)
+                        .trim_end_matches('\0')
+                        .ends_with("128");
+                if binary128 && !interchange_binary128 {
                     self.extension(Feature::Float128, "binary128 floating constant", token);
+                }
+                if interchange_binary128
+                    || matches!(
+                        value,
+                        FloatTokenType::Float32(_)
+                            | FloatTokenType::Float64(_)
+                            | FloatTokenType::Float32x(_)
+                            | FloatTokenType::Float64x(_)
+                    )
+                {
+                    self.extension(
+                        Feature::InterchangeFloatTypes,
+                        "_FloatN floating constant suffix",
+                        token,
+                    );
                 }
                 ExpressionType::Constant(Constant::Float(value))
             },

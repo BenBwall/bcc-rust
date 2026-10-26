@@ -551,11 +551,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let complex_type = |ty: TypeId| {
                     matches!(
                         self.types.nodes[ty.index],
-                        TypeKind::Scalar(
-                            Scalar::ComplexFloat
-                                | Scalar::ComplexDouble
-                                | Scalar::ComplexLongDouble
-                        )
+                        TypeKind::Scalar(s) if s.complex()
                     )
                 };
                 let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
@@ -1500,9 +1496,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.integer_type(ty).is_some()
             || matches!(
                 self.types.nodes[ty.index],
-                TypeKind::Scalar(
-                    Scalar::Float | Scalar::Double | Scalar::LongDouble | Scalar::Float128
-                )
+                TypeKind::Scalar(s) if s.floating_rank() != 0 && !s.complex()
             )
     }
 
@@ -1806,38 +1800,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let (Some(ls), Some(rs)) = (ls, rs) else {
             return self.types.unknown();
         };
-        let float_rank = |s| match s {
-            | Scalar::Float | Scalar::ComplexFloat => 1,
-            | Scalar::Double | Scalar::ComplexDouble => 2,
-            | Scalar::LongDouble | Scalar::ComplexLongDouble => 3,
-            | Scalar::Float128 | Scalar::ComplexFloat128 => 4,
-            | _ => 0,
-        };
+        // C23 §H.4.3p1: within one precision, an interchange type is
+        // chosen over a standard type, and that over an extended type.
+        let float_rank = Scalar::floating_rank;
         let rank = float_rank(ls).max(float_rank(rs));
-        let complex = matches!(
-            ls,
-            Scalar::ComplexFloat
-                | Scalar::ComplexDouble
-                | Scalar::ComplexLongDouble
-                | Scalar::ComplexFloat128
-        ) || matches!(
-            rs,
-            Scalar::ComplexFloat
-                | Scalar::ComplexDouble
-                | Scalar::ComplexLongDouble
-                | Scalar::ComplexFloat128
-        );
+        let complex = ls.complex() || rs.complex();
         let scalar = if rank != 0 {
-            match (rank, complex) {
-                | (1, false) => Scalar::Float,
-                | (2, false) => Scalar::Double,
-                | (4, false) => Scalar::Float128,
-                | (_, false) => Scalar::LongDouble,
-                | (1, true) => Scalar::ComplexFloat,
-                | (2, true) => Scalar::ComplexDouble,
-                | (4, true) => Scalar::ComplexFloat128,
-                | (_, true) => Scalar::ComplexLongDouble,
+            let real = if float_rank(ls) >= float_rank(rs) {
+                ls
+            } else {
+                rs
             }
+            .real_type();
+            if complex { real.complex_type() } else { real }
         } else {
             let rank = |s| match s {
                 | Scalar::Long | Scalar::UnsignedLong => 2,
@@ -1901,41 +1876,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let ty = self.types.scalar(scalar).with_alignment(alignment);
         // C99 §6.3.1.8p1: common real precision does not change type domain.
-        let complex_scalar = |s| {
-            matches!(
-                s,
-                Scalar::ComplexFloat
-                    | Scalar::ComplexDouble
-                    | Scalar::ComplexLongDouble
-                    | Scalar::ComplexFloat128
-            )
-        };
         let real = if complex {
-            self.types.scalar(match rank {
-                | 1 => Scalar::Float,
-                | 2 => Scalar::Double,
-                | 4 => Scalar::Float128,
-                | _ => Scalar::LongDouble,
-            })
+            self.types.scalar(scalar.real_type())
         } else {
             ty
         };
         self.convert(
             left.expression,
-            if complex && !complex_scalar(ls) {
-                real
-            } else {
-                ty
-            },
+            if complex && !ls.complex() { real } else { ty },
             ConversionKind::Arithmetic,
         );
         self.convert(
             right.expression,
-            if complex && !complex_scalar(rs) {
-                real
-            } else {
-                ty
-            },
+            if complex && !rs.complex() { real } else { ty },
             ConversionKind::Arithmetic,
         );
         ty
@@ -2087,6 +2040,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // keyword is disabled; it stays an opaque reserved name there.
             let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name))
                 .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
+                .filter(|descriptor| descriptor.availability.accepted(self.context.configuration))
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
             if let Some(descriptor) = descriptor
                 && descriptor.type_rule == crate::builtins::TypeRule::X86Signature

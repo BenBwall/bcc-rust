@@ -71,7 +71,8 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
     while let TypeKind::Atomic(inner) = types.kind(ty) {
         if matches!(
             types.kind(inner),
-            TypeKind::Scalar(
+            TypeKind::Scalar(s) if matches!(
+                s.representation(),
                 Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
             )
         ) {
@@ -107,8 +108,10 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
 }
 
 /// C99: §6.2.5 paragraphs 2-11, pp. 33-34; PDF pp. 45-46.
+/// An interchange or extended floating type lowers as the type whose
+/// representation it shares (C23 §H.2.2 paragraph 3, p. 553; PDF p. 566).
 fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorKind> {
-    match scalar {
+    match scalar.representation() {
         | Scalar::Void => Ok(Repr::Void),
         | Scalar::Bool => Ok(Repr::Bool),
         | Scalar::Float => Ok(Repr::Float { ty: Type::F32 }),
@@ -481,7 +484,7 @@ fn scalar_leaves(
         | Some(Layout { size: 8, .. }) => Type::F64,
         | _ => Type::F80,
     };
-    let (ty, parts) = match scalar {
+    let (ty, parts) = match scalar.representation() {
         | Scalar::Void =>
             return Err(LoweringErrorKind::MissingFact(
                 "an aggregate has a void member",

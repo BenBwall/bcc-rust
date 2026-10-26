@@ -140,10 +140,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         };
         let precision = self.floating_precision(scalar)?;
-        let complex = matches!(
-            scalar,
-            Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
-        );
+        let complex = scalar.complex();
         Some(Floating {
             real: value.real.arithmetic(LongDouble::ZERO, 4, precision),
             imag: if complex {
@@ -156,11 +153,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The carrier's rounding precision for a real or complex floating
     /// scalar: 1 for binary32, 2 for binary64 and 3 for x87 extended.
-    /// Binary128 has no carrier precision.
+    /// Binary128 has no carrier precision. An interchange or extended type
+    /// rounds as the standard type whose representation it shares.
     /// C99: implementation-defined floating representations §6.2.5p10,
     /// p. 34; PDF p. 46; characteristics §5.2.4.2.2, pp. 23-27; PDF pp. 35-39.
     pub(super) fn floating_precision(&self, scalar: Scalar) -> Option<i32> {
-        Some(match scalar {
+        Some(match scalar.representation() {
             | Scalar::Float | Scalar::ComplexFloat => 1,
             | Scalar::Double | Scalar::ComplexDouble => 2,
             | Scalar::LongDouble | Scalar::ComplexLongDouble =>

@@ -625,16 +625,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }),
                 | _ => None,
             },
-            | TypeKind::Scalar(
-                Scalar::Float
-                | Scalar::Double
-                | Scalar::LongDouble
-                | Scalar::Float128
-                | Scalar::ComplexFloat
-                | Scalar::ComplexDouble
-                | Scalar::ComplexLongDouble
-                | Scalar::ComplexFloat128,
-            ) => match value {
+            | TypeKind::Scalar(s) if s.floating() => match value {
                 | Value::Floating(floating) =>
                     self.round_floating(floating, ty).map(Value::Floating),
                 | Value::Integer(integer) => {
@@ -848,16 +839,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         };
         let value = match read {
             | Read::Zero => match self.types.nodes[ty.index] {
-                | TypeKind::Scalar(
-                    Scalar::Float
-                    | Scalar::Double
-                    | Scalar::LongDouble
-                    | Scalar::Float128
-                    | Scalar::ComplexFloat
-                    | Scalar::ComplexDouble
-                    | Scalar::ComplexLongDouble
-                    | Scalar::ComplexFloat128,
-                ) => Value::Floating(Floating {
+                | TypeKind::Scalar(s) if s.floating() => Value::Floating(Floating {
                     real: LongDouble::ZERO,
                     imag: LongDouble::ZERO,
                 }),

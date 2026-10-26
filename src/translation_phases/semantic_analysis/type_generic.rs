@@ -233,13 +233,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if scalar == Scalar::Void {
             return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
         }
-        let component = match scalar {
-            | Scalar::ComplexFloat => Scalar::Float,
-            | Scalar::ComplexDouble => Scalar::Double,
-            | Scalar::ComplexLongDouble => Scalar::LongDouble,
-            | Scalar::ComplexFloat128 => Scalar::Float128,
-            | _ => scalar,
-        };
+        let component = scalar.real_type();
         let complex = component != scalar;
         let ty = if complex {
             self.types
@@ -312,12 +306,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | TypeKind::Scalar(Scalar::Bool) => 4,
                 | TypeKind::Scalar(s) if s.integer() => 1,
                 | TypeKind::Scalar(Scalar::Void) => 0,
-                | TypeKind::Scalar(
-                    Scalar::ComplexFloat
-                    | Scalar::ComplexDouble
-                    | Scalar::ComplexLongDouble
-                    | Scalar::ComplexFloat128,
-                ) => 9,
+                | TypeKind::Scalar(s) if s.complex() => 9,
                 | TypeKind::Scalar(_) => 8,
                 | TypeKind::Pointer(_) => 5,
                 | TypeKind::Tag(id) => match self.types.tags[id].kind {

@@ -26,6 +26,7 @@ mod float128;
 mod fortify;
 mod initializer_plans;
 mod int128;
+mod interchange_floats;
 mod labels_as_values;
 mod library_modes;
 mod math_builtins;

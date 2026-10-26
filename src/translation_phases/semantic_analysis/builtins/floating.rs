@@ -98,9 +98,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if !self.types.unanalyzed(ty)
                 && !matches!(
                     self.types.nodes[ty.index],
-                    TypeKind::Scalar(
-                        Scalar::Float | Scalar::Double | Scalar::LongDouble | Scalar::Float128
-                    )
+                    TypeKind::Scalar(s) if s.floating() && !s.complex()
                 )
             {
                 return self.invalid_expression(expression, SemanticErrorKind::InvalidArgumentType);
@@ -167,10 +165,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return Self::expression_result(expression, self.types.unknown());
             }
             let ty = self.types.non_atomic(ty);
-            let TypeKind::Scalar(
-                scalar @ (Scalar::Float | Scalar::Double | Scalar::LongDouble | Scalar::Float128),
-            ) = self.types.nodes[ty.index]
-            else {
+            let Some(scalar) = (match self.types.nodes[ty.index] {
+                | TypeKind::Scalar(s) if s.floating() && !s.complex() => Some(s),
+                | _ => None,
+            }) else {
                 self.error(
                     SemanticErrorKind::InvalidArgumentType,
                     argument.source_vectors,
@@ -193,12 +191,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return Self::expression_result(expression, self.types.unknown());
         }
-        let complex = match scalar {
-            | Scalar::Float => Scalar::ComplexFloat,
-            | Scalar::Double => Scalar::ComplexDouble,
-            | Scalar::LongDouble => Scalar::ComplexLongDouble,
-            | _ => Scalar::ComplexFloat128,
-        };
+        let complex = scalar.complex_type();
         let mut result = Self::expression_result(expression, self.types.scalar(complex));
         result.operation_type = Some(operand);
         if real.constant == ConstantClass::Arithmetic

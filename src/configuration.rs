@@ -83,6 +83,7 @@ pub(crate) struct CompilerConfiguration {
     hosted: bool,
     optimization: (bool, bool),
     gnu89_inline: Option<bool>,
+    interchange_float_types: bool,
     suppress_warnings: bool,
     warnings_as_errors: bool,
     /// Most recursive grammar productions active at once; see

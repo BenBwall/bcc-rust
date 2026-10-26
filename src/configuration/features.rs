@@ -170,6 +170,16 @@ pub(crate) enum Feature {
     /// mode, as GCC and Clang do (Clang's `-Wpedantic`
     /// "forward references to 'enum' types").
     ForwardEnumReference,
+    /// The `_Float32`, `_Float64`, `_Float128`, `_Float32x` and `_Float64x`
+    /// keywords and their `f32`, `f64`, `f128`, `f32x` and `f64x` constant
+    /// suffixes. Accepted only where
+    /// [`CompilerConfiguration::interchange_float_types`](super::CompilerConfiguration::interchange_float_types)
+    /// selects them; GCC 7 and later accept them in every mode, as an
+    /// extension before C23.
+    /// C23: Annex H, §H.5.1 paragraph 1 and §H.5.2 paragraph 2, p. 560;
+    /// PDF p. 573. GCC manual, "Additional Floating Types",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>.
+    InterchangeFloatTypes,
 }
 
 impl Feature {
@@ -227,6 +237,7 @@ impl Feature {
             | Self::Constexpr
             | Self::Nullptr
             | Self::UnnamedDefinitionParameters
+            | Self::InterchangeFloatTypes
             | Self::WideEnumerators => FeatureOrigin::Standard(CStandard::C23),
 
             | Self::OctalPrefix
@@ -432,6 +443,7 @@ impl Feature {
         Self::UnnamedDefinitionParameters,
         Self::VoidPointerArithmetic,
         Self::ForwardEnumReference,
+        Self::InterchangeFloatTypes,
     ];
 }
 

@@ -38,6 +38,7 @@ use crate::{
             extensions::{
                 modern::{
                     ExtendedType,
+                    InterchangeFloat,
                     SpecifierExtension,
                     SpecifierExtensionKind,
                     SyntaxOperand,
@@ -379,9 +380,15 @@ impl<'tu> SpecifierList<'tu> {
     }
 
     /// GCC Additional Floating Types: binary128 accepts _Complex in either
-    /// order. Returns whether `token` was consumed.
+    /// order, as do the interchange and extended floating types (C23 §H.5.1
+    /// paragraph 1, p. 560; PDF p. 573). Returns whether `token` was
+    /// consumed.
     fn apply_float128(&mut self, parser: &mut Parser<'_, 'tu, '_>, token: Token) -> bool {
-        if !matches!(token.kind, TokenType::Keyword(KeywordTokenType::Float128)) {
+        let TokenType::Keyword(keyword) = token.kind else {
+            return false;
+        };
+        let interchange = InterchangeFloat::from_keyword(keyword);
+        if keyword != KeywordTokenType::Float128 && interchange.is_none() {
             return false;
         }
         let complex = self.specifiers.type_specifiers == TypeSpecifiers::Complex;
@@ -393,8 +400,11 @@ impl<'tu> SpecifierList<'tu> {
                 .type_specifiers
                 .report_conflict(parser, token.contents, token);
         }
-        self.specifiers.type_specifiers =
-            TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::Float128 { complex }));
+        let extended = match interchange {
+            | Some(format) => ExtendedType::InterchangeFloat { format, complex },
+            | None => ExtendedType::Float128 { complex },
+        };
+        self.specifiers.type_specifiers = TypeSpecifiers::Extended(parser.alloc_syntax(extended));
         self.consumed = true;
         parser.merge_source(&mut self.source_vectors, token);
         true
@@ -977,6 +987,21 @@ impl<'tu> SpecifierList<'tu> {
                 if matches!(specifier, PrimitiveTypeSpecifier::Complex) && !complex {
                     self.specifiers.type_specifiers = TypeSpecifiers::Extended(
                         parser.alloc_syntax(ExtendedType::Float128 { complex: true }),
+                    );
+                } else {
+                    self.specifiers
+                        .type_specifiers
+                        .report_conflict(parser, token.contents, token);
+                }
+                return;
+            },
+            | TypeSpecifiers::Extended(ExtendedType::InterchangeFloat { format, complex }) => {
+                if matches!(specifier, PrimitiveTypeSpecifier::Complex) && !complex {
+                    self.specifiers.type_specifiers = TypeSpecifiers::Extended(
+                        parser.alloc_syntax(ExtendedType::InterchangeFloat {
+                            format:  *format,
+                            complex: true,
+                        }),
                     );
                 } else {
                     self.specifiers

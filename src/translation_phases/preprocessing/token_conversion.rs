@@ -30,6 +30,7 @@ use super::{
         ImaginaryIntegerKind,
         IntegerSuffix,
         IntegerTokenType,
+        InterchangeFloat,
         KeywordTokenType,
         LiteralEncoding,
         LiteralId,
@@ -521,6 +522,20 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     TokenType::Float(FloatTokenType::ImaginaryFloat128(v)),
                 | TokenType::Float(FloatTokenType::LongDouble(v)) =>
                     TokenType::Float(FloatTokenType::ImaginaryLongDouble(v)),
+                // No imaginary interchange or extended constants are
+                // modeled.
+                | TokenType::Float(
+                    FloatTokenType::Float32(_)
+                    | FloatTokenType::Float64(_)
+                    | FloatTokenType::Float32x(_)
+                    | FloatTokenType::Float64x(_),
+                ) => {
+                    self.context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::InvalidDecimalFloatLiteral,
+                        source_vectors: token.source_vectors,
+                    });
+                    real_token.kind
+                },
                 | TokenType::Integer(v) => {
                     let component = match v {
                         | IntegerTokenType::Int(_) => ImaginaryIntegerKind::Int,
@@ -1187,6 +1202,28 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             &normalized
         };
+        // An interchange or extended suffix reads its value as the standard
+        // suffix of the same representation would, then names its own type.
+        let interchange = self
+            .context
+            .configuration
+            .accepts(Feature::InterchangeFloatTypes)
+            .then(|| interchange_suffix(contents))
+            .flatten();
+        let mut standard = ArenaString::new_in(self.scratch);
+        let contents = if let Some((format, length)) = interchange {
+            standard.push_str(&contents[..contents.len() - 1 - length]);
+            standard.push_str(match format {
+                | InterchangeFloat::Float32 => "f",
+                | InterchangeFloat::Float64 | InterchangeFloat::Float32x => "",
+                | InterchangeFloat::Float64x => "l",
+                | InterchangeFloat::Float128 => "q",
+            });
+            standard.push('\0');
+            &standard
+        } else {
+            contents
+        };
         let suffix = contents.char_at(contents.len() - 2);
         let res = match suffix {
             | Some('q' | 'Q') =>
@@ -1204,6 +1241,29 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             | Some('l' | 'L') => string_to_long_double(contents).map(FloatTokenType::LongDouble),
             | _ =>
                 string_to_double(contents).map(|value| FloatTokenType::Double(Packed::new(value))),
+        };
+        let res = match interchange {
+            | Some((format, _)) => {
+                let retype = |kind| match (format, kind) {
+                    | (InterchangeFloat::Float32, FloatTokenType::Float(v)) =>
+                        FloatTokenType::Float32(v),
+                    | (InterchangeFloat::Float64, FloatTokenType::Double(v)) =>
+                        FloatTokenType::Float64(v),
+                    | (InterchangeFloat::Float32x, FloatTokenType::Double(v)) =>
+                        FloatTokenType::Float32x(v),
+                    | (InterchangeFloat::Float64x, FloatTokenType::LongDouble(v)) =>
+                        FloatTokenType::Float64x(v),
+                    | (_, kind) => kind,
+                };
+                match res {
+                    | Ok(kind) => Ok(retype(kind)),
+                    | Err(ParseFloatError::Invalid(kind)) =>
+                        Err(ParseFloatError::Invalid(retype(kind))),
+                    | Err(ParseFloatError::OutOfRange(kind, error)) =>
+                        Err(ParseFloatError::OutOfRange(retype(kind), error)),
+                }
+            },
+            | None => res,
         };
         match res {
             | Ok(kind) => Token {
@@ -1513,4 +1573,33 @@ fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
     } else {
         None
     }
+}
+
+/// The interchange or extended format a floating constant's suffix names,
+/// and the suffix's length: `f` or `F` followed by `32`, `64` or `128`, or by
+/// `32` or `64` and then `x` or `X`. `contents` ends with a NUL.
+/// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573. `f16` and `f128x` name
+/// types bcc does not provide.
+fn interchange_suffix(contents: &str) -> Option<(InterchangeFloat, usize)> {
+    let spelling = contents.strip_suffix('\0').unwrap_or(contents);
+    // A hexadecimal significand ends at its binary exponent, so `f` there
+    // starts a suffix only after the exponent's digits.
+    let hexadecimal = spelling.starts_with("0x") || spelling.starts_with("0X");
+    let (format, length) = [
+        ("32", InterchangeFloat::Float32),
+        ("64", InterchangeFloat::Float64),
+        ("128", InterchangeFloat::Float128),
+        ("32x", InterchangeFloat::Float32x),
+        ("32X", InterchangeFloat::Float32x),
+        ("64x", InterchangeFloat::Float64x),
+        ("64X", InterchangeFloat::Float64x),
+    ]
+    .into_iter()
+    .find_map(|(digits, format)| {
+        let rest = spelling.strip_suffix(digits)?;
+        let rest = rest.strip_suffix(['f', 'F'])?;
+        (!hexadecimal || rest.contains(['p', 'P'])).then_some((format, digits.len() + 1))
+    })?;
+    // The significand must remain: `1.f32` keeps `1.`.
+    (spelling.len() > length).then_some((format, length))
 }

@@ -59,6 +59,7 @@ impl CompilerConfiguration {
                 | Feature::VaOpt
                 | Feature::Inline => native || self.gnu,
                 | Feature::Trigraphs => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
+                | Feature::InterchangeFloatTypes => self.interchange_float_types,
                 | _ => true,
             };
             if accepted {
@@ -161,6 +162,22 @@ impl CompilerConfiguration {
         }
     }
 
+    /// Makes `_Float32`, `_Float64`, `_Float128`, `_Float32x` and `_Float64x`
+    /// keywords naming distinct types, as GCC 7 and later do, and predefines
+    /// their `__FLT32_*__`-family characteristics macros. Off by default:
+    /// glibc declares these names as typedefs for the Clang identity bcc
+    /// claims, so they must stay identifiers there; a GCC identity turns it
+    /// on.
+    /// C23: §H.5.1 paragraph 1, p. 560; PDF p. 573.
+    pub(crate) const fn with_interchange_float_types(mut self, enabled: bool) -> Self {
+        self.interchange_float_types = enabled;
+        self.derive_features()
+    }
+
+    pub(crate) const fn interchange_float_types(self) -> bool {
+        self.interchange_float_types
+    }
+
     pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
         self.suppress_warnings = enabled;
         self
@@ -259,6 +276,7 @@ impl CompilerConfiguration {
             hosted: true,
             optimization: (false, false),
             gnu89_inline: None,
+            interchange_float_types: false,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,

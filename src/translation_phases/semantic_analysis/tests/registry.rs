@@ -16,7 +16,11 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
         assert!(ids.insert(descriptor.id));
         assert_eq!(lookup(descriptor.spelling).unwrap().id, descriptor.id);
         assert_eq!(descriptor.id.descriptor().spelling, descriptor.spelling);
-        let advertised = descriptor.availability.naming == NamingPolicy::Reserved;
+        // The default configuration has no `_FloatN` types, so their
+        // builtins do not exist.
+        let advertised = descriptor.availability.naming == NamingPolicy::Reserved
+            && descriptor.availability.feature
+                != Some(crate::configuration::Feature::InterchangeFloatTypes);
         write!(
             source,
             "#if __has_builtin({}) != {}\n#error support\n#endif\n",
@@ -39,7 +43,7 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             .unwrap();
         }
     }
-    assert_eq!(ids.len(), 775);
+    assert_eq!(ids.len(), 791);
     source.push_str("int following;\n");
     for target in [
         Target::LinuxGnu,
