@@ -296,12 +296,16 @@ int main(void) {
         let source = "typedef __builtin_va_list va_list;
 int printf(const char *, ...);
 int __vsprintf_chk(char *, int, unsigned long long, const char *, va_list);
+int vprintf(const char *, va_list);
 static void show(const char *format, ...) {
   va_list list; char text[64];
   __builtin_va_start(list, format);
   __vsprintf_chk(text, 1, sizeof text, format, list);
   __builtin_va_end(list);
   printf(\"%s\", text);
+  __builtin_va_start(list, format);
+  vprintf(format, list);
+  __builtin_va_end(list);
 }
 int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
   show(\"%Lf %d %Lg %Le\\n\", x, 8, x * 2, x / 4); return 0; }
@@ -321,7 +325,7 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
                 );
                 assert_eq!(
                     text(&output.stdout),
-                    "1.500000 7 1.500000 8 3 3.750000e-01\n",
+                    "1.500000 7 1.500000 8 3 3.750000e-01\n1.500000 8 3 3.750000e-01\n",
                     "{target} {optimize}"
                 );
             }
