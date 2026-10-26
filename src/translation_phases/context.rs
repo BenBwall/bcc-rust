@@ -82,6 +82,11 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
+    /// The source is already preprocessed (GCC's `-fpreprocessed`): no
+    /// macro is replaced, and only line markers, `#pragma`, `#ident` and
+    /// `#sccs` take effect; `#define` and `#undef` are read but, with
+    /// replacement off, change nothing.
+    pub(crate) preprocessed_input: bool,
     /// Output-token ordinals preserve directive order across includes/macros.
     pub(crate) preprocessed_tokens: usize,
     pub(crate) pack_pragmas: ArenaVec<'tu, super::pragma_pack::PackPragma<'tu>>,

@@ -1,15 +1,22 @@
 //! Combines explicit include directories, environment paths, and resource
 //! header settings into the ordered header search.
 
-use std::env::{
-    split_paths,
-    var_os,
+use std::{
+    env::{
+        split_paths,
+        var_os,
+    },
+    path::Path,
 };
 #[expect(
     clippy::disallowed_types,
-    reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."
+    reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`. \
+              Startup builds clang's options as `OsString`s."
 )]
-use std::path::PathBuf;
+use std::{
+    ffi::OsString,
+    path::PathBuf,
+};
 
 use clap::Args;
 
@@ -46,6 +53,49 @@ impl CliHeaderSearch {
             resource: !self.nostdinc && !self.nobuiltininc,
             after,
         }
+    }
+}
+
+impl CliHeaderSearch {
+    /// The header search options as the bundled clang reads them, for the
+    /// C preprocessor that runs before an assembly file is assembled.
+    /// `--sysroot` goes with the toolchain ([`Self::sysroot`]).
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Startup builds the clang command line beside clap's arguments."
+    )]
+    pub(super) fn clang_arguments(&self) -> Vec<OsString> {
+        let mut arguments = Vec::new();
+        let groups = [
+            ("-iquote", &self.quote_include),
+            ("-I", &self.include),
+            ("-isystem", &self.system_include),
+            ("-idirafter", &self.after_include),
+        ];
+        for (flag, directories) in groups {
+            for directory in directories {
+                arguments.push(flag.into());
+                arguments.push(directory.into());
+            }
+        }
+        let switches = [
+            ("-nostdinc", self.nostdinc),
+            ("-nostdlibinc", self.nostdlibinc),
+            ("-nobuiltininc", self.nobuiltininc),
+        ];
+        arguments.extend(
+            switches
+                .into_iter()
+                .filter(|(_, enabled)| *enabled)
+                .map(|(flag, _)| flag.into()),
+        );
+        arguments
+    }
+
+    /// The `--sysroot` directory, which the bundled clang also links and
+    /// assembles against, so headers and libraries come from one root.
+    pub(super) fn sysroot(&self) -> Option<&Path> {
+        self.sysroot.as_deref()
     }
 }
 

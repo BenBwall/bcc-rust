@@ -51,15 +51,28 @@ pub(super) struct DependencyRequest {
     default_target: PathBuf,
 }
 
+/// The outputs a job's rules are named after, as GCC derives them from
+/// the stage and `-o`.
+#[derive(Clone, Copy, Default)]
+pub(super) struct DependencyNames<'a> {
+    /// The path whose name, with `.d`, names the `-MD` file; `None` names
+    /// it after the source in the working directory.
+    pub(super) file:   Option<&'a Path>,
+    /// The rule's target without `-MT` or `-MQ`; `None` is the source's
+    /// name with `.o`.
+    pub(super) target: Option<&'a Path>,
+}
+
 /// The rules `source` writes: for `-M` and `-MM` (`only`), to the `-MF`
 /// file, the `-o` path or stdout; for `-MD` and `-MMD`, to the `-MF` file or
-/// beside `object`, the object the job writes, with `.d`. The target is
-/// `object`, or the source's name with `.o`.
+/// the `.d` file `names` gives. `-MF -` and `-o -` write to stdout, and a
+/// `-` in `names` is not a name, so `-S -o -` names the file after the
+/// source (GCC would write a file named `-.d`).
 pub(super) fn request(
     args: &Cli,
     source: Source<'_>,
     only: bool,
-    object: Option<&Path>,
+    names: DependencyNames<'_>,
 ) -> Result<Option<DependencyRequest>, MainError> {
     let driver = &args.driver;
     let files = if only {
@@ -70,21 +83,30 @@ pub(super) fn request(
     let Some(files) = files else {
         return Ok(None);
     };
-    let default_target = match object {
-        | Some(object) => object.into(),
+    let default_target = match named(names.target) {
+        | Some(target) => target.into(),
         | None if matches!(source, Source::Text(_)) => "input.o".into(),
         | None => output_or_stem(None, source.path(), "o")?,
     };
     let destination = match (&driver.dependency_file, only) {
-        | (Some(file), _) => Some(file.clone()),
-        | (None, true) => args.code_generation.output_path.clone(),
-        | (None, false) => Some(default_target.with_extension("d")),
+        | (Some(file), _) => named(Some(file.as_path())).map(Into::into),
+        | (None, true) => named(args.code_generation.output_path.as_deref()).map(Into::into),
+        | (None, false) => Some(match named(names.file) {
+            | Some(file) => file.with_extension("d"),
+            | None if matches!(source, Source::Text(_)) => "input.d".into(),
+            | None => output_or_stem(None, source.path(), "d")?,
+        }),
     };
     Ok(Some(DependencyRequest {
         files,
         destination,
         default_target,
     }))
+}
+
+/// `path`, unless it is `-`, which names stdout rather than a file.
+fn named(path: Option<&Path>) -> Option<&Path> {
+    path.filter(|path| *path != Path::new("-"))
 }
 
 /// Writes the rules of the translation unit `context` read.

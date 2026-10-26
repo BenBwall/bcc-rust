@@ -50,6 +50,10 @@ pub(in crate::cli) struct DriverOptions {
     /// -nostartfiles, -nodefaultlibs, -rdynamic and -pthread.
     #[arg(long, hide = true, allow_hyphen_values = true)]
     pub(in crate::cli) link_option:        Vec<String>,
+    /// An assembler option, as clang reads it, for the assembly inputs:
+    /// GCC -Wa,ARGS, or -Xassembler ARG.
+    #[arg(long, hide = true, allow_hyphen_values = true)]
+    pub(in crate::cli) assembler_option:   Vec<String>,
     /// Write make rules for the files the source depends on instead of its
     /// preprocessed text: every file, or only the user's (also accepts GCC
     /// -M and -MM).

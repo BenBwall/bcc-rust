@@ -1219,12 +1219,15 @@ bcc-rust --print-default-passes     print the default pass list and exit
 The driver runs one job per input in command-line order (`src/cli/driver.rs`):
 `-S` and `-c` stop each C source at assembly or an object, named after the
 source in the working directory unless `-o` names the only output; `-o`
-alone links. One C source alone links in one step as before; with several
-inputs, each C source becomes a temporary object beside the output and
+alone links, after the driver has checked that the output is none of the
+inputs. One C source alone links in one step as before; with several
+inputs, or with `--sysroot`, each C source becomes a temporary object beside
+the output and
 assembly inputs are assembled by the bundled clang, which then links every
 object, archive, library and `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`,
 `-rdynamic` or `-pthread` option in order, adding `-latomic` when an object
-needs it. No link runs after a failed job. README lists the preprocessing
+needs it, against the `--sysroot` when one is given. No link runs after a
+failed job. README lists the preprocessing
 stages (`-E`, `-M`).
 
 `-O0` disables optimization; the other `-O` levels enable bcc's pass

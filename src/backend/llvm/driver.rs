@@ -271,6 +271,17 @@ impl Toolchain {
         })
     }
 
+    /// This toolchain with `sysroot`, when given, as the system root it
+    /// links and assembles against instead of its own, as `--sysroot`
+    /// selects one for the headers.
+    #[must_use]
+    pub(crate) fn with_sysroot(mut self, sysroot: Option<&Path>) -> Self {
+        if let Some(sysroot) = sysroot {
+            self.sysroot = Some(sysroot.to_path_buf());
+        }
+        self
+    }
+
     /// The clang executable.
     #[cfg(test)]
     pub(crate) fn clang(&self) -> &Path {
@@ -362,12 +373,14 @@ impl Toolchain {
     }
 
     /// Assembles or compiles one input the bundled clang understands, such as
-    /// an assembly file, into the object `out_path`.
-    pub(crate) fn compile_foreign(
+    /// an assembly file, into the object `out_path`. `options` come before
+    /// the input: its `-x` language and preprocessor options.
+    pub(crate) fn compile_foreign<'a>(
         &self,
         input: &Path,
         out_path: &Path,
         target: Target,
+        options: impl IntoIterator<Item = &'a OsStr>,
     ) -> io::Result<()> {
         let mut command = Command::new(&self.clang);
         _ = command.arg(concat_os("--target=", target.triple().as_ref()));
@@ -375,6 +388,7 @@ impl Toolchain {
             _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
         }
         let output = command
+            .args(options)
             .arg("-c")
             .arg(input)
             .arg("-o")

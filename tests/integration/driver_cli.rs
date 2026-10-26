@@ -1,6 +1,7 @@
 //! The compiler driver: `-c`, `-S` and `-E` jobs and their output names,
-//! linking several inputs in order, `-M` dependency rules, `-fsyntax-only`,
-//! stdin, and reading preprocessed output back.
+//! refusing an output that is an input, linking several inputs in order,
+//! `--sysroot` linking, assembly inputs, `-M` dependency rules,
+//! `-fsyntax-only`, stdin, and reading preprocessed output back.
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
@@ -262,5 +263,196 @@ mod tests {
         let unknown = project.bcc(&["-x", "fortran", "main.c"]);
         assert_eq!(unknown.status.code(), Some(1));
         assert!(stderr(&unknown).contains("language fortran not recognized"));
+    }
+
+    #[test]
+    fn an_output_that_is_an_input_is_refused_before_any_job() {
+        let project = Project::new();
+        let check = |args: &[&str], input: &str| {
+            let output = project.bcc(args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            assert!(
+                stderr(&output).contains(&format!("is the same as input file '{input}'")),
+                "{args:?}: {}",
+                stderr(&output)
+            );
+        };
+        // Compilation writes temporary objects, so only this check stops the
+        // link from replacing a source.
+        check(&["a.c", "main.c", "-o", "a.c"], "a.c");
+        check(&["main.c", "a.c", "-o", "a.c"], "a.c");
+        succeeds(&project.bcc(&["-c", "a.c"]));
+        check(&["main.c", "a.o", "-o", "a.o"], "a.o");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("a.c", project.path("alias.c")).unwrap();
+            check(&["main.c", "a.c", "-o", "alias.c"], "a.c");
+            std::fs::hard_link(project.path("main.c"), project.path("hard.c")).unwrap();
+            check(&["main.c", "a.c", "-o", "hard.c"], "main.c");
+        }
+        assert_eq!(
+            std::fs::read_to_string(project.path("a.c")).unwrap(),
+            HELPER
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.path("main.c")).unwrap(),
+            MAIN
+        );
+    }
+
+    #[test]
+    fn dependency_files_are_named_after_the_stage_and_output() {
+        let project = Project::new();
+        let read = |name: &str| std::fs::read_to_string(project.path(name)).unwrap();
+        succeeds(&project.bcc(&["-S", "-MD", "main.c"]));
+        assert_eq!(read("main.d"), "main.o: main.c h.h\n");
+        succeeds(&project.bcc(&["-S", "-MD", "main.c", "-o", "out.s"]));
+        assert_eq!(read("out.d"), "out.s: main.c h.h\n");
+        succeeds(&project.bcc(&["-E", "-MD", "a.c", "-o", "pre.i"]));
+        assert_eq!(read("pre.d"), "a.o: a.c h.h\n");
+        // `-o -` is stdout, not a name.
+        succeeds(&project.bcc(&["-S", "-MMD", "a.c", "-o", "-"]));
+        assert_eq!(read("a.d"), "a.o: a.c h.h\n");
+        assert!(!project.path("-.d").exists());
+        if !linkable_host() {
+            eprintln!("skipping the link cases: they link for the Linux GNU host");
+            return;
+        }
+        std::fs::write(
+            project.path("solo.c"),
+            "#include \"h.h\"\nint main(void) { return 0; }\n",
+        )
+        .unwrap();
+        succeeds(&project.bcc(&["-MD", "solo.c", "-o", "app"]));
+        assert_eq!(read("app.d"), "app: solo.c h.h\n");
+        // With --sysroot one source links in two steps; the rule is the same.
+        succeeds(&project.bcc(&["--sysroot=/", "-MD", "solo.c", "-o", "rooted"]));
+        assert_eq!(read("rooted.d"), "rooted: solo.c h.h\n");
+        // Several sources each write their own rule.
+        succeeds(&project.bcc(&["-MMD", "a.c", "main.c", "-o", "app2"]));
+        assert_eq!(read("a.d"), "a.o: a.c h.h\n");
+        assert_eq!(read("main.d"), "main.o: main.c h.h\n");
+        assert!(!project.path("app2.d").exists());
+    }
+
+    #[test]
+    fn dash_dependency_destinations_write_to_stdout() {
+        let project = Project::new();
+        for args in [
+            &["-M", "-MF", "-", "main.c"][..],
+            &["-M", "main.c", "-o", "-"],
+            &["-c", "-MD", "-MF", "-", "main.c"],
+        ] {
+            let output = project.bcc(args);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "main.o: main.c h.h\n", "{args:?}");
+            assert!(!project.path("-").exists(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn assembly_keeps_its_language_and_preprocessing_options() {
+        let project = Project::new();
+        std::fs::create_dir(project.path("inc")).unwrap();
+        std::fs::write(project.path("inc/inc.h"), "#define INCLUDED 7\n").unwrap();
+        std::fs::write(project.path("forced.h"), "#define FORCED 1\n").unwrap();
+        let assembly = "#if !defined VALUE || !defined FORCED\n#error missing \
+                        options\n#endif\n#include \"inc.h\"\n.globl f\nf:\n movl $INCLUDED, \
+                        %eax\n ret\n";
+        std::fs::write(project.path("f.txt"), assembly).unwrap();
+        std::fs::write(project.path("f.S"), assembly).unwrap();
+        let options = ["-DVALUE=1", "-Iinc", "-include", "forced.h"];
+        // `-x assembler-with-cpp` reaches clang for an unknown extension.
+        let mut args = vec!["-c", "-x", "assembler-with-cpp", "f.txt", "-o", "f1.o"];
+        args.extend(options);
+        succeeds(&project.bcc(&args));
+        assert!(project.path("f1.o").is_file());
+        let mut args = vec!["-c", "f.S", "-o", "f2.o"];
+        args.extend(options);
+        succeeds(&project.bcc(&args));
+        // Without the options the preprocessor stops at `#error`.
+        assert_eq!(
+            project.bcc(&["-c", "f.S", "-o", "f3.o"]).status.code(),
+            Some(1)
+        );
+        // `-x assembler` does not preprocess: the assembler reads the
+        // directives as comments.
+        succeeds(&project.bcc(&["-c", "-x", "assembler", "f.S", "-o", "f4.o"]));
+        // Assembler options reach assembly but not C sources, which bcc
+        // assembles itself; `--noexecstack` is already true of them.
+        let warned = project.bcc(&["-c", "-Wa,--noexecstack,-L", "a.c"]);
+        succeeds(&warned);
+        assert_eq!(
+            stderr(&warned),
+            "warning: assembler option '-L' is not applied to C sources, which bcc assembles \
+             itself\n"
+        );
+    }
+
+    #[test]
+    fn preprocessed_input_is_not_preprocessed_again() {
+        let project = Project::new();
+        // GCC and Clang pass no -D to `.i` input and replace no macro in it.
+        std::fs::write(
+            project.path("p.i"),
+            "# 1 \"orig.c\"\n#define X 3\nint X;\nint *p = &X;\n",
+        )
+        .unwrap();
+        std::fs::write(project.path("breaks.h"), "#error forced include\n").unwrap();
+        succeeds(&project.bcc(&["-c", "-DX=1", "-include", "breaks.h", "p.i", "-o", "p.o"]));
+        let mut child = project
+            .command(&["-fsyntax-only", "-DX=1", "-x", "cpp-output", "-"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"int X;\n").unwrap();
+        succeeds(&child.wait_with_output().unwrap());
+        // Builtin macros are not replaced either.
+        std::fs::write(project.path("line.i"), "int line = __LINE__;\n").unwrap();
+        let line = project.bcc(&["-fsyntax-only", "line.i"]);
+        assert_eq!(line.status.code(), Some(1));
+        assert!(stderr(&line).contains("__LINE__"), "{}", stderr(&line));
+        // Only line markers, #pragma, #ident, #define and #undef are read.
+        std::fs::write(project.path("inc.i"), "#include \"h.h\"\nint y;\n").unwrap();
+        let include = project.bcc(&["-fsyntax-only", "inc.i"]);
+        assert_eq!(include.status.code(), Some(1));
+        assert!(
+            stderr(&include).contains("preprocessed input takes no directive"),
+            "{}",
+            stderr(&include)
+        );
+        // `-E` skips it, as GCC does, with Clang's warning.
+        let again = project.bcc(&["-E", "p.i"]);
+        succeeds(&again);
+        assert_eq!(stdout(&again), "");
+        assert!(stderr(&again).contains("p.i: previously preprocessed input"));
+    }
+
+    #[test]
+    fn sysroot_reaches_the_link() {
+        if !linkable_host() {
+            eprintln!("skipping: the test links for the Linux GNU host");
+            return;
+        }
+        let project = Project::new();
+        std::fs::create_dir(project.path("empty-root")).unwrap();
+        for sources in [&["main.c", "a.c"][..], &["a.c", "main.c"]] {
+            let mut args = vec!["--sysroot=empty-root"];
+            args.extend(sources);
+            args.extend(["-o", "app"]);
+            let failed = project.bcc(&args);
+            assert_eq!(failed.status.code(), Some(1), "{}", stderr(&failed));
+            assert!(
+                stderr(&failed).contains("cannot build"),
+                "{}",
+                stderr(&failed)
+            );
+        }
+        std::fs::write(project.path("solo.c"), "int main(void) { return 3; }\n").unwrap();
+        let failed = project.bcc(&["--sysroot=empty-root", "solo.c", "-o", "solo"]);
+        assert_eq!(failed.status.code(), Some(1), "{}", stderr(&failed));
+        succeeds(&project.bcc(&["--sysroot=/", "solo.c", "-o", "solo"]));
+        let run = Command::new(project.path("solo")).output().unwrap();
+        assert_eq!(run.status.code(), Some(3));
     }
 }

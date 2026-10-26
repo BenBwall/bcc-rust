@@ -51,18 +51,35 @@ bcc-rust -fsyntax-only a.c             # check; exit 1 after an error
 ```
 
 The driver takes several inputs and runs one job per input, as GCC does: C
-sources (`.c`, `.i`, `.h`, or any file after `-x c`; `-` reads stdin),
-assembly (`.s`, `.S`), and objects, archives and libraries, which go to the
-linker in order with `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`,
-`-pthread` and `-nostdlib`. `-c` and `-S` name each output after its source
+sources (`.c`, `.h`, or any file after `-x c`; `-` reads stdin), preprocessed
+C (`.i`, or `-x cpp-output`), assembly (`.s`, or `.S` and `.sx`, which the C
+preprocessor reads first with the `-D`, `-U`, `-include` and header search
+options; `-x assembler` and `-x assembler-with-cpp` reach the bundled clang),
+and objects, archives and libraries, which go to the linker in order with
+`-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`, `-pthread` and
+`-nostdlib`. `-Wa,` and `-Xassembler` options go to the assembly inputs; C
+sources, which bcc assembles itself, warn about any but `--noexecstack`. An
+output that is one of the input files, even through a symbolic or hard link,
+is refused before any job runs. `--sysroot` also selects the libraries the
+bundled clang links against. `-c` and `-S` name each output after its source
 in the working directory unless `-o` names the only one, and `-o -` writes
 `-S` or `-E` output to stdout. `-E` writes GCC's line markers (`# 3
 "a.c"`), unless `-P`, and keeps `#pragma pack` and `#pragma weak`; bcc reads
 such markers back, so a `.i` file compiles with its original locations.
+Preprocessed input is read as GCC's `-fpreprocessed` reads it: no macro is
+replaced, `-D`, `-U` and `-include` do not apply, only line markers,
+`#pragma`, `#ident`, `#define` and `#undef` are read (any other directive is
+an error), and `-E` skips it with a warning.
 `-E -dM` lists the macros in effect at the end, sorted by name. `-M`, `-MM`,
 `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write make rules as GCC does; the
-`-MM` forms leave out system headers. `--syntax-only` (`-fsyntax-only`)
-analyzes like the default view but exits with status 1 after an error.
+`-MM` forms leave out system headers. The `-MD` file and target follow the
+stage and `-o` as in GCC: `-c -o x.o` writes `x.d` for `x.o`, `-S -o x.s`
+`x.d` for `x.s`, `-E -o x.i` `x.d` for the source's `.o`, and linking one
+source with `-o app` `app.d` for `app`. Linking several sources writes one
+rule per source, named after it (`a.d` for `a.o`), where GCC would overwrite
+one `app.d`. `-MF -` and `-o -` write the rules to stdout.
+`--syntax-only` (`-fsyntax-only`) analyzes like the default view but exits
+with status 1 after an error.
 
 Every back end receives the module after ABI lowering, which fixes how the
 `--target` passes structures by value and `va_arg`; `--emit=ir` prints the

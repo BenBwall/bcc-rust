@@ -35,9 +35,11 @@ mod link;
 mod options;
 
 use clap::ArgMatches;
+use dependencies::DependencyNames;
 use inputs::{
     Input,
     Source,
+    check_output,
     ordered_inputs,
     output_or_stem,
 };
@@ -65,6 +67,9 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
     let inputs = ordered_inputs(args, matches)?;
     let generation = &args.code_generation;
     let output = generation.output_path.as_deref();
+    if let Some(output) = output {
+        check_output(&inputs, output)?;
+    }
     let sources = inputs
         .iter()
         .filter(|input| !matches!(input, Input::Link(_)))
@@ -97,6 +102,9 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
             }
         }
     }
+    if inputs.iter().any(|input| input.c_source().is_some()) {
+        link::warn_unused_assembler_options(args);
+    }
     let mut status = 0;
     match stage {
         | Stage::Inspect => {
@@ -116,33 +124,54 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
         },
         | Stage::Preprocess =>
             for input in &inputs {
-                if let Some(source) = input.c_source() {
-                    let (job, dependencies) = if args.driver.dependencies.is_some() {
-                        (Job::Scan, dependencies::request(args, source, true, None)?)
-                    } else {
-                        (
-                            Job::Preprocess(output),
-                            dependencies::request(args, source, false, None)?,
-                        )
-                    };
-                    status = status.max(compile(args, source, job, dependencies)?.status);
+                match input.c_source() {
+                    // GCC skips preprocessed input before its preprocessor;
+                    // Clang also warns.
+                    | Some(Source::Preprocessed(path)) => report_stderr(format_args!(
+                        "warning: {}: previously preprocessed input, not preprocessed again",
+                        path.display()
+                    )),
+                    | Some(source) if args.driver.dependencies.is_some() => {
+                        let dependencies =
+                            dependencies::request(args, source, true, DependencyNames::default())?;
+                        status = status.max(compile(args, source, Job::Scan, dependencies)?.status);
+                    },
+                    | Some(source) => {
+                        let names = DependencyNames {
+                            file:   output,
+                            target: None,
+                        };
+                        let dependencies = dependencies::request(args, source, false, names)?;
+                        status = status.max(
+                            compile(args, source, Job::Preprocess(output), dependencies)?.status,
+                        );
+                    },
+                    | None => {},
                 }
             },
         | Stage::Assemble | Stage::Compile =>
             for input in &inputs {
                 let extension = if stage == Stage::Assemble { "s" } else { "o" };
-                match input {
+                match *input {
                     | Input::Link(_) => {},
-                    | Input::Assembly(path) =>
+                    | Input::Assembly(assembly) =>
                         if stage == Stage::Compile {
-                            let object = output_or_stem(output, path, extension)?;
-                            status = status.max(assemble(args, path, &object));
+                            let object = output_or_stem(output, assembly.path, extension)?;
+                            status = status.max(assemble(args, assembly, &object));
                         },
-                    | _ => {
-                        let source = input.c_source().expect("a C input");
+                    | Input::C(source) => {
                         let path = output_or_stem(output, source.path(), extension)?;
-                        let object = (stage == Stage::Compile).then_some(path.as_path());
-                        let dependencies = dependencies::request(args, source, false, object)?;
+                        // GCC names an `-S` rule's target after the object
+                        // `-c` would write, unless `-o` names the output.
+                        let names = DependencyNames {
+                            file:   Some(&path),
+                            target: if stage == Stage::Compile {
+                                Some(&path)
+                            } else {
+                                output
+                            },
+                        };
+                        let dependencies = dependencies::request(args, source, false, names)?;
                         let mut job = generation.clone();
                         job.output_path = Some(path.clone());
                         if stage == Stage::Assemble {

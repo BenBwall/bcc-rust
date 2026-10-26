@@ -963,7 +963,11 @@ a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
 identity that is not a system header. A GNU line marker (`# 12 "file.c" 1 3`),
 the form `-E` writes, is read as `#line 12 "file.c"`; its flags are ignored,
-so flag 3 does not make what follows a system header. `#pragma GCC warning` and `#pragma GCC
+so flag 3 does not make what follows a system header. Already
+preprocessed input (`.i`, `-x cpp-output`) is read as GCC's
+`-fpreprocessed` reads it: no macro, builtin or not, is replaced, and only
+line markers, `#pragma`, `#ident`, `#sccs`, `#define` and `#undef` are
+directives; any other directive is an error. `#pragma GCC warning` and `#pragma GCC
 error` report their macro-replaced string operand (optionally parenthesized,
 adjacent literals concatenated) as a warning or an error, as GCC and Clang do;
 any other operand is an error. glibc's `__glibc_macro_warning`, which bcc

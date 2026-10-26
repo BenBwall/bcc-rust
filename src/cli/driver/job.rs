@@ -63,13 +63,13 @@ pub(super) fn compile(
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) = match source {
         | Source::Text(text) => (tu.alloc_str(text), Path::new("<input>")),
-        | Source::File(path) if path == Path::new("-") => {
+        | Source::File(path) | Source::Preprocessed(path) if path == Path::new("-") => {
             let text = tu
                 .read_from_lossy(io::stdin().lock())
                 .map_err(|source| open_error(path, source))?;
             (text, Path::new("<stdin>"))
         },
-        | Source::File(path) => match tu.read_to_str_lossy(path) {
+        | Source::File(path) | Source::Preprocessed(path) => match tu.read_to_str_lossy(path) {
             | Ok(text) => (text, path),
             | Err(source) => return Err(open_error(path, source)),
         },
@@ -83,7 +83,7 @@ pub(super) fn compile(
             .as_deref()
             .or(options.emit_path.as_deref()),
     };
-    if let (Source::File(input), Some(output)) = (source, output)
+    if let (Source::File(input) | Source::Preprocessed(input), Some(output)) = (source, output)
         && input != Path::new("-")
     {
         let same_file = output_file::is_input(input, output).map_err(|source| {
@@ -108,7 +108,12 @@ pub(super) fn compile(
         after:    tu.alloc_slice_fill_iter(directories.after.iter().map(AsRef::as_ref)),
     };
     let mut context = Context::with_configuration(&tu, args.configuration());
-    args.configure_preprocessing(&mut context);
+    // GCC passes no preprocessing options to `-fpreprocessed` input.
+    if matches!(source, Source::Preprocessed(_)) {
+        context.preprocessed_input = true;
+    } else {
+        args.configure_preprocessing(&mut context);
+    }
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(!args.no_repeated_specifier_warnings);

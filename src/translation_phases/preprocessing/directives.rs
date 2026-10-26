@@ -75,7 +75,8 @@ impl Expander<'_, '_, '_, '_> {
     /// not a directive makes a `non-directive`, to which C99 gives no
     /// meaning; it is diagnosed and skipped, as GCC and Clang do.
     /// `# new-line` is the null directive (§6.10.7 paragraph 1, p. 160; PDF
-    /// p. 172).
+    /// p. 172). Already preprocessed input takes only the directives GCC's
+    /// `-fpreprocessed` reads; that mode is an extension.
     pub(super) fn parse_directive(&mut self, token: PreprocessorToken) {
         if !self.last_was_newline {
             self.context.preprocessor_error(PreprocessorError {
@@ -112,7 +113,21 @@ impl Expander<'_, '_, '_, '_> {
                 return;
             },
         }
-        match self.context.string_cache.at(directive.contents) {
+        let name = self.context.string_cache.at(directive.contents);
+        if self.context.preprocessed_input
+            && !matches!(name, "pragma" | "ident" | "sccs" | "define" | "undef")
+        {
+            // GCC's `-fpreprocessed` reads only these directives; it hands
+            // any other to the parser, which rejects the stray `#`.
+            self.language_error(
+                "preprocessed input takes no directive other than a line marker, #pragma, #ident, \
+                 #define or #undef",
+                directive.source_vectors,
+            );
+            self.skip_until_newline();
+            return;
+        }
+        match name {
             | "if" => self.parse_if_directive(directive),
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),

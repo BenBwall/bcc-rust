@@ -100,6 +100,15 @@ pub(super) fn normalize_language_arguments(
             opaque_value = true;
         } else if let Some(language) = text.strip_prefix("-x") {
             normalized.push(format!("--language={language}").into());
+        } else if text.starts_with("-Wa,") {
+            normalized.push(format!("--assembler-option={text}").into());
+        } else if text == "-Xassembler" {
+            normalized.push("--assembler-option=-Xassembler".into());
+            if let Some(operand) = arguments.next() {
+                let mut option = std::ffi::OsString::from("--assembler-option=");
+                option.push(operand);
+                normalized.push(option);
+            }
         } else if matches!(text, "-l" | "-L" | "-Xlinker") {
             // The operand is the next argument, which keeps its place
             // among the inputs.
@@ -181,6 +190,7 @@ pub(super) fn normalize_language_arguments(
                     | "--preprocessing-option"
                     | "--language"
                     | "--link-option"
+                    | "--assembler-option"
                     | "--dependency-file"
                     | "--dependency-target"
                     | "-o"
