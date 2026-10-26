@@ -474,26 +474,28 @@ fn rejected_initializers_leave_no_state_for_the_next() {
 
 #[test]
 fn deep_initializers_scale_with_their_nesting() {
-    for n in [128, 512] {
-        let braced = format!(
-            "int a{}={}1{};",
-            "[1]".repeat(n),
-            "{".repeat(n),
-            "}".repeat(n)
-        );
-        let (work, operations) = plan_work(&braced);
-        assert_eq!(
-            operations,
-            n + 1,
-            "one zero scope per brace pair and the store"
-        );
-        assert!(work <= 4 * n, "{work}");
-        // Brace elision descends the same depth from one element.
-        let elided = format!("int a{}=1;", "[1]".repeat(n)).replace("=1", "={1}");
-        let (work, operations) = plan_work(&elided);
-        assert_eq!(operations, 2);
-        assert!(work <= 4 * n, "{work}");
-    }
+    crate::test_support::on_compilation_stack(|| {
+        for n in [128, 512] {
+            let braced = format!(
+                "int a{}={}1{};",
+                "[1]".repeat(n),
+                "{".repeat(n),
+                "}".repeat(n)
+            );
+            let (work, operations) = plan_work(&braced);
+            assert_eq!(
+                operations,
+                n + 1,
+                "one zero scope per brace pair and the store"
+            );
+            assert!(work <= 4 * n, "{work}");
+            // Brace elision descends the same depth from one element.
+            let elided = format!("int a{}=1;", "[1]".repeat(n)).replace("=1", "={1}");
+            let (work, operations) = plan_work(&elided);
+            assert_eq!(operations, 2);
+            assert!(work <= 4 * n, "{work}");
+        }
+    });
 }
 
 #[test]

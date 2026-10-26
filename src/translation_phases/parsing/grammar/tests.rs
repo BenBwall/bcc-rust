@@ -9,6 +9,7 @@ use crate::{
         Renderer,
         ToDiagnostic,
     },
+    test_support::on_compilation_stack,
     translation_phases::{
         Context,
         GetSourceVectors,
@@ -19,7 +20,6 @@ use crate::{
         },
         preprocessing::Preprocessor,
     },
-    test_support::on_compilation_stack,
     util::{
         bump::Bump,
         shared::SharedVec,
