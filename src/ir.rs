@@ -105,6 +105,8 @@ pub(crate) use inline_asm::{
     AsmOperand,
     CONDITIONS as ASM_CONDITIONS,
     InlineAsm,
+    TemplatePiece as AsmTemplatePiece,
+    template_pieces as asm_template_pieces,
 };
 pub(crate) use instructions::{
     Align,

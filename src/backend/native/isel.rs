@@ -26,7 +26,8 @@
 //! addresses in `isel/memory.rs`; `f32` and `f64` operations in
 //! `isel/float.rs`; `i128` register pairs in `isel/wide.rs`; `f80` through
 //! the x87 unit in `isel/x87.rs`; `f128` through runtime routines in
-//! `isel/quad.rs`; dynamic stack allocation in `isel/stack.rs`.
+//! `isel/quad.rs`; dynamic stack allocation in `isel/stack.rs`; inline
+//! assembly in `isel/asm.rs`.
 //!
 //! `i128`, `f80` and `f128` values all live in pairs of general registers,
 //! the low eight bytes first: block parameters, spills and copies treat them
@@ -38,6 +39,7 @@
 //! bits extend first.
 
 // Selection by family
+mod asm;
 mod calls;
 mod edges;
 mod float;
@@ -646,6 +648,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 self.memory(inst, data)?,
             | InstData::Atomic { .. } => unreachable!("atomics refused by support check"),
             | InstData::Call { .. } | InstData::CallIndirect { .. } => self.call(inst, data)?,
+            | InstData::InlineAsm { .. } => self.inline_asm(data)?,
             | InstData::Nullary {
                 opcode: Opcode::Trap,
                 ..

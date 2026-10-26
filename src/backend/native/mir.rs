@@ -73,6 +73,9 @@ pub(crate) struct MFunction<'a> {
     /// The IR symbols the function reaches through their GOT entry or
     /// `.refptr` stub, possibly repeated.
     pub(crate) indirect_symbols: ArenaVec<'a, Symbol>,
+    /// Each [`MInst::InlineAsm`]'s template and operand locations, by its
+    /// `index`.
+    pub(crate) asm:              ArenaVec<'a, AsmMachine<'a>>,
 }
 
 impl<'a> MFunction<'a> {
@@ -93,6 +96,7 @@ impl<'a> MFunction<'a> {
             indirect:         ArenaVec::new_in(arena),
             labels:           ArenaVec::new_in(arena),
             indirect_symbols: ArenaVec::new_in(arena),
+            asm:              ArenaVec::new_in(arena),
         }
     }
 
@@ -339,12 +343,66 @@ impl PReg {
     }
 }
 
+/// An inline assembly statement as the listing writes it: the template in
+/// LLVM's syntax and where each of its operands is.
+/// GNU extension: GCC manual, "Extended Asm".
+pub(crate) struct AsmMachine<'a> {
+    pub(crate) template: &'a str,
+    pub(crate) operands: &'a [AsmLocation],
+}
+
+/// Where an inline assembly operand is while the statement runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AsmLocation {
+    /// A register holding a value of `width`.
+    Reg(PReg, Width),
+    /// Memory at the address the register holds.
+    Mem(PReg),
+    Imm(i64),
+    /// A symbol's address plus an offset.
+    Symbol(SymbolRef, i64),
+    /// A flag output, which the template cannot name.
+    None,
+}
+
+impl AsmLocation {
+    /// Whether the listing writes this operand with `modifier`: `b`, `h`
+    /// (`%ah`-`%bh`), `w`, `k`, `q`, `V` (no `%`), `z` (the size suffix),
+    /// `a` (as an address) and `x` for registers; `a` and `H` (eight bytes
+    /// on) and the ignored size letters for memory; `c`, `P`, `p`, `a`
+    /// (without `$`) and `n` (negated) for immediates.
+    /// GNU extension: GCC manual, "x86 Operand Modifiers".
+    pub(crate) fn writes(self, modifier: Option<u8>) -> bool {
+        let Some(modifier) = modifier else {
+            return self != Self::None;
+        };
+        match self {
+            | Self::Reg(register, _) => match modifier {
+                | b'b' | b'w' | b'k' | b'q' | b'V' | b'z' | b'a' =>
+                    register.class() == RegClass::Gpr,
+                | b'h' => register.index() < 4,
+                | b'x' => register.class() == RegClass::Xmm,
+                | _ => false,
+            },
+            | Self::Mem(_) => matches!(modifier, b'a' | b'H' | b'b' | b'w' | b'k' | b'q'),
+            | Self::Imm(_) => matches!(modifier, b'c' | b'P' | b'p' | b'a' | b'n'),
+            | Self::Symbol(..) => matches!(modifier, b'c' | b'P' | b'p' | b'a'),
+            | Self::None => false,
+        }
+    }
+}
+
 /// A set of physical registers.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(crate) struct PRegSet(u32);
 
 impl PRegSet {
     pub(crate) const EMPTY: Self = Self(0);
+
+    /// The set whose bit `n` is the register `PReg::ALL[n]`.
+    pub(crate) const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
 
     pub(crate) const fn of(registers: &[PReg]) -> Self {
         let mut bits = 0;
@@ -1049,6 +1107,14 @@ pub(crate) enum MInst {
     Ud2,
     /// A breakpoint trap (`__debugbreak`).
     Int3,
+    /// Inline assembly: [`MFunction::asm`] entry `index`, reading the
+    /// registers `uses` and writing `defs`, its outputs and clobbers. Every
+    /// register operand is physical, set and read by moves around it.
+    InlineAsm {
+        index: u32,
+        uses:  PRegSet,
+        defs:  PRegSet,
+    },
 }
 
 impl MInst {
@@ -1178,6 +1244,14 @@ impl MInst {
                 for register in uses.iter() {
                     phys(register, Role::Use, &mut visit);
                 },
+            | Self::InlineAsm { uses, defs, .. } => {
+                for register in uses.iter() {
+                    phys(register, Role::Use, &mut visit);
+                }
+                for register in defs.iter() {
+                    phys(register, Role::Def, &mut visit);
+                }
+            },
             | Self::X87Arith { .. }
             | Self::X87Pop
             | Self::X87Compare
@@ -1326,6 +1400,7 @@ impl MInst {
             | Self::Div { .. }
             | Self::MulWide { .. }
             | Self::Call { .. }
+            | Self::InlineAsm { .. }
             | Self::X87Compare
             | Self::Unary {
                 op: UnaryOp::Neg, ..

@@ -465,6 +465,18 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
             }
             Flags::Untouched
         },
+        // Inline assembly reads its input registers and writes its output
+        // and clobbered ones; every x86 statement may change the flags, as
+        // GCC and Clang assume.
+        | MInst::InlineAsm { uses, defs, .. } => {
+            for register in uses.iter() {
+                at.phys(register, Read);
+            }
+            for register in defs.iter() {
+                at.phys(register, Clobber);
+            }
+            Flags::Written
+        },
     };
     (at.0, flags)
 }
@@ -677,6 +689,11 @@ fn forms() -> Vec<MInst> {
         Ret => [MInst::Ret { uses: PRegSet::of(&[PReg::Rax, PReg::Rdx, PReg::Xmm0]) }],
         Ud2 => [MInst::Ud2],
         Int3 => [MInst::Int3],
+        InlineAsm => [MInst::InlineAsm {
+            index: 0,
+            uses: PRegSet::of(&[PReg::Rax, PReg::Rcx, PReg::Xmm1]),
+            defs: PRegSet::of(&[PReg::Rax, PReg::Rbx, PReg::Rdx, PReg::Xmm2]),
+        }],
     }
     forms
 }

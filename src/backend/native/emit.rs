@@ -48,6 +48,8 @@ use super::{
     frame::Frame,
     imported,
     mir::{
+        AsmLocation,
+        AsmMachine,
         Base,
         Callee,
         MBlock,
@@ -66,6 +68,7 @@ use super::{
 };
 use crate::{
     ir::{
+        AsmTemplatePiece,
         DllStorage,
         Entity,
         FuncId,
@@ -77,6 +80,7 @@ use crate::{
         RelocationTarget,
         Symbol,
         Visibility,
+        asm_template_pieces,
     },
     target::{
         Target,
@@ -92,6 +96,10 @@ use crate::{
     },
 };
 
+/// The comment that opens an inline assembly statement in a listing, as GCC
+/// and Clang write it.
+pub(crate) const INLINE_ASM_START: &str = "#APP";
+
 /// The comment that opens the file-scope assembly in a listing, as Clang
 /// writes it.
 pub(crate) const MODULE_ASM_START: &str = "# Start of file scope inline assembly";
@@ -105,6 +113,9 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     /// The symbols code reaches through a `.refptr` stub on COFF, whose
     /// stubs follow the data.
     stubs:             ArenaSet<'o, Symbol>,
+    /// The next number an inline assembly `${:uid}` (GCC's `%=`) takes,
+    /// unique in the listing.
+    asm_uid:           u32,
 }
 
 impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
@@ -120,6 +131,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             elf: matches!(target, Target::LinuxGnu | Target::LinuxMusl),
             target,
             stubs: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            asm_uid: 0,
         }
     }
 
@@ -234,6 +246,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
             let next = (index + 1 < func.blocks.len()).then(|| MBlock::new(index + 1));
             for inst in &block.insts {
+                if let MInst::InlineAsm { index, .. } = *inst {
+                    self.inline_asm(&func.asm[index as usize])?;
+                    continue;
+                }
                 self.instruction(id, inst, frame, next)?;
             }
         }
@@ -264,6 +280,38 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
         }
         Ok(())
+    }
+
+    /// An inline assembly statement between `#APP` and `#NO_APP`, as GCC and
+    /// Clang mark it: the template's AT&T alternative with each operand
+    /// written as its modifier asks.
+    /// GNU extension: GCC manual, "Extended Asm" and "x86 Operand
+    /// Modifiers".
+    fn inline_asm(&mut self, machine: &AsmMachine<'_>) -> fmt::Result {
+        let uid = self.asm_uid;
+        self.asm_uid += 1;
+        let out = &mut *self.out;
+        writeln!(out, "{INLINE_ASM_START}")?;
+        out.write_char('\t')?;
+        let mut skip = false;
+        for piece in asm_template_pieces(machine.template) {
+            // Selection checked the template.
+            let Ok(piece) = piece else { break };
+            match piece {
+                | AsmTemplatePiece::DialectOpen | AsmTemplatePiece::DialectClose => skip = false,
+                | AsmTemplatePiece::DialectNext => skip = true,
+                | _ if skip => {},
+                | AsmTemplatePiece::Text(text) => out.write_str(text)?,
+                | AsmTemplatePiece::UniqueId => write!(out, "{uid}")?,
+                | AsmTemplatePiece::Operand { operand, modifier } => write_asm_operand(
+                    out,
+                    self.module,
+                    machine.operands[operand as usize],
+                    modifier,
+                )?,
+            }
+        }
+        writeln!(out, "\n#NO_APP")
     }
 
     /// The COMDAT section of a `selectany` or `linkonce` definition `name`:
@@ -816,6 +864,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 at(Operand::Mem(mem), Width::B16)
             ),
             | MInst::Ret { .. } => self.epilogue(frame),
+            | MInst::InlineAsm { .. } => unreachable!("inline assembly is written apart"),
             | MInst::Ud2 => writeln!(out, "\tud2"),
             | MInst::Int3 => writeln!(out, "\tint3"),
         }
@@ -1355,6 +1404,50 @@ impl fmt::Display for BlockLabel {
 
 /// A register at a width.
 struct RegName(PReg, Width);
+
+/// Writes an inline assembly operand at `location` with `modifier`, which
+/// selection checked [`AsmLocation::writes`].
+fn write_asm_operand(
+    out: &mut dyn Write,
+    module: &Module<'_>,
+    location: AsmLocation,
+    modifier: Option<u8>,
+) -> fmt::Result {
+    match location {
+        | AsmLocation::Reg(register, width) => match modifier {
+            | Some(b'b') => write!(out, "{}", RegName(register, Width::B8)),
+            | Some(b'w') => write!(out, "{}", RegName(register, Width::B16)),
+            | Some(b'k') => write!(out, "{}", RegName(register, Width::B32)),
+            | Some(b'q') => write!(out, "{}", RegName(register, Width::B64)),
+            | Some(b'h') => write!(out, "%{}", ["ah", "ch", "dh", "bh"][register.index()]),
+            | Some(b'V') => out.write_str(register.name(width)),
+            | Some(b'z') => out.write_char(width.suffix()),
+            | Some(b'a') => write!(out, "({})", RegName(register, Width::B64)),
+            | _ => write!(out, "{}", RegName(register, width)),
+        },
+        | AsmLocation::Mem(register) => {
+            let disp = if modifier == Some(b'H') { "8" } else { "" };
+            write!(out, "{disp}({})", RegName(register, Width::B64))
+        },
+        | AsmLocation::Imm(value) => match modifier {
+            | None => write!(out, "${value}"),
+            | Some(b'n') => write!(out, "{}", value.wrapping_neg()),
+            | Some(_) => write!(out, "{value}"),
+        },
+        | AsmLocation::Symbol(symbol, disp) => {
+            if modifier.is_none() {
+                out.write_char('$')?;
+            }
+            write!(out, "{}", symbol_name(module, symbol))?;
+            match disp {
+                | 0 => Ok(()),
+                | disp if disp > 0 => write!(out, "+{disp}"),
+                | disp => write!(out, "{disp}"),
+            }
+        },
+        | AsmLocation::None => Ok(()),
+    }
+}
 
 impl fmt::Display for RegName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

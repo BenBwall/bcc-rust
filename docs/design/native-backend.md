@@ -928,6 +928,29 @@ with the following decisions recorded for review:
   inline assembly` and `# End of file scope inline assembly` after the
   listing's first `.text`, in source order and before every function and
   object, as Clang places module assembly; `.att_syntax` follows them.
+- Inline assembly (`isel/asm.rs`) never reaches the allocator as an operand
+  form. Selection fixes every register operand to a physical register
+  first: the one its constraint names, or the first free one of its class
+  in the allocation order. Every operand gets its own register, except that
+  an output that is not early-clobber may share an input's fixed register
+  (`"=a"(eax) : "a"(leaf)`) and a tied input shares its output's. `%rsp`,
+  `%rbp` and the spill scratch registers (`%r10`, `%r11`, `%xmm14`, `%xmm15`)
+  are never assigned,
+  and a clobber of `%rsp` or `%rbp` is refused. Inputs and memory addresses
+  are materialized in virtual registers and then copied into their
+  registers. `MInst::InlineAsm` then reads the input registers and writes
+  the output and clobbered ones, so the allocator keeps values that are
+  live across it elsewhere, as at a call, and the frame saves any
+  callee-saved register it writes. Right after it come `setcc` for flag
+  outputs, copies of the register outputs into virtual registers, and
+  stores to the output pointers. The listing writes the template between
+  `#APP` and `#NO_APP`: registers at their operand's width or the `b` `h`
+  `w` `k` `q` `V` `z` `a` `x` modifiers, memory as `(%reg)` (`H` adds 8),
+  immediates as `$n` (`c` `P` `p` `a` without `$`, `n` negated), symbols as
+  `$sym+off`, `${:uid}` as a listing-wide counter, and the AT&T alternative
+  of `{att|intel}`. Other modifiers, and templates that name a flag output,
+  are refused. Like GCC and Clang, a System V leaf function may keep its
+  frame in the red zone, which assembly that pushes would overwrite.
 
 - An `i1` arriving from another compiler (a parameter or a call result) is
   masked to its low bit, since the back end keeps `i1` canonical.
@@ -1309,8 +1332,8 @@ Windows targets by default, and ELF64 objects for Linux targets under
 `--no-native-object` selects the text path, which bundled clang assembles,
 on every target; it remains the Linux default, and the last of the two flags
 wins. `--emit=asm` prints the same listing either way. The encoder reads only
-the emitter's vocabulary, so a module with file-scope assembly takes the text
-path by default and is refused under `--native-object`.
+the emitter's vocabulary, so a module with file-scope or inline assembly
+takes the text path by default and is refused under `--native-object`.
 `driver::object_writer` makes this choice from the target, the flags and the
 module, in one place, including whether an encoder refusal is final, and
 `driver::build` runs it. When the default direct writer's encoder refuses a

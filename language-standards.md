@@ -500,7 +500,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
 | GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; sema attribute pass; packed/aligned/scalar mode, transparent_union, cleanup, constructor/destructor, alias, weak, section, used, visibility lowering; vector_size sema |
-| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser; sema statement checks; LLVM lowering |
+| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser; sema statement checks; LLVM and native lowering |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | parser |
