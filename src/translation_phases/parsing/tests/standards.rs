@@ -437,9 +437,15 @@ fn modern_grammar_truncations_terminate_with_restored_state() {
 }
 
 #[test]
-fn nested_iso_operands_and_balanced_attributes_do_not_recurse() {
-    let nested = format!("{}int{} x;", "_Atomic(".repeat(256), ")".repeat(256));
-    clean(&nested, CStandard::C11);
+fn nested_iso_operands_parse_on_the_compilation_stack() {
+    crate::test_support::on_compilation_stack(|| {
+        let nested = format!("{}int{} x;", "_Atomic(".repeat(256), ")".repeat(256));
+        clean(&nested, CStandard::C11);
+    });
+}
+
+#[test]
+fn balanced_attribute_arguments_do_not_recurse() {
     let attributes = format!(
         "[[vendor::tag({}1{})]] int object;",
         "(".repeat(2_000),

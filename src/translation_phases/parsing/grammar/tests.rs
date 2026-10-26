@@ -9,6 +9,7 @@ use crate::{
         Renderer,
         ToDiagnostic,
     },
+    test_support::on_compilation_stack,
     translation_phases::{
         Context,
         GetSourceVectors,
@@ -35,7 +36,7 @@ fn deep_parenthesized_declarators_recurse_natively() {
         "(*".repeat(depth),
         ")".repeat(depth)
     );
-    let (text, max_depth) = inspect(&source, ParserLimits::default());
+    let (text, max_depth) = on_compilation_stack(|| inspect(&source, ParserLimits::default()));
     assert!(!text.contains("error"), "{text}");
     assert!(
         max_depth > depth,

@@ -82,15 +82,17 @@ fn repeated_offset_member_lookup_scales_linearly() {
 
 #[test]
 fn nested_array_initializer_classification_scales_linearly() {
-    for n in [128, 512] {
-        let source = format!(
-            "int a{}={}1{};",
-            "[1]".repeat(n),
-            "{".repeat(n),
-            "}".repeat(n)
-        );
-        assert!(steps(&source)[2] <= 4 * n);
-    }
+    crate::test_support::on_compilation_stack(|| {
+        for n in [128, 512] {
+            let source = format!(
+                "int a{}={}1{};",
+                "[1]".repeat(n),
+                "{".repeat(n),
+                "}".repeat(n)
+            );
+            assert!(steps(&source)[2] <= 4 * n);
+        }
+    });
 }
 
 fn clean(source: &str) {

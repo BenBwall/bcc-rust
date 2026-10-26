@@ -1232,41 +1232,43 @@ fn deeply_nested_expressions_use_heap_backed_parser_frames() {
 
 #[test]
 fn call_argument_and_initializer_nesting_translation_floors_are_heap_backed() {
-    let arguments = (0..127).map(|_| "1").collect::<Vec<_>>().join(",");
-    let initializer_depth = 512;
-    let source = format!(
-        "int nested = {}1{}; int f(void) {{ return f({arguments}); }}\n",
-        "{".repeat(initializer_depth),
-        "}".repeat(initializer_depth),
-    );
-    with_parse(&source, |parsed| {
-        assert!(
-            parser_errors(parsed).next().is_none(),
-            "{:#?}",
-            parsed.errors
+    crate::test_support::on_compilation_stack(|| {
+        let arguments = (0..127).map(|_| "1").collect::<Vec<_>>().join(",");
+        let initializer_depth = 512;
+        let source = format!(
+            "int nested = {}1{}; int f(void) {{ return f({arguments}); }}\n",
+            "{".repeat(initializer_depth),
+            "}".repeat(initializer_depth),
         );
-        assert!(
-            parsed
-                .parser
-                .syntax
-                .iter::<Expression<'_>>()
-                .any(|expression| matches!(
-                    expression.kind,
-                    ExpressionType::Call { arguments, .. } if arguments.len() == 127
-                ))
-        );
-        assert!(
-            parsed
-                .parser
-                .syntax
-                .iter::<Initializer<'_>>()
-                .filter(|initializer| matches!(
-                    initializer.kind,
-                    InitializerType::InitializerList(_)
-                ))
-                .count()
-                >= initializer_depth
-        );
+        with_parse(&source, |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<Expression<'_>>()
+                    .any(|expression| matches!(
+                        expression.kind,
+                        ExpressionType::Call { arguments, .. } if arguments.len() == 127
+                    ))
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<Initializer<'_>>()
+                    .filter(|initializer| matches!(
+                        initializer.kind,
+                        InitializerType::InitializerList(_)
+                    ))
+                    .count()
+                    >= initializer_depth
+            );
+        });
     });
 }
 
