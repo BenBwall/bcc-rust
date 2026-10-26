@@ -31,10 +31,11 @@ pub fn PipelineView(
     /// Whether to show `-O2` output rather than `-O0`.
     optimize: RwSignal<bool>,
     /// The source's compilation at the selected level, which places the
-    /// hover links.
+    /// hover links and lists the diagnostics.
     compilation: Memo<Option<Compilation>>,
-    /// What the view shows: `compilation`, or the last output while the next
-    /// one compiles.
+    /// The output on screen: `compilation`, or the last output while the
+    /// next one compiles. The stage strip, stop box and optimizer note
+    /// describe it.
     shown: Memo<Option<Compilation>>,
     /// Its compilation at the other level, for the optimizer comparison.
     other: Memo<Option<Compilation>>,
@@ -146,7 +147,7 @@ pub fn PipelineView(
                     })}
                 </div>
             </article>
-            <Diagnostics compilation=shown live on_reveal />
+            <Diagnostics compilation live on_reveal />
         </section>
     }
 }
@@ -499,5 +500,77 @@ mod tests {
             missing(Stage::Asm, false, Some(&clean), &LiveCompile::Compiled),
             "bcc produced no output for this stage."
         );
+    }
+
+    /// The pipeline view at `-O2` (when `optimize`), rendered to HTML, given
+    /// the source's compilation at that level, the output on screen, and the
+    /// source's compilation at the other level.
+    #[cfg(feature = "ssr")]
+    fn render(
+        optimize: bool,
+        current: Option<Compilation>,
+        held: Option<Compilation>,
+        other: Option<Compilation>,
+    ) -> String {
+        use leptos::prelude::*;
+
+        use super::PipelineView;
+
+        Owner::new().with(|| {
+            let compilation = Memo::new(move |_| current.clone());
+            let shown = Memo::new(move |_| held.clone());
+            let other = Memo::new(move |_| other.clone());
+            view! {
+                <PipelineView
+                    stage=RwSignal::new(Stage::Ir)
+                    optimize=RwSignal::new(optimize)
+                    compilation
+                    shown
+                    other
+                    live=Signal::stored(LiveCompile::Compiling)
+                    theme=Signal::stored("dark")
+                    hover_source=RwSignal::new(0).read_only()
+                    hover_output=RwSignal::new(0)
+                    filename=RwSignal::new("program.c".to_owned()).read_only()
+                    source=Signal::stored("int main(void) { return 0; }\n".to_owned())
+                    on_reveal=Callback::new(|_: usize| {})
+                />
+            }
+            .to_html()
+        })
+    }
+
+    /// An `-O0` compilation of an earlier text with one placed error.
+    #[cfg(feature = "ssr")]
+    fn earlier() -> Compilation {
+        Compilation {
+            tokens: Some(String::new()),
+            ir: Some("function @earlier_output() -> i32 external {\n".into()),
+            diagnostics: vec![CompileDiagnostic {
+                severity: "warning".into(),
+                stage: "front-end".into(),
+                message: "an earlier warning".into(),
+                range: Some(crate::pipeline::SourceSpan {
+                    line:       3,
+                    column:     1,
+                    end_line:   3,
+                    end_column: 2,
+                }),
+                ..CompileDiagnostic::default()
+            }],
+            ..Compilation::default()
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "ssr")]
+    fn a_held_output_lists_none_of_its_diagnostics() {
+        let held = render(false, None, Some(earlier()), None);
+        assert!(held.contains("earlier_output"), "the output stays: {held}");
+        assert!(!held.contains("an earlier warning"), "{held}");
+        assert!(!held.contains("diagnostic-place"), "{held}");
+        let current = render(false, Some(earlier()), Some(earlier()), None);
+        assert!(current.contains("an earlier warning"), "{current}");
+        assert!(current.contains("diagnostic-place"), "{current}");
     }
 }
