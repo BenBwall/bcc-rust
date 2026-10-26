@@ -601,7 +601,10 @@ The following vocabulary entries retain the established diagnostic contracts:
   Parser `__extension__` suppression applies. C99 §6.7.5p1 (printed p. 114;
   PDF p. 126) specifies all three forms.
 - `AlignofExpression` has GNU origin and accepts an expression operand in
-  every mode. ISO `_Alignof` and C23 `alignof` spellings report GNU origin under
+  every mode, parenthesized or, as GCC accepts it, not (`_Alignof x`,
+  `_Alignof (a)[1]`): every spelling takes `__alignof__`'s operand, a
+  parenthesized type name or a unary expression, like `sizeof`. ISO
+  `_Alignof` and C23 `alignof` spellings report GNU origin under
   Warn/Deny, including GNU dialects; Allow is silent. Reserved GNU aliases
   retain their exemption, and parser suppression still applies. The source is
   [GCC's alignment extension](https://gcc.gnu.org/onlinedocs/gcc/Alignment.html).
@@ -654,7 +657,7 @@ functions.
 | --- | --- | --- |
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
 | C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
-| C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (parenthesized expressions as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
+| C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (expression operands as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
 | C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 

@@ -1240,6 +1240,14 @@ fn alignof_expression_is_accepted_as_a_gnu_extension() {
                 "_Alignof",
             ),
             ("int x; int a = alignof(x[0] + 1);", "alignof"),
+            // GCC takes `__alignof__`'s unary-expression operand after the
+            // ISO spellings too.
+            ("int x; int a = _Alignof x;", "_Alignof"),
+            (
+                "double d[2]; int a = _Alignof d[1] + _Alignof (d)[1];",
+                "_Alignof",
+            ),
+            ("int x; int a = alignof x;", "alignof"),
         ] {
             let standard = if keyword == "alignof" {
                 CStandard::C23
@@ -1267,11 +1275,22 @@ fn alignof_expression_is_accepted_as_a_gnu_extension() {
             });
         }
     }
-    with_parse_configuration(
+    for source in [
         "int a = _Alignof(int);",
-        mode(CStandard::C11, ExtensionPolicy::Deny),
-        |p| assert!(p.errors.is_empty(), "{:?}", p.errors),
-    );
+        "int a = _Alignof(int) + 1;",
+        "int a = _Alignof(int *[2]);",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C11, ExtensionPolicy::Deny), |p| {
+            assert!(p.errors.is_empty(), "{source}: {:?}", p.errors);
+            assert!(
+                p.parser
+                    .syntax
+                    .iter::<super::super::syntax::Expression<'_>>()
+                    .any(|x| matches!(x.kind, ExpressionType::AlignofType(_))),
+                "{source}"
+            );
+        });
+    }
 }
 
 #[test]

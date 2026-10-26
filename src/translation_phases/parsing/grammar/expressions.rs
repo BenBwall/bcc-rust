@@ -246,18 +246,12 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         ) = token.kind
         {
             if keyword == KeywordTokenType::Alignof {
-                if KeywordTokenType::classify(token.contents, self.context.configuration)
-                    .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu))
-                {
-                    self.consume_token();
-                    self.parse_countof_or_alignof(
-                        e,
-                        KeywordTokenType::Alignof,
-                        token.source_vectors,
-                    )?;
-                    return Some(false);
-                }
+                // GCC takes the operand of every spelling as `__alignof__`'s:
+                // a parenthesized type name or a unary expression.
                 report_alignof_expression(self, token);
+                self.consume_token();
+                self.parse_countof_or_alignof(e, KeywordTokenType::Alignof, token.source_vectors)?;
+                return Some(false);
             }
             let kind = if keyword == KeywordTokenType::Generic {
                 ModernKind::Generic
@@ -1811,25 +1805,30 @@ impl<'p> CallState<'_, 'p> {
     }
 }
 
-/// Diagnoses `_Alignof` or `alignof` applied to a parenthesized
-/// expression, which GCC and Clang accept from `__alignof__`. The
-/// standard spellings take only a type name.
-/// C11: §6.5.3 paragraph 1, p. 88; PDF p. 106. Extension: GNU.
+/// Diagnoses `_Alignof` or `alignof` applied to an expression, which GCC
+/// and Clang accept from `__alignof__`, parenthesized or not (GCC also
+/// without parentheses after the standard spellings). The standard
+/// spellings take only a parenthesized type name.
+/// C11: §6.5.3 paragraph 1, p. 88; PDF p. 106. Extension: GNU, GCC manual,
+/// "Determining the Alignment of Functions, Types or Variables",
+/// <https://gcc.gnu.org/onlinedocs/gcc/Alignment.html>.
 pub(in crate::translation_phases::parsing) fn report_alignof_expression(
     parser: &mut Parser<'_, '_, '_>,
     keyword: Token,
 ) {
     let gnu_spelling = KeywordTokenType::classify(keyword.contents, parser.context.configuration)
         .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu));
-    let expression = parser.cursor.following().is_some_and(|x| {
+    let parenthesized = parser.cursor.following().is_some_and(|x| {
         matches!(
             x.kind,
             TokenType::Operator(OperatorTokenType::OpeningParenthesis)
         )
-    }) && parser
-        .cursor
-        .lookahead(1)
-        .is_some_and(|x| !parser.type_name_starter(x));
+    });
+    let expression = !parenthesized
+        || parser
+            .cursor
+            .lookahead(1)
+            .is_some_and(|x| !parser.type_name_starter(x));
     if gnu_spelling || !expression || parser.pedantic_suppression != 0 {
         return;
     }

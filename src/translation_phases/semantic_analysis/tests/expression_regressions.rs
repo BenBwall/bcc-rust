@@ -492,3 +492,27 @@ fn constant_p_has_int_type_and_checks_array_bounds() {
         );
     }
 }
+
+/// GCC gives an unparenthesized `_Alignof` operand `__alignof__`'s meaning:
+/// the alignment of the expression's object, storage alignment included.
+/// GNU extension: GCC manual, "Determining the Alignment of Functions,
+/// Types or Variables".
+#[test]
+fn unparenthesized_alignof_operands_take_gnu_alignment() {
+    with_source(
+        "struct S { char c; double d; } s; double d[3]; _Alignas(32) int big; char \
+         c;\n_Static_assert(_Alignof d[0] == 8 && _Alignof (d)[1] == 8, \
+         \"element\");\n_Static_assert(_Alignof big == 32 && __alignof__ big == 32, \
+         \"storage\");\n_Static_assert(__alignof__ s.d == 8 && _Alignof c + 1 == 2, \"member and \
+         precedence\");\n_Static_assert(__alignof__(big) == 32 && _Alignof(int) == 4, \
+         \"parenthesized\");",
+        |context, _| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+        },
+    );
+}
