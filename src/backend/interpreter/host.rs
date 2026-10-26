@@ -131,8 +131,14 @@ pub(crate) enum HostReturn {
 pub(crate) struct DefaultHost<'a> {
     allocator:     &'a Bump,
     output:        ArenaVec<'a, u8>,
-    /// What the program wrote to `stderr`.
-    errors:        ArenaVec<'a, u8>,
+    /// What the program wrote to `stderr`, and where it falls among the
+    /// flushes of `stdout`.
+    console:       stdio::Console<'a>,
+    /// Whether the program may open, create and remove host files.
+    file_access:   bool,
+    /// How many file-system accesses were refused, and the first path.
+    denied_files:  u32,
+    denied_path:   ArenaVec<'a, u8>,
     /// The open streams.
     streams:       stdio::Streams,
     /// A file name being passed to the host's file system.
@@ -191,6 +197,10 @@ impl DefaultHost<'_> {
         } else if let Some(signature) = library::signature(call.name) {
             let windows = matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc);
             library::check(call, signature, self.long_width, windows)?;
+        }
+        // Using a closed standard stream is undefined even without naming it.
+        if let Some(stream) = implicit_stream(call.name) {
+            let _ = self.standard(stream)?;
         }
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
             return result;
@@ -525,7 +535,60 @@ impl DefaultHost<'_> {
 
     /// Everything the program has written to `stderr`.
     pub(crate) fn errors(&self) -> &[u8] {
-        &self.errors
+        &self.console.errors
+    }
+
+    /// Lets the program open, create and remove host files; without it, those
+    /// calls fail as for a permission error.
+    pub(crate) fn allow_file_access(&mut self) {
+        self.file_access = true;
+    }
+
+    /// How many file-system accesses were refused, with the first path, if
+    /// any were.
+    pub(crate) fn denied_file_access(&self) -> Option<(u32, &[u8])> {
+        (self.denied_files > 0).then_some((self.denied_files, &self.denied_path[..]))
+    }
+
+    /// Passes what the program wrote to `write`, chunk by chunk, in the order
+    /// it reached the standard streams: each `stderr` write after the
+    /// `stdout` bytes flushed before it, and the unflushed rest of `stdout`
+    /// at the end, as at the program's exit.
+    pub(crate) fn emit<E>(
+        &self,
+        mut write: impl FnMut(Channel, &[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let (mut output, mut errors) = (0, 0);
+        for &(flushed, end) in &self.console.marks {
+            let flushed = flushed.min(self.output.len());
+            if flushed > output {
+                write(Channel::Output, &self.output[output..flushed])?;
+                output = flushed;
+            }
+            write(Channel::Errors, &self.console.errors[errors..end])?;
+            errors = end;
+        }
+        if output < self.output.len() {
+            write(Channel::Output, &self.output[output..])?;
+        }
+        Ok(())
+    }
+}
+
+/// A standard stream of the command line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Channel {
+    Output,
+    Errors,
+}
+
+/// The standard stream a C library function reads or writes without a
+/// `FILE *` argument.
+fn implicit_stream(name: &str) -> Option<usize> {
+    match name {
+        | "printf" | "puts" | "putchar" | "vprintf" | "__printf_chk" | "__vprintf_chk" => Some(1),
+        | "getchar" | "scanf" | "__isoc99_scanf" => Some(0),
+        | _ => None,
     }
 }
 
@@ -572,7 +635,14 @@ impl<'a> DefaultHost<'a> {
         Self {
             allocator:     arena,
             output:        ArenaVec::new_in(arena),
-            errors:        ArenaVec::new_in(arena),
+            console:       stdio::Console {
+                errors:  ArenaVec::new_in(arena),
+                marks:   ArenaVec::new_in(arena),
+                flushed: 0,
+            },
+            file_access:   false,
+            denied_files:  0,
+            denied_path:   ArenaVec::new_in(arena),
             streams:       stdio::Streams::default(),
             path:          ArenaVec::new_in(arena),
             tmpnam_buffer: None,

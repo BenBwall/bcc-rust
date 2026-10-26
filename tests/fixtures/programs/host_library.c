@@ -84,6 +84,30 @@ double carg(double _Complex);
 
 static int calls;
 
+int sprintf(char *, const char *, ...);
+
+struct big {
+  int key;
+  int tag;
+  char padding[32];
+};
+
+static const void *trace_base;
+static size_t trace_size;
+static char trace[512];
+static int traced;
+
+/* Records which elements it compares, as offsets from `trace_base`, and
+   orders them by their first int. */
+static int traced_compare(const void *a, const void *b)
+{
+  long i = ((const char *)a - (const char *)trace_base) / (long)trace_size;
+  long j = ((const char *)b - (const char *)trace_base) / (long)trace_size;
+  traced += sprintf(trace + traced, " %ld%ld", i, j);
+  int x = *(const int *)a, y = *(const int *)b;
+  return (x > y) - (x < y);
+}
+
 static int by_value(const void *a, const void *b)
 {
   calls++;
@@ -157,10 +181,12 @@ int main(void)
   printf("\n");
 
   char *rest;
-  printf("%d %ld %ld %lu %lld %llu\n", atoi("  -42xyz"), atol("+77"), strtol("0x1F!", &rest, 0),
-         strtoul("-1", 0, 10), strtoll("077", 0, 0), strtoull("zz", 0, 36));
-  printf("%s %ld %ld %ld\n", rest, strtol("99999999999999999999", 0, 10),
-         strtol("-99999999999999999999", 0, 10), strtol("  12", &rest, 8));
+  long parsed = strtol("0x1F!", &rest, 0);
+  printf("%d %ld %ld %lu %lld %llu %s\n", atoi("  -42xyz"), atol("+77"), parsed,
+         strtoul("-1", 0, 10), strtoll("077", 0, 0), strtoull("zz", 0, 36), rest);
+  long octal = strtol("  12", &rest, 8);
+  printf("%ld %ld %ld [%s]\n", strtol("99999999999999999999", 0, 10),
+         strtol("-99999999999999999999", 0, 10), octal, rest);
   for (int c = -1; c < 130; c += 13)
     printf("%d:%d%d%d%d%d%d%c%c ", c, !!isalpha(c), !!isdigit(c), !!isspace(c), !!ispunct(c),
            !!isxdigit(c), !!isupper(c), c > 31 && c < 127 ? tolower(c) : '.',
@@ -212,9 +238,54 @@ int main(void)
   char raw[8] = "";
   fseek(file, -7, 2);
   printf("%lu %.6s\n", fread(raw, 1, 7, file), raw);
+  /* SEEK_CUR counts from before a pushed-back byte, then drops it. */
+  fseek(file, 3, 0);
+  ungetc(fgetc(file), file);
+  fseek(file, 2, 1);
+  printf("seek %c ", fgetc(file));
+  /* Empty requests and fgets limits without room read and write nothing. */
+  printf("%lu %lu ", fwrite("x", 0, 3, file), fwrite("x", 3, 0, file));
+  char untouched[4] = "abc";
+  printf("%d %d %s ", fgets(untouched, 0, file) == 0, fgets(untouched, -1, file) == 0, untouched);
+  printf("%d [%s]\n", fgets(untouched, 1, file) == untouched, untouched);
   fclose(file);
-  printf("remove %d %d\n", remove(name), remove(name));
+  /* "x" refuses an existing file instead of truncating it. */
+  FILE *exclusive = fopen(name, "wx");
+  printf("wx existing %d ", exclusive == 0);
+  int removed = remove(name);
+  int again = remove(name);
+  printf("remove %d %d ", removed, again);
+  exclusive = fopen(name, "wx");
+  printf("wx new %d\n", exclusive != 0);
+  fclose(exclusive);
+  remove(name);
   printf("fopen missing %d\n", fopen(name, "r") == 0);
+
+  /* Comparison traces: offsets of the compared elements from the base,
+     into the array as it is merged for small elements, and where the
+     elements started for those over 32 bytes, which glibc sorts through
+     pointers. */
+  int small[] = {5, 3, 8, 1, 9, 2, 7, 4};
+  trace_base = small;
+  trace_size = sizeof small[0];
+  qsort(small, 8, sizeof small[0], traced_compare);
+  printf("small %s:", trace);
+  for (int i = 0; i < 8; i++)
+    printf(" %d", small[i]);
+  struct big big[8];
+  for (int i = 0; i < 8; i++) {
+    big[i].key = small[(i * 5) % 8] * 10 + i % 3;
+    big[i].tag = i;
+  }
+  trace_base = big;
+  trace_size = sizeof big[0];
+  traced = 0;
+  trace[0] = 0;
+  qsort(big, 8, sizeof big[0], traced_compare);
+  printf("\nbig %s:", trace);
+  for (int i = 0; i < 8; i++)
+    printf(" %d/%d", big[i].key, big[i].tag);
+  printf("\n");
 
   volatile double _Complex z = 3.0 + 4.0i;
   double _Complex c = conj(z), p = cproj(z), q = cproj(z / 0.0);

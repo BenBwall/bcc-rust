@@ -104,6 +104,13 @@ const CNTRL: u16 = 0x2;
 const PUNCT: u16 = 0x4;
 const ALNUM: u16 = 0x8;
 
+/// Whether `byte` is white space in the "C" locale: space, `\t`, `\n`,
+/// `\v`, `\f` and `\r`.
+/// C99: §7.4.1.10 paragraph 2, p. 184; PDF p. 196.
+pub(super) const fn is_space(byte: u8) -> bool {
+    classes(byte) & SPACE != 0
+}
+
 /// The classes of `byte` in the "C" locale.
 /// C99: §7.4.1, pp. 181-184; PDF pp. 193-196; §7.4 paragraph 1-2 (the "C"
 /// locale's classes are those of the basic character set).
@@ -390,7 +397,11 @@ impl DefaultHost<'_> {
         let size = u64::from(wide.bytes());
         let align = Align::from_bytes(size).expect("a power of two");
         let at = |memory: &Memory<'_>, pointer: RuntimeValue, index: u64| {
-            memory.ptr_add(pointer, RuntimeValue::Int(u128::from(index * size)), true)
+            memory.ptr_add(
+                pointer,
+                RuntimeValue::Int(u128::from(index) * u128::from(size)),
+                true,
+            )
         };
         let element =
             |memory: &Memory<'_>, pointer: RuntimeValue, index: u64| -> Result<u128, Fault> {
@@ -419,7 +430,12 @@ impl DefaultHost<'_> {
                 | std::cmp::Ordering::Greater => 1,
             })
         };
-        let bytes = |count: u64| RuntimeValue::Int(u128::from(count * size));
+        // An element count whose byte size overflows names more memory than
+        // any object has.
+        let bytes = |count: u64| -> Result<RuntimeValue, Fault> {
+            let bytes = count.checked_mul(size).ok_or(UbKind::OutOfBounds)?;
+            Ok(RuntimeValue::Int(u128::from(bytes)))
+        };
         Ok(match call.name {
             | "wcslen" => RuntimeValue::Int(u128::from(length(memory, arg(0), u64::MAX)?)),
             | "wcscpy" | "wcscat" => {
@@ -432,7 +448,7 @@ impl DefaultHost<'_> {
                 memory.copy(
                     at(memory, arg(0), end),
                     arg(1),
-                    bytes(source),
+                    bytes(source)?,
                     Align::BYTE,
                     false,
                 )?;
@@ -441,7 +457,7 @@ impl DefaultHost<'_> {
             | "wcsncpy" => {
                 let limit = count(integer(arg(2))?)?;
                 let copied = length(memory, arg(1), limit)?;
-                memory.copy(arg(0), arg(1), bytes(copied), Align::BYTE, false)?;
+                memory.copy(arg(0), arg(1), bytes(copied)?, Align::BYTE, false)?;
                 for index in copied..limit {
                     memory.store(wide, RuntimeValue::Int(0), at(memory, arg(0), index), align)?;
                 }
@@ -496,7 +512,7 @@ impl DefaultHost<'_> {
                 memory.copy(
                     arg(0),
                     arg(1),
-                    bytes(elements),
+                    bytes(elements)?,
                     Align::BYTE,
                     call.name == "wmemmove",
                 )?;

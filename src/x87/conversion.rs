@@ -267,27 +267,11 @@ impl X87 {
             | Class::Finite {
                 exponent,
                 significand,
-            } => match round(format, exponent, u128::from(significand)) {
-                | Rounded::Zero => sign,
-                | Rounded::Infinite => sign | infinity,
-                | Rounded::Finite {
-                    quantum,
-                    significand,
-                } => {
-                    let leading = 1 << fraction_bits;
-                    let biased = if significand & leading == 0 {
-                        0
-                    } else {
-                        #[expect(
-                            clippy::cast_sign_loss,
-                            reason = "A normal result has a positive biased exponent."
-                        )]
-                        let biased = (quantum + fraction_bits as i32 + format.bias()) as u64;
-                        biased
-                    };
-                    sign | biased << fraction_bits | (significand & (leading - 1))
-                },
-            },
+            } => encode(
+                format,
+                self.is_negative(),
+                round(format, exponent, u128::from(significand)),
+            ),
         }
     }
 
@@ -302,5 +286,48 @@ impl X87 {
         )]
         let bits = self.to_binary(Binary::SINGLE) as u32;
         f32::from_bits(bits)
+    }
+}
+
+/// The IEEE binary32 (`single`) or binary64 encoding nearest the exact
+/// value `magnitude × 2^exponent` with the given sign, rounded once, as
+/// `strtof` and `strtod` read a hexadecimal floating constant. Bits below
+/// the rounding position may be summarized by a sticky bit.
+/// C99: §7.20.1.3 paragraph 8, p. 309; PDF p. 321.
+pub(crate) fn nearest_binary(single: bool, negative: bool, exponent: i32, magnitude: u128) -> u64 {
+    let format = if single {
+        Binary::SINGLE
+    } else {
+        Binary::DOUBLE
+    };
+    encode(format, negative, round(format, exponent, magnitude))
+}
+
+/// The IEEE `format` encoding of a rounded magnitude with the given sign.
+fn encode(format: Binary, negative: bool, rounded: Rounded) -> u64 {
+    let width = format.width();
+    let fraction_bits = format.precision - 1;
+    let sign = u64::from(negative) << (width - 1);
+    let max_biased = (1_u64 << (width - fraction_bits - 1)) - 1;
+    match rounded {
+        | Rounded::Zero => sign,
+        | Rounded::Infinite => sign | max_biased << fraction_bits,
+        | Rounded::Finite {
+            quantum,
+            significand,
+        } => {
+            let leading = 1 << fraction_bits;
+            let biased = if significand & leading == 0 {
+                0
+            } else {
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "A normal result has a positive biased exponent."
+                )]
+                let biased = (quantum + fraction_bits as i32 + format.bias()) as u64;
+                biased
+            };
+            sign | biased << fraction_bits | (significand & (leading - 1))
+        },
     }
 }

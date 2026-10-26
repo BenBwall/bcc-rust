@@ -178,8 +178,12 @@ pub(super) fn generate_code<'tu>(
     match prepared.output {
         | retention::Output::Text(text) => print_stdout(format_args!("{text}")),
         | retention::Output::Built => 0,
-        | retention::Output::Interpret =>
-            interpret(&diagnosed.module, target, options.interpret_step_limit),
+        | retention::Output::Interpret => interpret(
+            &diagnosed.module,
+            target,
+            options.interpret_step_limit,
+            options.interpret_allow_fs,
+        ),
     }
 }
 
@@ -225,6 +229,11 @@ pub(super) struct CodeGeneration {
     /// Maximum interpreter instructions (default 100000000); 0 is unlimited.
     #[arg(long, value_name = "N", requires = "interpret")]
     pub(super) interpret_step_limit: Option<u64>,
+    /// Let the interpreted program open, create and remove host files
+    /// (`fopen`, `freopen`, `remove`); without it they fail as for a
+    /// permission error.
+    #[arg(long, requires = "interpret")]
+    pub(super) interpret_allow_fs:   bool,
     /// Build an executable at PATH through the bundled clang (an object with
     /// -c).
     #[arg(short = 'o', long = "output", value_name = "PATH", group = "back_end",
@@ -501,25 +510,41 @@ impl CodeGeneration {
 }
 
 /// Runs `main` and returns its status, after forwarding what the program
-/// wrote to stdout. A trap is reported like a diagnostic.
-fn interpret(module: &Module<'_>, target: Target, steps: Option<u64>) -> i32 {
+/// wrote to stdout and stderr in the order it wrote them. A trap is reported
+/// like a diagnostic, and refused file access as a note.
+fn interpret(module: &Module<'_>, target: Target, steps: Option<u64>, allow_fs: bool) -> i32 {
     let arena = Bump::new();
     let mut host = DefaultHost::for_target(&arena, target);
+    if allow_fs {
+        host.allow_file_access();
+    }
     let mut limits = interpreter::Limits::default();
     if let Some(steps) = steps {
         limits.steps = steps;
     }
     let result = interpreter::run_main_with_limits(module, &mut host, limits);
-    // What the program wrote to `stderr`; a closed stream is not an error
-    // of the compiler.
-    _ = io::stderr().lock().write_all(host.errors()).ok();
-    let mut stdout = io::stdout().lock();
-    if let Err(error) = stdout
-        .write_all(host.output())
-        .and_then(|()| stdout.flush())
+    let (mut stdout, mut stderr) = (io::stdout().lock(), io::stderr().lock());
+    let forwarded = host.emit(|channel, bytes| match channel {
+        | interpreter::Channel::Output => stdout.write_all(bytes).and_then(|()| stdout.flush()),
+        // A closed stderr is not an error of the compiler.
+        | interpreter::Channel::Errors => {
+            _ = stderr.write_all(bytes).ok();
+            Ok(())
+        },
+    });
+    drop((stdout, stderr));
+    if let Err(error) = forwarded
         && error.kind() != io::ErrorKind::BrokenPipe
     {
         return stdout_error(&error);
+    }
+    if let Some((count, path)) = host.denied_file_access() {
+        report_stderr(format_args!(
+            "note: the interpreter refused {count} host file access{} (first `{}`); pass \
+             --interpret-allow-fs to allow it",
+            if count == 1 { "" } else { "es" },
+            std::str::from_utf8(path).unwrap_or("<a non-UTF-8 path>")
+        ));
     }
     match result {
         // C99: §5.1.2.2.3 paragraph 1, p. 13; PDF p. 25: returning from

@@ -6,8 +6,11 @@
 //! function's frame and steps the machine until that frame returns, so its
 //! instructions count against the step limit and its traps stop the program
 //! where they happen. `qsort` is glibc's stable merge sort step for step, so
-//! the comparison function sees pointers into the array and the same calls
-//! glibc makes; `bsearch` is glibc's bisection.
+//! the comparison function sees the same calls glibc makes: pointers into
+//! the array as it is being merged, or, for elements over 32 bytes, which
+//! glibc sorts through an array of pointers, pointers to the elements where
+//! they started. `bsearch` is glibc's bisection. glibc's fallbacks when its
+//! temporary buffer cannot be allocated are not modelled.
 //!
 //! C99: §7.20.5, pp. 318-319; PDF pp. 330-331.
 
@@ -38,6 +41,18 @@ pub(super) enum Callback {
     Waiting(usize),
     /// Returned this value.
     Returned(Option<RuntimeValue>),
+}
+
+/// glibc sorts elements larger than this through pointers to them.
+const INDIRECT_SIZE: u128 = 32;
+
+/// What a merge sort orders, with the comparison function.
+#[derive(Clone, Copy)]
+enum Sorted {
+    /// The program's elements themselves.
+    Elements(RuntimeValue),
+    /// Pointers to them.
+    Pointers(RuntimeValue),
 }
 
 /// How a comparison call ended.
@@ -73,21 +88,22 @@ impl Machine<'_, '_, '_> {
             let (count, size) = (integer(args[1])?, integer(args[2])?);
             let total = count.checked_mul(size).ok_or(UbKind::OutOfBounds)?;
             if count > 1 && size > 0 {
-                let temporary = self.memory.allocate(
-                    ObjectKind::Heap,
-                    u64::try_from(total).map_err(|_| UbKind::OutOfBounds)?,
-                    Align::BYTE,
-                )?;
-                let sorted = self.merge_sort(
-                    args[0],
-                    count,
-                    size,
-                    RuntimeValue::Ptr(temporary),
-                    args[3],
-                    host,
-                );
-                self.memory
-                    .free(temporary.provenance.expect("a fresh object"));
+                let sorted = if size > INDIRECT_SIZE {
+                    self.sort_indirectly(args[0], count, size, args[3], host)
+                } else {
+                    let temporary = self.scratch_object(total)?;
+                    let sorted = self.merge_sort(
+                        args[0],
+                        count,
+                        size,
+                        RuntimeValue::Ptr(temporary),
+                        Sorted::Elements(args[3]),
+                        host,
+                    );
+                    self.memory
+                        .free(temporary.provenance.expect("a fresh object"));
+                    sorted
+                };
                 if let Err(termination) = sorted? {
                     return Ok(Err(termination));
                 }
@@ -114,16 +130,95 @@ impl Machine<'_, '_, '_> {
         Ok(Ok(Some(RuntimeValue::NULL)))
     }
 
+    /// A heap object of `size` bytes for the sort's own use.
+    fn scratch_object(&mut self, size: u128) -> Result<super::value::Pointer, Fault> {
+        let size = u64::try_from(size).map_err(|_| UbKind::OutOfBounds)?;
+        self.memory.allocate(ObjectKind::Heap, size, Align::BYTE)
+    }
+
+    /// glibc's indirect sort for elements over 32 bytes: it sorts an array
+    /// of pointers to the elements, so comparisons see the elements where
+    /// they started, then moves each element to its sorted place.
+    fn sort_indirectly(
+        &mut self,
+        base: RuntimeValue,
+        count: u128,
+        size: u128,
+        function: RuntimeValue,
+        host: &mut dyn Host,
+    ) -> Result<Result<(), Termination>, Fault> {
+        let pointers = self.scratch_object(count * 8)?;
+        let temporary = self.scratch_object(count * 8)?;
+        let copy = self.scratch_object(count * size)?;
+        let at = |this: &Self, pointer: RuntimeValue, offset: u128| {
+            this.memory
+                .ptr_add(pointer, RuntimeValue::Int(offset), true)
+        };
+        let (pointers, temporary, copy) = (
+            RuntimeValue::Ptr(pointers),
+            RuntimeValue::Ptr(temporary),
+            RuntimeValue::Ptr(copy),
+        );
+        let release = |this: &mut Self| {
+            for object in [pointers, temporary, copy] {
+                let object = object.as_pointer().expect("a fresh object");
+                this.memory.free(object.provenance.expect("a fresh object"));
+            }
+        };
+        for index in 0..count {
+            let element = at(self, base, index * size);
+            self.memory.store(
+                Type::Ptr,
+                element,
+                at(self, pointers, index * 8),
+                Align::BYTE,
+            )?;
+        }
+        let sorted = self.merge_sort(
+            pointers,
+            count,
+            8,
+            temporary,
+            Sorted::Pointers(function),
+            host,
+        );
+        if !matches!(sorted, Ok(Ok(()))) {
+            release(self);
+            return sorted;
+        }
+        let total = RuntimeValue::Int(count * size);
+        self.memory.copy(copy, base, total, Align::BYTE, false)?;
+        let base_address = base.as_pointer().map_or(0, |pointer| pointer.address);
+        for index in 0..count {
+            let element =
+                self.memory
+                    .load(Type::Ptr, at(self, pointers, index * 8), Align::BYTE)?;
+            let offset = element.as_pointer().map_or(0, |pointer| pointer.address) - base_address;
+            let source = at(self, copy, u128::from(offset));
+            let destination = at(self, base, index * size);
+            self.memory.copy(
+                destination,
+                source,
+                RuntimeValue::Int(size),
+                Align::BYTE,
+                false,
+            )?;
+        }
+        release(self);
+        Ok(Ok(()))
+    }
+
     /// glibc's `msort_with_tmp`: sorts the halves of `count` elements of
     /// `size` bytes at `base`, merges them into `temporary` and copies the
-    /// merged prefix back.
+    /// merged prefix back. The elements are the program's own, or pointers
+    /// to them for the indirect sort.
     fn merge_sort(
         &mut self,
         base: RuntimeValue,
         count: u128,
         size: u128,
         temporary: RuntimeValue,
-        function: RuntimeValue,
+        sorted: Sorted,
         host: &mut dyn Host,
     ) -> Result<Result<(), Termination>, Fault> {
         if count <= 1 {
@@ -136,16 +231,24 @@ impl Machine<'_, '_, '_> {
         let (mut first, mut second) = (count / 2, count - count / 2);
         let mut left = base;
         let mut right = at(self, base, first);
-        if let Err(termination) = self.merge_sort(left, first, size, temporary, function, host)? {
+        if let Err(termination) = self.merge_sort(left, first, size, temporary, sorted, host)? {
             return Ok(Err(termination));
         }
-        if let Err(termination) = self.merge_sort(right, second, size, temporary, function, host)? {
+        if let Err(termination) = self.merge_sort(right, second, size, temporary, sorted, host)? {
             return Ok(Err(termination));
         }
         let element = RuntimeValue::Int(size);
         let mut output = temporary;
         while first > 0 && second > 0 {
-            let take_left = match self.compare(function, left, right, host)? {
+            let compared = match sorted {
+                | Sorted::Elements(function) => self.compare(function, left, right, host)?,
+                | Sorted::Pointers(function) => {
+                    let a = self.memory.load(Type::Ptr, left, Align::BYTE)?;
+                    let b = self.memory.load(Type::Ptr, right, Align::BYTE)?;
+                    self.compare(function, a, b, host)?
+                },
+            };
+            let take_left = match compared {
                 | Compared::Ended(termination) => return Ok(Err(termination)),
                 | Compared::Order(order) => order <= 0,
             };

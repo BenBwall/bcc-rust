@@ -240,7 +240,8 @@ pub(crate) enum Unsupported {
     ObjectSize,
     /// More objects or addresses than the interpreter can number.
     AddressSpace,
-    /// A `printf` conversion other than those the default host implements.
+    /// A `printf` or `scanf` conversion other than those the default host
+    /// implements.
     FormatConversion,
     /// A field width over the host's bounded padding limit.
     FormatWidth,
@@ -259,7 +260,7 @@ impl fmt::Display for Unsupported {
             | Self::WideFloat => "f128 arithmetic or an f80 library function",
             | Self::ObjectSize => "an object larger than the size limit",
             | Self::AddressSpace => "more objects than the interpreter can address",
-            | Self::FormatConversion => "a printf conversion the host does not implement",
+            | Self::FormatConversion => "a printf or scanf conversion the host does not implement",
             | Self::FormatWidth => "a printf field width larger than the size limit",
             | Self::VaListTarget => "a target va_list in a module without a known target",
             | Self::ReturnsTwice => "a returns-twice function other than setjmp",

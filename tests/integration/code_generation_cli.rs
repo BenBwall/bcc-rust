@@ -334,18 +334,35 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
 
     /// `tests/fixtures/programs/host_library.c` exercises the host's streams
     /// and files, `va_list` formatting, `scanf`, `qsort` and `bsearch` with
-    /// interpreted comparisons, and its string, wide-string, character and
-    /// conversion functions: the interpreter must write what the program
-    /// built against glibc writes, to stdout and to stderr.
+    /// interpreted comparisons (tracing the elements glibc compares), and its
+    /// string, wide-string, character and conversion functions: with host
+    /// files allowed, the interpreter must write what the program built
+    /// against glibc writes, to stdout and to stderr.
     #[test]
     fn host_library_functions_match_glibc() {
+        interpreter_matches_glibc("host_library.c", &["--interpret-allow-fs"]);
+    }
+
+    /// `tests/fixtures/programs/scanf_cases.c` runs `sscanf` edge cases:
+    /// matching and input failures, suppression, widths, scansets, white
+    /// space and every form of floating input.
+    #[test]
+    fn scanf_edge_cases_match_glibc() {
+        interpreter_matches_glibc("scanf_cases.c", &[]);
+    }
+
+    /// Builds a fixture with clang against glibc and checks that the
+    /// interpreter, with `flags`, writes the same stdout and stderr under
+    /// both optimization settings. GNU/Linux hosts only.
+    fn interpreter_matches_glibc(fixture: &str, flags: &[&str]) {
         if host() != Some("x86_64-unknown-linux-gnu") {
             return;
         }
-        let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/host_library.c");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs")
+            .join(fixture);
         let source = source.to_str().unwrap();
-        let reference = temporary("host-library.exe");
+        let reference = temporary("glibc-reference.exe");
         let built = Command::new("target/llvm/bin/clang")
             .args([source, "-std=c99", "-O0", "-fno-builtin", "-w", "-lm", "-o"])
             .arg(&reference)
@@ -357,17 +374,177 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
         std::fs::remove_file(reference).unwrap();
         for optimize in ["--opt=none", "--opt=bcc"] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
-            _ = command.args([source, "--interpret", optimize]);
+            _ = command.args([source, "--interpret", optimize]).args(flags);
             let output = run_native(&mut command).unwrap();
             assert_eq!(
                 output.status.code(),
                 Some(0),
-                "{optimize}: {}",
+                "{fixture} {optimize}: {}",
                 text(&output.stderr)
             );
-            assert_eq!(text(&output.stdout), text(&expected.stdout), "{optimize}");
-            assert_eq!(text(&output.stderr), text(&expected.stderr), "{optimize}");
+            assert_eq!(
+                text(&output.stdout),
+                text(&expected.stdout),
+                "{fixture} {optimize}"
+            );
+            assert_eq!(
+                text(&output.stderr),
+                text(&expected.stderr),
+                "{fixture} {optimize}"
+            );
         }
+    }
+
+    /// Host files are opt-in. Without `--interpret-allow-fs`, `fopen` in any
+    /// mode and `remove` fail as for a permission error, the file system is
+    /// untouched, and the interpreter notes the refusal; with it, they act.
+    #[test]
+    fn interpreter_file_access_is_opt_in() {
+        let path = temporary("file-access.txt");
+        std::fs::write(&path, "kept\n").unwrap();
+        let path_text = path.to_str().unwrap().replace('\\', "/");
+        let source = format!(
+            "typedef struct _IO_FILE FILE; int printf(const char *, ...);
+FILE *fopen(const char *, const char *); int fclose(FILE *); int remove(const char *);
+int fputs(const char *, FILE *);
+int main(void) {{ const char *name = \"{path_text}\";
+  FILE *read = fopen(name, \"r\"); FILE *write = fopen(name, \"w\");
+  printf(\"%d %d \", read != 0, write != 0);
+  if (write) {{ fputs(\"replaced\\n\", write); fclose(write); }}
+  if (read) fclose(read);
+  printf(\"%d\\n\", remove(name)); return 0; }}
+"
+        );
+        let output = bcc(&source, &["--interpret"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "0 0 -1\n");
+        let stderr = text(&output.stderr);
+        assert!(
+            stderr.contains("refused 3 host file accesses")
+                && stderr.contains("--interpret-allow-fs"),
+            "{stderr}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept\n");
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "1 1 0\n");
+        assert!(!text(&output.stderr).contains("refused"));
+        assert!(!path.exists());
+    }
+
+    /// stdout and stderr keep their order when both go to one file, as with
+    /// a pipe under glibc: stderr is unbuffered, and stdout bytes appear at
+    /// `fflush` and at exit.
+    #[test]
+    fn interpreter_interleaves_stdout_and_stderr_at_flushes() {
+        let source = "typedef struct _IO_FILE FILE; extern FILE *stdout, *stderr;
+int fputs(const char *, FILE *); int fflush(FILE *); int puts(const char *);
+int main(void) { fputs(\"A\", stdout); fflush(stdout); fputs(\"B\", stderr);
+  puts(\"C\"); fputs(\"D\", stderr); fflush(0); fputs(\"E\", stderr); fputs(\"F\", stdout);
+  return 0; }
+";
+        let merged = temporary("merged-output.txt");
+        let file = std::fs::File::create(&merged).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args([
+                "--interpret",
+                "--target=x86_64-unknown-linux-gnu",
+                "--input",
+                source,
+            ])
+            .stdout(file.try_clone().unwrap())
+            .stderr(file)
+            .status()
+            .unwrap();
+        assert_eq!(output.code(), Some(0));
+        assert_eq!(std::fs::read_to_string(&merged).unwrap(), "ABDC\nEF");
+        std::fs::remove_file(merged).unwrap();
+    }
+
+    /// Using a closed stream is undefined: after `fclose(stdin)` or
+    /// `fclose(stdout)`, the functions that use them implicitly trap, and a
+    /// failed `freopen` closes its stream, whose stale pointer stays invalid
+    /// when a later `fopen` reuses its table slot.
+    #[test]
+    fn closed_streams_trap_even_when_used_implicitly() {
+        let path = temporary("reused-slot.txt");
+        let path_text = path.to_str().unwrap().replace('\\', "/");
+        let prelude = "typedef struct _IO_FILE FILE; extern FILE *stdin, *stdout;
+int fclose(FILE *); int getchar(void); int puts(const char *); int printf(const char *, ...);
+int scanf(const char *, ...) __asm__(\"__isoc99_scanf\"); int fputs(const char *, FILE *);
+FILE *fopen(const char *, const char *); FILE *freopen(const char *, const char *, FILE *);
+";
+        for body in [
+            "fclose(stdin); return getchar();".to_string(),
+            "int x; fclose(stdin); return scanf(\"%d\", &x);".to_string(),
+            "fclose(stdout); return puts(\"x\");".to_string(),
+            "fclose(stdout); return printf(\"x\");".to_string(),
+            format!(
+                "FILE *a = fopen(\"{path_text}\", \"w\"); FILE *b = \
+                 freopen(\"/nonexistent-bcc/x\", \"r\", a);
+  FILE *c = fopen(\"{path_text}\", \"r\"); if (b || !c) return 1; return fputs(\"stale\", a);"
+            ),
+        ] {
+            let source = format!("{prelude}int main(void) {{ {body} }}\n");
+            let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(70), "{body}: {stderr}");
+            assert!(stderr.contains("not an open FILE"), "{body}: {stderr}");
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// `%lf` stores a `double` on every target, Win64's 32-bit `long`
+    /// notwithstanding; the wide conversions are refused rather than run as
+    /// byte conversions; and a wide-string length whose byte size overflows
+    /// is out of bounds rather than a short copy.
+    #[test]
+    fn scanf_lengths_and_wide_sizes_follow_the_conversion() {
+        let source = "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
+int printf(const char *, ...);
+int main(void) { double d = 0; long l = 0; float f = 0;
+  int n = sscanf(\"2.5 -7 0.25\", \"%lf %ld %f\", &d, &l, &f);
+  printf(\"%d %g %ld %g\\n\", n, d, l, (double)f); return 0; }
+";
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            let output = bcc(source, &["--interpret", target]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{target}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), "3 2.5 -7 0.25\n", "{target}");
+        }
+        for conversion in ["%lc", "%ls", "%l[a]", "%Lf"] {
+            let source = format!(
+                "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
+int main(void) {{ long double buffer[4]; return sscanf(\"a\", \"{conversion}\", buffer); }}
+"
+            );
+            let output = bcc(&source, &["--interpret"]);
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(70), "{conversion}: {stderr}");
+            assert!(
+                stderr.contains("scanf conversion the host does not implement"),
+                "{stderr}"
+            );
+        }
+        let source = "typedef int wchar_t; wchar_t *wmemcpy(wchar_t *, const wchar_t *, unsigned \
+                      long);
+int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return b[0]; }
+";
+        let output = bcc(
+            source,
+            &["--interpret", "--target=x86_64-unknown-linux-gnu"],
+        );
+        let stderr = text(&output.stderr);
+        assert_eq!(output.status.code(), Some(70), "{stderr}");
+        assert!(stderr.contains("out-of-bounds access"), "{stderr}");
     }
 
     /// The interpreter computes the exact x87 `long double` functions and

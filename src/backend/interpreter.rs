@@ -90,6 +90,7 @@ mod tests;
 mod text;
 
 pub(crate) use host::{
+    Channel,
     DefaultHost,
     Host,
     HostCall,

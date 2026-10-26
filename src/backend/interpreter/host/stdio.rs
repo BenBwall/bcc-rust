@@ -5,9 +5,23 @@
 //! the host's stream table; the program cannot read or write the object
 //! itself. `stdout` writes to the host's captured output and `stderr` to its
 //! captured error output, unless `freopen` redirects them; `stdin` reads the
-//! process's standard input. Files are unbuffered, so every write reaches the
-//! file at once and a later `fopen` of the same name reads it back. `errno` is
-//! not modelled: a failing call only returns its failure value.
+//! process's standard input. A stream used after `fclose`, or after a failed
+//! `freopen` closed it, is undefined, including the standard streams that
+//! `printf` or `getchar` use implicitly.
+//!
+//! The captured output keeps glibc's order for a pipe: standard error is
+//! unbuffered, while standard output reaches the command line only at
+//! `fflush(stdout)`, `fflush(NULL)` or the end of the run (a full buffer's
+//! flush is not modelled). [`Console`] records where each error write falls
+//! among those flushes.
+//!
+//! Host files are opt-in (`--interpret-allow-fs`): without it, `fopen`,
+//! `freopen` and `remove` fail as glibc does on `EACCES`, returning null or
+//! -1, and the host counts the refusal for the command line to note;
+//! `tmpnam` then names files without looking at the file system. Files are
+//! unbuffered, so every write reaches the file at once and a later `fopen` of
+//! the same name reads it back. `errno` is not modelled: a failing call only
+//! returns its failure value.
 //!
 //! C99: §7.19.3, pp. 264-266; PDF pp. 276-278 (files); §7.19.4-§7.19.10,
 //! pp. 268-304; PDF pp. 280-316 (operations, access, I/O, positioning and
@@ -97,9 +111,26 @@ const EOF: u128 = (-1_i32).cast_unsigned() as u128;
 /// glibc's `L_tmpnam`, the size of `tmpnam`'s static buffer.
 const TMPNAM_SIZE: u64 = 20;
 
+/// The names `tmpnam` hands out, `bcc000000` to `bcc999999`, each once;
+/// after them it returns null. C99 §7.19.4.4p3 leaves the behaviour after
+/// `TMP_MAX` calls to the implementation.
+const TMPNAM_NAMES: u32 = 1_000_000;
+
 /// The open streams the host can track at once, the standard three
 /// included.
 const MAX_STREAMS: usize = 64;
+
+/// What the program wrote to the standard streams, in the order the
+/// command line shows it.
+pub(super) struct Console<'a> {
+    /// Everything written to `stderr`.
+    pub(super) errors:  super::ArenaVec<'a, u8>,
+    /// For each write to `stderr`: how much of the host's output buffer had
+    /// been flushed before it, and the end of its bytes in `errors`.
+    pub(super) marks:   super::ArenaVec<'a, (usize, usize)>,
+    /// How much of the output buffer `fflush` has released.
+    pub(super) flushed: usize,
+}
 
 /// The host's stream table.
 pub(super) struct Streams {
@@ -193,8 +224,14 @@ impl DefaultHost<'_> {
                 RuntimeValue::Int(0)
             },
             | "fflush" => {
-                if arg(0) != RuntimeValue::NULL {
-                    let _ = self.stream(arg(0), memory)?;
+                // C99 §7.19.5.2p3: a null pointer flushes every stream.
+                let stream = if arg(0) == RuntimeValue::NULL {
+                    1
+                } else {
+                    self.stream(arg(0), memory)?
+                };
+                if matches!(self.streams.entries[stream].target, Target::Output) {
+                    self.console.flushed = self.output.len();
                 }
                 RuntimeValue::Int(0)
             },
@@ -202,7 +239,7 @@ impl DefaultHost<'_> {
                 let stream = self.stream(arg(1), memory)?;
                 let byte = truncate_u8(integer(arg(0))?);
                 let entry = &mut self.streams.entries[stream];
-                if write_to(entry, &mut self.output, &mut self.errors, &[byte]) {
+                if write_to(entry, &mut self.output, &mut self.console, &[byte]) {
                     RuntimeValue::Int(u128::from(byte))
                 } else {
                     RuntimeValue::Int(EOF)
@@ -215,7 +252,7 @@ impl DefaultHost<'_> {
                 let written = write_to(
                     &mut self.streams.entries[stream],
                     &mut self.output,
-                    &mut self.errors,
+                    &mut self.console,
                     &self.text,
                 );
                 RuntimeValue::Int(if written { 1 } else { EOF })
@@ -224,6 +261,10 @@ impl DefaultHost<'_> {
                 let stream = self.stream(arg(3), memory)?;
                 let (size, count) = (integer(arg(1))?, integer(arg(2))?);
                 let total = size.checked_mul(count).ok_or(UbKind::OutOfBounds)?;
+                // glibc writes nothing and returns 0 for an empty request.
+                if total == 0 {
+                    return Ok(HostReturn::Value(Some(RuntimeValue::Int(0))));
+                }
                 self.text.clear();
                 for offset in 0..u64::try_from(total).map_err(|_| UbKind::OutOfBounds)? {
                     let at = memory.ptr_add(arg(0), RuntimeValue::Int(u128::from(offset)), true);
@@ -236,10 +277,10 @@ impl DefaultHost<'_> {
                 let written = write_to(
                     &mut self.streams.entries[stream],
                     &mut self.output,
-                    &mut self.errors,
+                    &mut self.console,
                     &self.text,
                 );
-                RuntimeValue::Int(if written || size == 0 { count } else { 0 })
+                RuntimeValue::Int(if written { count } else { 0 })
             },
             | "fread" => {
                 let stream = self.stream(arg(3), memory)?;
@@ -263,7 +304,7 @@ impl DefaultHost<'_> {
             },
             | "fgetc" | "getc" | "getchar" => {
                 let stream = if call.name == "getchar" {
-                    0
+                    self.standard(0)?
                 } else {
                     self.stream(arg(0), memory)?
                 };
@@ -272,6 +313,11 @@ impl DefaultHost<'_> {
             | "fgets" => {
                 let stream = self.stream(arg(2), memory)?;
                 let limit = int(arg(1))?;
+                // glibc: no room gives null and leaves the array alone; room
+                // for only the terminator stores it without reading.
+                if limit <= 0 {
+                    return Ok(HostReturn::Value(Some(RuntimeValue::NULL)));
+                }
                 let mut count = 0_i128;
                 while count + 1 < limit {
                     let Some(byte) = self.read(stream) else {
@@ -335,9 +381,12 @@ impl DefaultHost<'_> {
                 } else {
                     let offset = sext(call.arg_types[1], integer(arg(1))?);
                     let offset = i64::try_from(offset).map_err(|_| UbKind::SignatureMismatch)?;
+                    // A byte `ungetc` pushed back stands before the file
+                    // position, so the current position is one less.
+                    let pushed = i64::from(self.streams.entries[stream].pushed.is_some());
                     match int(arg(2))? {
                         | 0 => SeekFrom::Start(offset.cast_unsigned()),
-                        | 1 => SeekFrom::Current(offset),
+                        | 1 => SeekFrom::Current(offset - pushed),
                         | _ => SeekFrom::End(offset),
                     }
                 };
@@ -369,10 +418,15 @@ impl DefaultHost<'_> {
                 })
             },
             | "remove" => {
+                let allowed = self.file_access;
                 let path = self.path(arg(0), memory)?;
-                let removed = path.is_some_and(|path| {
-                    std::fs::remove_file(path).is_ok() || std::fs::remove_dir(path).is_ok()
-                });
+                let removed = allowed
+                    && path.is_some_and(|path| {
+                        std::fs::remove_file(path).is_ok() || std::fs::remove_dir(path).is_ok()
+                    });
+                if !allowed {
+                    self.deny_file_access();
+                }
                 RuntimeValue::Int(if removed { 0 } else { EOF })
             },
             | "tmpnam" => self.tmpnam(arg(0), memory)?,
@@ -383,7 +437,8 @@ impl DefaultHost<'_> {
             },
             | "vprintf" | "__printf_chk" => {
                 let format = usize::from(call.name == "__printf_chk");
-                self.print_to(1, call, format, memory)?
+                let stream = self.standard(1)?;
+                self.print_to(stream, call, format, memory)?
             },
             | "vsprintf" | "vsnprintf" => {
                 let bounded = call.name == "vsnprintf";
@@ -438,6 +493,25 @@ impl DefaultHost<'_> {
         Ok(RuntimeValue::Int(if written { count as u128 } else { EOF }))
     }
 
+    /// The table index of standard stream `index`, which a function such as
+    /// `printf` or `getchar` uses implicitly; undefined once it is closed.
+    pub(super) fn standard(&self, index: usize) -> Result<usize, Fault> {
+        if matches!(self.streams.entries[index].target, Target::Closed) {
+            return Err(UbKind::InvalidStream.into());
+        }
+        Ok(index)
+    }
+
+    /// Counts a refused file-system access and keeps the first path, for the
+    /// command line's note.
+    fn deny_file_access(&mut self) {
+        if self.denied_files == 0 {
+            self.denied_path.clear();
+            self.denied_path.extend_from_slice(&self.path);
+        }
+        self.denied_files += 1;
+    }
+
     /// The table index of the open stream `pointer` names.
     pub(super) fn stream(
         &self,
@@ -462,7 +536,11 @@ impl DefaultHost<'_> {
         let written = match &mut entry.target {
             | Target::Output => return true,
             | Target::Errors => {
-                self.errors.extend_from_slice(&self.output[before..]);
+                self.console
+                    .errors
+                    .extend_from_slice(&self.output[before..]);
+                let end = self.console.errors.len();
+                self.console.marks.push((self.console.flushed, end));
                 true
             },
             | Target::File(file) => file.write_all(&self.output[before..]).is_ok(),
@@ -529,30 +607,48 @@ impl DefaultHost<'_> {
     ) -> Result<RuntimeValue, Fault> {
         self.text.clear();
         memory.read_c_string(mode, &mut self.text)?;
+        // glibc reads the access letter and then up to six modifiers, of
+        // which `+` adds the other direction, `x` (C11) refuses an existing
+        // file, and the rest (`b`, `e`, `m`, `c`, ...) do not change the
+        // host's access.
+        let modifiers = self.text.get(1..self.text.len().min(7)).unwrap_or_default();
+        let plus = modifiers.contains(&b'+');
+        let exclusive = modifiers.contains(&b'x');
         let mut options = OpenOptions::new();
-        let plus = self.text.contains(&b'+');
         let _ = match self.text.first() {
             | Some(b'r') => options.read(true).write(plus),
+            | Some(b'w') if exclusive => options.write(true).create_new(true).read(plus),
             | Some(b'w') => options.write(true).create(true).truncate(true).read(plus),
+            | Some(b'a') if exclusive => options.append(true).create_new(true).read(plus),
             | Some(b'a') => options.append(true).create(true).read(plus),
             | _ => return Ok(RuntimeValue::NULL),
         };
+        let allowed = self.file_access;
         let file = self
             .path(path, memory)?
+            .filter(|_| allowed)
             .and_then(|path| options.open(path).ok());
+        if !allowed {
+            self.deny_file_access();
+        }
         if let Some((stream, pointer)) = reopen {
+            // C99 §7.19.5.4p3: the original stream is closed even when the
+            // new file cannot be opened, so its `FILE *` dies with it.
             let entry = &mut self.streams.entries[stream];
+            let object = entry.object;
+            *entry = Stream::default();
+            let Some(file) = file else {
+                if let Some(object) = object {
+                    memory.free(object.provenance.expect("streams have provenance"));
+                }
+                return Ok(RuntimeValue::NULL);
+            };
             *entry = Stream {
-                object: entry.object,
+                target: Target::File(file),
+                object,
                 ..Stream::default()
             };
-            return Ok(match file {
-                | Some(file) => {
-                    entry.target = Target::File(file);
-                    pointer
-                },
-                | None => RuntimeValue::NULL,
-            });
+            return Ok(pointer);
         }
         let Some(file) = file else {
             return Ok(RuntimeValue::NULL);
@@ -595,19 +691,25 @@ impl DefaultHost<'_> {
         memory: &mut Memory<'_>,
     ) -> Result<RuntimeValue, Fault> {
         // `/tmp/bccNNNNNN` fits `L_tmpnam`; Windows names are relative, as
-        // its C libraries' are.
+        // its C libraries' are. Without file access the names are not
+        // checked against the file system, so a run names the same files
+        // every time.
         let prefix: &[u8] = if cfg!(windows) { b"bcc" } else { b"/tmp/bcc" };
         loop {
+            if self.streams.names >= TMPNAM_NAMES {
+                return Ok(RuntimeValue::NULL);
+            }
+            let number = self.streams.names;
             self.streams.names += 1;
-            let number = (std::process::id() % 1000) * 1000 + self.streams.names % 1000;
             self.path.clear();
             self.path.extend_from_slice(prefix);
             for shift in (0..6).rev() {
                 let digit = number / 10_u32.pow(shift) % 10;
                 self.path.push(b'0' + u8::try_from(digit).expect("a digit"));
             }
-            let taken = std::str::from_utf8(&self.path)
-                .is_ok_and(|name| std::path::Path::new(name).exists());
+            let taken = self.file_access
+                && std::str::from_utf8(&self.path)
+                    .is_ok_and(|name| std::path::Path::new(name).exists());
             if !taken {
                 break;
             }
@@ -648,7 +750,7 @@ const fn truncate_u8(bits: u128) -> u8 {
 fn write_to(
     entry: &mut Stream,
     output: &mut super::ArenaVec<'_, u8>,
-    errors: &mut super::ArenaVec<'_, u8>,
+    console: &mut Console<'_>,
     bytes: &[u8],
 ) -> bool {
     let written = match &mut entry.target {
@@ -657,7 +759,8 @@ fn write_to(
             true
         },
         | Target::Errors => {
-            errors.extend_from_slice(bytes);
+            console.errors.extend_from_slice(bytes);
+            console.marks.push((console.flushed, console.errors.len()));
             true
         },
         | Target::File(file) => file.write_all(bytes).is_ok(),
@@ -665,4 +768,49 @@ fn write_to(
     };
     entry.error |= !written;
     written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DefaultHost,
+        TMPNAM_NAMES,
+    };
+    use crate::{
+        backend::interpreter::{
+            memory::Memory,
+            value::RuntimeValue,
+        },
+        util::bump::{
+            ArenaVec,
+            Bump,
+        },
+    };
+
+    /// Without file access, `tmpnam` names files in order without looking
+    /// at the file system, never repeats a name, and returns null once the
+    /// names run out.
+    #[test]
+    fn tmpnam_names_are_bounded_and_never_repeat() {
+        let arena = Bump::new();
+        let mut memory = Memory::new(&arena, 1 << 20);
+        let mut host = DefaultHost::new_in(&arena);
+        let name = |host: &mut DefaultHost<'_>, memory: &mut Memory<'_>| {
+            let pointer = host.tmpnam(RuntimeValue::NULL, memory).unwrap();
+            if pointer == RuntimeValue::NULL {
+                return None;
+            }
+            let mut text = ArenaVec::new_in(&arena);
+            memory.read_c_string(pointer, &mut text).unwrap();
+            Some(text.to_vec())
+        };
+        let first = name(&mut host, &mut memory).unwrap();
+        let second = name(&mut host, &mut memory).unwrap();
+        assert!(first.ends_with(b"bcc000000"), "{first:?}");
+        assert!(second.ends_with(b"bcc000001"), "{second:?}");
+        host.streams.names = TMPNAM_NAMES - 1;
+        let last = name(&mut host, &mut memory).unwrap();
+        assert!(last.ends_with(b"bcc999999"), "{last:?}");
+        assert_eq!(name(&mut host, &mut memory), None);
+    }
 }

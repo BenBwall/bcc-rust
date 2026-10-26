@@ -1,9 +1,17 @@
-//! `scanf`'s format interpretation for `sscanf`, `fscanf` and `scanf`:
-//! white space, ordinary characters, and the conversions `d i u o x X c s
-//! [ n e f g a %` (the floating ones decimal only, into `float` or
-//! `double`), with assignment suppression, a field width and the length
-//! modifiers `hh h l ll j z t`. Input comes from a string in memory or a
-//! stream, with one character of pushback.
+//! `scanf`'s format interpretation for `sscanf`, `fscanf` and `scanf`, as
+//! glibc reads input: white space, ordinary characters, and the conversions
+//! `d i u o x X c s [ n e f g a E F G A %`, with assignment suppression, a
+//! field width and the length modifiers `hh h l ll j z t q`. Input comes
+//! from a string in memory or a stream, with one character of pushback.
+//!
+//! Every directive ends in success, a matching failure (the input does not
+//! fit; the call returns the assignments so far) or an input failure (the
+//! input ended first; the call returns `EOF` if nothing was assigned, as
+//! glibc does even after a suppressed conversion). A numeric field that
+//! stops after a prefix such as a sign, `0x`, `1e`, `nan(` or `infin` is a
+//! matching failure, the prefix consumed. White space is the "C" locale's,
+//! `\v` included. The wide forms `%lc`, `%ls` and `%l[` and `long double`
+//! input (`%Lf`) are not implemented and trap as unsupported.
 //!
 //! C99: §7.19.6.2 paragraphs 3-14, pp. 282-288; PDF pp. 294-300.
 
@@ -12,6 +20,7 @@ use super::{
     DefaultHost,
     FormatArguments,
     integer,
+    strings::is_space,
 };
 use crate::{
     backend::interpreter::{
@@ -41,18 +50,33 @@ pub(super) enum Input {
     Stream(usize),
 }
 
-/// How a conversion ended the directive loop, if it did.
-enum Stop {
+/// Why a directive failed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Failure {
     /// The input ended (or failed) before the directive matched.
     Input,
     /// The input did not match the directive.
     Matching,
 }
 
+/// A length modifier, interpreted per conversion.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Length {
+    None,
+    Char,
+    Short,
+    Long,
+    LongLong,
+    /// `j`, `z`, `t`: 64 bits on every target.
+    Wide,
+    /// `L`.
+    LongDouble,
+}
+
 impl DefaultHost<'_> {
     /// Runs `format` against `input`, storing through `args`, and returns
-    /// the number of assigned conversions, or `EOF` (-1) when the input
-    /// ended before the first conversion.
+    /// the number of assigned conversions, or `EOF` (-1) when an input
+    /// failure comes before any assignment.
     pub(super) fn scanf(
         &mut self,
         mut input: Input,
@@ -63,15 +87,14 @@ impl DefaultHost<'_> {
         let mut directives = super::ArenaVec::new_in(self.allocator);
         memory.read_c_string(format, &mut directives)?;
         let mut assigned = 0;
-        let mut converted_any = false;
         let mut consumed: u64 = 0;
         let mut position = 0;
-        let stop = loop {
+        let failure = loop {
             let Some(&directive) = directives.get(position) else {
                 break None;
             };
             position += 1;
-            if directive.is_ascii_whitespace() {
+            if is_space(directive) {
                 self.skip_space(&mut input, &mut consumed, memory)?;
                 continue;
             }
@@ -84,9 +107,9 @@ impl DefaultHost<'_> {
                     | Some(byte) if byte == directive => consumed += 1,
                     | Some(byte) => {
                         self.unread(&mut input, byte);
-                        break Some(Stop::Matching);
+                        break Some(Failure::Matching);
                     },
-                    | None => break Some(Stop::Input),
+                    | None => break Some(Failure::Input),
                 }
                 continue;
             }
@@ -100,49 +123,35 @@ impl DefaultHost<'_> {
                 position += 1;
             }
             let width = if width == 0 { u64::MAX } else { width };
-            let mut size = 4;
-            let mut ells = 0;
-            loop {
-                match directives.get(position) {
-                    | Some(b'h') => size /= 2,
-                    | Some(b'l') => {
-                        ells += 1;
-                        size = if ells == 1 { self.long_width / 8 } else { 8 };
-                    },
-                    | Some(b'j' | b'z' | b't' | b'q') => size = 8,
-                    | Some(b'L') => return Err(Fault::Unsupported(Unsupported::FormatConversion)),
-                    | _ => break,
-                }
-                position += 1;
-            }
+            let length = Self::length(&directives, &mut position);
             let Some(&conversion) = directives.get(position) else {
                 return Err(Fault::Unsupported(Unsupported::FormatConversion));
             };
             position += 1;
-            if !matches!(conversion, b'[' | b'c' | b'n') {
-                self.skip_space(&mut input, &mut consumed, memory)?;
-            }
+            let size = self.store_size(conversion, length)?;
             let destination = if suppress {
                 RuntimeValue::NULL
             } else {
                 args.next(ArgumentClass::Pointer, memory)?
             };
-            let store_int = |memory: &mut Memory<'_>, value: u128, size: u32| {
-                let ty = match size {
-                    | 1 => Type::I8,
-                    | 2 => Type::I16,
-                    | 8 => Type::I64,
-                    | _ => Type::I32,
-                };
-                memory.store(ty, RuntimeValue::int(ty, value), destination, Align::BYTE)
+            if conversion == b'n' {
+                if !suppress {
+                    store_integer(memory, destination, u128::from(consumed), size)?;
+                }
+                continue;
+            }
+            if !matches!(conversion, b'[' | b'c') {
+                self.skip_space(&mut input, &mut consumed, memory)?;
+                if self.at_end(&mut input, memory)? {
+                    break Some(Failure::Input);
+                }
+            }
+            let mut field = Field {
+                width,
+                used: 0,
+                text: super::ArenaVec::new_in(self.allocator),
             };
-            match conversion {
-                | b'n' => {
-                    if !suppress {
-                        store_int(memory, u128::from(consumed), size)?;
-                    }
-                    continue;
-                },
+            let result = match conversion {
                 | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' => {
                     let base = match conversion {
                         | b'd' | b'u' => 10,
@@ -150,21 +159,17 @@ impl DefaultHost<'_> {
                         | b'o' => 8,
                         | _ => 16,
                     };
-                    let Some(value) =
-                        self.scan_integer(&mut input, &mut consumed, width, base, memory)?
-                    else {
-                        break Some(if self.at_end(&mut input, memory)? {
-                            Stop::Input
-                        } else {
-                            Stop::Matching
-                        });
-                    };
-                    if !suppress {
-                        store_int(memory, value, size)?;
-                    }
+                    self.scan_integer(&mut input, &mut field, base, memory)?
+                        .map(|value| {
+                            if !suppress {
+                                store_integer(memory, destination, value, size)?;
+                            }
+                            Ok::<(), Fault>(())
+                        })
+                        .transpose()?
                 },
                 | b'c' | b's' | b'[' => {
-                    let (scanset, negated) = if conversion == b'[' {
+                    let (set, negated) = if conversion == b'[' {
                         Self::scanset(&directives, &mut position)
                     } else {
                         ([false; 256], false)
@@ -175,14 +180,16 @@ impl DefaultHost<'_> {
                         width
                     };
                     let mut count = 0;
+                    let mut ended = false;
                     while count < width {
                         let Some(byte) = self.next(&mut input, memory)? else {
+                            ended = true;
                             break;
                         };
                         let accepted = match conversion {
                             | b'c' => true,
-                            | b's' => !byte.is_ascii_whitespace(),
-                            | _ => scanset[usize::from(byte)] != negated,
+                            | b's' => !is_space(byte),
+                            | _ => set[usize::from(byte)] != negated,
                         };
                         if !accepted {
                             self.unread(&mut input, byte);
@@ -202,13 +209,15 @@ impl DefaultHost<'_> {
                             )?;
                         }
                         count += 1;
-                        consumed += 1;
                     }
-                    if count == 0 || (conversion == b'c' && count < width) {
-                        break Some(if count == 0 && self.at_end(&mut input, memory)? {
-                            Stop::Input
+                    consumed += count;
+                    // `%c` needs all its characters; `%[` and `%s` at least
+                    // one. Running out of input is an input failure.
+                    if (conversion == b'c' && count < width) || count == 0 {
+                        break Some(if ended {
+                            Failure::Input
                         } else {
-                            Stop::Matching
+                            Failure::Matching
                         });
                     }
                     if conversion != b'c' && !suppress {
@@ -216,47 +225,81 @@ impl DefaultHost<'_> {
                             memory.ptr_add(destination, RuntimeValue::Int(u128::from(count)), true);
                         memory.store(Type::I8, RuntimeValue::Int(0), at, Align::BYTE)?;
                     }
+                    Some(())
                 },
                 | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' => {
-                    let Some(value) = self.scan_float(&mut input, &mut consumed, width, memory)?
-                    else {
-                        break Some(if self.at_end(&mut input, memory)? {
-                            Stop::Input
-                        } else {
-                            Stop::Matching
-                        });
-                    };
-                    if !suppress {
-                        if size == 4 {
-                            #[expect(
-                                clippy::cast_possible_truncation,
-                                reason = "`%f` stores a float."
-                            )]
-                            let single = value as f32;
-                            memory.store(
-                                Type::F32,
-                                RuntimeValue::F32(single),
-                                destination,
-                                Align::BYTE,
-                            )?;
-                        } else {
-                            memory.store(
-                                Type::F64,
-                                RuntimeValue::F64(value),
-                                destination,
-                                Align::BYTE,
-                            )?;
-                        }
-                    }
+                    let single = size == 4;
+                    self.scan_float(&mut input, &mut field, single, memory)?
+                        .map(|bits| {
+                            if !suppress {
+                                let value = if single {
+                                    RuntimeValue::F32(f32::from_bits(
+                                        u32::try_from(bits).expect("binary32 bits"),
+                                    ))
+                                } else {
+                                    RuntimeValue::F64(f64::from_bits(bits))
+                                };
+                                let ty = if single { Type::F32 } else { Type::F64 };
+                                memory.store(ty, value, destination, Align::BYTE)?;
+                            }
+                            Ok::<(), Fault>(())
+                        })
+                        .transpose()?
                 },
                 | _ => return Err(Fault::Unsupported(Unsupported::FormatConversion)),
+            };
+            if !matches!(conversion, b'c' | b's' | b'[') {
+                consumed += field.used;
+                if result.is_none() {
+                    break Some(Failure::Matching);
+                }
             }
-            converted_any = true;
             assigned += i32::from(!suppress);
         };
-        Ok(match stop {
-            | Some(Stop::Input) if !converted_any && assigned == 0 => -1,
+        Ok(match failure {
+            | Some(Failure::Input) if assigned == 0 => -1,
             | _ => assigned,
+        })
+    }
+
+    /// The length modifier at `position`, advancing past it.
+    fn length(directives: &[u8], position: &mut usize) -> Length {
+        let mut length = Length::None;
+        loop {
+            length = match (directives.get(*position), length) {
+                | (Some(b'h'), Length::Short) => Length::Char,
+                | (Some(b'h'), _) => Length::Short,
+                | (Some(b'l'), Length::Long) | (Some(b'q'), _) => Length::LongLong,
+                | (Some(b'l'), _) => Length::Long,
+                | (Some(b'j' | b'z' | b't'), _) => Length::Wide,
+                | (Some(b'L'), _) => Length::LongDouble,
+                | _ => return length,
+            };
+            *position += 1;
+        }
+    }
+
+    /// The bytes a conversion stores under `length`: an integer's width, 4 or
+    /// 8 for a floating conversion, 1 for the character conversions. The
+    /// combinations the host does not implement are refused.
+    fn store_size(&self, conversion: u8, length: Length) -> Result<u32, Fault> {
+        let unsupported = Err(Fault::Unsupported(Unsupported::FormatConversion));
+        Ok(match conversion {
+            | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'n' => match length {
+                | Length::Char => 1,
+                | Length::Short => 2,
+                | Length::None => 4,
+                | Length::Long => self.long_width / 8,
+                // glibc reads `L` with an integer conversion as `ll`.
+                | Length::LongLong | Length::Wide | Length::LongDouble => 8,
+            },
+            | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' => match length {
+                | Length::None => 4,
+                | Length::Long | Length::LongLong => 8,
+                | _ => return unsupported,
+            },
+            | b'c' | b's' | b'[' if length == Length::None => 1,
+            | _ => return unsupported,
         })
     }
 
@@ -301,7 +344,7 @@ impl DefaultHost<'_> {
         memory: &Memory<'_>,
     ) -> Result<(), Fault> {
         while let Some(byte) = self.next(input, memory)? {
-            if !byte.is_ascii_whitespace() {
+            if !is_space(byte) {
                 self.unread(input, byte);
                 break;
             }
@@ -311,7 +354,9 @@ impl DefaultHost<'_> {
     }
 
     /// The bytes a `[` conversion accepts, and whether it is negated, after
-    /// which `position` is past its closing `]`.
+    /// which `position` is past its closing `]`. A `]` first is a member;
+    /// `a-z` is a range when it ascends, and three members (`z`, `-`, `a`)
+    /// when it does not, as glibc reads it.
     fn scanset(directives: &[u8], position: &mut usize) -> ([bool; 256], bool) {
         let mut set = [false; 256];
         let negated = directives.get(*position) == Some(&b'^');
@@ -322,72 +367,109 @@ impl DefaultHost<'_> {
                 *position += 1;
                 break;
             }
-            // A `-` between two characters is a range, as glibc reads it.
-            if let (Some(b'-'), Some(&end)) =
-                (directives.get(*position + 1), directives.get(*position + 2))
-                && end != b']'
-            {
-                for member in byte..=end {
-                    set[usize::from(member)] = true;
-                }
-                *position += 3;
-            } else {
-                set[usize::from(byte)] = true;
-                *position += 1;
+            match (directives.get(*position + 1), directives.get(*position + 2)) {
+                | (Some(b'-'), Some(&end)) if end != b']' && end >= byte => {
+                    for member in byte..=end {
+                        set[usize::from(member)] = true;
+                    }
+                    *position += 3;
+                },
+                | _ => {
+                    set[usize::from(byte)] = true;
+                    *position += 1;
+                },
             }
             first = false;
         }
         (set, negated)
     }
 
-    /// An integer as `strtol` reads it with `base`, at most `width` bytes;
-    /// `None` when no digit matched.
+    /// Takes the next byte into `field` if it satisfies `accept` and the
+    /// width allows it.
+    fn take(
+        &mut self,
+        input: &mut Input,
+        field: &mut Field<'_>,
+        memory: &Memory<'_>,
+        accept: impl Fn(u8) -> bool,
+    ) -> Result<Option<u8>, Fault> {
+        if field.used >= field.width {
+            return Ok(None);
+        }
+        match self.next(input, memory)? {
+            | Some(byte) if accept(byte) => {
+                field.used += 1;
+                field.text.push(byte);
+                Ok(Some(byte))
+            },
+            | Some(byte) => {
+                self.unread(input, byte);
+                Ok(None)
+            },
+            | None => Ok(None),
+        }
+    }
+
+    /// Takes the bytes of `word`, case-insensitively, saying whether all
+    /// matched.
+    fn take_word(
+        &mut self,
+        input: &mut Input,
+        field: &mut Field<'_>,
+        memory: &Memory<'_>,
+        word: &[u8],
+    ) -> Result<bool, Fault> {
+        for &expected in word {
+            if self
+                .take(input, field, memory, |byte| {
+                    byte.eq_ignore_ascii_case(&expected)
+                })?
+                .is_none()
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// An integer as `strtol` reads it with `base`, within the field width;
+    /// `None` (a matching failure) when no digit follows the sign and
+    /// prefix, including a `0x` with no hexadecimal digit after it.
     fn scan_integer(
         &mut self,
         input: &mut Input,
-        consumed: &mut u64,
-        width: u64,
+        field: &mut Field<'_>,
         base: u32,
         memory: &Memory<'_>,
     ) -> Result<Option<u128>, Fault> {
-        let mut used = 0;
-        let mut take = |this: &mut Self,
-                        input: &mut Input,
-                        accept: &dyn Fn(u8) -> bool|
-         -> Result<Option<u8>, Fault> {
-            if used >= width {
-                return Ok(None);
-            }
-            match this.next(input, memory)? {
-                | Some(byte) if accept(byte) => {
-                    used += 1;
-                    *consumed += 1;
-                    Ok(Some(byte))
-                },
-                | Some(byte) => {
-                    this.unread(input, byte);
-                    Ok(None)
-                },
-                | None => Ok(None),
-            }
-        };
-        let negative = take(self, input, &|byte| byte == b'+' || byte == b'-')? == Some(b'-');
+        let negative =
+            self.take(input, field, memory, |byte| byte == b'+' || byte == b'-')? == Some(b'-');
         let mut base = base;
         let mut digits = 0;
-        let mut value = 0_u128;
-        if matches!(base, 0 | 16) && take(self, input, &|byte| byte == b'0')?.is_some() {
-            digits = 1;
-            if take(self, input, &|byte| byte == b'x' || byte == b'X')?.is_some() {
+        if matches!(base, 0 | 16)
+            && self
+                .take(input, field, memory, |byte| byte == b'0')?
+                .is_some()
+        {
+            if self
+                .take(input, field, memory, |byte| byte == b'x' || byte == b'X')?
+                .is_some()
+            {
                 base = 16;
-                digits = 0;
-            } else if base == 0 {
-                base = 8;
+            } else {
+                digits = 1;
+                if base == 0 {
+                    base = 8;
+                }
             }
         }
         if base == 0 {
             base = 10;
         }
-        while let Some(byte) = take(self, input, &|byte: u8| char::from(byte).is_digit(base))? {
+        let mut value = 0_u128;
+        while let Some(byte) = self.take(input, field, memory, |byte: u8| {
+            char::from(byte).is_digit(base)
+        })? {
             let digit = char::from(byte).to_digit(base).expect("an accepted digit");
             value = value
                 .wrapping_mul(u128::from(base))
@@ -403,86 +485,235 @@ impl DefaultHost<'_> {
         }))
     }
 
-    /// A decimal floating number, infinity or NaN as `strtod` reads it, at
-    /// most `width` bytes; `None` when none matched. Hexadecimal input is
-    /// unsupported.
+    /// A floating number as `strtod` reads it, within the field width:
+    /// decimal, hexadecimal with an optional binary exponent, `inf`,
+    /// `infinity`, or `nan` with an optional `(n-char-sequence)`; the bits
+    /// of the nearest binary32 (`single`) or binary64 value, or `None` (a
+    /// matching failure) when the field stops inside one of those forms.
     fn scan_float(
         &mut self,
         input: &mut Input,
-        consumed: &mut u64,
-        width: u64,
+        field: &mut Field<'_>,
+        single: bool,
         memory: &Memory<'_>,
-    ) -> Result<Option<f64>, Fault> {
-        let mut text = super::ArenaVec::new_in(self.allocator);
-        let mut accept = |this: &mut Self,
-                          input: &mut Input,
-                          text: &mut super::ArenaVec<'_, u8>,
-                          allowed: &dyn Fn(u8) -> bool|
-         -> Result<bool, Fault> {
-            if (text.len() as u64) >= width {
-                return Ok(false);
-            }
-            match this.next(input, memory)? {
-                | Some(byte) if allowed(byte) => {
-                    text.push(byte);
-                    *consumed += 1;
-                    Ok(true)
-                },
-                | Some(byte) => {
-                    this.unread(input, byte);
-                    Ok(false)
-                },
-                | None => Ok(false),
-            }
-        };
-        let _ = accept(self, input, &mut text, &|byte| byte == b'+' || byte == b'-')?;
-        let mut letters = 0;
-        while accept(self, input, &mut text, &|byte| {
-            b"infinityINFINITYaA".contains(&byte)
-        })? {
-            letters += 1;
-        }
-        if letters > 0 {
-            let word = text
-                .iter()
-                .filter(|byte| byte.is_ascii_alphabetic())
-                .count();
-            if !(word == 3 || word == 8) {
-                return Ok(None);
-            }
+    ) -> Result<Option<u64>, Fault> {
+        let negative =
+            self.take(input, field, memory, |byte| byte == b'+' || byte == b'-')? == Some(b'-');
+        let start = field.text.len();
+        let (sign_bit, infinity, quiet, payload_bits) = if single {
+            (1_u64 << 31, 0x7F80_0000_u64, 0x0040_0000_u64, 22)
         } else {
-            let mut digits = 0;
-            while accept(self, input, &mut text, &|byte| byte.is_ascii_digit())? {
-                digits += 1;
-            }
-            if accept(self, input, &mut text, &|byte| byte == b'.')? {
-                while accept(self, input, &mut text, &|byte| byte.is_ascii_digit())? {
-                    digits += 1;
-                }
-            }
-            if digits == 0 {
-                return Ok(None);
-            }
-            if matches!(text.as_slice(), [b'0'] | [_, b'0'])
-                && accept(self, input, &mut text, &|byte| byte == b'x' || byte == b'X')?
-            {
-                return Err(Fault::Unsupported(Unsupported::FormatConversion));
-            }
-            if accept(self, input, &mut text, &|byte| byte == b'e' || byte == b'E')? {
-                let _ = accept(self, input, &mut text, &|byte| byte == b'+' || byte == b'-')?;
-                let mut exponent = 0;
-                while accept(self, input, &mut text, &|byte| byte.is_ascii_digit())? {
-                    exponent += 1;
-                }
-                if exponent == 0 {
+            (
+                1_u64 << 63,
+                0x7FF0_0000_0000_0000,
+                0x0008_0000_0000_0000,
+                51,
+            )
+        };
+        let sign = if negative { sign_bit } else { 0 };
+        let first = self.take(input, field, memory, |byte| {
+            byte.is_ascii_digit() || matches!(byte, b'.' | b'i' | b'I' | b'n' | b'N')
+        })?;
+        match first {
+            | Some(b'i' | b'I') => {
+                if !self.take_word(input, field, memory, b"nf")? {
                     return Ok(None);
                 }
+                // `infinity` must be spelled out once it continues.
+                if self
+                    .take(input, field, memory, |byte| {
+                        byte.eq_ignore_ascii_case(&b'i')
+                    })?
+                    .is_some()
+                    && !self.take_word(input, field, memory, b"nity")?
+                {
+                    return Ok(None);
+                }
+                return Ok(Some(sign | infinity));
+            },
+            | Some(b'n' | b'N') => {
+                if !self.take_word(input, field, memory, b"an")? {
+                    return Ok(None);
+                }
+                let mut payload = 0;
+                if self
+                    .take(input, field, memory, |byte| byte == b'(')?
+                    .is_some()
+                {
+                    let open = field.text.len();
+                    while self
+                        .take(input, field, memory, |byte| {
+                            byte.is_ascii_alphanumeric() || byte == b'_'
+                        })?
+                        .is_some()
+                    {}
+                    let sequence = std::str::from_utf8(&field.text[open..]).unwrap_or("");
+                    payload = parse_payload(sequence);
+                    if self
+                        .take(input, field, memory, |byte| byte == b')')?
+                        .is_none()
+                    {
+                        return Ok(None);
+                    }
+                }
+                return Ok(Some(
+                    sign | infinity | quiet | (payload & ((1 << payload_bits) - 1)),
+                ));
+            },
+            | None => return Ok(None),
+            | Some(_) => {},
+        }
+        if field.text[start..] == *b"0"
+            && self
+                .take(input, field, memory, |byte| byte == b'x' || byte == b'X')?
+                .is_some()
+        {
+            return self.scan_hexadecimal(input, field, single, negative, memory);
+        }
+        let mut digits = usize::from(field.text[start].is_ascii_digit());
+        let mut point = field.text[start] == b'.';
+        loop {
+            match self.take(input, field, memory, |byte| {
+                byte.is_ascii_digit() || (!point && byte == b'.')
+            })? {
+                | Some(b'.') => point = true,
+                | Some(_) => digits += 1,
+                | None => break,
             }
         }
-        Ok(std::str::from_utf8(&text)
-            .ok()
-            .and_then(|text| text.parse::<f64>().ok()))
+        if digits == 0 {
+            return Ok(None);
+        }
+        if self
+            .take(input, field, memory, |byte| byte == b'e' || byte == b'E')?
+            .is_some()
+            && !self.exponent_digits(input, field, memory)?
+        {
+            return Ok(None);
+        }
+        let text = std::str::from_utf8(&field.text[start..]).expect("ASCII digits");
+        Ok(Some(if single {
+            u64::from(text.parse::<f32>().map_or(0, f32::to_bits)) | sign
+        } else {
+            text.parse::<f64>().map_or(0, f64::to_bits) | sign
+        }))
     }
+
+    /// A sign and at least one decimal digit, after an exponent letter.
+    fn exponent_digits(
+        &mut self,
+        input: &mut Input,
+        field: &mut Field<'_>,
+        memory: &Memory<'_>,
+    ) -> Result<bool, Fault> {
+        let _ = self.take(input, field, memory, |byte| byte == b'+' || byte == b'-')?;
+        let mut digits = 0;
+        while self
+            .take(input, field, memory, |byte| byte.is_ascii_digit())?
+            .is_some()
+        {
+            digits += 1;
+        }
+        Ok(digits > 0)
+    }
+
+    /// The rest of a hexadecimal floating number after its `0x`: digits
+    /// with an optional point, then an optional `p` exponent, rounded once.
+    fn scan_hexadecimal(
+        &mut self,
+        input: &mut Input,
+        field: &mut Field<'_>,
+        single: bool,
+        negative: bool,
+        memory: &Memory<'_>,
+    ) -> Result<Option<u64>, Fault> {
+        let (mut magnitude, mut exponent, mut sticky, mut digits) = (0_u128, 0_i64, false, 0);
+        let mut point = false;
+        while let Some(byte) = self.take(input, field, memory, |byte| {
+            byte.is_ascii_hexdigit() || (!point && byte == b'.')
+        })? {
+            if byte == b'.' {
+                point = true;
+                continue;
+            }
+            digits += 1;
+            let digit = u128::from(char::from(byte).to_digit(16).expect("a hexadecimal digit"));
+            // Keep 120 bits; later digits only move the exponent or set the
+            // sticky bit.
+            if magnitude >> 120 == 0 {
+                magnitude = magnitude << 4 | digit;
+                exponent -= if point { 4 } else { 0 };
+            } else {
+                sticky |= digit != 0;
+                exponent += if point { 0 } else { 4 };
+            }
+        }
+        if digits == 0 {
+            return Ok(None);
+        }
+        if self
+            .take(input, field, memory, |byte| byte == b'p' || byte == b'P')?
+            .is_some()
+        {
+            let start = field.text.len();
+            if !self.exponent_digits(input, field, memory)? {
+                return Ok(None);
+            }
+            let text = std::str::from_utf8(&field.text[start..]).expect("ASCII digits");
+            exponent += text.parse::<i64>().unwrap_or(if text.starts_with('-') {
+                -1 << 40
+            } else {
+                1 << 40
+            });
+        }
+        let exponent = i32::try_from(exponent.clamp(-0x10_0000, 0x10_0000)).expect("clamped");
+        let magnitude = (magnitude << 1) | u128::from(sticky);
+        Ok(Some(crate::x87::nearest_binary(
+            single,
+            negative,
+            exponent - 1,
+            magnitude,
+        )))
+    }
+}
+
+/// One conversion's characters, within its field width.
+struct Field<'a> {
+    width: u64,
+    used:  u64,
+    text:  super::ArenaVec<'a, u8>,
+}
+
+/// Stores the integer `value` in `size` bytes at `destination`.
+fn store_integer(
+    memory: &mut Memory<'_>,
+    destination: RuntimeValue,
+    value: u128,
+    size: u32,
+) -> Result<(), Fault> {
+    let ty = match size {
+        | 1 => Type::I8,
+        | 2 => Type::I16,
+        | 8 => Type::I64,
+        | _ => Type::I32,
+    };
+    memory.store(ty, RuntimeValue::int(ty, value), destination, Align::BYTE)
+}
+
+/// The payload glibc gives `nan(n-char-sequence)`: the sequence read as
+/// `strtoull` reads it in base 0, or zero when it is not such a number.
+fn parse_payload(sequence: &str) -> u64 {
+    let (digits, radix) = if let Some(hex) = sequence
+        .strip_prefix("0x")
+        .or_else(|| sequence.strip_prefix("0X"))
+    {
+        (hex, 16)
+    } else if sequence.len() > 1 && sequence.starts_with('0') {
+        (&sequence[1..], 8)
+    } else {
+        (sequence, 10)
+    };
+    u64::from_str_radix(digits, radix).unwrap_or(0)
 }
 
 #[expect(clippy::cast_possible_truncation, reason = "Truncation is the intent.")]
