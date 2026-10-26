@@ -126,6 +126,15 @@ jobs:
           llvm-key: ${{ needs.llvm.outputs.key }}
       - run: cargo test --all-targets --no-fail-fast
       - run: cargo test --features benchmarking-internals --test allocation_count
+      # The site (web/) shows bcc's output for each lesson, precomputed by the
+      # native compiler. Regenerate it with this commit's compiler and fail if
+      # it differs, so a compiler change cannot leave the site's outputs stale.
+      - name: Check the site's precomputed compiler outputs
+        if: ${{ !cancelled() }}
+        run: |
+          cargo build --bin bcc-rust
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          BCC="target/$host/debug/bcc-rust" sh web/pipeline/generate.sh --check
 
   bench:
     name: Benchmarks

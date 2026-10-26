@@ -74,7 +74,11 @@ for source in *.c; do
 done
 
 if $check; then
-    diff -r "$root/web/pipeline" "$out" -x generate.sh -x README.md -q && echo 'Pipeline outputs are up to date.'
+    if ! diff -ru -x generate.sh -x README.md "$root/web/pipeline" "$out"; then
+        echo 'generate.sh: web/pipeline/ is stale; run web/pipeline/generate.sh and commit the result.' >&2
+        exit 1
+    fi
+    echo 'Pipeline outputs are up to date.'
 else
     echo "Wrote the pipeline outputs to web/pipeline/."
 fi

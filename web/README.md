@@ -132,7 +132,9 @@ BCC=path/to/bcc-rust sh web/pipeline/generate.sh --check   # compare only
 
 The script needs a native `bcc-rust` (built with LLVM) and GNU `objdump`. The
 site's tests check that every lesson's outputs were generated from its current
-source.
+source, and the main CI workflow's Tests job runs `generate.sh --check` with the
+compiler it just built, so a compiler change that alters an output fails CI
+until the outputs are regenerated.
 
 Edited source is compiled live in the Worker through `explorer.rs` once bcc's
 compiler builds for wasm32 (`bcc_rust::explorer::compile`). Until the Worker
