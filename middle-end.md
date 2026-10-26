@@ -349,6 +349,12 @@ The differential generator produces parameter and return contracts; the
 interpreter oracle discards their UB cases before comparing LLVM arms and
 rejects any optimization that introduces a UB trap into a defined execution.
 
+Inline assembly (no result; see [GNU inline assembly](#gnu-inline-assembly-2026-10-26)):
+
+```text
+asm [sideeffect] "template" (out|in "constraint" <ty> [bytes N] value, ...) [clobber(name, ...)]
+```
+
 Terminators end every block and nothing else does:
 
 ```text
@@ -1747,3 +1753,106 @@ build prints. Lua as one translation unit stops in the interpreter at the
 missing `realloc` host function, an unrelated host gap. Windows native
 execution (MSVCRT's `_setjmp` with a frame address and SEH unwinding) was
 not run for this change.
+
+## GNU inline assembly (2026-10-26)
+
+GNU `asm` statements inside functions compile end to end through the LLVM
+back end, as Clang compiles them; the interpreter refuses to run them.
+Contract: [GCC Extended Asm](https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html),
+[Constraints for asm Operands](https://gcc.gnu.org/onlinedocs/gcc/Constraints.html)
+and LLVM's [inline assembler expressions](https://llvm.org/docs/LangRef.html#inline-assembler-expressions).
+C99 §J.5.10 (p. 514; PDF p. 526) lists `asm` as a common extension.
+
+**Semantic analysis** (`semantic_analysis/assembly.rs`). The operand
+expressions are typed by the ordinary expression work; then each constraint
+is parsed (`assembly/constraints.rs`: `=`, `+`, `&`, `%`, `,`
+alternatives, the generic `r` `m` `o` `V` `<` `>` `g` `X` `i` `n` `s` `p`
+`E` `F`, the x86 registers `a` `b` `c` `d` `S` `D` `q` `Q` `R` `l` `U`
+`x` `v`, the accepted but unlowered `A` `f` `t` `u` `y` `k` `Y…`, the
+ranged immediates `I` `J` `K` `L` `M` `N` `O` `e` `Z`, matching digits and
+`[name]`, and `=@cc` flag outputs) and the operand gets one location:
+
+- an output is a modifiable lvalue; it takes a flag, a register when its
+  constraint allows one and its type fits (an integer or pointer of at most
+  64 bits, `float` or `double`), else its memory;
+- an input takes an immediate for a constant its constraint allows (`g`
+  only when the value fits a sign-extended 32-bit field; `i`, `g` and `X`
+  also take an address constant, but `g` prefers a register for one), else
+  a register, else the lvalue's memory;
+- a matching input names an earlier register output; integers and
+  pointers may differ in width (the register holds the input widened or
+  narrowed to the output's width, as in GCC), floating values may not.
+
+Memory operands must be addressable (no bit-field, `register` object or
+vector element). Clobbers (`assembly/registers.rs`) are any width of an
+x86-64 register name with or without `%`, `memory`, `cc` and its LLVM
+spellings. A clobber of the register an operand's constraint names alone is
+"impossible constraints". The template (`assembly/template.rs`) resolves
+`%N`, `%[name]`, the x86 modifiers, `%lN`/`%l[name]` goto labels, `%=`,
+`%%`, `%{` `%|` `%}` and `{…|…}` dialect alternatives; basic assembly
+(no colon) substitutes nothing. Each fault is `SemanticErrorKind::InvalidAsm`
+with GCC's or Clang's message. Every `asm goto` label is a jump of the
+statement, checked as a `goto` is (an undefined label, or entering a
+variably modified scope, is an error); the statement records them as
+consecutive jump facts. `AssemblyFacts` retains, by statement, the template
+pieces, each operand's role and location, the clobbers and whether the
+statement is volatile (written so, basic, without outputs, or `goto`).
+
+**IR.** `asm` names a module-level `InlineAsm` descriptor (`ir/inline_asm.rs`):
+an LLVM-syntax template (`$N`, `${N:m}`, `${:uid}`, `$$`, `$(` `$|` `$)`),
+operands, clobbers and `sideeffect`. It has no result. Each operand is one
+value: a register or flag output is the `ptr` its result is stored to after
+the assembly runs, a memory operand the `ptr` it addresses (`bytes N` for an
+aggregate), and an input its value; an immediate is an `iconst`,
+`global_addr` or `func_addr`, and a tied input (`"0"`) names a register
+output of its type. The textual form prints the descriptor inline, as in
+`asm sideeffect "addl $1, $0" (out "r" i32 v1, in "i" i32 v2, in "0" i32 v0)
+clobber(memory, flags, rcx)`; the verifier checks these rules and the
+template's operand numbers.
+
+**Lowering** (`lowering/assembly.rs`). Operands are evaluated in order: an
+output or memory operand as a place, an input as its converted value, a `+`
+register operand as both (it becomes an output and a tied input; a `+`
+memory operand is read and written in place). A register output passes a
+fresh slot; its value is then assigned to the lvalue as an assignment
+would, so SSA locals, bit-fields, volatile and atomic objects are written
+correctly. A `float` in a general register, or an integer in an SSE
+register, is reinterpreted with `bitcast`; a narrower matching input is
+extended by its signedness. A local that is a memory operand lives in memory
+(`address_taken.rs`). `asm goto` adds a selector output that the template's
+appended code sets: 0 on fall-through, and `N + 1` in a local stub
+`.Lbcc_asm_goto${:uid}_N` that each `%lN` names; a `switch` on it takes each
+label's jump with the cleanups that jump leaves. Outputs are therefore valid
+on every path, and no IR terminator needs to know about assembly. Operands in
+x87, MMX or register-pair registers, `__int128` or aggregates in registers,
+and symbolic immediates with an offset are refused as unsupported.
+
+**Optimizer.** Every pass treats `asm` as a call: it is never removed,
+duplicated or moved, it is a full memory barrier for GVN, its pointer
+operands escape, and DCE keeps it whether or not it is volatile. The inliner
+copies it with its operands; each copy gets its own `${:uid}`.
+
+**LLVM.** `LLVMGetInlineAsm` with Clang's constraint string: register and
+flag outputs are the call's results (`=r`, `={ax}`, `=&r`, `={@ccz}`),
+stored to their output pointers after the call; memory operands are `=*m`
+and `*m` with an `elementtype` attribute; specific registers use Clang's
+names (`{ax}`, `{r8}`), and sets of the `Q` and `R` classes those letters;
+every x86 statement clobbers `~{dirflag},~{fpsr},~{flags}`, and `memory`
+adds `~{memory}`.
+
+**Interpreter.** Executing an `asm` traps with "unsupported by the
+interpreter: inline assembly, which only compiled code can run"; a program
+that never reaches its assembly still runs. Differential tests do not
+generate assembly.
+
+**Native back end.** Not supported in this change: a module with `asm` is
+refused with "not yet supported by the native back end: the `asm`
+instruction".
+
+Evidence: `semantic_analysis/tests/assembly.rs` (locations, template pieces,
+clobbers, every fault, goto jumps), `ir/tests/inline_asm.rs` (round trip,
+builder, verifier rules, template pieces), `lowering/tests/assembly.rs`, and
+`tests/integration/inline_asm.rs`, which runs `rdtsc`, `cpuid`, `+r`,
+named, immediate, memory, matching, widened matching, flag, SSE, `%h`,
+register clobber, early clobber, global memory, `memory` barrier, `%=` and
+`asm goto` operands through LLVM at O0, at O2 and after the bcc optimizer.
