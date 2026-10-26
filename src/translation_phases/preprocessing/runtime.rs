@@ -98,6 +98,9 @@ pub(super) struct PreprocessorState<'pp> {
     pub(super) macro_definitions:   ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
     /// Implementation-defined pragma markers (C99 §6.10.6p1).
     pub(super) deprecated_macros:   ArenaMap<'pp, StringCacheId, MacroDeprecation<'pp>>,
+    /// `#pragma push_macro` saves: each name with its definition then, or
+    /// `None` when it was not a macro, most recent last.
+    pub(super) pushed_macros:       ArenaVec<'pp, (StringCacheId, Option<MacroDefinition<'pp>>)>,
     /// Every source file opened, including the main file and headers.
     pub(super) lexed_files:         LexedFiles<'pp>,
     /// Source-file frames, outermost first, while no expansion is active.

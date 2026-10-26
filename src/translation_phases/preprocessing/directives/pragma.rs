@@ -145,6 +145,15 @@ impl Expander<'_, '_, '_, '_> {
                             consumed_newline = true;
                             break 'base;
                         },
+                        | kind @ ("push_macro" | "pop_macro") => {
+                            if !self.pragma_macro_stack(kind == "push_macro") {
+                                let line_state = (self.last_was_newline, self.current_is_newline);
+                                self.skip_until_newline();
+                                (self.last_was_newline, self.current_is_newline) = line_state;
+                            }
+                            consumed_newline = true;
+                            break 'base;
+                        },
                         | "clang" => {
                             if !self.pragma_deprecated_macro() {
                                 let line_state = (self.last_was_newline, self.current_is_newline);
@@ -599,6 +608,75 @@ impl Expander<'_, '_, '_, '_> {
                     .clone(),
             },
         );
+        false
+    }
+
+    /// `#pragma push_macro("NAME")` saves the current definition of `NAME`,
+    /// or that it has none; `#pragma pop_macro("NAME")` restores the latest
+    /// saved state and forgets it. A pop without a matching push is ignored,
+    /// and a malformed operand ignores the pragma, as in GCC and Clang.
+    /// Returns whether the operand's new-line was consumed; otherwise the
+    /// caller skips the rest of the line.
+    /// C99: implementation-defined pragma behavior, §6.10.6p1, p. 159; PDF
+    /// p. 171. GCC manual, "Push/Pop Macro Pragmas"; Clang and MSVC accept
+    /// the same pragmas.
+    fn pragma_macro_stack(&mut self, push: bool) -> bool {
+        let mut literal = None;
+        for expected in [
+            PreprocessorTokenType::OpeningParenthesis,
+            PreprocessorTokenType::String,
+            PreprocessorTokenType::ClosingParenthesis,
+        ] {
+            match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
+                | Some(token) if token.kind == expected => {
+                    if expected == PreprocessorTokenType::String {
+                        literal = Some(token);
+                    }
+                },
+                | token =>
+                    return token.is_none_or(|token| token.kind == PreprocessorTokenType::Newline),
+            }
+        }
+        let Some(literal) = literal else {
+            return false;
+        };
+        // The literal holds the macro name as written, without escapes.
+        let spelling = self.context.string_cache.at(literal.contents);
+        let Some(name) = spelling
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+            .filter(|name| {
+                let mut bytes = name.bytes();
+                bytes.next().is_some_and(|first| {
+                    first.is_ascii_alphabetic() || matches!(first, b'_' | b'$')
+                }) && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+            })
+        else {
+            return false;
+        };
+        let name = &*self.scratch.alloc_str(name);
+        let name = self.context.string_cache.intern(name);
+        if push {
+            let saved = self.state.macro_definitions.get(&name).cloned();
+            self.state.pushed_macros.push((name, saved));
+            return false;
+        }
+        let Some(index) = self
+            .state
+            .pushed_macros
+            .iter()
+            .rposition(|&(pushed, _)| pushed == name)
+        else {
+            return false;
+        };
+        match self.state.pushed_macros.remove(index).1 {
+            | Some(definition) => {
+                _ = self.state.macro_definitions.insert(name, definition);
+            },
+            | None => {
+                _ = self.state.macro_definitions.remove(&name);
+            },
+        }
         false
     }
 
