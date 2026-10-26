@@ -18,6 +18,7 @@
 //! Files by role:
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
 //! - Jobs and linking: `driver.rs`.
+//! - Driver personalities (`--gcc-mode`, `--msvc-mode`, ...): `personality.rs`.
 //! - Output: `output.rs`, `preprocessed.rs`, `token.rs`,
 //!   `diagnostic_reporter.rs`, `output_file.rs`.
 //! - Code generation: `code_generation.rs`.
@@ -33,8 +34,9 @@ mod arguments;
 mod errors;
 mod search;
 
-// Jobs
+// Jobs and driver personalities
 mod driver;
+mod personality;
 
 // Output and diagnostic reporting
 mod code_generation;
@@ -94,9 +96,28 @@ pub fn run() -> Result<i32, MainError> {
 /// committed only as recursion touches them, so the size costs no memory.
 const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
 
-/// Keeps all compilation arenas, phases and output on the same thread.
+/// Keeps all compilation arenas, phases and output on the same thread. A
+/// driver personality (`--gcc-mode`, or an executable named `gcc`)
+/// translates the command line into bcc's before it runs.
+#[expect(
+    clippy::disallowed_types,
+    reason = "The OS hands argv over as owned strings."
+)]
 fn run_on_current_thread() -> Result<i32, MainError> {
-    let arguments = normalize_language_arguments(std::env::args_os())?;
+    let mut arguments: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    match personality::select(&mut arguments) {
+        | Some(personality) => personality::run(personality, arguments, run_arguments),
+        | None => run_arguments(arguments),
+    }
+}
+
+/// Runs bcc's own command line, `argv[0]` first.
+#[expect(
+    clippy::disallowed_types,
+    reason = "The OS hands argv over as owned strings."
+)]
+fn run_arguments(arguments: Vec<std::ffi::OsString>) -> Result<i32, MainError> {
+    let arguments = normalize_language_arguments(arguments)?;
     // Clap would demand an input for this flag, so it is answered before
     // parsing; the declaration below only documents it in `--help`.
     if arguments.len() == 2 && arguments[1] == "--print-default-passes" {
@@ -174,6 +195,16 @@ struct Cli {
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,
+    /// Claim this compiler in the predefined identity macros: the pinned
+    /// Clang (the default), GCC 14.2, MSVC 19.33, clang-cl, or TCC 0.9.27.
+    /// The driver personalities select their own.
+    #[arg(long, value_enum, value_name = "COMPILER", default_value = "clang")]
+    compiler_identity: arguments::Identity,
+    /// Print diagnostics as bcc's annotated snippets (the default), in
+    /// Clang's or GCC's `file:line:col:` form, or in MSVC's `file(line,col):`
+    /// form (also accepts Clang -fdiagnostics-format=FORMAT).
+    #[arg(long, value_enum, value_name = "FORMAT", default_value = "bcc")]
+    diagnostic_format: arguments::Format,
     /// Suppress all warning diagnostics (GCC -w).
     #[arg(short = 'w', long)]
     suppress_warnings: bool,

@@ -161,6 +161,19 @@ impl CompilerConfiguration {
         }
     }
 
+    /// Selects the compiler the identity macros claim.
+    pub(crate) const fn with_compiler_identity(
+        mut self,
+        identity: super::CompilerIdentity,
+    ) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    pub(crate) const fn compiler_identity(self) -> super::CompilerIdentity {
+        self.identity
+    }
+
     pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
         self.suppress_warnings = enabled;
         self
@@ -262,6 +275,8 @@ impl CompilerConfiguration {
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,
+            identity: super::CompilerIdentity::Clang,
+            diagnostic_format: super::DiagnosticFormat::Bcc,
             warning_options: [super::diagnostics::WarningSettings::DEFAULT;
                 super::DiagnosticGroup::COUNT],
         }

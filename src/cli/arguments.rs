@@ -30,6 +30,8 @@ use super::Cli;
 use crate::{
     configuration::{
         CompilerConfiguration,
+        CompilerIdentity,
+        DiagnosticFormat,
         DiagnosticGroup,
         ExtensionPolicy,
         LanguageMode,
@@ -91,6 +93,8 @@ pub(super) fn normalize_language_arguments(
             normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
         } else if let Some(option) = dependency_option(text, &mut arguments) {
             normalized.push(option);
+        } else if let Some(format) = text.strip_prefix("-fdiagnostics-format=") {
+            normalized.push(format!("--diagnostic-format={format}").into());
         } else if text == "-fsyntax-only" {
             normalized.push("--syntax-only".into());
         } else if text == "-dM" {
@@ -197,6 +201,8 @@ pub(super) fn normalize_language_arguments(
                     | "--assembler-option"
                     | "--dependency-file"
                     | "--dependency-target"
+                    | "--compiler-identity"
+                    | "--diagnostic-format"
                     | "-o"
                     | "--output"
             );
@@ -335,6 +341,8 @@ impl Cli {
             .with_optimization(self.code_generation.optimization_macros())
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
+            .with_compiler_identity(self.compiler_identity.into())
+            .with_diagnostic_format(self.diagnostic_format.into())
             .with_max_nesting_depth(self.max_nesting_depth)
     }
 
@@ -406,6 +414,77 @@ impl Cli {
                     | _ => PreprocessingOption::Include(value),
                 }
             }));
+    }
+}
+
+/// Whether bcc implements the GCC-style `-W`, `-f`, `-pedantic` or
+/// `-Werror` option `text` itself, rather than only accepting it for a
+/// driver personality.
+pub(super) fn implements_language_option(text: &str) -> bool {
+    text.starts_with("-ftls-model=")
+        || text.starts_with("-fdiagnostics-format=")
+        || LanguageFlag::parse(text)
+            .is_some_and(|flag| !matches!(flag, LanguageFlag::UnknownWarning))
+}
+
+/// `--compiler-identity`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub(super) enum Identity {
+    Clang,
+    Gcc,
+    Msvc,
+    ClangCl,
+    Tcc,
+}
+
+impl From<Identity> for CompilerIdentity {
+    fn from(identity: Identity) -> Self {
+        match identity {
+            | Identity::Clang => Self::Clang,
+            | Identity::Gcc => Self::Gcc,
+            | Identity::Msvc => Self::Msvc,
+            | Identity::ClangCl => Self::ClangCl,
+            | Identity::Tcc => Self::Tcc,
+        }
+    }
+}
+
+/// `--diagnostic-format`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub(super) enum Format {
+    Bcc,
+    Clang,
+    Gcc,
+    /// `file(line,col):`, as clang-cl writes and `cl /diagnostics:column`.
+    Msvc,
+    /// `file(line):`, `cl /diagnostics:classic`.
+    MsvcClassic,
+    /// `file(line,col):` and the snippet, `cl /diagnostics:caret`.
+    MsvcCaret,
+    /// `file:line:`, without a snippet.
+    Tcc,
+}
+
+impl From<Format> for DiagnosticFormat {
+    fn from(format: Format) -> Self {
+        match format {
+            | Format::Bcc => Self::Bcc,
+            | Format::Clang => Self::Clang,
+            | Format::Gcc => Self::Gcc,
+            | Format::Msvc => Self::Msvc {
+                column: true,
+                caret:  false,
+            },
+            | Format::MsvcClassic => Self::Msvc {
+                column: false,
+                caret:  false,
+            },
+            | Format::MsvcCaret => Self::Msvc {
+                column: true,
+                caret:  true,
+            },
+            | Format::Tcc => Self::Tcc,
+        }
     }
 }
 

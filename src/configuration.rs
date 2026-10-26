@@ -35,6 +35,7 @@ mod features;
 mod options;
 
 pub(crate) use diagnostics::{
+    DiagnosticFormat,
     DiagnosticGroup,
     WarningOption,
 };
@@ -44,6 +45,7 @@ pub(crate) use features::{
 };
 pub(crate) use language::{
     CStandard,
+    CompilerIdentity,
     ExtensionPolicy,
     LanguageMode,
     MsvcFeature,
@@ -85,6 +87,9 @@ pub(crate) struct CompilerConfiguration {
     gnu89_inline: Option<bool>,
     suppress_warnings: bool,
     warnings_as_errors: bool,
+    /// The compiler the identity macros claim.
+    identity: CompilerIdentity,
+    diagnostic_format: DiagnosticFormat,
     /// Most recursive grammar productions active at once; see
     /// [`DEFAULT_MAX_NESTING_DEPTH`].
     max_nesting_depth: u32,

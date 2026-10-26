@@ -172,6 +172,15 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 
     pub(super) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.flush(context, out)?;
+        // GCC, MSVC and TCC print no summary.
+        if matches!(
+            context.configuration.diagnostic_format(),
+            crate::configuration::DiagnosticFormat::Gcc
+                | crate::configuration::DiagnosticFormat::Msvc { .. }
+                | crate::configuration::DiagnosticFormat::Tcc
+        ) {
+            return Ok(());
+        }
         let errors = count_of(self.errors, "error");
         let warnings = count_of(self.warnings, "warning");
         match (self.errors, self.warnings) {

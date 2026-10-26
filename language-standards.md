@@ -104,6 +104,26 @@ ordinary macros that `#undef` may remove. OS identity
 macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
 
+`--compiler-identity` claims another compiler than Clang, as the driver
+personalities ([docs/design/driver-modes.md](docs/design/driver-modes.md)) do.
+`gcc` defines `__GNUC__` `14`, `__GNUC_MINOR__` `2`, `__GNUC_PATCHLEVEL__`
+`0`, `__VERSION__` `"14.2.0"` and GCC's execution character set names, and no
+Clang macro (`__clang__` and its versions, `__llvm__`, the literal
+encodings). Because GCC 7 and later name the TS 18661-3 types as keywords,
+glibc's headers then stop declaring them, so this identity also defines
+`_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as macros for
+the standard types of the same representation (`float`, `double`, `double`,
+`long double`, `__float128`); they are not distinct types. glibc's GCC fortify
+wrappers need `__builtin_va_arg_pack`, which bcc lacks, so `_FORTIFY_SOURCE`
+with optimization fails under this identity. `msvc` (`cl.exe`) removes the
+GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
+`_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
+/Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
+target, which the `cl` personality selects. `clang-cl` removes the GNU macros
+and keeps Clang's. `tcc` removes the GNU and Clang macros and defines
+`__TINYC__` `927` (TCC 0.9.27). Every identity keeps `__bcc__`, the ISO
+macros and the target's definitions, as clang-cl keeps `__x86_64__`.
+
 Claiming Clang changes the paths the C libraries take. In glibc,
 `sys/cdefs.h` drops its pre-C11 `_Noreturn` and `_Static_assert` fallbacks
 (bcc accepts both keywords in every mode, as Clang does), marks socket

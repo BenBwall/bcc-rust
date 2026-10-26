@@ -46,6 +46,10 @@ pub enum MainError {
     /// An output file that cannot be created or written.
     #[error("error: cannot write `{}`: {source}", path.display())]
     WriteOutputFileError { path: PathBuf, source: io::Error },
+    /// A driver personality already reported why it stops; the process
+    /// exits with this status and prints nothing more.
+    #[error("")]
+    Reported(i32),
     #[error(transparent)]
     ParseArgumentsError(#[from] clap::Error),
 }

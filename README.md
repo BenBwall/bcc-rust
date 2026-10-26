@@ -185,6 +185,24 @@ validation gaps. Code generation covers the prototype subset of
 [middle-end.md](middle-end.md), with ABI lowering for x86-64 System V and Win64.
 This is not yet a production-ready or conforming C99 compiler.
 
+### Driver personalities
+
+bcc's command line can mimic another compiler's. `--gcc-mode`,
+`--clang-mode`, `--msvc-mode` (`cl.exe`), `--clang-cl-mode` and `--tcc-mode`,
+or running bcc under the name `gcc`, `cc`, `clang`, `cl`, `clang-cl` or `tcc`
+(a symbolic link; also `bcc-gcc`, `gcc-14`, or a target prefix such as
+`x86_64-w64-mingw32-gcc`), select a personality. It reads that compiler's
+options, including `cl`'s `/c /Fo /Fe /link` and `tcc -run`, accepts and
+ignores the warning and tuning options the compiler knows but bcc does not
+implement, diagnoses unknown options as the compiler does, and claims the
+compiler: `__GNUC__` 14 for GCC, `_MSC_VER` 1933 with every Microsoft
+extension for `cl`, `__TINYC__` for TCC, and the compiler's diagnostic
+format, default target, system header directories, output names and version
+banners, which still name bcc. bcc's own `--compiler-identity` and
+`--diagnostic-format` select the identity and format alone.
+[docs/design/driver-modes.md](docs/design/driver-modes.md) records each
+compiler's conventions, the mapping, and every deviation.
+
 ## Prerequisites
 
 - Rust 1.99.0, pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and declared
