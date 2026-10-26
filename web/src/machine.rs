@@ -48,8 +48,8 @@ impl Machine {
     /// Run one request from the page.
     ///
     /// # Errors
-    /// Stepping before any program has loaded, or compiling without the
-    /// in-browser compiler. Rejected source and C faults are snapshots, not
+    /// Stepping before any program has loaded, or compiling, which is the
+    /// compiler Worker's job. Rejected source and C faults are snapshots, not
     /// errors.
     pub fn run(&mut self, command: Command) -> Result<Answer, String> {
         match command {
@@ -57,8 +57,9 @@ impl Machine {
             | Command::Step => self
                 .step()
                 .map(|snapshot| Answer::Snapshot(Box::new(snapshot))),
-            | Command::Compile(source) => crate::explorer::compile(&source)
-                .map(|compilation| Answer::Compiled(Box::new(compilation))),
+            | Command::Compile { .. } => Err("The abstract machine's Worker does not compile; \
+                                              the compiler Worker does."
+                .into()),
         }
     }
 
@@ -444,8 +445,13 @@ mod tests {
             "a terminal state stays put"
         );
         assert!(
-            matches!(machine.run(Command::Compile(String::new())), Err(error) if error == crate::explorer::UNAVAILABLE),
-            "live compilation reports the missing in-browser compiler"
+            machine
+                .run(Command::Compile {
+                    source:   String::new(),
+                    optimize: false,
+                })
+                .is_err(),
+            "the compiler Worker compiles, not the abstract machine's"
         );
 
         let changed = demos::find("tour")

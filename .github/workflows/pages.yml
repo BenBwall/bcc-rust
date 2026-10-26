@@ -3,17 +3,15 @@ name: Pages
 # Tests and builds the static site in web/ and publishes web/dist/ to GitHub
 # Pages. Pull requests only test and build it; pushes to main and manual runs
 # also deploy. The paths are everything the site build reads: web/ itself
-# (including the Monaco bundle in web/editor and the precomputed compiler
-# outputs in web/pipeline) and the abstract-machine engine it links from the
-# root crate.
+# (including the Monaco bundle in web/editor and the precomputed LLVM IR in
+# web/pipeline) and the root crate, whose abstract machine and pure-Rust
+# compiler (the `explorer` feature, without LLVM) the site's Workers link.
 on:
   push:
     branches: [main]
     paths:
       - "web/**"
-      - "src/lib.rs"
-      - "src/abstract_machine.rs"
-      - "src/abstract_machine/**"
+      - "src/**"
       - "build.rs"
       - "Cargo.toml"
       - "rust-toolchain.toml"
@@ -22,9 +20,7 @@ on:
   pull_request:
     paths:
       - "web/**"
-      - "src/lib.rs"
-      - "src/abstract_machine.rs"
-      - "src/abstract_machine/**"
+      - "src/**"
       - "build.rs"
       - "Cargo.toml"
       - "rust-toolchain.toml"
@@ -81,15 +77,16 @@ jobs:
           curl -sSfLO "https://github.com/trunk-rs/trunk/releases/download/v$TRUNK_VERSION/$archive"
           echo "$TRUNK_SHA256  $archive" | sha256sum -c -
           tar -xzf "$archive" -C "$HOME/.cargo/bin"
-      # The engine's own tests, and the site's (which run the engine over
-      # every lesson and check the precomputed outputs match the lessons).
+      # The engine's own tests, and the site's (which run the engine and the
+      # in-browser compiler over every lesson and check the precomputed LLVM
+      # IR matches the lessons).
       # RUSTFLAGS= keeps the repository's LLVM linker flags
       # (.cargo/config.toml) away from these host builds, as for prerender.
       - name: Test the abstract machine
         working-directory: .
         run: RUSTFLAGS= cargo test --lib --no-default-features --features abstract-machine abstract_machine
       - name: Test the site
-        run: RUSTFLAGS= cargo test --features ssr,worker
+        run: RUSTFLAGS= cargo test --features ssr,worker,compiler
       # build.sh bundles the editor (npm ci, then esbuild), then runs Trunk,
       # which downloads the wasm-bindgen and wasm-opt versions it needs.
       - name: Build

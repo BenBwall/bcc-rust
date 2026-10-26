@@ -1,7 +1,9 @@
 //! The compiler pipeline: a strip of stages from tokens to machine code, an
 //! explanation of the selected stage, and bcc's real output for it in a
-//! read-only editor. Hovering a source line highlights the output lines that
-//! came from it (and the reverse) where the stage records source locations.
+//! read-only editor, compiled live in the browser at `-O0` or `-O2`.
+//! Hovering a source line highlights the output lines that came from it (and
+//! the reverse). When an error stops bcc, the view says which stage stopped
+//! and why, and the diagnostics list every message.
 
 use leptos::prelude::*;
 
@@ -14,9 +16,11 @@ use crate::{
     },
     pipeline::{
         Compilation,
+        CompileDiagnostic,
         Links,
         Stage,
         links,
+        optimizer_changes,
     },
 };
 
@@ -24,8 +28,13 @@ use crate::{
 #[expect(clippy::too_many_arguments, reason = "The page state the view reads.")]
 pub fn PipelineView(
     stage: RwSignal<Stage>,
+    /// Whether to show `-O2` output rather than `-O0`.
+    optimize: RwSignal<bool>,
+    /// The source's compilation at the selected level.
     compilation: Memo<Option<Compilation>>,
-    /// The in-browser compiler's progress on `source`.
+    /// Its compilation at the other level, for the optimizer comparison.
+    other: Memo<Option<Compilation>>,
+    /// The in-browser compiler's progress on `source` at the selected level.
     live: Signal<LiveCompile>,
     theme: Signal<&'static str>,
     hover_source: ReadSignal<usize>,
@@ -33,6 +42,8 @@ pub fn PipelineView(
     filename: ReadSignal<String>,
     /// The source the compilation came from.
     source: Signal<String>,
+    /// Show a source line, from a diagnostic.
+    on_reveal: Callback<usize>,
 ) -> impl IntoView {
     let output = Memo::new(move |_| {
         let stage = stage.get();
@@ -47,10 +58,10 @@ pub fn PipelineView(
     let lesson = Memo::new(move |_| source.with(|source| demos::matching(source).is_some()));
     let language = Signal::derive(move || stage.get().language());
     let links = Memo::new(move |_| {
-        output.with(|output| {
-            output
-                .as_deref()
-                .map(|output| source.with(|source| links(stage.get(), output, source)))
+        compilation.with(|compilation| {
+            compilation
+                .as_ref()
+                .map(|compilation| source.with(|source| links(stage.get(), compilation, source)))
                 .unwrap_or_default()
         })
     });
@@ -79,18 +90,24 @@ pub fn PipelineView(
     view! {
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
-            <StageStrip stage />
+            <StageStrip stage compilation />
             <article class="card stage-card" id="stage-output">
                 <header class="stage-header">
                     <div>
                         <p class="stage-kicker">{move || stage.get().phase()}</p>
                         <h3>{move || stage.get().label()}</h3>
                     </div>
-                    <code class="stage-command">
-                        {move || format!("$ {}", stage.get().command(&filename.get()))}
-                    </code>
+                    <div class="stage-controls">
+                        <LiveStatus live lesson stage />
+                        <OptimizationToggle optimize />
+                    </div>
                 </header>
+                <code class="stage-command">
+                    {move || format!("$ {}", stage.get().command(&filename.get(), optimize.get()))}
+                </code>
                 <p class="stage-explanation">{move || stage.get().explanation()}</p>
+                <StopBanner compilation />
+                <OptimizerNote stage optimize compilation other />
                 <p class="stage-note is-link" hidden=move || links.with(Links::is_empty)>
                     {move || if links.with(Links::is_exact) {
                         "Hover a source line to find what it became here, or hover here to find its source."
@@ -112,17 +129,44 @@ pub fn PipelineView(
                     />
                 </div>
                 <div class="stage-missing" hidden=move || output.with(Option::is_some)>
-                    {move || missing(stage.get(), lesson.get(), compilation.with(Option::is_some), live.get())}
+                    {move || compilation.with(|compilation| {
+                        missing(stage.get(), lesson.get(), compilation.as_ref(), &live.get())
+                    })}
                 </div>
             </article>
-            <Diagnostics compilation />
+            <Diagnostics compilation live on_reveal />
         </section>
     }
 }
 
-/// The stages as tabs, grouped under front, middle and back end.
+/// Which stage an error stopped bcc in, and why.
 #[component]
-fn StageStrip(stage: RwSignal<Stage>) -> impl IntoView {
+fn StopBanner(compilation: Memo<Option<Compilation>>) -> impl IntoView {
+    let stop = Memo::new(move |_| {
+        compilation.with(|compilation| compilation.as_ref().and_then(Compilation::stop))
+    });
+    view! {
+        <div class="stop-banner" role="status" hidden=move || stop.with(Option::is_none)>
+            <p class="stop-title">
+                <span class="stop-icon" aria-hidden="true">"✕"</span>
+                {move || stop.with(|stop| stop.as_ref().map(|stop| format!("Compilation stopped in the {}", stop.phase.to_lowercase())))}
+            </p>
+            <p>{move || stop.with(|stop| stop.as_ref().map(|stop| stop.explanation.clone()))}</p>
+        </div>
+    }
+}
+
+/// The stages as tabs, grouped under front, middle and back end. A stage an
+/// error kept from running is marked.
+#[component]
+fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) -> impl IntoView {
+    let stopped = move |entry: Stage| {
+        compilation.with(|compilation| {
+            compilation
+                .as_ref()
+                .is_some_and(|compilation| compilation.stopped_before(entry))
+        })
+    };
     view! {
             <div class="stage-phases" aria-hidden="true">
                 <span data-phase="Front end">"Front end"</span>
@@ -136,14 +180,17 @@ fn StageStrip(stage: RwSignal<Stage>) -> impl IntoView {
                             type="button"
                             role="tab"
                             class="stage-button"
+                            class:is-stopped=move || stopped(entry)
                             data-phase=entry.phase()
                             aria-selected=move || (stage.get() == entry).to_string()
                             aria-controls="stage-output"
                             on:click=move |_| stage.set(entry)
                         >
-                            <span class="stage-index">{index + 1}</span>
+                            <span class="stage-index">{move || if stopped(entry) { "✕".to_owned() } else { (index + 1).to_string() }}</span>
                             <span class="stage-name">{entry.label()}</span>
-                            <span class="sr-only">{format!(" ({})", entry.phase())}</span>
+                            <span class="sr-only">
+                                {move || format!(" ({}{})", entry.phase(), if stopped(entry) { ", did not run" } else { "" })}
+                            </span>
                         </button>
                     </li>
                 }).collect_view()}
@@ -151,13 +198,116 @@ fn StageStrip(stage: RwSignal<Stage>) -> impl IntoView {
     }
 }
 
-/// bcc's warnings and errors for the program.
+/// Where the selected stage's output comes from: compiled in this browser, or
+/// (LLVM IR) precomputed by the native compiler.
 #[component]
-fn Diagnostics(compilation: Memo<Option<Compilation>>) -> impl IntoView {
+fn LiveStatus(
+    live: Signal<LiveCompile>,
+    lesson: Memo<bool>,
+    stage: RwSignal<Stage>,
+) -> impl IntoView {
+    let status = move || {
+        if stage.get() == Stage::Llvm {
+            return if lesson.get() {
+                ("precomputed", "Precomputed by native bcc")
+            } else {
+                ("idle", "Bundled lessons only")
+            };
+        }
+        match live.get() {
+            | LiveCompile::Loading => ("busy", "Loading the compiler…"),
+            | LiveCompile::Compiling => ("busy", "Compiling…"),
+            | LiveCompile::Failed(_) => ("failed", "Compiler stopped"),
+            | LiveCompile::Compiled => ("live", "Compiled live in your browser"),
+            | LiveCompile::Idle => ("idle", "Not compiled yet"),
+        }
+    };
+    view! {
+        <span class="live-status" data-status=move || status().0 aria-live="polite">
+            <i aria-hidden="true"></i>
+            {move || status().1}
+        </span>
+    }
+}
+
+/// The `-O0` / `-O2` switch.
+#[component]
+fn OptimizationToggle(optimize: RwSignal<bool>) -> impl IntoView {
+    let option = move |level: bool, label: &'static str, title: &'static str| {
+        view! {
+            <button
+                type="button"
+                class="opt-option"
+                title=title
+                aria-pressed=move || (optimize.get() == level).to_string()
+                on:click=move |_| optimize.set(level)
+            >
+                {label}
+            </button>
+        }
+    };
+    view! {
+        <div class="opt-toggle" role="group" aria-label="Optimization level">
+            {option(false, "-O0", "No optimization: each operation translated as written")}
+            {option(true, "-O2", "Optimize: run bcc's optimizer before code generation")}
+        </div>
+    }
+}
+
+/// What the optimizer does at this stage and, once both levels are compiled,
+/// what it changed in this program.
+#[component]
+fn OptimizerNote(
+    stage: RwSignal<Stage>,
+    optimize: RwSignal<bool>,
+    compilation: Memo<Option<Compilation>>,
+    other: Memo<Option<Compilation>>,
+) -> impl IntoView {
+    let changes = Memo::new(move |_| {
+        let stage = stage.get();
+        compilation.with(|current| {
+            other.with(|other| match (current, other) {
+                | (Some(current), Some(other)) if optimize.get() =>
+                    optimizer_changes(stage, other, current),
+                | (Some(current), Some(other)) => optimizer_changes(stage, current, other),
+                | _ => Vec::new(),
+            })
+        })
+    });
+    let summary = move || {
+        if optimize.get() {
+            stage.get().optimizer_note().to_owned()
+        } else {
+            "This is -O0: bcc translates each operation as written, without optimizing. Switch to \
+             -O2 to watch its optimizer rewrite the program."
+                .to_owned()
+        }
+    };
+    view! {
+        <aside class="optimizer-note" data-level=move || if optimize.get() { "O2" } else { "O0" }>
+            <p>{summary}</p>
+            <ul hidden=move || changes.with(Vec::is_empty)>
+                {move || changes.get().into_iter().map(|change| view! { <li>{change}</li> }).collect_view()}
+            </ul>
+        </aside>
+    }
+}
+
+/// bcc's errors, warnings and notes for the program, each placed in the
+/// source.
+#[component]
+fn Diagnostics(
+    compilation: Memo<Option<Compilation>>,
+    live: Signal<LiveCompile>,
+    on_reveal: Callback<usize>,
+) -> impl IntoView {
     let diagnostics = Memo::new(move |_| {
         compilation.with(|compilation| {
             compilation
                 .as_ref()
+                .filter(|compilation| {
+                    compilation.tokens.is_some() || !compilation.diagnostics.is_empty()
+                })
                 .map(|compilation| compilation.diagnostics.clone())
         })
     });
@@ -173,46 +323,117 @@ fn Diagnostics(compilation: Memo<Option<Compilation>>) -> impl IntoView {
                         </p>
                     }.into_any(),
                     | Some(list) => view! {
-                        <pre class="diagnostics-list">{list.join("\n")}</pre>
+                        <ol class="diagnostics-list">
+                            {list.into_iter().map(|diagnostic| view! { <DiagnosticItem diagnostic on_reveal /> }).collect_view()}
+                        </ol>
                     }.into_any(),
+                    | None if live.get() == LiveCompile::Compiling || live.get() == LiveCompile::Loading =>
+                        view! { <p class="muted">"Compiling…"</p> }.into_any(),
                     | None => view! { <p class="muted">"No compilation for this source yet."</p> }.into_any(),
                 }}
             </article>
     }
 }
 
-/// What the page knows about compiling the editor's text in the browser.
-/// Bundled lessons never need it: their outputs are precomputed.
+#[component]
+fn DiagnosticItem(diagnostic: CompileDiagnostic, on_reveal: Callback<usize>) -> impl IntoView {
+    let line = diagnostic.range.map(|range| range.line);
+    let place = diagnostic.range.map_or_else(
+        || "no source location".to_owned(),
+        |range| format!("line {}, column {}", range.line, range.column),
+    );
+    let stage = match diagnostic.stage.as_str() {
+        | "middle-end" => "middle end",
+        | "back-end" => "back end",
+        | _ => "front end",
+    };
+    view! {
+        <li class="diagnostic" data-severity=diagnostic.severity.clone()>
+            <div class="diagnostic-head">
+                <span class="diagnostic-severity">{diagnostic.severity.clone()}</span>
+                <button
+                    type="button"
+                    class="diagnostic-place"
+                    disabled=line.is_none()
+                    title="Show this line in the source"
+                    on:click=move |_| if let Some(line) = line { on_reveal.run(line) }
+                >
+                    {place}
+                </button>
+                <span class="diagnostic-stage">{stage}</span>
+            </div>
+            <p class="diagnostic-message">{diagnostic.message.clone()}</p>
+            <details>
+                <summary>"Full message"</summary>
+                <pre>{diagnostic.rendered.clone()}</pre>
+            </details>
+        </li>
+    }
+}
+
+/// What the page knows about compiling the editor's text in the browser at
+/// the selected level.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiveCompile {
     /// No compilation of this text has been requested.
     Idle,
+    /// The compiler Worker is starting.
+    Loading,
     Compiling,
-    /// The Worker could not compile this text.
+    Compiled,
+    /// The compiler Worker could not compile this text: it failed to start,
+    /// ran too long, or crashed.
     Failed(String),
 }
 
-/// Why a stage has no output to show for a bundled lesson (`lesson`) or other
-/// source, given whether a compilation exists.
-fn missing(stage: Stage, lesson: bool, compiled: bool, live: LiveCompile) -> String {
-    const LESSONS: &str =
-        "Compiler outputs are precomputed for the bundled lessons: pick one to see every stage.";
-    if compiled || lesson {
-        return if stage == Stage::Llvm && !lesson {
-            "LLVM IR is precomputed for the bundled lessons only: the in-browser build of bcc has \
-             no LLVM. Every other stage was compiled in your browser."
-                .to_owned()
-        } else {
-            "bcc produced no output for this stage.".to_owned()
-        };
+/// Why `stage` has no output to show for a bundled lesson (`lesson`) or other
+/// source, given its compilation, if any, and the compiler's progress.
+fn missing(
+    stage: Stage,
+    lesson: bool,
+    compilation: Option<&Compilation>,
+    live: &LiveCompile,
+) -> String {
+    if stage == Stage::Llvm && !lesson {
+        return "LLVM IR is precomputed for the bundled lessons only: the in-browser build of bcc \
+                has no LLVM. Every other stage is compiled live in your browser as you type."
+            .to_owned();
     }
     match live {
-        | LiveCompile::Failed(error) => format!("{error} {LESSONS}"),
-        | LiveCompile::Compiling => "Compiling this program in your browser…".to_owned(),
-        | LiveCompile::Idle => format!(
-            "This version of the program has not been compiled. Choose Run edited code to compile \
-             it. {LESSONS}"
+        | LiveCompile::Loading =>
+            return "Loading bcc's compiler into your browser. It is a separate download, so the \
+                    abstract machine never waits for it."
+                .to_owned(),
+        | LiveCompile::Compiling => return "Compiling this program in your browser…".to_owned(),
+        | LiveCompile::Failed(error) =>
+            return format!(
+                "{error} Programs that nest very deeply or expand a macro enormously can exhaust \
+                 the in-browser compiler. The page starts a fresh compiler for your next edit."
+            ),
+        | LiveCompile::Compiled | LiveCompile::Idle => {},
+    }
+    match compilation {
+        | Some(compilation) if compilation.stopped_before(stage) => format!(
+            "This stage did not run: bcc stopped in the {}. The red box above explains why.",
+            compilation
+                .stop()
+                .map_or("front end", |stop| stop.phase)
+                .to_lowercase()
         ),
+        | Some(compilation) if compilation.tokens.is_some() => {
+            let notes: Vec<&str> = compilation
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == "note")
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect();
+            if notes.is_empty() {
+                "bcc produced no output for this stage.".to_owned()
+            } else {
+                format!("bcc produced no output for this stage: {}", notes.join(" "))
+            }
+        },
+        | _ => "This version of the program has not been compiled yet.".to_owned(),
     }
 }
 
@@ -223,26 +444,47 @@ mod tests {
         Stage,
         missing,
     };
-    use crate::explorer::UNAVAILABLE;
+    use crate::pipeline::{
+        Compilation,
+        CompileDiagnostic,
+    };
 
     #[test]
-    fn missing_output_explains_custom_source_by_its_compilation() {
-        // After Run edited code the source is no longer edited, but it is still
-        // not a lesson: the Worker's error must stay visible.
+    fn missing_output_explains_the_compilers_progress() {
         let failed = missing(
             Stage::Ir,
             false,
-            false,
-            LiveCompile::Failed(UNAVAILABLE.to_owned()),
+            None,
+            &LiveCompile::Failed("The compiler stopped.".to_owned()),
         );
-        assert!(failed.starts_with(UNAVAILABLE), "{failed}");
-        assert!(!failed.contains("produced no output"), "{failed}");
-        assert!(missing(Stage::Ir, false, false, LiveCompile::Compiling).starts_with("Compiling"));
-        assert!(missing(Stage::Ir, false, false, LiveCompile::Idle).contains("Run edited code"));
-        // A live compilation has no LLVM IR; a lesson's empty stage is bcc's.
-        assert!(missing(Stage::Llvm, false, true, LiveCompile::Idle).contains("no LLVM"));
+        assert!(failed.starts_with("The compiler stopped."), "{failed}");
+        assert!(failed.contains("fresh compiler"), "{failed}");
+        assert!(missing(Stage::Ir, true, None, &LiveCompile::Compiling).starts_with("Compiling"));
+        assert!(missing(Stage::Ir, false, None, &LiveCompile::Loading).contains("Loading"));
+        // Edited source has no LLVM IR, compiled or not.
+        assert!(missing(Stage::Llvm, false, None, &LiveCompile::Compiled).contains("no LLVM"));
+    }
+
+    #[test]
+    fn a_stage_an_error_skipped_points_at_the_stop() {
+        let stopped = Compilation {
+            tokens: Some("<input>:1:1: identifier `x`".into()),
+            diagnostics: vec![CompileDiagnostic {
+                severity: "error".into(),
+                stage: "front-end".into(),
+                message: "expected ';'".into(),
+                ..CompileDiagnostic::default()
+            }],
+            ..Compilation::default()
+        };
+        let text = missing(Stage::Asm, false, Some(&stopped), &LiveCompile::Compiled);
+        assert!(text.contains("stopped in the front end"), "{text}");
+        let clean = Compilation {
+            tokens: Some("<input>:1:1: identifier `x`".into()),
+            ..Compilation::default()
+        };
         assert_eq!(
-            missing(Stage::Llvm, true, true, LiveCompile::Idle),
+            missing(Stage::Asm, false, Some(&clean), &LiveCompile::Compiled),
             "bcc produced no output for this stage."
         );
     }

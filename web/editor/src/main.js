@@ -198,6 +198,28 @@ class Editor {
     collection.set(decorations);
   }
 
+  /**
+   * Replace bcc's diagnostics on the text with `items`, drawn as squiggles
+   * with their message on hover: each has 1-based `startLine`, `startColumn`,
+   * `endLine` and `endColumn` (UTF-16, the end just past the range),
+   * `severity` (`error`, `warning` or `note`) and `message`.
+   */
+  setMarkers(items) {
+    const severity = {
+      error: monaco.MarkerSeverity.Error,
+      warning: monaco.MarkerSeverity.Warning,
+    };
+    monaco.editor.setModelMarkers(this.editor.getModel(), 'bcc', items.map((item) => ({
+      startLineNumber: item.startLine,
+      startColumn: item.startColumn,
+      endLineNumber: item.endLine,
+      endColumn: item.endColumn,
+      severity: severity[item.severity] ?? monaco.MarkerSeverity.Info,
+      message: item.message,
+      source: 'bcc',
+    })));
+  }
+
   /** Scroll so `line` is visible, centring it only when it is off screen. */
   revealLine(line) {
     if (line > 0) {
@@ -222,6 +244,7 @@ class Editor {
     for (const listener of this.listeners.splice(0)) {
       listener.dispose();
     }
+    monaco.editor.setModelMarkers(this.editor.getModel(), 'bcc', []);
     for (const collection of this.decorations.values()) {
       collection.clear();
     }
