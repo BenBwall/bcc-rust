@@ -225,11 +225,7 @@ impl<'tu> Context<'tu> {
     /// of its presumed filename.
     /// C99: presumed filenames, §6.10.4 paragraph 4, p. 158; PDF p. 170.
     pub(crate) fn in_system_header(&self, vector: &SourceVector) -> bool {
-        let physical = self
-            .presumed_files
-            .get(&vector.source_file_index)
-            .copied()
-            .unwrap_or(vector.source_file_index);
+        let physical = self.physical_source_file(vector.source_file_index);
         self.system_headers
             .get(&physical)
             .is_some_and(|&from| vector.index >= from)
@@ -323,6 +319,31 @@ impl<'tu> Context<'tu> {
                 ),
             )
         }))
+    }
+
+    /// The file whose bytes `index` refers to: the physical file a `#line`
+    /// filename stands for, or `index` itself.
+    /// C99: presumed filenames, §6.10.4 paragraph 4, p. 158; PDF p. 170.
+    pub(crate) fn physical_source_file(&self, index: u32) -> u32 {
+        self.presumed_files.get(&index).copied().unwrap_or(index)
+    }
+
+    /// The 1-based physical line and character column of byte `offset` in
+    /// the physical file behind `index`, which `#line` does not change.
+    /// `None` when that file's text was not recorded.
+    pub(crate) fn physical_position(&self, index: u32, offset: usize) -> Option<(u32, u32)> {
+        let index = self.physical_source_file(index);
+        let text = self.source_text(index)?;
+        let starts = self.source_line_starts(index)?;
+        let offset = offset.min(text.len());
+        let line = starts.partition_point(|&start| start <= offset).max(1);
+        let column = text
+            .get(starts[line - 1]..offset)
+            .map_or(0, |prefix| prefix.chars().count());
+        Some((
+            u32::try_from(line).unwrap_or(u32::MAX),
+            u32::try_from(column + 1).unwrap_or(u32::MAX),
+        ))
     }
 
     /// Returns the exact source spelling covered by a single-segment range.

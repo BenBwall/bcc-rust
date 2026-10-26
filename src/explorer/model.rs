@@ -89,7 +89,8 @@ pub struct ExplorerDiagnostic {
     pub message:    String,
     /// The file of the range the diagnostic is about: `<input>` for the
     /// source, or a header's name. `None` with the other location fields
-    /// when the diagnostic has no place.
+    /// when the diagnostic has no place. This and the lines and columns
+    /// are physical: `#line` changes only the place `rendered` names.
     pub file:       Option<String>,
     /// The 1-based line where the range starts.
     pub line:       Option<u32>,

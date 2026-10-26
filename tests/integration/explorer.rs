@@ -327,6 +327,34 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_places_are_physical_despite_line_directives() {
+        for (source, presumed) in [
+            ("#line 100\nint x = y;\n", "<input>:100:9"),
+            (
+                "#line 100 \"generated.c\"\nint x = y;\n",
+                "generated.c:100:9",
+            ),
+        ] {
+            let output = compile(source, &ExplorerOptions::default());
+            let [diagnostic] = &*output.diagnostics else {
+                panic!("{:#?}", output.diagnostics);
+            };
+            assert_eq!(
+                (
+                    diagnostic.file.as_deref(),
+                    diagnostic.line,
+                    diagnostic.column,
+                    diagnostic.end_line,
+                    diagnostic.end_column
+                ),
+                (Some("<input>"), Some(2), Some(9), Some(2), Some(10)),
+                "{diagnostic:#?}"
+            );
+            assert!(diagnostic.rendered.contains(presumed), "{diagnostic:#?}");
+        }
+    }
+
+    #[test]
     fn host_files_are_never_found_or_read() {
         let host = temporary("host.h");
         std::fs::write(&host, "int host_header;\n").unwrap();
