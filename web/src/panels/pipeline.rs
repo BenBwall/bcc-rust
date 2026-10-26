@@ -31,11 +31,10 @@ pub fn PipelineView(
     /// Whether to show `-O2` output rather than `-O0`.
     optimize: RwSignal<bool>,
     /// The source's compilation at the selected level, which places the
-    /// hover links and lists the diagnostics.
+    /// hover links and lists the diagnostics and the optimizer's changes.
     compilation: Memo<Option<Compilation>>,
     /// The output on screen: `compilation`, or the last output while the
-    /// next one compiles. The stage strip, stop box and optimizer note
-    /// describe it.
+    /// next one compiles. The stage strip and stop box describe it.
     shown: Memo<Option<Compilation>>,
     /// Its compilation at the other level, for the optimizer comparison.
     other: Memo<Option<Compilation>>,
@@ -120,7 +119,7 @@ pub fn PipelineView(
                 </code>
                 <p class="stage-explanation">{move || stage.get().explanation()}</p>
                 <StopBanner compilation=shown />
-                <OptimizerNote stage optimize compilation=shown other />
+                <OptimizerNote stage optimize compilation other />
                 <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
                     {move || if shown_links.with(Links::is_exact) {
                         "Hover a source line to find what it became here, or hover here to find its source."
@@ -572,5 +571,17 @@ mod tests {
         let current = render(false, Some(earlier()), Some(earlier()), None);
         assert!(current.contains("an earlier warning"), "{current}");
         assert!(current.contains("diagnostic-place"), "{current}");
+    }
+
+    #[test]
+    #[cfg(feature = "ssr")]
+    fn the_optimizer_note_waits_for_both_levels() {
+        const SAME: &str = "nothing to improve";
+        // Switched to an uncached -O2 while -O0 is still on screen.
+        let switched = render(true, None, Some(earlier()), Some(earlier()));
+        assert!(!switched.contains(SAME), "{switched}");
+        // Both levels compiled to the same IR.
+        let compiled = render(true, Some(earlier()), Some(earlier()), Some(earlier()));
+        assert!(compiled.contains(SAME), "{compiled}");
     }
 }

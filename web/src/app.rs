@@ -1058,8 +1058,8 @@ fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compil
 /// What the pipeline view shows: the `current` compilation or, while the
 /// next one compiles (`waiting`), the `previous` output, so typing does not
 /// make the view flicker. Only `current` places markers and links and lists
-/// the diagnostics: the previous output came from other text or another
-/// level.
+/// the diagnostics and the optimizer's changes: the previous output came
+/// from other text or another level.
 fn shown(
     current: Option<&Compilation>,
     previous: Option<&Compilation>,
