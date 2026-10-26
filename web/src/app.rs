@@ -579,6 +579,17 @@ impl State {
         self.in_flight.set(Some(key.clone()));
         spawn_local(async move {
             let result = match self.compiler().await {
+                // The editor may have changed while the compiler loaded:
+                // drop the request and start whatever is needed now, once
+                // typing pauses.
+                | Ok(_)
+                    if self.pending.get_untracked()
+                        || self.next_compilation().as_ref() != Some(&key) =>
+                {
+                    self.in_flight.set(None);
+                    self.pump();
+                    return;
+                },
                 | Ok(compiler) => {
                     let result = compiler.compile(&key.0, key.1).await;
                     // A compiler that timed out or trapped is gone; the
@@ -613,28 +624,11 @@ impl State {
     }
 
     fn next_compilation(self) -> Option<CompileKey> {
-        let text = self.editor_text.get_untracked();
         let pipeline = self.mode.get_untracked() == Mode::Pipeline;
-        if !pipeline && demos::matching(&text).is_some() {
-            return None;
-        }
-        // Text that crashed or stalled the compiler is not tried again at the
-        // other level.
-        if self.compiled.with_untracked(|compiled| {
-            compiled
-                .iter()
-                .any(|((source, _), result)| *source == text && result.is_err())
-        }) {
-            return None;
-        }
         let level = self.optimize.get_untracked();
-        let mut wanted = vec![(text.clone(), level)];
-        if pipeline {
-            wanted.push((text, !level));
-        }
-        wanted.into_iter().find(|key| {
+        self.editor_text.with_untracked(|text| {
             self.compiled
-                .with_untracked(|compiled| !compiled.iter().any(|(known, _)| known == key))
+                .with_untracked(|compiled| wanted(compiled, text, level, pipeline))
         })
     }
 
@@ -1092,6 +1086,33 @@ fn lookup<'a>(
         .rev()
         .find(|((source, optimized), _)| source == text && *optimized == level)
         .map(|(_, result)| result)
+}
+
+/// Why the compiler Worker could not compile `text` at either level. Text
+/// that crashed or stalled the compiler is not tried again at the other
+/// level, so the failure stands for both.
+fn failure<'a>(compiled: &'a Compiled, text: &str) -> Option<&'a str> {
+    compiled
+        .iter()
+        .rev()
+        .find_map(|((source, _), result)| {
+            (source == text).then_some(result.as_ref().err()).flatten()
+        })
+        .map(String::as_str)
+}
+
+/// The next compilation the page needs for `text`: at the selected `level`,
+/// then at the other level when the `pipeline` view shows the optimizer
+/// comparison. Outside the pipeline view a bundled lesson needs none.
+fn wanted(compiled: &Compiled, text: &str, level: bool, pipeline: bool) -> Option<CompileKey> {
+    if (!pipeline && demos::matching(text).is_some()) || failure(compiled, text).is_some() {
+        return None;
+    }
+    [Some(level), pipeline.then_some(!level)]
+        .into_iter()
+        .flatten()
+        .find(|&level| lookup(compiled, text, level).is_none())
+        .map(|level| (text.to_owned(), level))
 }
 
 /// The compiler's progress on `text` at `level`, given what it is compiling

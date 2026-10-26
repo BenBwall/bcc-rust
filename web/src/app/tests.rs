@@ -95,3 +95,25 @@ fn held_output_takes_the_current_lessons_llvm_ir() {
         Some(live.clone())
     );
 }
+
+#[test]
+fn edited_text_is_compiled_at_the_selected_level_first() {
+    let mut cache = Compiled::new();
+    assert_eq!(wanted(&cache, "x", true, true), Some(key("x", true)));
+    cache.push((key("x", true), Ok(compiled("", 1))));
+    assert_eq!(wanted(&cache, "x", true, true), Some(key("x", false)));
+    // The abstract machine view needs only the selected level.
+    assert_eq!(wanted(&cache, "x", true, false), None);
+    // A request captured before an edit is no longer wanted after it.
+    assert_ne!(wanted(&cache, "xy", true, true), Some(key("x", false)));
+}
+
+#[test]
+fn a_bundled_lesson_compiles_only_in_the_pipeline_view() {
+    let lesson = DEMOS[0].source;
+    assert_eq!(wanted(&Compiled::new(), lesson, false, false), None);
+    assert_eq!(
+        wanted(&Compiled::new(), lesson, false, true),
+        Some(key(lesson, false))
+    );
+}
