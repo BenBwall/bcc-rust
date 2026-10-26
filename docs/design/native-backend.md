@@ -938,14 +938,16 @@ with the following decisions recorded for review:
   are never assigned,
   and a clobber of `%rsp` or `%rbp` is refused. Inputs and memory addresses
   are materialized in virtual registers and then copied into their
-  registers. `MInst::InlineAsm` then reads the input registers and writes
+  registers; a memory operand in a frame object or at a defined symbol is
+  addressed directly (`16(%rsp)`, `sym(%rip)`) and needs no register, and
+  operands at one address (a `+m` output and its read) share one. `MInst::InlineAsm` then reads the input registers and writes
   the output and clobbered ones, so the allocator keeps values that are
   live across it elsewhere, as at a call, and the frame saves any
   callee-saved register it writes. Right after it come `setcc` for flag
   outputs, copies of the register outputs into virtual registers, and
   stores to the output pointers. The listing writes the template between
   `#APP` and `#NO_APP`: registers at their operand's width or the `b` `h`
-  `w` `k` `q` `V` `z` `a` `x` modifiers, memory as `(%reg)` (`H` adds 8),
+  `w` `k` `q` `V` `z` `a` `x` modifiers, memory as its operand (`H` adds 8),
   immediates as `$n` (`c` `P` `p` `a` without `$`, `n` negated), symbols as
   `$sym+off`, `${:uid}` as a listing-wide counter, and the AT&T alternative
   of `{att|intel}`. Other modifiers, and templates that name a flag output,

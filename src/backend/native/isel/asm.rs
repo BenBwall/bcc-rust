@@ -9,12 +9,14 @@
 //! input shares its output's. `%rsp`, `%rbp` (the frame pointer) and the
 //! allocator's spill scratch registers (`%r10`, `%r11`, `%xmm14`, `%xmm15`)
 //! are never assigned. Inputs are
-//! materialized first and then copied into their registers, memory operands
-//! pass their address in a register, and immediates are written into the
-//! template. The [`MInst::InlineAsm`] reads the input registers and writes
-//! the output and clobbered ones; right after it, flag outputs are read
-//! with `setcc`, register outputs are copied into virtual registers, and
-//! each is stored to its output pointer.
+//! materialized first and then copied into their registers; a memory
+//! operand in a frame object or at a defined symbol is written as that
+//! operand, any other passes its address in a register (shared by operands
+//! at one address, as a `+m` output and its read), and immediates are
+//! written into the template. The [`MInst::InlineAsm`] reads the input
+//! registers and writes the output and clobbered ones; right after it, flag
+//! outputs are read with `setcc`, register outputs are copied into virtual
+//! registers, and each is stored to its output pointer.
 //!
 //! The listing writes the template with each operand substituted
 //! (`emit.rs`). The direct object encoder reads only the emitter's own
@@ -41,8 +43,11 @@ use crate::{
         mir::{
             AsmLocation,
             AsmMachine,
+            Base,
             Cond,
+            FrameObject,
             MInst,
+            Mem,
             Operand,
             PReg,
             PRegSet,
@@ -119,13 +124,23 @@ impl Selector<'_, '_, '_> {
                 inputs = inputs.with(register);
             }
         }
-        for (index, operand) in operands.iter().enumerate() {
+        for (index, (operand, &value)) in operands.iter().zip(values).enumerate() {
             if registers[index].is_some() {
                 continue;
             }
             let class = match operand.constraint {
                 | AsmConstraint::General(mask) => Some((RegClass::Gpr, mask)),
                 | AsmConstraint::Sse => Some((RegClass::Xmm, u16::MAX)),
+                // A frame object or a defined symbol is addressed directly.
+                | AsmConstraint::Memory if self.direct_memory(value).is_some() => None,
+                // Operands at one address (a `+m` output and its read)
+                // share the register that holds it.
+                | AsmConstraint::Memory
+                    if let Some(earlier) = shared_address(operands, values, index) =>
+                {
+                    registers[index] = registers[earlier];
+                    continue;
+                },
                 // The address of a memory operand.
                 | AsmConstraint::Memory => Some((RegClass::Gpr, AsmConstraint::ANY_GENERAL)),
                 | AsmConstraint::Tied(output) => {
@@ -168,10 +183,15 @@ impl Selector<'_, '_, '_> {
         for (index, (operand, &value)) in operands.iter().zip(values).enumerate() {
             let register = registers[index];
             let location = match operand.constraint {
-                | AsmConstraint::Memory => {
-                    let register = register.expect("a memory operand has an address register");
-                    moves.push((register, Operand::Reg(self.reg(value))));
-                    AsmLocation::Mem(register)
+                | AsmConstraint::Memory => match self.direct_memory(value) {
+                    | Some(mem) => AsmLocation::Mem(mem),
+                    | None => {
+                        let register = register.expect("a memory operand has an address register");
+                        if shared_address(operands, values, index).is_none() {
+                            moves.push((register, Operand::Reg(self.reg(value))));
+                        }
+                        AsmLocation::Mem(Mem::new(Base::Reg(Reg::Phys(register)), 0))
+                    },
                 },
                 | AsmConstraint::Immediate => self.immediate(value)?,
                 | AsmConstraint::Flag(_) => AsmLocation::None,
@@ -271,6 +291,25 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// The memory operand of a frame object or a symbol the function
+    /// addresses directly (`%rip`-relative), which needs no register.
+    fn direct_memory(&self, value: Value) -> Option<Mem> {
+        match self.kind(value) {
+            | ValueKind::Addr(AddrBase::Slot(slot), disp) if disp.abs() < MAX_DIRECT =>
+                Some(Mem::new(
+                    Base::Frame(FrameObject::Slot(slot)),
+                    i32::try_from(disp).ok()?,
+                )),
+            | ValueKind::Addr(AddrBase::Symbol(symbol), disp)
+                if disp.abs() < MAX_DIRECT && self.direct(symbol) =>
+                Some(Mem::new(
+                    Base::Symbol(SymbolRef::Ir(symbol)),
+                    i32::try_from(disp).ok()?,
+                )),
+            | _ => None,
+        }
+    }
+
     /// The location of an immediate: an integer, or a symbol's address
     /// with an offset.
     fn immediate(&mut self, value: Value) -> Result<AsmLocation, Construct> {
@@ -287,6 +326,21 @@ impl Selector<'_, '_, '_> {
             )),
         }
     }
+}
+
+/// The largest displacement a direct memory operand folds, leaving room
+/// for the `H` modifier's eight bytes and the frame offset.
+const MAX_DIRECT: i64 = 1 << 30;
+
+/// An earlier memory operand at the same address as operand `index`.
+fn shared_address(
+    operands: &[crate::ir::AsmOperand],
+    values: &[Value],
+    index: usize,
+) -> Option<usize> {
+    (0..index).find(|&earlier| {
+        operands[earlier].constraint == AsmConstraint::Memory && values[earlier] == values[index]
+    })
 }
 
 /// Checks that the native listing can write every operand reference of

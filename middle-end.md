@@ -1881,7 +1881,8 @@ generate assembly.
 **Native back end** (`backend/native/isel/asm.rs`). Selection fixes each
 register operand to a physical register (the constraint's, or the first
 free one of its class; never `%rsp`, `%rbp` or the spill scratch registers
-`%r10`, `%r11`, `%xmm14` and `%xmm15`), copies the inputs in, and emits one
+`%r10`, `%r11`, `%xmm14` and `%xmm15`; a memory operand in a frame object or
+at a defined symbol needs none), copies the inputs in, and emits one
 `MInst::InlineAsm` that reads the input registers and writes the outputs
 and clobbers, so the allocator and frame treat it as they treat a call. The
 listing writes the substituted template between `#APP` and `#NO_APP`; the

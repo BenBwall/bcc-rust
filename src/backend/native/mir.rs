@@ -356,8 +356,9 @@ pub(crate) struct AsmMachine<'a> {
 pub(crate) enum AsmLocation {
     /// A register holding a value of `width`.
     Reg(PReg, Width),
-    /// Memory at the address the register holds.
-    Mem(PReg),
+    /// Memory: a frame object or a symbol addressed directly, or the
+    /// address a physical register holds.
+    Mem(Mem),
     Imm(i64),
     /// A symbol's address plus an offset.
     Symbol(SymbolRef, i64),

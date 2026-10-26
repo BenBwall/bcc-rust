@@ -180,3 +180,56 @@ fn statements_the_back_end_cannot_place_are_refused() {
         );
     }
 }
+
+/// A frame object is addressed directly, so a memory output (as an
+/// `asm goto` selector) still has a location when the statement clobbers
+/// every general register.
+#[test]
+fn frame_memory_needs_no_register() {
+    let text = listing(
+        "abi lowered
+function @f() -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0:
+    v0 = stack_addr slot0
+    asm sideeffect \"movl $$1, $0\" (out \"m\" i32 v0) clobber(rax, rcx, rdx, rbx, rsi, rdi, r8, \
+         r9, r10, r11, r12, r13, r14, r15)
+    v1 = load.i32 v0, align 4
+    return v1
+}
+",
+        Target::LinuxGnu,
+    );
+    let [statement] = statements(&text)[..] else {
+        panic!("{text}");
+    };
+    assert!(
+        statement.starts_with("\tmovl $1, ") && statement.ends_with("(%rsp)"),
+        "{statement}"
+    );
+}
+
+/// A `+m` operand's output and read share one address register.
+#[test]
+fn update_memory_operands_share_their_address() {
+    let text = listing(
+        "abi lowered
+function @f(ptr) external {
+block0(v0: ptr):
+    asm \"addl $$1, $0 # $1\" (out \"m\" i32 v0, in \"m\" i32 v0)
+    return
+}
+",
+        Target::LinuxGnu,
+    );
+    let [statement] = statements(&text)[..] else {
+        panic!("{text}");
+    };
+    let (first, second) = statement
+        .strip_prefix("\taddl $1, ")
+        .and_then(|rest| rest.split_once(" # "))
+        .unwrap_or_else(|| panic!("{statement}"));
+    assert_eq!(first, second, "{statement}");
+    let before = text.split("#APP").next().unwrap();
+    assert_eq!(before.matches("movq").count(), 1, "{text}");
+}

@@ -247,7 +247,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             let next = (index + 1 < func.blocks.len()).then(|| MBlock::new(index + 1));
             for inst in &block.insts {
                 if let MInst::InlineAsm { index, .. } = *inst {
-                    self.inline_asm(&func.asm[index as usize])?;
+                    self.inline_asm(&func.asm[index as usize], id, frame)?;
                     continue;
                 }
                 self.instruction(id, inst, frame, next)?;
@@ -287,9 +287,24 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     /// written as its modifier asks.
     /// GNU extension: GCC manual, "Extended Asm" and "x86 Operand
     /// Modifiers".
-    fn inline_asm(&mut self, machine: &AsmMachine<'_>) -> fmt::Result {
+    fn inline_asm(
+        &mut self,
+        machine: &AsmMachine<'_>,
+        func: FuncId,
+        frame: &Frame<'_>,
+    ) -> fmt::Result {
         let uid = self.asm_uid;
         self.asm_uid += 1;
+        let module = self.module;
+        let elf = self.elf;
+        let memory = |mem: Mem| Op {
+            operand: Operand::Mem(mem),
+            width: Width::B64,
+            frame,
+            module,
+            func,
+            elf,
+        };
         let out = &mut *self.out;
         writeln!(out, "{INLINE_ASM_START}")?;
         out.write_char('\t')?;
@@ -303,12 +318,14 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 | _ if skip => {},
                 | AsmTemplatePiece::Text(text) => out.write_str(text)?,
                 | AsmTemplatePiece::UniqueId => write!(out, "{uid}")?,
-                | AsmTemplatePiece::Operand { operand, modifier } => write_asm_operand(
-                    out,
-                    self.module,
-                    machine.operands[operand as usize],
-                    modifier,
-                )?,
+                | AsmTemplatePiece::Operand { operand, modifier } =>
+                    match machine.operands[operand as usize] {
+                        | AsmLocation::Mem(mem) => {
+                            let disp = if modifier == Some(b'H') { 8 } else { 0 };
+                            write!(out, "{}", memory(mem.offset(disp)))?;
+                        },
+                        | location => write_asm_operand(out, module, location, modifier)?,
+                    },
             }
         }
         writeln!(out, "\n#NO_APP")
@@ -1425,10 +1442,8 @@ fn write_asm_operand(
             | Some(b'a') => write!(out, "({})", RegName(register, Width::B64)),
             | _ => write!(out, "{}", RegName(register, width)),
         },
-        | AsmLocation::Mem(register) => {
-            let disp = if modifier == Some(b'H') { "8" } else { "" };
-            write!(out, "{disp}({})", RegName(register, Width::B64))
-        },
+        // The caller writes memory, which needs the frame.
+        | AsmLocation::Mem(_) | AsmLocation::None => Ok(()),
         | AsmLocation::Imm(value) => match modifier {
             | None => write!(out, "${value}"),
             | Some(b'n') => write!(out, "{}", value.wrapping_neg()),
@@ -1445,7 +1460,6 @@ fn write_asm_operand(
                 | disp => write!(out, "{disp}"),
             }
         },
-        | AsmLocation::None => Ok(()),
     }
 }
 

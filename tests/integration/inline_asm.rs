@@ -271,8 +271,8 @@ int main(void) {
 
     /// An initialized local incremented through `+m` is read by the
     /// statement (Clang's `=*m,*m`), so optimization keeps its initial
-    /// value: the program returns 15 at O2, through LLVM's and bcc's
-    /// optimizers.
+    /// value: the program returns 15 through LLVM at O2 and the native
+    /// back end, with and without bcc's optimizer.
     #[test]
     fn optimized_update_memory_operands_are_read() {
         let source = "__attribute__((noinline)) int f(void) { int m = 5; __asm__(\"addl $10, %0\" \
@@ -293,7 +293,12 @@ int main(void) {
         let Some(target) = host() else {
             return;
         };
-        for flags in [&["-O2"][..], &["-O2", "--opt=bcc"][..]] {
+        for flags in [
+            &["-O2"][..],
+            &["-O2", "--opt=bcc"][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
             let executable = temporary("inline-asm-update.exe");
             let built = bcc(
                 source,
