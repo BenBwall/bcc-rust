@@ -1,6 +1,7 @@
 //! The extended assembly template grammar: literal text, `%` operand
 //! references with optional modifiers, `%l` goto labels, `%=`, the `%%`,
-//! `%{`, `%|` and `%}` escapes, and `{…|…}` dialect alternatives. Basic
+//! `%{`, `%|` and `%}` escapes, and the AT&T alternative of `{…|…}`
+//! dialect groups. Basic
 //! assembly has no substitution and is one text piece.
 //! GNU extension: GCC manual, "Extended Asm" (the assembler template and
 //! goto labels) and "x86 Operand Modifiers".
@@ -23,6 +24,8 @@ pub(super) enum TemplateFault {
     Name,
     /// A modifier letter x86 does not define.
     Modifier,
+    /// A dialect group `{…|…}` that is nested or never closed.
+    Dialect,
 }
 
 /// The names a template may refer to.
@@ -36,7 +39,12 @@ pub(super) struct Names<'n> {
     pub(super) labels:   &'n [&'n str],
 }
 
-/// Splits an extended template into pieces in `arena`.
+/// Splits an extended template into pieces in `arena`. Of each `{att|intel}`
+/// group only the first, AT&T alternative is kept and checked, as GCC
+/// writes it in AT&T syntax: the others are skipped up to their `|` or `}`
+/// (a `%` escape there skips its next character), never interpreted, so a
+/// `%z` that only Intel syntax gives meaning is no error. Outside a group,
+/// `|` and `}` are literal text.
 pub(super) fn parse<'a, 't: 'a>(
     text: &'t str,
     names: &Names<'_>,
@@ -51,31 +59,57 @@ pub(super) fn parse<'a, 't: 'a>(
             pieces.push(AsmPiece::Text(&text[start..end]));
         }
     };
+    let mut group = false;
     while let Some(&byte) = bytes.get(index) {
-        let piece = match byte {
-            | b'{' => AsmPiece::DialectOpen,
-            | b'|' => AsmPiece::DialectNext,
-            | b'}' => AsmPiece::DialectClose,
+        match byte {
+            | b'{' if group => return Err(TemplateFault::Dialect),
+            | b'{' => {
+                flush(&mut pieces, start, index);
+                group = true;
+                index += 1;
+                start = index;
+            },
+            | b'}' if group => {
+                flush(&mut pieces, start, index);
+                group = false;
+                index += 1;
+                start = index;
+            },
+            | b'|' if group => {
+                flush(&mut pieces, start, index);
+                index = skip_alternatives(bytes, index + 1)?;
+                group = false;
+                start = index;
+            },
             | b'%' => {
                 flush(&mut pieces, start, index);
                 let (piece, end) = escape(text, index + 1, names)?;
                 pieces.push(piece);
                 index = end;
                 start = end;
-                continue;
             },
-            | _ => {
-                index += 1;
-                continue;
-            },
-        };
-        flush(&mut pieces, start, index);
-        pieces.push(piece);
-        index += 1;
-        start = index;
+            | _ => index += 1,
+        }
+    }
+    if group {
+        return Err(TemplateFault::Dialect);
     }
     flush(&mut pieces, start, index);
     Ok(pieces.leak())
+}
+
+/// Where the text continues after the alternatives that follow a group's
+/// first: just past its `}`.
+fn skip_alternatives(bytes: &[u8], mut index: usize) -> Result<usize, TemplateFault> {
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            | b'%' => index += 2,
+            | b'}' => return Ok(index + 1),
+            | b'{' => return Err(TemplateFault::Dialect),
+            | _ => index += 1,
+        }
+    }
+    Err(TemplateFault::Dialect)
 }
 
 /// The piece the `%` escape starting at `index` writes, and where the text

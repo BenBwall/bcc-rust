@@ -116,8 +116,8 @@ fn generic_constraints_follow_the_operand() {
 #[test]
 fn templates_resolve_names_modifiers_labels_and_escapes() {
     facts(
-        "void f(int x) { __asm__ goto(\"mov %k[v], %%eax{|}%=\\n\\tjz %l1\" :: [v] \"r\"(x) : \
-         \"cc\", \"memory\", \"%rcx\", \"xmm3\" : out); out: ; }",
+        "void f(int x) { __asm__ goto(\"mov %k[v], %%eax{;|bad %9}%=\\n\\tjz %l1\" :: [v] \
+         \"r\"(x) : \"cc\", \"memory\", \"%rcx\", \"xmm3\" : out); out: ; }",
         |facts, _| {
             assert_eq!(
                 facts.template,
@@ -130,9 +130,7 @@ fn templates_resolve_names_modifiers_labels_and_escapes() {
                     AsmPiece::Text(", "),
                     AsmPiece::Text("%"),
                     AsmPiece::Text("eax"),
-                    AsmPiece::DialectOpen,
-                    AsmPiece::DialectNext,
-                    AsmPiece::DialectClose,
+                    AsmPiece::Text(";"),
                     AsmPiece::UniqueId,
                     AsmPiece::Text("\n\tjz "),
                     AsmPiece::Label(0),
@@ -406,6 +404,42 @@ fn size_suffixes_without_a_mode_are_errors() {
             kinds(&format!("void f(void) {{ {body} }}")),
             [SemanticErrorKind::InvalidAsm(AsmFault::SizeModifier)],
             "{body}"
+        );
+    }
+}
+
+/// Of a `{att|intel}` group only the AT&T alternative is kept and checked,
+/// as GCC writes AT&T syntax: GCC 15.2 accepts this statement, whose Intel
+/// arm's `%z1` on an immediate would be an error in AT&T syntax.
+/// GNU extension: GCC manual, "Extended Asm", "Multiple assembler
+/// dialects in asm templates".
+#[test]
+fn only_the_att_dialect_alternative_is_checked() {
+    facts(
+        "void f(int x) { __asm__(\"{addl %1, %0|add %0, %z1%1}\" : \"+r\"(x) : \"i\"(1)); }",
+        |facts, _| {
+            assert_eq!(
+                facts.template,
+                [
+                    AsmPiece::Text("addl "),
+                    AsmPiece::Operand {
+                        operand:  1,
+                        modifier: None,
+                    },
+                    AsmPiece::Text(", "),
+                    AsmPiece::Operand {
+                        operand:  0,
+                        modifier: None,
+                    },
+                ]
+            );
+        },
+    );
+    for template in ["{a|b", "{a{b}|c}", "{a|b{c}}"] {
+        assert_eq!(
+            kinds(&format!("void f(void) {{ __asm__(\"{template}\" ::); }}")),
+            [SemanticErrorKind::InvalidAsm(AsmFault::Dialect)],
+            "{template}"
         );
     }
 }

@@ -732,9 +732,6 @@ fn llvm_template<'s>(
             },
             | AsmPiece::Label(label) => _ = write!(text, "{GOTO_PREFIX}${{:uid}}_{label}"),
             | AsmPiece::UniqueId => text.push_str("${:uid}"),
-            | AsmPiece::DialectOpen => text.push_str("$("),
-            | AsmPiece::DialectNext => text.push_str("$|"),
-            | AsmPiece::DialectClose => text.push_str("$)"),
         }
     }
     if let Some(selector) = selector {

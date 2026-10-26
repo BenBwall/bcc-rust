@@ -1793,7 +1793,9 @@ x86-64 register name with or without `%`, `memory`, `cc` and its LLVM
 spellings. A clobber of the register an operand's constraint names alone is
 "impossible constraints". The template (`assembly/template.rs`) resolves
 `%N`, `%[name]`, the x86 modifiers, `%lN`/`%l[name]` goto labels, `%=`,
-`%%`, `%{` `%|` `%}` and `{…|…}` dialect alternatives, and rewrites each
+`%%`, `%{` `%|` `%}`, keeps only the AT&T alternative of each `{…|…}`
+dialect group (the others are skipped unread, as GCC skips them in AT&T
+syntax, so they are not checked), and rewrites each
 `%z` to the AT&T suffix of the operand's own mode (its C type: `b` `w` `l`
 `q` for integers and pointers, `s` `l` `t` for `float`, `double` and x87
 `long double`, the byte size of an aggregate memory operand, `q` for a

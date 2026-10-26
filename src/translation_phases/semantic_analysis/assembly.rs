@@ -215,6 +215,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         | TemplateFault::OperandNumber => AsmFault::OperandNumber,
                         | TemplateFault::Name => AsmFault::OperandName,
                         | TemplateFault::Modifier => AsmFault::Modifier,
+                        | TemplateFault::Dialect => AsmFault::Dialect,
                     };
                     self.assembly_error(fault, token.source_vectors, None);
                     return None;
@@ -740,6 +741,7 @@ pub(crate) enum AsmFault {
     OperandName,
     Modifier,
     SizeModifier,
+    Dialect,
 }
 
 impl AsmFault {
@@ -763,6 +765,7 @@ impl AsmFault {
             | Self::Escape | Self::OperandNumber | Self::OperandName | Self::Modifier =>
                 "invalid template",
             | Self::SizeModifier => "operand has no size suffix",
+            | Self::Dialect => "unbalanced dialect alternatives",
         }
     }
 
@@ -859,6 +862,11 @@ impl AsmFault {
             | Self::OperandName => (
                 "unknown symbolic operand name in inline asm string",
                 "GNU Extended Asm: '%[name]' names an operand and '%l[name]' a goto label",
+            ),
+            | Self::Dialect => (
+                "unterminated or nested assembly dialect alternative",
+                "GNU Extended Asm, Multiple assembler dialects: '{' opens alternatives for AT&T \
+                 and Intel syntax separated by '|' and closed by '}'; they do not nest",
             ),
             | Self::SizeModifier => (
                 "invalid operand type used with operand code 'z'",

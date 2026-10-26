@@ -69,18 +69,11 @@ pub(crate) enum AsmPiece<'tu> {
     Text(&'tu str),
     /// `%N`, `%[name]` or `%xN`: operand `operand` printed with modifier
     /// `x`.
-    Operand {
-        operand:  u32,
-        modifier: Option<u8>,
-    },
+    Operand { operand: u32, modifier: Option<u8> },
     /// `%lN` or `%l[name]`: the label with this index in the goto list.
     Label(u32),
     /// `%=`: a number unique to this instance of the statement.
     UniqueId,
-    /// `{`, `|` and `}`: alternatives for each assembler dialect, AT&T first.
-    DialectOpen,
-    DialectNext,
-    DialectClose,
 }
 
 /// One operand with the alternative analysis chose.

@@ -80,6 +80,7 @@ taken:
 }
 static int internal_target;
 static int dialect(void) { int r; __asm__("{movl $1, %0|mov %0, 2}" : "=r"(r)); return r; }
+static int dialect_add(int x) { __asm__("{addl %1, %0|add %0, %z1%1}" : "+r"(x) : "i"(1)); return x; }
 static int bare(void) { int r; __asm__("movl $%c1, %0" : "=r"(r) : "i"(42)); return r; }
 static int *symbol(void) {
     int *p;
@@ -158,7 +159,7 @@ int main(void) {
     if (sign(0) != 0 || sign(5) != 1 || sign(-5) != -1) return 17;
     if (!unique()) return 18;
     if (all_clobbered(1) != 1 || all_clobbered(0) != 0) return 19;
-    if (dialect() != 1) return 20;
+    if (dialect() != 1 || dialect_add(41) != 42) return 20;
     if (bare() != 42) return 21;
     if (symbol() != &internal_target) return 22;
     if (alternatives() != 12) return 23;
