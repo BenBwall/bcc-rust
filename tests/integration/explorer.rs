@@ -327,6 +327,63 @@ mod tests {
     }
 
     #[test]
+    fn host_files_are_never_found_or_read() {
+        let host = temporary("host.h");
+        std::fs::write(&host, "int host_header;\n").unwrap();
+        let absolute = host.display();
+        // Relative names would be found beside `<input>`, in the working
+        // directory, which holds `Cargo.toml` while tests run.
+        let source = format!(
+            "#if __has_include(\"{absolute}\") || __has_include(\"Cargo.toml\") || \
+             __has_include(<Cargo.toml>) || __has_embed(\"Cargo.toml\")\n#error host file \
+             found\n#endif\n#if __has_embed(\"data.bin\") != 1 || __has_embed(\"empty.bin\") != \
+             2\n#error in-memory resource not found\n#endif\nconst unsigned char data[] = \
+             {{\n#embed \"data.bin\"\n}};\n#include <stdint.h>\n#include \"{absolute}\"\n#embed \
+             \"Cargo.toml\"\n"
+        );
+        let output = compile(
+            &source,
+            &ExplorerOptions {
+                std: "c23".into(),
+                files: vec![
+                    ExplorerFile {
+                        name:     "data.bin".into(),
+                        contents: "AB".into(),
+                    },
+                    ExplorerFile {
+                        name:     "empty.bin".into(),
+                        contents: String::new(),
+                    },
+                ],
+                ..ExplorerOptions::default()
+            },
+        );
+        std::fs::remove_file(&host).unwrap();
+        let lines: Vec<_> = output
+            .diagnostics
+            .iter()
+            .map(|d| (d.severity.as_str(), d.line))
+            .collect();
+        // Only the host header's `#include` and the host resource's `#embed`
+        // fail, each because nothing is found.
+        assert_eq!(
+            lines,
+            [("error", Some(11)), ("error", Some(12))],
+            "{:#?}",
+            output.diagnostics
+        );
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .all(|d| d.message.starts_with("cannot find")),
+            "{:#?}",
+            output.diagnostics
+        );
+        assert!(!output.tokens.unwrap().contains("host_header"));
+    }
+
+    #[test]
     fn in_memory_headers_are_included_and_deep_nesting_is_a_diagnostic() {
         let options = ExplorerOptions {
             files: vec![ExplorerFile {

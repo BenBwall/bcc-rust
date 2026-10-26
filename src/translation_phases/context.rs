@@ -45,6 +45,7 @@ use std::path::Path;
 
 use expansion_sites::ExpansionSites;
 use rustc_hash::FxBuildHasher;
+pub(crate) use source_files::FileSystem;
 use source_text::SourceText;
 
 #[cfg(test)]
@@ -82,9 +83,10 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
-    /// In-memory files by path, found before the file system: the
-    /// explorer's headers. Empty for the command line.
-    pub(crate) virtual_files: &'tu [(&'tu Path, &'tu str)],
+    /// Where included files and `#embed` resources are found and read:
+    /// the host's file system for the command line, only in-memory files
+    /// for the explorer.
+    pub(crate) file_system: FileSystem<'tu>,
     /// Output-token ordinals preserve directive order across includes/macros.
     pub(crate) preprocessed_tokens: usize,
     pub(crate) pack_pragmas: ArenaVec<'tu, super::pragma_pack::PackPragma<'tu>>,

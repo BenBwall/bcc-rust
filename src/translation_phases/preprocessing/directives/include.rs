@@ -282,8 +282,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     }
 
     /// The file `path` names in `directory`, interned, when it exists there
-    /// or the context holds it in memory. The resource directory holds
-    /// exactly the embedded headers.
+    /// in the context's file system. The resource directory holds exactly
+    /// the embedded headers.
     pub(in crate::translation_phases::preprocessing) fn probe_header(
         &mut self,
         directory: &Path,
@@ -298,7 +298,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         // before the next one, so a lookup leaves nothing there.
         let mut buffer = ArenaVec::new_in(self.scratch);
         let candidate = join_path(&mut buffer, directory, path);
-        (self.context.virtual_file(candidate).is_some() || candidate.is_file())
+        self.context
+            .file_exists(candidate)
             .then(|| self.context.intern_source_file(candidate))
     }
 
@@ -327,7 +328,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         start: Option<usize>,
     ) -> Option<(u32, Option<usize>)> {
         let found = if path.is_absolute() {
-            path.is_file()
+            self.context
+                .file_exists(path)
                 .then(|| (self.context.intern_source_file(path), None))
         } else {
             let places = self.header_search_places(including_file, is_system_header, start);

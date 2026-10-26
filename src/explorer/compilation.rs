@@ -70,6 +70,7 @@ use crate::{
     translation_phases::{
         Context,
         ErrorSeverity,
+        FileSystem,
         parsing::{
             InspectionOptions,
             ParsedTranslationUnit,
@@ -177,19 +178,21 @@ fn configure(options: &ExplorerOptions) -> Result<CompilerConfiguration, String>
     )
 }
 
-/// A context holding the explorer's in-memory headers.
+/// A context that finds only the explorer's in-memory headers and the
+/// embedded resource headers, never a host file.
 fn new_context<'tu>(
     tu: &'tu Bump,
     configuration: CompilerConfiguration,
     options: &ExplorerOptions,
 ) -> Context<'tu> {
     let mut context = Context::with_configuration(tu, configuration);
-    context.virtual_files = tu.alloc_slice_fill_iter(options.files.iter().map(|file| {
-        (
-            Path::new(tu.alloc_str(&file.name)),
-            &*tu.alloc_str(&file.contents),
-        )
-    }));
+    context.file_system =
+        FileSystem::InMemory(tu.alloc_slice_fill_iter(options.files.iter().map(|file| {
+            (
+                Path::new(tu.alloc_str(&file.name)),
+                &*tu.alloc_str(&file.contents),
+            )
+        })));
     context
 }
 
