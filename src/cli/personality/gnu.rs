@@ -25,7 +25,6 @@ use super::{
         Compiler,
         knows,
     },
-    system_headers,
     target_named,
     unimplemented::{
         Treatment,
@@ -56,7 +55,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         stage: None,
         output: false,
         inputs: 0,
-        nostdinc: false,
         verbose: false,
         dry_run: false,
     };
@@ -91,7 +89,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     } else if invocation.name.ends_with("c99") {
         bcc.push("-std=c99".into());
     }
-    system_headers(target, state.sysroot.as_deref(), state.nostdinc, &mut bcc);
+    // bcc searches the host's C library when it compiles for the host, as
+    // these compilers do, and the selected root's otherwise, also for the
+    // link; `-nostdinc` keeps the root for the link alone.
+    if let Some(sysroot) = &state.sysroot {
+        let mut option = OsString::from("--sysroot=");
+        option.push(sysroot);
+        bcc.push(option);
+    }
     let links = state.stage.is_none();
     if !links {
         // GCC ignores what links when it stops before linking.
@@ -142,10 +147,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
 }
 
 /// The translation so far.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "The switches of a command line are independent."
-)]
 struct State<'a> {
     invocation: &'a Invocation,
     compiler:   Compiler,
@@ -159,7 +160,6 @@ struct State<'a> {
     stage:      Option<&'static str>,
     output:     bool,
     inputs:     usize,
-    nostdinc:   bool,
     verbose:    bool,
     dry_run:    bool,
 }
@@ -306,10 +306,7 @@ impl State<'_> {
                 self.out.push("--syntax-only".into());
             },
             | "-ansi" => self.out.push("-std=c89".into()),
-            | "-nostdinc" => {
-                self.nostdinc = true;
-                self.out.push("--nostdinc".into());
-            },
+            | "-nostdinc" => self.out.push("--nostdinc".into()),
             | "-s" => self.out.push("-Wl,-s".into()),
             | "-Ofast" => self.unsupported(
                 text,

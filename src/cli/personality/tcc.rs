@@ -25,7 +25,6 @@ use super::{
         Compiler,
         knows,
     },
-    system_headers,
     unimplemented::{
         Treatment,
         treatment,
@@ -48,7 +47,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mut output = false;
     let mut inputs = 0;
     let mut run: Option<Vec<OsString>> = None;
-    let mut nostdinc = false;
     let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         let Some(text) = argument
@@ -110,10 +108,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                     }
                     out.push(text.into());
                 },
-            | "-nostdinc" => {
-                nostdinc = true;
-                out.push("--nostdinc".into());
-            },
+            | "-nostdinc" => out.push("--nostdinc".into()),
             | "-dD" => {
                 invocation.warning(format_args!("'-dD' is treated as '-dM'"));
                 out.push("-dM".into());
@@ -211,7 +206,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         format!("--target={}", target.triple()).into(),
         format!("-std={standard}").into(),
     ];
-    system_headers(target, None, nostdinc, &mut bcc);
     bcc.append(&mut out);
     let mut plan = Plan::default();
     if let Some(arguments) = run {

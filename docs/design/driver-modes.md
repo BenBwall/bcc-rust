@@ -86,7 +86,7 @@ without a personality as well:
 | `__GNUC__` | 14.2.0 | 4.2.1 | undefined | undefined | undefined | 4.2.1 |
 | `__clang__`, `__llvm__` | undefined | 23.1.1 | undefined | 23.1.1 | undefined | 23.1.1 |
 | Other identity | `__VERSION__ "14.2.0"`, execution charset names | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | |
-| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | none unless asked |
+| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host; none for a cross target unless asked |
 | Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line,col): error:` | same | `file:line: error:` | annotated snippet |
 | Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | none (analysis only) |
 | `__bcc__` | defined | defined | defined | defined | defined | defined |
@@ -331,10 +331,14 @@ paths. TCC's diagnostics are `file:line: error: message`.
 - **Name bcc.** Every banner names bcc and says it is not the compiler it
   mimics; `__bcc__` stays defined in every identity.
 - **No invented MSVC codes.** See Diagnostics under MSVC.
-- **Host headers in personalities only.** bcc's own mode stays hermetic (no C
-  library directories unless `--sysroot`, `-isystem` or `-idirafter` name
-  them); a personality searches the host's, as the compilers do, because a
-  drop-in compiler must find `<stdio.h>`.
+- **The host's C library for the host only.** Compiling for the host on an
+  x86-64 Linux host, bcc's own driver searches the host's
+  `/usr/local/include`, multiarch directory and `/usr/include` after its
+  resource headers, as Clang does, so every mode finds `<stdio.h>` with no
+  option and the personalities add no directories of their own. A cross
+  target (Windows, or musl on a glibc host) stays hermetic until
+  `--sysroot`, `-isystem` or `-idirafter` names its library; a personality
+  passes `--sysroot` on, also with `-nostdinc`, so the link uses it.
 
 ## Deviations
 

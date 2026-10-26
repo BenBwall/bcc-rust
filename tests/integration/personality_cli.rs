@@ -328,6 +328,37 @@ mod tests {
             assert_eq!(stdout(&run), "1.414\n", "{mode}");
             std::fs::remove_file(directory.path("a.out")).unwrap();
         }
+        // Hello world needs no option in any mode; bcc's own mode links
+        // where `-o` says.
+        directory.write(
+            "plain.c",
+            "#include <stdio.h>\nint main(void) { printf(\"hello, world\\n\"); return 0; }\n",
+        );
+        for (mode, output) in [
+            ("", "hello"),
+            ("--gcc-mode", "a.out"),
+            ("--clang-mode", "a.out"),
+        ] {
+            let args: &[&str] = if mode.is_empty() {
+                &["plain.c", "-o", "hello"]
+            } else {
+                &["plain.c"]
+            };
+            succeeds(&directory.bcc(mode, args));
+            let run = Command::new(directory.path(output)).output().unwrap();
+            assert_eq!(stdout(&run), "hello, world\n", "{mode}");
+            std::fs::remove_file(directory.path(output)).unwrap();
+        }
+        // A cross target searches no C library without a sysroot.
+        let cross = directory.bcc(
+            "--gcc-mode",
+            &[
+                "--target=x86_64-unknown-linux-musl",
+                "-fsyntax-only",
+                "plain.c",
+            ],
+        );
+        assert_eq!(cross.status.code(), Some(1), "{}", stderr(&cross));
         directory.write(
             "args.c",
             "#include <stdio.h>\nint main(int argc, char **argv) { printf(\"%d %s\\n\", argc, \
