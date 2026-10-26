@@ -7,15 +7,15 @@
 //! points of fortified C libraries, and `arguments.rs` reads the variadic
 //! arguments of formatted output, including from a `va_list`.
 
+// Formatted output
 mod arguments;
+mod floating;
+mod printf;
+
+// Library families
 mod checked;
 mod complex;
 mod math;
-
-use std::fmt::{
-    self,
-    Write as _,
-};
 
 pub(crate) use arguments::HostVaList;
 use arguments::{
@@ -114,6 +114,8 @@ pub(crate) struct DefaultHost<'a> {
     output:      ArenaVec<'a, u8>,
     scratch:     ArenaVec<'a, u8>,
     text:        ArenaVec<'a, u8>,
+    /// Digit space for floating conversions.
+    floating:    floating::Scratch<'a>,
     /// The width of `long` in bits, which `printf`'s `l` modifier reads.
     long_width:  u32,
     /// The target's existing long double representation (f64 or unsupported
@@ -387,147 +389,6 @@ fn compare_bytes(
 }
 
 impl DefaultHost<'_> {
-    /// `printf` with the conversions `d i u o x X c s p %`, the flags `-`,
-    /// `0` and `#`, a field width, and the length modifiers `hh h l ll z j`.
-    ///
-    /// C99: §7.19.6.1 paragraphs 4-8, pp. 275-280; PDF pp. 287-292.
-    fn printf(
-        &mut self,
-        format: RuntimeValue,
-        args: &mut FormatArguments<'_>,
-        memory: &Memory<'_>,
-    ) -> Result<(), Fault> {
-        self.scratch.clear();
-        memory.read_c_string(format, &mut self.scratch)?;
-        let mut position = 0;
-        while position < self.scratch.len() {
-            let byte = self.scratch[position];
-            position += 1;
-            if byte != b'%' {
-                self.output.push(byte);
-                continue;
-            }
-            let mut spec = Spec::default();
-            while let Some(&flag @ (b'-' | b'0' | b'#')) = self.scratch.get(position) {
-                if flag == b'-' {
-                    spec.left = true;
-                } else if flag == b'#' {
-                    spec.alternate = true;
-                } else {
-                    spec.zero = true;
-                }
-                position += 1;
-            }
-            while let Some(&digit @ b'0'..=b'9') = self.scratch.get(position) {
-                spec.width = spec
-                    .width
-                    .checked_mul(10)
-                    .and_then(|width| width.checked_add(usize::from(digit - b'0')))
-                    .filter(|&width| width <= MAX_FORMAT_WIDTH)
-                    .ok_or(Fault::Unsupported(Unsupported::FormatWidth))?;
-                position += 1;
-            }
-            // C99: §7.19.6.1 paragraph 7, pp. 276-277; PDF pp. 288-289:
-            // `l` names `long`, whose width is the target's, and `ll`
-            // names `long long`.
-            let mut length = 32;
-            let mut ells = 0;
-            loop {
-                match self.scratch.get(position) {
-                    | Some(b'h') => length /= 2,
-                    | Some(b'l') => {
-                        ells += 1;
-                        length = if ells == 1 { self.long_width } else { 64 };
-                    },
-                    | Some(b'z' | b'j') => length = 64,
-                    | _ => break,
-                }
-                position += 1;
-            }
-            let Some(&conversion) = self.scratch.get(position) else {
-                return Err(Fault::Unsupported(Unsupported::FormatConversion));
-            };
-            position += 1;
-            if conversion == b'%' {
-                self.output.push(b'%');
-                continue;
-            }
-            let class = match conversion {
-                | b'f' | b'F' => ArgumentClass::Double,
-                | b'p' | b's' => ArgumentClass::Pointer,
-                | _ => ArgumentClass::Integer(length),
-            };
-            let arg = args.next(class, memory)?;
-            let mut digits = Digits::default();
-            let body: &[u8] = match conversion {
-                | b'd' | b'i' => {
-                    let value = super::arithmetic::sext(width_type(length), integer(arg)?);
-                    digits.format(format_args!("{value}"))
-                },
-                | b'u' => digits.format(format_args!(
-                    "{}",
-                    integer(arg)? & width_type(length).mask()
-                )),
-                | b'o' | b'x' | b'X' => {
-                    let value = integer(arg)? & width_type(length).mask();
-                    // C99 §7.19.6.1p6: octal starts with zero;
-                    // hexadecimal has a base prefix only for nonzero values.
-                    match (conversion, spec.alternate && value != 0) {
-                        | (b'o', true) => digits.format(format_args!("0{value:o}")),
-                        | (b'o', false) => digits.format(format_args!("{value:o}")),
-                        | (b'x', true) => digits.format(format_args!("0x{value:x}")),
-                        | (b'x', false) => digits.format(format_args!("{value:x}")),
-                        | (_, true) => digits.format(format_args!("0X{value:X}")),
-                        | (_, false) => digits.format(format_args!("{value:X}")),
-                    }
-                },
-                | b'c' => {
-                    spec.zero = false;
-                    digits.bytes[0] = truncate_u8(integer(arg)?);
-                    &digits.bytes[..1]
-                },
-                | b'f' | b'F' => {
-                    let RuntimeValue::F64(value) = arg else {
-                        return Err(UbKind::PoisonInHostCall.into());
-                    };
-                    // C99 §7.19.6.1p8: variadic float is promoted to double;
-                    // the default f conversion has six fractional digits.
-                    if value.is_nan() || value.is_infinite() {
-                        spec.zero = false;
-                        let name = match (value.is_nan(), conversion) {
-                            | (true, b'F') => "NAN",
-                            | (true, _) => "nan",
-                            | (false, b'F') => "INF",
-                            | (false, _) => "inf",
-                        };
-                        digits.format(format_args!(
-                            "{}{name}",
-                            if value.is_sign_negative() { "-" } else { "" }
-                        ))
-                    } else {
-                        digits.format(format_args!("{value:.6}"))
-                    }
-                },
-                | b'p' => {
-                    let RuntimeValue::Ptr(pointer) = arg else {
-                        return Err(UbKind::PoisonInHostCall.into());
-                    };
-                    spec.zero = false;
-                    digits.format(format_args!("0x{:x}", pointer.address))
-                },
-                | b's' => {
-                    spec.zero = false;
-                    self.text.clear();
-                    memory.read_c_string(arg, &mut self.text)?;
-                    &self.text
-                },
-                | _ => return Err(Fault::Unsupported(Unsupported::FormatConversion)),
-            };
-            spec.pad(&mut self.output, body);
-        }
-        Ok(())
-    }
-
     /// Writes the formatted bytes after `before` to `destination`: at most
     /// `limit - 1` of them and a terminating null, or nothing for a zero
     /// `limit`. C99: §7.19.6.5p2, p. 290; PDF p. 302; §7.19.6.6p2, p. 291;
@@ -565,95 +426,6 @@ impl DefaultHost<'_> {
     /// Everything the program has written.
     pub(crate) fn output(&self) -> &[u8] {
         &self.output
-    }
-}
-
-/// A `printf` conversion's flags and field width.
-#[derive(Clone, Copy, Default)]
-struct Spec {
-    left:      bool,
-    zero:      bool,
-    alternate: bool,
-    width:     usize,
-}
-
-/// Interpreter limit on padding for one conversion (one MiB). Precision
-/// conversions are unsupported and trap before any precision is accumulated.
-/// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287 (decimal field width).
-const MAX_FORMAT_WIDTH: usize = 1024 * 1024;
-
-impl Spec {
-    /// Appends `body` to `output`, padded to the field width: with spaces
-    /// after it for `-`, with zeros after its sign or base prefix for `0`, else
-    /// with spaces before it.
-    /// C99: §7.19.6.1 paragraph 6, pp. 275-276; PDF pp. 287-288.
-    fn pad(self, output: &mut ArenaVec<'_, u8>, body: &[u8]) {
-        let padding = self.width.saturating_sub(body.len());
-        if self.left {
-            output.extend_from_slice(body);
-            output.extend(std::iter::repeat_n(b' ', padding));
-        } else if self.zero {
-            let prefix = if body.starts_with(b"0x") || body.starts_with(b"0X") {
-                2
-            } else {
-                usize::from(body.first() == Some(&b'-'))
-            };
-            output.extend_from_slice(&body[..prefix]);
-            output.extend(std::iter::repeat_n(b'0', padding));
-            output.extend_from_slice(&body[prefix..]);
-        } else {
-            output.extend(std::iter::repeat_n(b' ', padding));
-            output.extend_from_slice(body);
-        }
-    }
-}
-
-/// The text of one numeric conversion, formatted without allocating.
-struct Digits {
-    // A maximum finite binary64 f conversion needs 309 integer digits,
-    // a sign, a decimal point and six fractional digits.
-    bytes: [u8; 320],
-    len:   usize,
-}
-
-impl Default for Digits {
-    fn default() -> Self {
-        Self {
-            bytes: [0; 320],
-            len:   0,
-        }
-    }
-}
-
-impl Digits {
-    /// Formats `value` and returns its text.
-    fn format(&mut self, value: fmt::Arguments<'_>) -> &[u8] {
-        self.len = 0;
-        self.write_fmt(value)
-            .expect("integer and default binary64 f conversions fit in the buffer");
-        &self.bytes[..self.len]
-    }
-}
-
-impl fmt::Write for Digits {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let end = self.len + s.len();
-        self.bytes
-            .get_mut(self.len..end)
-            .ok_or(fmt::Error)?
-            .copy_from_slice(s.as_bytes());
-        self.len = end;
-        Ok(())
-    }
-}
-
-/// The integer type a length modifier names.
-const fn width_type(length: u32) -> Type {
-    match length {
-        | 8 => Type::I8,
-        | 16 => Type::I16,
-        | 64 => Type::I64,
-        | _ => Type::I32,
     }
 }
 
@@ -701,6 +473,10 @@ impl<'a> DefaultHost<'a> {
             output:      ArenaVec::new_in(arena),
             scratch:     ArenaVec::new_in(arena),
             text:        ArenaVec::new_in(arena),
+            floating:    floating::Scratch {
+                integer:     ArenaVec::new_in(arena),
+                significant: ArenaVec::new_in(arena),
+            },
             long_width:  64,
             long_double: Type::F80,
             target:      Target::LinuxGnu,

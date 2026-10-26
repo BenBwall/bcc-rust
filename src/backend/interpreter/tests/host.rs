@@ -135,6 +135,49 @@ fn printf_formats_each_conversion() {
     );
 }
 
+/// Precisions, `*` widths, the sign flags and the floating conversions
+/// print as glibc prints them, with halfway cases rounded to even; `%.Ns`
+/// reads only `N` bytes of an unterminated array.
+#[test]
+fn printf_formats_precisions_and_floating_conversions() {
+    let globals = [c_string(
+        "format",
+        "[%.3d] [%+d] [% d] [%#o] [%#x] [%.0d] [%*d] [%-*d] [%.*f] [%.2s] [%.0f] [%.0f] [%e] \
+         [%.3E] [%g] [%g] [%#g] [%G] [%a] [%.1a] [%La] [%.3Lf] [%Lg] [%010.2f] [%+.1e] [%p]\n",
+    )]
+    .concat()
+        + "global @bytes internal constant size 2, align 1 = bytes \"6869\"\n";
+    let body = "\
+    v0 = global_addr @format
+    v1 = iconst.i32 7
+    v2 = iconst.i32 5
+    v3 = iconst.i32 0
+    v4 = iconst.i32 255
+    v5 = iconst.i32 6
+    v6 = iconst.i32 42
+    v7 = iconst.i32 2
+    v8 = fconst.f64 0x400921F9F01B866E
+    v9 = global_addr @bytes
+    v10 = fconst.f64 0x3FE0000000000000
+    v11 = fconst.f64 0x4004000000000000
+    v12 = fconst.f64 0x3EE9E3779B97F4A8
+    v13 = fconst.f64 0x412E848000000000
+    v14 = fconst.f80 0x3FFDAAAAAAAAAAAAAAAB
+    v15 = fconst.f64 0xC059000000000000
+    v16 = iconst.i64 0
+    v17 = inttoptr.ptr v16
+    v18 = call @printf(v0, v1, v2, v2, v3, v4, v3, v5, v6, v5, v6, v7, v8, v9, v10, v11, v8, v8, \
+                v12, v13, v8, v12, v8, v8, v14, v14, v14, v15, v15, v17)
+    return v18
+";
+    let run = run_main(&globals, body);
+    let expected = "[007] [+5] [ 5] [0] [0xff] [] [    42] [42    ] [3.14] [hi] [0] [2] \
+                    [3.141590e+00] [3.142E+00] [1.23446e-05] [1e+06] [3.14159] [1.23446E-05] \
+                    [0x1.921f9f01b866ep+1] [0x1.9p+1] [0xa.aaaaaaaaaaaaaabp-5] [0.333] [0.333333] \
+                    [-000100.00] [-1.0e+02] [(nil)]\n";
+    assert_eq!(run.output, expected);
+}
+
 /// `%ld` reads a `long`, which is 32 bits on Windows: a Windows program
 /// passes `-5L` as an `i32`, and `%lld` still reads 64 bits.
 #[test]
