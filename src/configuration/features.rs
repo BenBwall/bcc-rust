@@ -170,6 +170,11 @@ pub(crate) enum Feature {
     /// mode, as GCC and Clang do (Clang's `-Wpedantic`
     /// "forward references to 'enum' types").
     ForwardEnumReference,
+    /// A cast of a structure or union to its own type, which gives its
+    /// value. GNU extension to C99 §6.5.4 paragraph 2, p. 81; PDF p. 93,
+    /// which requires a scalar or void type; GCC c/c-typeck.cc,
+    /// `build_c_cast`, "ISO C forbids casting nonscalar to the same type".
+    SameTypeCasts,
 }
 
 impl Feature {
@@ -292,6 +297,7 @@ impl Feature {
             | Self::MacroExpandedDefined
             | Self::QuotedHeaderBackslash
             | Self::VoidPointerArithmetic
+            | Self::SameTypeCasts
             | Self::ForwardEnumReference => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
@@ -432,6 +438,7 @@ impl Feature {
         Self::UnnamedDefinitionParameters,
         Self::VoidPointerArithmetic,
         Self::ForwardEnumReference,
+        Self::SameTypeCasts,
     ];
 }
 

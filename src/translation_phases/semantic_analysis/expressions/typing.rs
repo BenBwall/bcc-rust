@@ -1033,6 +1033,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let ty = self.types.recovery_type(&[target, from]);
             return Self::expression_result(e, ty);
         }
+        // GNU: a structure or union cast to its own type is its value, an
+        // rvalue, as GCC accepts it ("ISO C forbids casting nonscalar to
+        // the same type" under -pedantic); C99 §6.5.4p2 requires a scalar
+        // type otherwise.
+        if let TypeKind::Tag(id) = self.types.nodes[self.types.non_atomic(target).index]
+            && self.types.tags[id].kind != TagKind::Enum
+            && self
+                .types
+                .composite(
+                    self.types.non_atomic(target).unqualified(),
+                    self.types.non_atomic(from).unqualified(),
+                )
+                .is_some()
+        {
+            // The parser already reported a cast spelled `(union ...)`.
+            if !matches!(e.kind, ExpressionType::Cast { target_type: type_name, .. } if matches!(type_name.declaration_specifiers.type_specifiers, super::super::super::parsing::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == super::super::super::parsing::declaration_syntax::StructOrUnion::Union))
+            {
+                self.context.report_extension(
+                    crate::configuration::Feature::SameTypeCasts,
+                    "cast of a structure or union to its own type",
+                    e.source_vectors,
+                );
+            }
+            let ty = self.types.non_atomic(target).unqualified();
+            self.convert(operand.expression, ty, ConversionKind::Assignment);
+            return Self::expression_result(e, ty);
+        }
         if let TypeKind::Tag(id) = self.types.nodes[target.index]
             && self.types.tags[id].kind == TagKind::Union
         {

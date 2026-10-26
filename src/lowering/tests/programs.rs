@@ -301,6 +301,23 @@ int main(void) {
         expected: 15,
     },
     Program {
+        // GNU casts of a structure or union to its own type give its value.
+        name:     "same_type_aggregate_casts",
+        source:   "struct S { int a, b; } s = {1, 2};
+union U { int i; float f; } u = {5};
+typedef struct S T;
+static struct S get(void) { return (struct S)s; }
+int main(void) {
+  struct S t = (struct S)s;
+  const struct S cs = {3, 4};
+  T v = (T)cs;
+  union U w = (union U)u;
+  return (t.b == 2) + (v.a == 3) * 2 + (((struct S)get()).a == 1) * 4 + (w.i == 5) * 8
+       + (sizeof((struct S)s) == 8) * 16;
+}",
+        expected: 31,
+    },
+    Program {
         name:     "old_style_definition",
         source:   "int scale(x, k) char x; int k; { return x * k; }
 int main(void) { return scale(7, 6); }",

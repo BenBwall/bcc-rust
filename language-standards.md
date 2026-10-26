@@ -539,6 +539,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | FlexibleArrayInitializers | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | ConstantFolding | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | VoidPointerArithmetic | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
+| SameTypeCasts | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
 | MsIntTypes | - | - | - | - | - | - | - | MS flag | parser |
 | MsCallingConventions | - | - | - | - | - | - | - | MS flag | parser |
@@ -600,6 +601,14 @@ The following vocabulary entries retain the established diagnostic contracts:
   spellings under Warn/Deny, including GNU modes; C99 and later are silent.
   Parser `__extension__` suppression applies. C99 §6.7.5p1 (printed p. 114;
   PDF p. 126) specifies all three forms.
+- `SameTypeCasts` has GNU origin. A cast of a structure or union to its own
+  type, qualifiers aside (`(struct S)s`, through typedefs too), gives the
+  operand's value as an rvalue, as GCC accepts it ("ISO C forbids casting
+  nonscalar to the same type" under -Wpedantic; C99 §6.5.4p2 requires a scalar
+  or void type). Warn/Deny report it, except a cast spelled `(union ...)`,
+  which keeps the parser's `UnionCasts` report. A cast to another aggregate
+  type stays invalid, the result is not an lvalue, and it is no constant
+  initializer of a static object, as in GCC.
 - `AlignofExpression` has GNU origin and accepts an expression operand in
   every mode. ISO `_Alignof` and C23 `alignof` spellings report GNU origin under
   Warn/Deny, including GNU dialects; Allow is silent. Reserved GNU aliases
