@@ -103,6 +103,10 @@ fn verifier_keeps_the_operand_rules() {
             "asm \"\" (in \"@ccz\" i32 v0)",
             "a flag operand is not an integer output",
         ),
+        (
+            "asm \"\" (out \"@ccz\" i128 v1)",
+            "a flag operand is not an integer output of at most 64 bits",
+        ),
         ("asm \"\" (in \"&r\" i32 v0)", "an input is early-clobber"),
         (
             "asm \"$1\" (in \"r\" i32 v0)",

@@ -79,7 +79,7 @@ use crate::{
     },
 };
 
-impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
+impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
     /// Schedules the operands of a GNU `asm` statement, in order, before
     /// [`Task::Assembly`].
     pub(super) fn assembly(
@@ -130,8 +130,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut tied = ArenaVec::new_in(self.scratch);
         // The read of each `+` memory operand, as Clang's `=*m,*m`.
         let mut reads = ArenaVec::new_in(self.scratch);
-        // Each register output's slot, lvalue and register type.
+        // Each register output's slot, lvalue and register types.
         let mut writes = ArenaVec::new_in(self.scratch);
+        // The register an output shares with its tied inputs holds the
+        // widest of them, as in GCC; each reference prints at its own
+        // operand's width.
+        let widths = self.tied_widths(facts, source)?;
+        let mut prints = ArenaVec::with_capacity_in(facts.operands.len(), self.scratch);
         for operand in facts.operands {
             let source = operand.expression.source_vectors;
             let mut next = || {
@@ -141,7 +146,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             };
             if operand.role.writes() {
                 let place = next()?;
-                let (descriptor, value) = self.output_operand(operand, place, &mut writes)?;
+                let widened = widths[outputs.len()];
+                let (descriptor, value, print) =
+                    self.output_operand(operand, place, widened, &mut writes)?;
+                prints.push(print);
                 if operand.role == AsmRole::Update && operand.kind == AsmOperandKind::Memory {
                     reads.push((
                         AsmOperand {
@@ -152,7 +160,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     ));
                 } else if operand.role == AsmRole::Update {
                     let current = next()?;
-                    let value = self.register_value(current, descriptor.ty, source)?;
+                    let value = if widened.is_some() {
+                        self.tied_value(current, descriptor.ty, source)?
+                    } else {
+                        self.register_value(current, descriptor.ty, source)?
+                    };
                     let index = u32::try_from(outputs.len())
                         .map_err(|_| LoweringError::missing("too many asm operands", source))?;
                     tied.push((
@@ -172,7 +184,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     | AsmOperandKind::Immediate { symbolic: false } => None,
                     | _ => Some(next()?),
                 };
-                inputs.push(self.input_operand(operand, item, &outputs)?);
+                let (descriptor, value, print) = self.input_operand(operand, item, &outputs)?;
+                prints.push(print);
+                inputs.push((descriptor, value));
             }
         }
         let gcc_outputs = outputs.len();
@@ -202,6 +216,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let template = llvm_template(
             facts,
+            &prints,
             gcc_outputs,
             selector.map(|_| gcc_outputs),
             self.scratch,
@@ -213,9 +228,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             side_effects: facts.volatile,
         });
         _ = self.draft.push(Op::InlineAsm(asm, args.leak()), None);
-        for &(slot, place, register, value_type, ty) in &writes {
+        for &(slot, place, register, base, value_type, ty) in &writes {
             let value = self.load_register(slot, register);
-            let value = if register == value_type {
+            // A widened output keeps its low bits; a flag zero-extends.
+            let value = match register.bits().cmp(&base.bits()) {
+                | std::cmp::Ordering::Greater => self.convert(Opcode::Trunc, base, value),
+                | std::cmp::Ordering::Less => self.extend(value, false, base),
+                | std::cmp::Ordering::Equal => value,
+            };
+            let value = if base == value_type {
                 value
             } else {
                 self.convert(Opcode::Bitcast, value_type, value)
@@ -239,17 +260,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         &mut self,
         operand: &AsmOperandFacts<'tu>,
         place: Item,
-        writes: &mut ArenaVec<
-            '_,
-            (
-                Value,
-                Item,
-                Type,
-                Type,
-                crate::translation_phases::semantic_analysis::TypeId,
-            ),
-        >,
-    ) -> Result<(AsmOperand, Value), LoweringError> {
+        widened: Option<Type>,
+        writes: &mut ArenaVec<'_, Write>,
+    ) -> Result<(AsmOperand, Value, Option<Type>), LoweringError> {
         let source = operand.expression.source_vectors;
         if operand.kind == AsmOperandKind::Memory {
             let (address, ty, bytes) = self.memory_operand(place, source)?;
@@ -262,6 +275,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     bytes,
                 },
                 address,
+                None,
             ));
         }
         let value_ty = place.ty.unqualified();
@@ -274,7 +288,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .position(|&name| name == condition.name())
                     .and_then(|index| u8::try_from(index).ok())
                     .ok_or_else(|| LoweringError::missing("an unknown flag condition", source))?;
-                (AsmConstraint::Flag(index), value_type)
+                // The condition is 0 or 1; a wider integer is zero-extended
+                // from it when assigned, as GCC does for `__int128`.
+                let register = if value_type.bits() > 64 {
+                    Type::I32
+                } else {
+                    value_type
+                };
+                (AsmConstraint::Flag(index), register)
             },
             | _ =>
                 return Err(LoweringError::missing(
@@ -282,10 +303,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     source,
                 )),
         };
+        let base = register;
+        let register = widened.unwrap_or(base);
+        let print = (register != base).then_some(base);
         let bytes = register.bytes();
         let align = Align::from_bytes(u64::from(bytes)).unwrap_or(Align::BYTE);
         let slot = self.fresh_object(u64::from(bytes), align, source)?;
-        writes.push((slot, place, register, value_type, value_ty));
+        let base = if matches!(operand.kind, AsmOperandKind::Flag(_)) {
+            value_type
+        } else {
+            base
+        };
+        writes.push((slot, place, register, base, value_type, value_ty));
         Ok((
             AsmOperand {
                 output: true,
@@ -295,7 +324,43 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 bytes,
             },
             slot,
+            print,
         ))
+    }
+
+    /// The register type each output shares with its tied inputs: the
+    /// widest integer among them, as GCC gives the matched pair the wider
+    /// mode, or `None` when the output's own type is widest. A pointer
+    /// counts as a 64-bit integer.
+    fn tied_widths(
+        &self,
+        facts: &AsmFacts<'tu>,
+        source: SourceVectors,
+    ) -> Result<ArenaVec<'s, Option<Type>>, LoweringError> {
+        let mut widths = ArenaVec::with_capacity_in(facts.operands.len(), self.scratch);
+        widths.resize(facts.operands.len(), None);
+        for operand in facts.operands {
+            let AsmOperandKind::Tied(output) = operand.kind else {
+                continue;
+            };
+            let output_facts = &facts.operands[output as usize];
+            let info = self.info(output_facts.expression)?;
+            let own = self.value_type(info.ty.unqualified(), source)?;
+            let info = self.info(operand.expression)?;
+            let converted = self
+                .conversions(operand.expression)
+                .last()
+                .map_or(info.ty, |conversion| conversion.ty);
+            let input = match self.value_type(converted.unqualified(), source)? {
+                | Type::Ptr => Type::I64,
+                | ty => ty,
+            };
+            let current = widths[output as usize].unwrap_or(own);
+            if input.is_int() && own.is_int() && input.bits() > current.bits() {
+                widths[output as usize] = Some(input);
+            }
+        }
+        Ok(widths)
     }
 
     /// The descriptor and value of an input; `item` is its evaluated value
@@ -305,7 +370,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         operand: &AsmOperandFacts<'tu>,
         item: Option<Item>,
         outputs: &[(AsmOperand, Value)],
-    ) -> Result<(AsmOperand, Value), LoweringError> {
+    ) -> Result<(AsmOperand, Value, Option<Type>), LoweringError> {
         let source = operand.expression.source_vectors;
         let missing = || LoweringError::missing("an asm input was not evaluated", source);
         let descriptor = |constraint, ty: Type| AsmOperand {
@@ -315,7 +380,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             ty,
             bytes: ty.bytes(),
         };
-        Ok(match operand.kind {
+        let mut print = None;
+        let (descriptor, value) = match operand.kind {
             | AsmOperandKind::Memory => {
                 let (address, ty, bytes) =
                     self.memory_operand(item.ok_or_else(missing)?, source)?;
@@ -339,6 +405,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let (tied, _) = outputs.get(output as usize).ok_or_else(|| {
                     LoweringError::missing("a tied asm output is missing", source)
                 })?;
+                let own = self.value_type(item.ty, source)?;
+                if own.is_int() && own.bits() < tied.ty.bits() {
+                    print = Some(own);
+                }
                 let value = self.tied_value(item, tied.ty, source)?;
                 (descriptor(AsmConstraint::Tied(output), tied.ty), value)
             },
@@ -370,7 +440,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | AsmOperandKind::Flag(_) =>
                 return Err(LoweringError::missing("a flag operand is an input", source)),
-        })
+        };
+        Ok((descriptor, value, print))
     }
 
     /// The address of a memory operand's lvalue, the scalar type it holds
@@ -616,6 +687,7 @@ fn clobbers(facts: &AsmFacts<'_>) -> AsmClobbers {
 /// stubs appended after the template.
 fn llvm_template<'s>(
     facts: &AsmFacts<'_>,
+    prints: &[Option<Type>],
     outputs: usize,
     selector: Option<usize>,
     scratch: &'s crate::util::bump::Bump,
@@ -643,6 +715,15 @@ fn llvm_template<'s>(
                 operand: index,
                 modifier,
             } => {
+                // A reference to an operand narrower than the register it
+                // shares prints at the operand's own width.
+                let modifier = modifier.or_else(|| {
+                    prints
+                        .get(index as usize)
+                        .copied()
+                        .flatten()
+                        .and_then(size_modifier)
+                });
                 let index = operand(index);
                 _ = match modifier {
                     | Some(modifier) => write!(text, "${{{index}:{}}}", char::from(modifier)),
@@ -674,6 +755,29 @@ fn llvm_template<'s>(
     }
     text.into_str()
 }
+
+/// The x86 modifier that names an integer register at `ty`'s width.
+fn size_modifier(ty: Type) -> Option<u8> {
+    match ty {
+        | Type::I8 => Some(b'b'),
+        | Type::I16 => Some(b'w'),
+        | Type::I32 => Some(b'k'),
+        | Type::I64 | Type::Ptr => Some(b'q'),
+        | _ => None,
+    }
+}
+
+/// A register output's slot and lvalue, the register type it shares with
+/// its tied inputs, the register type of its own value, and its value's IR
+/// and C types.
+type Write = (
+    Value,
+    Item,
+    Type,
+    Type,
+    Type,
+    crate::translation_phases::semantic_analysis::TypeId,
+);
 
 /// The prefix of an `asm goto` statement's local labels; `.L` keeps them
 /// out of the symbol table on ELF and COFF.

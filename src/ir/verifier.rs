@@ -1111,8 +1111,9 @@ impl InstChecker<'_, '_, '_, '_, '_> {
                 | C::Flag(condition)
                     if !operand.output
                         || !ty.is_int()
+                        || ty.bits() > 64
                         || usize::from(condition) >= super::ASM_CONDITIONS.len() =>
-                    Some("a flag operand is not an integer output"),
+                    Some("a flag operand is not an integer output of at most 64 bits"),
                 | _ if operand.early_clobber && !operand.output =>
                     Some("an input is early-clobber"),
                 | _ => None,

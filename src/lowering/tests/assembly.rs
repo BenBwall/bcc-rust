@@ -81,10 +81,11 @@ fn register_classes_reinterpret_the_other_kind_of_value() {
     assert!(ir.contains("in \"x\" f64"), "{ir}");
 }
 
-/// A wider matching input keeps the low bits the narrower output reads,
-/// as GCC's `ll_to_int` (`20030222-1.c`) and `stkalign.c` expect.
+/// A wider matching input or pointer keeps all its bits in the shared
+/// register, and the narrower output takes the low ones when assigned, as
+/// GCC's `ll_to_int` (`20030222-1.c`) and `stkalign.c` expect.
 #[test]
-fn matching_inputs_narrow_to_their_output() {
+fn matching_inputs_wider_than_their_output_keep_every_bit() {
     for (source, expected) in [
         (
             "int f(long long x) { int i; __asm__(\"\" : \"=r\"(i) : \"0\"(x)); return i; }",
@@ -97,8 +98,45 @@ fn matching_inputs_narrow_to_their_output() {
     ] {
         let ir = lower_for(source, Target::LinuxGnu).unwrap();
         assert!(ir.contains(expected), "{source}\n{ir}");
-        assert!(ir.contains("in \"0\" i32"), "{source}\n{ir}");
+        assert!(ir.contains("(out \"r\" i64"), "{source}\n{ir}");
+        assert!(ir.contains("in \"0\" i64"), "{source}\n{ir}");
+        assert!(ir.contains("trunc.i32"), "{source}\n{ir}");
     }
+}
+
+/// A matching input wider than its output widens their shared register,
+/// as GCC gives the pair the wider mode: `%q2` reads all of the 64-bit
+/// input, `%0` still names the 32-bit output, and the output keeps the low
+/// bits when assigned.
+#[test]
+fn wider_matching_inputs_widen_the_shared_register() {
+    let ir = lower_for(
+        "int f(long x, long *result) { int out; __asm__(\"movq %q2, %1; movl $1, %0\" : \
+         \"=a\"(out), \"=&r\"(*result) : \"0\"(x)); return out; }",
+        Target::LinuxGnu,
+    )
+    .unwrap();
+    let asm = ir.lines().find(|line| line.contains("asm ")).unwrap();
+    assert!(
+        asm.contains("\"movq ${2:q}, $1; movl $$1, ${0:k}\" (out \"{rax}\" i64"),
+        "{asm}"
+    );
+    assert!(asm.contains("in \"0\" i64 v0)"), "{asm}");
+    assert!(ir.contains("trunc.i32"), "{ir}");
+}
+
+/// A flag output wider than a register is zero-extended from the 0 or 1
+/// the condition gives, as GCC does for `__int128`.
+#[test]
+fn wide_flag_outputs_are_zero_extended() {
+    let ir = lower_for(
+        "__int128 f(int a) { __int128 eq; __asm__(\"testl %1, %1\" : \"=@ccz\"(eq) : \"r\"(a)); \
+         return eq; }",
+        Target::LinuxGnu,
+    )
+    .unwrap();
+    assert!(ir.contains("out \"@ccz\" i32"), "{ir}");
+    assert!(ir.contains("zext.i128"), "{ir}");
 }
 
 #[test]

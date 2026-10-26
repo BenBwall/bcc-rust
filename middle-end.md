@@ -1826,8 +1826,15 @@ writing it). A register output passes a
 fresh slot; its value is then assigned to the lvalue as an assignment
 would, so SSA locals, bit-fields, volatile and atomic objects are written
 correctly. A `float` in a general register, or an integer in an SSE
-register, is reinterpreted with `bitcast`; a narrower matching input is
-extended by its signedness and a wider one keeps its low bits. A local that is a memory operand lives in memory
+register, is reinterpreted with `bitcast`. An output and its matching
+inputs share a register as wide as the widest of them, as GCC gives the
+pair the wider mode: a narrower input is extended by its signedness, a
+wider integer or pointer input keeps all its bits (so `%q2` reads all of
+a 64-bit input tied to an `int` output), each unmodified reference to a
+narrower operand gets the size modifier of its own width (`%0` stays
+`%eax`), and the output takes the low bits when assigned. A flag output
+wider than 64 bits (`__int128`) is set from a 32-bit condition and
+zero-extended when assigned. A local that is a memory operand lives in memory
 (`address_taken.rs`). `asm goto` adds a selector output in a stack slot
 (a memory operand, so a statement that clobbers every general register
 still has room for it) that the template's appended code sets: 0 on

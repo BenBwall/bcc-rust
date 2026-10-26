@@ -92,6 +92,16 @@ static int alternatives(void) {
             : "=a,b"(x), "=b,a"(y));
     return x * 10 + y;
 }
+static int wide_match(long x, long *result) {
+    int out;
+    __asm__("movq %q2, %1; movl $1, %0" : "=a"(out), "=&r"(*result) : "0"(x));
+    return out;
+}
+static int wide_flag(int a) {
+    __int128 eq = -1;
+    __asm__("testl %1, %1" : "=@ccz"(eq) : "r"(a));
+    return eq == 1;
+}
 static int unique(void) {
     int r;
     __asm__("jmp 1f\n1:\tmovl $%=, %0" : "=r"(r));
@@ -126,6 +136,9 @@ int main(void) {
     if (bare() != 42) return 21;
     if (symbol() != &internal_target) return 22;
     if (alternatives() != 12) return 23;
+    long whole = 0;
+    if (wide_match(0x100000002L, &whole) != 1 || whole != 0x100000002L) return 24;
+    if (!wide_flag(0) || wide_flag(1)) return 25;
     return 0;
 }
 "#;
