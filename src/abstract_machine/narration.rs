@@ -49,22 +49,22 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
         diagnostic.source_range,
         String::from(title),
     );
-    let mut text = capitalized(&diagnostic.message);
-    text.push('.');
-    match diagnostic.kind {
-        | "undefined_behavior" => text.push_str(
-            " The C standard places no requirements on a program after this point: a compiler may \
-             assume it never happens, so the program could crash, print garbage, or appear to \
+    event.explanation = match diagnostic.kind {
+        | "undefined_behavior" => String::from(
+            "The C standard places no requirements on a program once this happens: a compiler may \
+             assume it never does, so the real program could crash, print garbage, or appear to \
              work. The abstract machine stops here instead of guessing.",
         ),
-        | "indeterminate" => text.push_str(
-            " An indeterminate value is not a number you can rely on: it might be anything left \
-             in memory, or even a trap representation. This machine stops rather than invent a \
-             value.",
+        | "indeterminate" => String::from(
+            "An indeterminate value is not a number you can rely on: it might be anything left in \
+             memory, or even a trap representation. This machine stops rather than invent a value.",
         ),
-        | _ => {},
-    }
-    event.explanation = text;
+        | _ => {
+            let mut text = capitalized(&diagnostic.message);
+            text.push('.');
+            text
+        },
+    };
     event.clauses.extend(diagnostic.clause.copied());
     event
 }

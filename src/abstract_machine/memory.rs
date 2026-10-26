@@ -319,11 +319,41 @@ impl Machine {
         }
     }
 
+    /// Signed overflow of `left operator right` (or of `operator right` when
+    /// `left` is `None`), with the mathematical result that did not fit.
     /// C99: §6.5 paragraph 5, p. 67; PDF p. 79.
-    pub fn overflow(&self) -> Diagnostic {
+    pub fn overflow(&self, left: Option<i32>, operator: &str, right: i32) -> Diagnostic {
+        let (a, b) = (i64::from(left.unwrap_or(0)), i64::from(right));
+        let exact = match operator {
+            | "+" => a + b,
+            | "-" => a - b,
+            | "*" => a * b,
+            // Only i32::MIN / -1 and i32::MIN % -1 overflow; both are
+            // undefined because the quotient does not fit.
+            | _ => -a,
+        };
+        let expression = left.map_or_else(
+            || format!("{operator}({right})"),
+            |left| format!("{left} {operator} {right}"),
+        );
+        let message = if operator == "%" {
+            format!(
+                "{expression} is undefined: the quotient {exact} does not fit in an int, whose \
+                 range is {} to {}",
+                i32::MIN,
+                i32::MAX
+            )
+        } else {
+            format!(
+                "{expression} = {exact}, which does not fit in an int (range {} to {}): signed \
+                 overflow",
+                i32::MIN,
+                i32::MAX
+            )
+        };
         Diagnostic::ub(
             self.state.source_range,
-            "signed int result is outside the representable range",
+            &message,
             &clauses::EXCEPTIONAL_CONDITION,
         )
     }
@@ -350,7 +380,9 @@ impl Machine {
             | ">=" => Some(i32::from(left >= right)),
             | _ => return Err(self.error("unsupported integer operator")),
         };
-        result.map(Value::Integer).ok_or_else(|| self.overflow())
+        result
+            .map(Value::Integer)
+            .ok_or_else(|| self.overflow(Some(left), operator, right))
     }
 
     fn offset(&self, pointer: &Value, delta: i64) -> Result<Value, Diagnostic> {

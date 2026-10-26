@@ -180,8 +180,11 @@ impl Machine {
                 let value = self.pop_value()?;
                 let result = match (operator, &value) {
                     | (&"+", Value::Integer(integer)) => Value::Integer(*integer),
-                    | (&"-", Value::Integer(integer)) =>
-                        Value::Integer(integer.checked_neg().ok_or_else(|| self.overflow())?),
+                    | (&"-", Value::Integer(integer)) => Value::Integer(
+                        integer
+                            .checked_neg()
+                            .ok_or_else(|| self.overflow(None, "-", *integer))?,
+                    ),
                     | (&"!", value) => Value::Integer(i32::from(!self.truth(value)?)),
                     | _ => return Err(self.error("unsupported unary operand")),
                 };
@@ -412,10 +415,17 @@ impl Machine {
     pub fn refresh(&mut self, program: &Program) {
         self.state.frames.clear();
         for (depth, frame) in self.activations.iter().enumerate() {
+            let nodes = &program.functions[frame.function].nodes;
             self.state.frames.push(Frame {
                 id: frame.id,
                 function: program.functions[frame.function].name.clone(),
                 depth,
+                waiting: frame
+                    .evaluation
+                    .as_ref()
+                    .and_then(|evaluation| evaluation.calling)
+                    .and_then(|node| nodes.get(node))
+                    .map(|node| node.range),
             });
         }
         self.state.evaluation = self

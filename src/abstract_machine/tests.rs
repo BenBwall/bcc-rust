@@ -552,6 +552,9 @@ fn calls_returns_and_block_exits_explain_frames_and_lifetimes() {
         call.evaluation.is_none(),
         "the callee starts a fresh evaluation"
     );
+    let waiting = call.frames[0].waiting.expect("main waits on the call");
+    assert_eq!(&source[waiting.start..waiting.end], "twice(3)");
+    assert_eq!(call.frames[1].waiting, None, "the callee waits on nothing");
     let returned = states
         .iter()
         .position(|state| state.event.kind == EventKind::Return)
@@ -669,4 +672,24 @@ fn schema_two_encodes_events_and_evaluations() {
         "{json}"
     );
     assert!(json.contains("\"id\":\"5.1.2.2.3p1\""), "{json}");
+}
+
+#[test]
+fn overflow_names_the_arithmetic_that_did_not_fit() {
+    let session = run("int main(void) { int x = 2147483647; x = x + 1; return x; }");
+    let diagnostic = &session.state().diagnostics[0];
+    assert!(
+        diagnostic
+            .message
+            .starts_with("2147483647 + 1 = 2147483648"),
+        "{}",
+        diagnostic.message
+    );
+    assert_eq!(session.state().event.title, "Undefined behavior");
+    let negated = run("int main(void) { int x = -2147483647 - 1; return -x; }");
+    assert!(
+        negated.state().diagnostics[0]
+            .message
+            .starts_with("-(-2147483648) = 2147483648")
+    );
 }

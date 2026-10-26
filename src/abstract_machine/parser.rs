@@ -250,7 +250,12 @@ impl<'a> Parser<'a> {
     }
 
     // Selection/iteration substatements get their C99 implicit block scope.
+    // A compound body is a block of its own that ends at the same point, so
+    // its scope stands in for the implicit one.
     fn control_body(&mut self) -> Result<(), Diagnostic> {
+        if self.at("{") {
+            return self.statement();
+        }
         let range = self.current().range;
         self.scope += 1;
         self.emit(Op::Enter, range)?;
@@ -440,7 +445,6 @@ impl<'a> Parser<'a> {
         range: SourceRange,
         last: bool,
     ) -> Result<(), Diagnostic> {
-        let range = combined(self.nodes[element].range, range);
         let node = self.tree("=", range, vec![element, value])?;
         self.emit_node(
             Op::Store {

@@ -94,6 +94,12 @@ fn state(output: &mut String, state: &State) {
         )
         .expect("String write");
         string(output, &frame.function);
+        output.push_str(",\"waiting\":");
+        if let Some(waiting) = frame.waiting {
+            range(output, waiting);
+        } else {
+            output.push_str("null");
+        }
         output.push('}');
     }
     output.push_str("],\"objects\":[");

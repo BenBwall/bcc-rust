@@ -271,6 +271,9 @@ pub struct Frame {
     pub function: String,
     /// Zero-based call depth.
     pub depth:    usize,
+    /// The call expression this activation is waiting on, when it has
+    /// called another function.
+    pub waiting:  Option<SourceRange>,
 }
 
 /// One automatic C object. Array elements share their enclosing object ID.
