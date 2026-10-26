@@ -436,7 +436,6 @@ pub(super) unsafe fn long_double_complex_arithmetic(
 // Tests
 #[cfg(test)]
 #[expect(
-    clippy::disallowed_macros,
     clippy::disallowed_methods,
     clippy::disallowed_types,
     reason = "Tests build inputs and expected values with std types; the arena rule covers the \

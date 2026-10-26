@@ -301,12 +301,28 @@ fn x87_arithmetic_rounds_to_the_requested_precision() {
     assert_eq!(invalid[..10], [0, 0, 0, 0, 0, 0, 0, 0xC0, 0xFF, 0xFF]);
 }
 
-/// The stand-in and the C bridge agree on every operation.
-#[cfg(feature = "native")]
+/// The stand-in and the C bridge agree on every operation. Only the host the
+/// stand-in models builds the bridge the same way: elsewhere `long double`
+/// has another carrier (8 bytes with MSVC, binary128 on 64-bit Arm Linux) or
+/// the complex routines come from another runtime library.
+#[cfg(all(feature = "native", target_arch = "x86_64", target_os = "linux"))]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Failure messages format the operands; the arena rule covers the compiler, not its \
+              tests."
+)]
 mod differential {
     use super::*;
 
     const C: Bridge = bridge!(super::super::super::ffi);
+
+    // The harness passes the stand-in's carrier to the C bridge unchanged.
+    const _: () = assert!(
+        super::super::super::ffi::LONG_DOUBLE_BYTES == super::super::LONG_DOUBLE_BYTES
+            && super::super::super::ffi::LONG_DOUBLE_VALUE_BYTES
+                == super::super::LONG_DOUBLE_VALUE_BYTES,
+        "the C bridge's long double carrier is not the modeled x87 one"
+    );
 
     #[test]
     fn conversions_match_the_c_library() {
