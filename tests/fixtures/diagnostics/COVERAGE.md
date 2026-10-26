@@ -635,6 +635,7 @@ below; implicit functions use the existing shared extension diagnostic.
 | `InvalidAssignment` | [assignment](sema2-assignment.c) | Assignment conversions, including nested pointer qualifiers. |
 | `InvalidCast` | [cast](sema2-cast.c) | Scalar casts and pointer/floating exclusions. |
 | `InvalidSizeof` | [sizeof](sema2-sizeof.c) | Function, incomplete and bit-field operands. |
+| `IncompleteValue` | [incomplete-value](sema2-incomplete-value.c) | Value use of an incomplete structure, union or enumeration lvalue. |
 | `InvalidMemberAccess` | [member-access](sema2-member-access.c) | Complete records and existing member names. |
 | `InvalidCall` | [call](sema2-call.c) | Pointer to function designators. |
 | `InvalidArgumentCount` | [argument-count](sema2-argument-count.c) | Prototype fixed and variadic arity. |

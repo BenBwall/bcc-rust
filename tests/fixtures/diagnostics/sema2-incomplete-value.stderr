@@ -1,0 +1,9 @@
+error: value of an object requires a complete type
+ --> sema2-incomplete-value.c:1:61
+  |
+1 | struct s; extern struct s object; struct s *f(void) { (void)object; return &object; }
+  |                                                             ^^^^^^ value of incomplete type
+  |
+  = note: C99 §6.3.2.1p2: an lvalue of incomplete non-array type has no value to convert to
+
+1 error generated.
