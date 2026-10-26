@@ -652,7 +652,10 @@ impl<'a> Parser<'a> {
     }
 
     pub fn require_scalar(&self, expression: usize) -> Result<(), Diagnostic> {
-        if matches!(self.expressions[expression].ty, Type::Int | Type::Pointer) {
+        if matches!(
+            self.expressions[expression].ty,
+            Type::Int | Type::Char | Type::Pointer
+        ) {
             Ok(())
         } else {
             Err(self.error("expected a scalar expression"))
@@ -741,7 +744,10 @@ pub(super) fn is_identifier(text: &str) -> bool {
 
 fn compatible(expected: Type, actual: Type, null: bool) -> bool {
     expected == actual
-        || (expected == Type::Char && actual == Type::Int)
+        || matches!(
+            (expected, actual),
+            (Type::Char, Type::Int) | (Type::Int, Type::Char)
+        )
         || (expected == Type::Pointer && actual == Type::Int && null)
 }
 

@@ -640,7 +640,7 @@ fn char_values_are_promoted_and_out_of_range_stores_wrap() {
         .iter()
         .filter(|state| state.event.kind == EventKind::IntegerPromotion)
         .count();
-    assert_eq!(promotions, 5, "each char read is promoted");
+    assert_eq!(promotions, 5, "each char operand of + is promoted");
     let wrapped = states
         .iter()
         .find(|state| state.event.title == "Initialize `d` = -56")
@@ -659,6 +659,42 @@ fn char_values_are_promoted_and_out_of_range_stores_wrap() {
     ] {
         let _diagnostic =
             compile(rejected).expect_err("char pointers and arrays are outside the subset");
+    }
+}
+
+#[test]
+fn char_reads_promote_only_where_an_operator_requires_it() {
+    let promotions = |source: &str| {
+        states(source)
+            .iter()
+            .filter(|state| state.event.kind == EventKind::IntegerPromotion)
+            .count()
+    };
+    // Lvalue conversion keeps the char type: copying, discarding, testing,
+    // indexing with, passing and returning a char promote nothing.
+    for unpromoted in [
+        "int main(void) { char c = 1; char d = c; return 0; }",
+        "int main(void) { char c = 1; c; return 0; }",
+        "int main(void) { char c = 1; if (c) { return 1; } return 0; }",
+        "int main(void) { char c = 1; int a[2] = {0, 7}; int *p = a + c; return a[c] + *p; }",
+        "int id(int x) { return x; } int main(void) { char c = 1; return id(c); }",
+        "int main(void) { char c = 1; return !c; }",
+        "int main(void) { char c = 1; return c; }",
+    ] {
+        assert_eq!(promotions(unpromoted), 0, "{unpromoted}");
+    }
+    // The operands of unary + and -, and of arithmetic, relational and
+    // equality operators, are promoted.
+    for (promoted, count) in [
+        ("int main(void) { char c = 1; return -c; }", 1),
+        ("int main(void) { char c = 1; return +c; }", 1),
+        ("int main(void) { char c = 1; return c < 2; }", 1),
+        (
+            "int main(void) { char c = 1; char d = 2; return c == d; }",
+            2,
+        ),
+    ] {
+        assert_eq!(promotions(promoted), count, "{promoted}");
     }
 }
 

@@ -42,10 +42,10 @@ impl Parser<'_> {
                 ));
             }
             let ty = match (operator, lhs.ty, rhs.ty) {
-                | (_, Type::Int, Type::Int) | ("==" | "!=", Type::Pointer, Type::Pointer) =>
-                    Type::Int,
-                | ("+" | "-", Type::Pointer, Type::Int) | ("+", Type::Int, Type::Pointer) =>
-                    Type::Pointer,
+                | (_, Type::Int | Type::Char, Type::Int | Type::Char)
+                | ("==" | "!=", Type::Pointer, Type::Pointer) => Type::Int,
+                | ("+" | "-", Type::Pointer, Type::Int | Type::Char)
+                | ("+", Type::Int | Type::Char, Type::Pointer) => Type::Pointer,
                 | ("==" | "!=", Type::Pointer, Type::Int)
                     if matches!(rhs.kind, ExprKind::Number(0)) =>
                     Type::Int,
@@ -80,7 +80,8 @@ impl Parser<'_> {
                 return Err(self.error("pointers to char are outside this subset"));
             }
             let ty = match (operator, expression.ty) {
-                | ("+" | "-" | "!", Type::Int) | ("!" | "*", Type::Pointer) => Type::Int,
+                | ("+" | "-" | "!", Type::Int | Type::Char) | ("!" | "*", Type::Pointer) =>
+                    Type::Int,
                 | ("&", Type::Int) => {
                     self.check_lvalue(child)?;
                     Type::Pointer
@@ -169,10 +170,11 @@ impl Parser<'_> {
                 let Some(declared) = binding else {
                     return Err(self.error("use of an undeclared identifier"));
                 };
-                // Arrays decay to pointers; a char's value is promoted to int.
+                // Arrays decay to pointers. A char's value keeps type char:
+                // only the operators that need it promote it (see `promoted`).
+                // C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58.
                 let ty = match declared {
                     | Type::Array(_) => Type::Pointer,
-                    | Type::Char => Type::Int,
                     | other => other,
                 };
                 self.node(ExprKind::Name(text, declared), ty, false, range, 1)?
@@ -188,7 +190,10 @@ impl Parser<'_> {
             self.expect("]")?;
             let base = &self.expressions[value];
             let subscript = &self.expressions[index];
-            if base.ty != Type::Pointer || subscript.ty != Type::Int || base.call || subscript.call
+            if base.ty != Type::Pointer
+                || !matches!(subscript.ty, Type::Int | Type::Char)
+                || base.call
+                || subscript.call
             {
                 return Err(self
                     .error("subscript requires an int pointer and a side-effect-free int index"));
@@ -253,14 +258,11 @@ impl Parser<'_> {
                 self.emit_node(Op::Decay(name), range, tree)?;
                 tree
             },
-            | ExprKind::Name(name, ty) => {
+            | ExprKind::Name(name, _) => {
                 let tree = self.tree(&name, range, Vec::new())?;
                 self.emit_node(Op::Address(name), range, tree)?;
                 if !address {
                     self.emit_node(Op::Load, range, tree)?;
-                    if ty == Type::Char {
-                        self.emit_node(Op::Promote, range, tree)?;
-                    }
                 }
                 tree
             },
@@ -298,13 +300,26 @@ impl Parser<'_> {
             },
             | ExprKind::Unary(operator, child) => {
                 let operand = self.emit_expression(child, false)?;
+                if operator != "!" {
+                    self.promoted(child, operand)?;
+                }
                 let tree = self.tree(operator, range, vec![operand])?;
                 self.emit_node(Op::Unary(operator), range, tree)?;
                 tree
             },
-            | ExprKind::Binary(operator, left, right) => {
-                let left = self.emit_expression(left, false)?;
-                let right = self.emit_expression(right, false)?;
+            | ExprKind::Binary(operator, lhs, rhs) => {
+                // The usual arithmetic conversions apply only when both
+                // operands are arithmetic; pointer arithmetic promotes nothing.
+                let arithmetic = self.expressions[lhs].ty != Type::Pointer
+                    && self.expressions[rhs].ty != Type::Pointer;
+                let left = self.emit_expression(lhs, false)?;
+                if arithmetic {
+                    self.promoted(lhs, left)?;
+                }
+                let right = self.emit_expression(rhs, false)?;
+                if arithmetic {
+                    self.promoted(rhs, right)?;
+                }
                 let tree = self.tree(operator, range, vec![left, right])?;
                 self.emit_node(Op::Binary(operator), range, tree)?;
                 tree
@@ -330,6 +345,21 @@ impl Parser<'_> {
             },
         };
         Ok(tree)
+    }
+
+    /// Promote the char value of `expression`, whose tree node is `tree`, to
+    /// int. Only the operands of unary `+` and `-` and of the usual arithmetic
+    /// conversions are promoted here: a char that is stored, returned, passed
+    /// to an int parameter, tested, or discarded keeps its value without
+    /// promotion. (Every call has a prototype, so the default argument
+    /// promotions never apply.)
+    /// C99: §6.3.1.1 paragraph 2 and footnote 48, pp. 42-43; PDF pp. 54-55.
+    fn promoted(&mut self, expression: usize, tree: usize) -> Result<(), Diagnostic> {
+        if self.expressions[expression].ty == Type::Char {
+            let range = self.expressions[expression].range;
+            self.emit_node(Op::Promote, range, tree)?;
+        }
+        Ok(())
     }
 
     fn check_lvalue(&self, expression: usize) -> Result<(), Diagnostic> {
