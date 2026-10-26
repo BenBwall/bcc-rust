@@ -211,8 +211,9 @@ fn encode_object(
 /// The libraries an executable of the listing `text` links besides the C
 /// library: libatomic when it calls one of its routines, which the selector
 /// does for `i128` and byte-buffer atomic operations (`isel/atomic.rs`), as
-/// the LLVM back end's driver does for the same operations.
-fn libraries(text: &str) -> &'static [&'static str] {
+/// the LLVM back end's driver does for the same operations. The tests'
+/// WSL runner, which links with WSL's own clang, appends the same list.
+pub(super) fn libraries(text: &str) -> &'static [&'static str] {
     if text.contains("\tcallq\t__atomic_") {
         &["-latomic"]
     } else {

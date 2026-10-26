@@ -385,7 +385,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     /// read-modify-writes keep exact, a compare-exchange loop, an `atomic_flag`
     /// spin lock and a libatomic `__int128`, with one, four and eight threads,
     /// through LLVM and the native back end. The driver links `-latomic` for
-    /// the `__int128`. C11: §7.17.7, pp. 282-285; PDF pp. 300-303.
+    /// the `__int128`. The command line has no `-pthread` yet, so the test
+    /// needs a C library that holds the threads functions itself (glibc 2.34
+    /// and later, musl), which a probe link through the LLVM back end checks.
+    /// C11: §7.17.7, pp. 282-285; PDF pp. 300-303.
     #[test]
     fn atomic_counters_stay_exact_across_threads() {
         if host() != Some("x86_64-unknown-linux-gnu")
@@ -394,6 +397,28 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             eprintln!("skipping: no Linux host C library with pthreads");
             return;
         }
+        let host_flags = [
+            "--target=x86_64-unknown-linux-gnu",
+            "--idirafter",
+            "/usr/include/x86_64-linux-gnu",
+            "--idirafter",
+            "/usr/include",
+        ];
+        let probe = temporary("pthread-probe.exe");
+        let probed = bcc(
+            "#include <pthread.h>\nstatic void *f(void *p) { return p; }\nint main(void) { \
+             pthread_t t; if (pthread_create(&t, 0, f, 0)) return 1; return pthread_join(t, 0); }",
+            &[&host_flags[..], &["-o", probe.to_str().unwrap()]].concat(),
+        );
+        if !probed.status.success() && text(&probed.stderr).contains("undefined symbol: pthread_") {
+            eprintln!(
+                "skipping: the C library does not link pthreads without -pthread:\n{}",
+                text(&probed.stderr)
+            );
+            return;
+        }
+        assert!(probed.status.success(), "{}", text(&probed.stderr));
+        std::fs::remove_file(&probe).unwrap();
         let source =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/atomic_threads.c");
         let executable = temporary("atomic-threads.exe");
@@ -407,15 +432,8 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
             _ = command
                 .arg(&source)
-                .args([
-                    "--target=x86_64-unknown-linux-gnu",
-                    "--idirafter",
-                    "/usr/include/x86_64-linux-gnu",
-                    "--idirafter",
-                    "/usr/include",
-                    "-o",
-                    path,
-                ])
+                .args(host_flags)
+                .args(["-o", path])
                 .args(backend)
                 .env("NO_COLOR", "1");
             let built = run_native(&mut command).unwrap();
