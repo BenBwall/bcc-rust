@@ -102,7 +102,7 @@ pub(crate) enum ConstantExpressionSlot<'tu> {
     Missing(SourceVectors),
 }
 
-/// Statement syntax node constructed by the statement frame.
+/// Statement syntax node constructed by the statement production.
 ///
 /// C99: §6.8-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
 #[derive(Debug, PartialEq, Clone, Copy)]

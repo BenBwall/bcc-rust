@@ -1,7 +1,7 @@
 //! Pending token diagnostics indexed by spelling and provenance.
 //!
 //! [`Parser::suppress_token_diagnostic`] advances the occurrence queue when a
-//! frame consumes a token or recovery skips it. GNU extension markers can
+//! production consumes a token or recovery skips it. GNU extension markers can
 //! suppress their own diagnostics, and MSVC assembly can withdraw C
 //! constant-conversion errors for assembler operands. Occurrences with shared
 //! macro provenance stay separate. The shared context owns diagnostic delivery
@@ -15,7 +15,7 @@ use std::cell::Cell;
 
 use super::{
     Parser,
-    machine::ParseFrameKind,
+    grammar::ProductionKind,
 };
 use crate::{
     translation_phases::{
@@ -35,9 +35,15 @@ use crate::{
 impl Parser<'_, '_, '_> {
     /// Advances the diagnostic occurrence cursor even on recovery skips.
     pub(super) fn suppress_token_diagnostic(&mut self, token: Token) {
-        if self.token_diagnostics.is_empty() {
-            return;
+        if !self.token_diagnostics.is_empty() {
+            self.suppress_pending_token_diagnostic(token);
         }
+    }
+
+    /// Kept out of line: its spelling table would otherwise enlarge the
+    /// native frame of every recursive production that consumes a token.
+    #[inline(never)]
+    fn suppress_pending_token_diagnostic(&mut self, token: Token) {
         match token.kind {
             | TokenType::Keyword(_) => {
                 self.suppress_diagnostic_occurrence(token, None);
@@ -81,7 +87,8 @@ impl Parser<'_, '_, '_> {
                 if self.pedantic_suppression != 0
                     || matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) =>
                 self.context.suppress_extension(suppressed),
-            | Some(TokenDiagnostic::Constant(index)) if self.active_frame == ParseFrameKind::Msvc =>
+            | Some(TokenDiagnostic::Constant(index))
+                if self.active_production == ProductionKind::Msvc =>
                 self.context.withdraw_pending_error(index),
             | _ => {},
         }
@@ -91,14 +98,15 @@ impl Parser<'_, '_, '_> {
 /// Each spelling/provenance pair owns its FIFO of diagnostic occurrences.
 /// Macro replacements can share provenance, so occurrences must not be merged.
 /// C99: §5.1.1.3, p. 11; PDF p. 23. GNU extension markers suppress only
-/// diagnostics in their owning parser frame, without reordering the queue.
+/// diagnostics in their owning production, without reordering the queue.
 pub(super) type TokenDiagnostics<'tu, 'p> = ArenaMap<
     'p,
     (&'tu str, &'p [SourceVector], Option<SourceVector>),
     ArenaQueue<'p, TokenDiagnostic<'tu>>,
 >;
 
-/// One pending diagnostic that the frame consuming its token may withdraw.
+/// One pending diagnostic that the production consuming its token may
+/// withdraw.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TokenDiagnostic<'tu> {
     /// An extension diagnostic, suppressed through its marker.

@@ -88,6 +88,16 @@ use crate::{
 /// and `--interpret` with the program's status.
 #[doc(hidden)]
 pub fn run() -> Result<i32, MainError> {
+    crate::with_compilation_stack(COMPILATION_STACK_BYTES, run_on_current_thread)
+        .map_err(MainError::CompilationStack)?
+}
+
+/// Address space reserved for the compilation worker's stack. Pages are
+/// committed only as recursion touches them, so the size costs no memory.
+const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
+
+/// Keeps all compilation arenas, phases and output on the same thread.
+fn run_on_current_thread() -> Result<i32, MainError> {
     let arguments = normalize_language_arguments(std::env::args_os())?;
     // Clap would demand an input for this flag, so it is answered before
     // parsing; the declaration below only documents it in `--help`.
@@ -239,6 +249,14 @@ struct Cli {
     /// Suppress all warning diagnostics (GCC -w).
     #[arg(short = 'w', long)]
     suppress_warnings: bool,
+    /// Stop parsing with a diagnostic once this many recursive grammar
+    /// productions are active at once. Each nested expression operand,
+    /// statement, block, declarator and initializer brace counts one level.
+    /// Raise it for machine-generated input that nests deeper.
+    #[arg(long, value_name = "N",
+        default_value_t = crate::configuration::DEFAULT_MAX_NESTING_DEPTH,
+        value_parser = clap::value_parser!(u32).range(1..))]
+    max_nesting_depth: u32,
     /// Spell `__DATE__` and `__TIME__` from seconds since the Unix epoch, in
     /// UTC.
     ///

@@ -30,7 +30,7 @@ use crate::{
                 ParserErrorType,
                 ParserWarningGroup,
             },
-            machine::ParseFrameKind,
+            grammar::ProductionKind,
             syntax::{
                 BinaryOperator,
                 Expression,
@@ -140,8 +140,8 @@ fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
                 "compatibility classification drifted for {name}: {:?}",
                 parsed.errors
             );
-            assert!(parsed.parser.frames.is_empty(), "{name}");
-            assert!(parsed.parser.returned.is_none(), "{name}");
+            assert_eq!(parsed.parser.depth, 0, "{name}");
+            assert!(parsed.parser.failure.is_none(), "{name}");
             assert_eq!(parsed.parser.scopes.depth(), 0, "{name}");
             match name {
                 | "repeated-specifiers.c" => {
@@ -227,7 +227,7 @@ fn parser_diagnostics_expose_structured_context_and_fifo_recovery() {
         let first = diagnostics[0];
         assert_eq!(first.code, ParserDiagnosticCode::Syntax);
         assert_eq!(first.severity, ErrorSeverity::Error);
-        assert_eq!(first.frame, ParseFrameKind::DeclarationSpecifiers);
+        assert_eq!(first.production, ProductionKind::DeclarationSpecifiers);
         assert_eq!(first.expected, ExpectedSyntax::DeclarationSpecifier);
         assert_eq!(
             first.found,
@@ -269,7 +269,7 @@ fn discarded_recovery_exposes_its_complete_summary() {
         let recovery = diagnostic.recovery.expect("recovery summary");
         let discarded = recovery.discarded.expect("discarded provenance");
 
-        assert_eq!(recovery.owner, ParseFrameKind::Declaration);
+        assert_eq!(recovery.owner, ProductionKind::Declaration);
         assert_eq!(recovery.discarded_tokens, 2);
         assert_eq!(
             recovery.stopped_at,

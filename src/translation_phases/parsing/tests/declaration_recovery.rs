@@ -35,7 +35,6 @@ use crate::translation_phases::{
         },
     },
     preprocessing::{
-        IntegerTokenType,
         KeywordTokenType,
         OperatorTokenType,
         TokenType,
@@ -969,24 +968,22 @@ fn direct_recovery_sources_are_retained_by_the_recovered_declaration() {
 fn recovery_trace_identifies_the_owner_of_every_consumed_token() {
     with_parse("int x + (1);\n", |parsed| {
         let recovery = parsed
-            .parser
-            .trace
+            .errors
             .iter()
-            .filter(|event| event.action == "recover-consume")
-            .collect::<Vec<_>>();
+            .find_map(|error| match error {
+                | TranslationError::Parsing(error) => error.recovery,
+                | _ => None,
+            })
+            .expect("expected a recovery summary");
 
-        assert!(recovery.iter().all(|event| event.frame == "declaration"));
         assert_eq!(
-            recovery
-                .iter()
-                .filter_map(|event| event.token)
-                .collect::<Vec<_>>(),
-            [
-                TokenType::Operator(OperatorTokenType::Plus),
-                TokenType::Operator(OperatorTokenType::OpeningParenthesis),
-                TokenType::Integer(IntegerTokenType::Int(1)),
-                TokenType::Operator(OperatorTokenType::ClosingParenthesis),
-            ]
+            recovery.owner,
+            crate::translation_phases::parsing::grammar::ProductionKind::Declaration
+        );
+        assert_eq!(recovery.discarded_tokens, 4);
+        assert_eq!(
+            sourced_text(parsed, recovery.discarded.expect("discarded provenance")),
+            "+(1)"
         );
     });
 }

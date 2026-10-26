@@ -2,29 +2,27 @@
 //!
 //! [`Parser::preprocess`] finishes the token array before parser working memory
 //! is created. [`Parser::from_preprocessed`] then borrows the context and
-//! creates the idle machine. Constructors also index pending token diagnostics
+//! creates the idle parser. Constructors also index pending token diagnostics
 //! and seed the parser-visible builtin typedef names; these are implementation
-//! extensions. Grammar decisions belong to the frames, and semantic analysis
-//! follows parsing.
+//! extensions. Grammar decisions belong to the productions, and semantic
+//! analysis follows parsing.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
 //! C99: diagnostics, §5.1.1.3, p. 11; PDF p. 23.
 
 use rustc_hash::FxBuildHasher;
 
-#[cfg(test)]
-use super::machine::FrameTrace;
 use super::{
     Parser,
     PreprocessedTranslationUnit,
-    frame_pool::FramePools,
+    grammar::ProductionKind,
     limits::ParserLimits,
-    machine::ParseFrameKind,
     recovery::RecoveryState,
     scope::{
         LabelScopes,
         ScopeStack,
     },
+    scratch_pool::ScratchPools,
     token_cursor::{
         TokenCursor,
         Upstream,
@@ -120,15 +118,16 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             );
         }
         let tree = context.tu_arena();
+        let limits = ParserLimits::for_configuration(context.configuration);
         Self {
             cursor: TokenCursor::new(upstream),
             arena,
             tree,
             context,
-            frames: ArenaVec::new_in(arena),
-            pools: FramePools::new_in(arena),
-            retained_frame_nodes: 0,
-            returned: None,
+            pools: ScratchPools::new_in(arena),
+            depth: 0,
+            max_depth: 0,
+            failure: None,
             #[cfg(test)]
             syntax: super::SyntaxLog::default(),
             syntax_nodes: 0,
@@ -144,16 +143,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             pedantic_suppression: 0,
             token_diagnostics,
             switch_floor: 0,
-            active_frame: ParseFrameKind::ExternalDeclaration,
+            active_production: ProductionKind::ExternalDeclaration,
             has_external_declaration: false,
             reported_empty_translation_unit: false,
             external_declaration_count: 0,
-            limits: ParserLimits::default(),
+            limits,
             resource_limit_reported: false,
-            #[cfg(test)]
-            trace: FrameTrace::new(),
-            #[cfg(test)]
-            action_budget: None,
         }
     }
 
@@ -207,12 +202,6 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         arena: &'p Bump,
     ) -> Self {
         Self::new_with_config(preprocessor, context, limits, arena)
-    }
-
-    #[cfg(test)]
-    pub(super) fn with_action_budget(mut self, action_budget: usize) -> Self {
-        self.action_budget = Some(action_budget);
-        self
     }
 
     /// Where the preprocessor stopped reading, for end-of-input locations.

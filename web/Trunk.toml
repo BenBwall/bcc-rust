@@ -1,0 +1,27 @@
+# `trunk build --release` writes a self-contained static site to dist/.
+# Serve that directory from any static host or CDN; no server code is involved.
+[build]
+target = "index.html"
+dist = "dist"
+# Relative asset URLs, so the site works from any path prefix.
+public_url = "./"
+filehash = true
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8080
+open = false
+
+# After each build, the native `prerender` binary renders the page's initial
+# HTML into the staged index.html (static SSR; the browser app hydrates it) and
+# moves the engine Worker, which Trunk does not hash, into a directory named
+# after its contents, so only index.html has a mutable URL. No server runs at
+# request time. `RUSTFLAGS=` keeps the repository's LLVM linker flags
+# (../.cargo/config.toml) away from this host build.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = [
+    "-c",
+    "RUSTFLAGS= cargo run --quiet --features ssr --bin prerender -- \"$TRUNK_STAGING_DIR\"",
+]

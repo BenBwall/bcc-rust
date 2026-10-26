@@ -3,7 +3,7 @@
 bcc-rust parses C89 through C23, a listed subset of the C2y draft, GNU
 dialects, and independently enabled MSVC extensions. One configuration value,
 CLI selection, predefined macros and a shared extension-diagnostic emitter
-connect the lexer, preprocessor and explicit-frame parser. This is a
+connect the lexer, preprocessor and recursive descent parser. This is a
 front end with an initial declaration semantic pass: selecting a mode is not
 a conformance claim. [semantic-analysis.md](semantic-analysis.md) records the
 C99 semantic subset and conservative extension boundaries; code generation is absent.
@@ -272,7 +272,7 @@ still follows the configured extension policy.
 
 Reserved `__builtin_va_arg`, `__builtin_va_start`, `__builtin_va_end`,
 `__builtin_va_copy`, `__builtin_va_list` and `__builtin_offsetof` support the
-standard headers even with `-pedantic-errors`. The parser uses `GnuFrame` for
+standard headers even with `-pedantic-errors`. The parser uses `parse_gnu` for
 intrinsic expression operands; semantic analysis checks va-list operands,
 va-arg result types and variadic-function context. Runtime pairing, argument
 availability and promoted argument/type agreement remain backend/runtime work.
@@ -664,9 +664,8 @@ through the shared emitter and keep their AST under Deny. Non-reserved C23
 aliases remain identifiers in earlier strict modes.
 
 New operands, assertions, generic selections, specifier additions and
-attributes are immutable arena nodes. `ModernFrame` owns their delimiters and
-delegates expression and type children to the machine stack; no grammar
-recursion is added. `parsing/tests/node_sizes.rs` pins node sizes. Inspection
+attributes are immutable arena nodes. `parse_modern` owns their delimiters and
+delegates expression and type children to their productions. `parsing/tests/node_sizes.rs` pins node sizes. Inspection
 visits every new child, including compound-literal storage, generic default
 arms, and fixed enum underlying types.
 
@@ -730,7 +729,7 @@ nested declarator, array, bit-field, function and label positions from
 
 [GNU C Extensions](https://gcc.gnu.org/onlinedocs/gcc/C-Extensions.html) and
 [GCC Extended Asm](https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html) specify
-the vendor grammar. `GnuFrame` owns assembly, builtins and `__label__`
+the vendor grammar. `parse_gnu` owns assembly, builtins and `__label__`
 declarations. Assembly nodes keep typed qualifiers, the template literal,
 constraint and clobber literals, parsed operand expressions, symbolic names and
 goto labels; file assembly and declarator assembly labels have explicit AST
@@ -741,7 +740,7 @@ also have inspectable syntax nodes.
 
 `__extension__` suppresses extension diagnostics for keyword, grammar and
 numeric-constant tokens within its expression or declaration, including a
-function body or a parameter. Suppression ends at the owning frame boundary;
+function body or a parameter. Suppression ends at the owning production's boundary;
 later unsuppressed occurrences, including ones from macro expansions, keep their
 diagnostics. Nested functions isolate typedef, label and switch state. GNU empty
 structures and unions remain complete syntax under every policy.
@@ -771,12 +770,12 @@ before the parser sees the resulting tokens.
   declaration or declarator position, including nested function pointers,
   parameters and abstract declarators. `__forceinline` keeps its modifier and
   inline property; semantic analysis adds `always_inline`.
-- `MsvcFrame` owns SEH: `__try` guarded compounds, `__except` expression
-  filters, `__finally` compounds and `__leave;`. Children use the machine's
-  compound and expression frames and ordinary scope restoration. Missing
+- `parse_msvc` owns SEH: `__try` guarded compounds, `__except` expression
+  filters, `__finally` compounds and `__leave;`. Children use the ordinary
+  compound and expression productions and scope restoration. Missing
   handlers, bodies, filters and delimiters produce recovered syntax and preserve
   following input. `__leave` placement and handler semantics are later analysis.
-- `MsvcFrame` also owns `__asm`/`_asm` brace blocks and single-line instructions
+- `parse_msvc` also owns `__asm`/`_asm` brace blocks and single-line instructions
   as opaque arena token lists with balanced parentheses, brackets and braces. A
   repeated asm keyword separates single-line instructions, and the enclosing C
   brace stays unconsumed. Line boundaries come from macro-invocation provenance

@@ -9,19 +9,17 @@
 
 use std::fmt::Debug;
 
-#[cfg(test)]
-use super::machine::FrameTraceEvent;
 use super::{
     Parser,
     errors::{
         RecoverySummary,
         RelatedParserDiagnostic,
     },
-    frames::{
+    grammar::{
+        ProductionKind,
         expression_operators::is_operator,
-        statement::is_statement_keyword,
+        is_statement_keyword,
     },
-    machine::ParseFrameKind,
 };
 use crate::{
     translation_phases::{
@@ -41,18 +39,14 @@ use crate::{
 
 impl Parser<'_, '_, '_> {
     /// Consumes malformed input until the active synchronization policy says
-    /// its owning frame can safely resume.
+    /// its owning production can safely resume.
     ///
     /// C99: continued translation after a required diagnostic is permitted by
     /// §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23. C99 does not
     /// specify how an implementation resynchronizes.
     #[cold]
     #[inline(never)]
-    pub(super) fn recover(
-        &mut self,
-        set: SynchronizationSet,
-        #[cfg(test)] depth: usize,
-    ) -> Option<SourceVectors> {
+    pub(super) fn recover(&mut self, set: SynchronizationSet) -> Option<SourceVectors> {
         let mut source_vectors = None;
         let mut consumed_tokens = 0_usize;
         self.recovery.begin(set);
@@ -90,10 +84,10 @@ impl Parser<'_, '_, '_> {
                     _,
                 )| (
                     SynchronizationKind::StructMember,
-                    ParseFrameKind::StructOrUnionSpecifier
+                    ProductionKind::StructOrUnionSpecifier
                 ) | (
                     SynchronizationKind::EnumeratorValue,
-                    ParseFrameKind::EnumSpecifier
+                    ProductionKind::EnumSpecifier
                 )
             );
             let stops_at_declaration_after_malformed_prefix = matches!(
@@ -123,7 +117,7 @@ impl Parser<'_, '_, '_> {
             let at_next_enumerator =
                 matches!(recovery_set.kind, SynchronizationKind::EnumeratorValue)
                     && at_top_level
-                    && recovery_set.target == ParseFrameKind::EnumSpecifier
+                    && recovery_set.target == ProductionKind::EnumSpecifier
                     && matches!(token.kind, TokenType::Identifier);
             let has_pending_conditional_at_depth = state.questions.contains(&delimiter_depth);
             let at_next_identifier_label =
@@ -196,13 +190,6 @@ impl Parser<'_, '_, '_> {
                 .is_some_and(|following| self.declaration_starter(following));
             self.recovery.consume(token.kind, opens_type_name);
 
-            #[cfg(test)]
-            self.trace.push(FrameTraceEvent {
-                frame: set.target.label(),
-                action: "recover-consume",
-                token: Some(token.kind),
-                depth,
-            });
             self.merge_source(&mut source_vectors, token);
             self.suppress_token_diagnostic(token);
             self.cursor.consume();
@@ -241,7 +228,7 @@ impl Parser<'_, '_, '_> {
     }
 }
 
-/// A production-specific synchronization policy and the frame allowed to
+/// A production-specific synchronization policy and the production allowed to
 /// resume after the scan.
 ///
 /// C99: recovery serves the diagnostic requirement in §5.1.1.3, p. 11; PDF
@@ -249,7 +236,7 @@ impl Parser<'_, '_, '_> {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SynchronizationSet {
     pub(super) kind:   SynchronizationKind,
-    pub(super) target: ParseFrameKind,
+    pub(super) target: ProductionKind,
 }
 
 /// The token a statement-owned expression ends at.
@@ -309,7 +296,7 @@ pub(super) enum SynchronizationKind {
 ///
 /// Keeping delimiter depth here makes recovery ownership inspectable and keeps
 /// the state resumable if the token source becomes asynchronous in a later
-/// phase. `active` is `None` whenever normal frame execution is in progress.
+/// phase. `active` is `None` whenever normal parsing is in progress.
 /// A finished scan keeps its emptied stacks in `spare` for the next one, so
 /// recovery reuses the same parse-arena storage however often it runs.
 ///

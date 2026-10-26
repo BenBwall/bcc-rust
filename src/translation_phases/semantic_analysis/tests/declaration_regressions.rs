@@ -471,56 +471,58 @@ fn unnamed_invalid_bit_fields_report_once_with_source_and_recover() {
 
 #[test]
 fn anonymous_member_paths_use_linear_retained_storage() {
-    let mut previous = None;
-    for depth in [2000, 4000, 8000] {
-        let source = format!(
-            "struct Outer {{ {} int leaf; {} }}; struct Outer value = {{.leaf = 7}}; int f(void) \
-             {{ return value.leaf; }}",
-            "struct {".repeat(depth),
-            "};".repeat(depth),
-        );
-        let tu = Bump::new();
-        let source = tu.alloc_str(&format!("{source}\n"));
-        let mut context = Context::with_configuration(
-            &tu,
-            CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
-        );
-        let parsed = crate::pipeline::parse_translation_unit(
-            &mut context,
-            Path::new("<input>"),
-            source,
-            crate::headers::HeaderSearch::default(),
-        );
-        assert_eq!(context.pending_error_count(), 0);
-        let before = tu.used();
-        let unit = analyze(&mut context, &parsed);
-        let retained = tu.used() - before;
-        assert_eq!(
-            context.pending_error_count(),
-            0,
-            "{:?}",
-            context.take_pending_errors()
-        );
-        let outer = unit
-            .types
-            .tags
-            .iter()
-            .find(|t| {
-                t.name
-                    .is_some_and(|n| context.string_cache.at(n) == "Outer")
-            })
-            .unwrap();
-        assert_eq!(outer.layout.get(), Some(Layout { size: 4, align: 4 }));
-        assert_eq!(outer.fields.get()[0].path.len(), depth + 1);
-        assert_eq!(outer.fields.get()[0].offset, 0);
-        if let Some(previous) = previous {
-            assert!(
-                retained <= 3 * previous,
-                "depth={depth}: {previous} -> {retained} retained bytes"
+    crate::test_support::on_compilation_stack(|| {
+        let mut previous = None;
+        for depth in [2000, 4000, 8000] {
+            let source = format!(
+                "struct Outer {{ {} int leaf; {} }}; struct Outer value = {{.leaf = 7}}; int \
+                 f(void) {{ return value.leaf; }}",
+                "struct {".repeat(depth),
+                "};".repeat(depth),
             );
+            let tu = Bump::new();
+            let source = tu.alloc_str(&format!("{source}\n"));
+            let mut context = Context::with_configuration(
+                &tu,
+                CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+            );
+            let parsed = crate::pipeline::parse_translation_unit(
+                &mut context,
+                Path::new("<input>"),
+                source,
+                crate::headers::HeaderSearch::default(),
+            );
+            assert_eq!(context.pending_error_count(), 0);
+            let before = tu.used();
+            let unit = analyze(&mut context, &parsed);
+            let retained = tu.used() - before;
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+            let outer = unit
+                .types
+                .tags
+                .iter()
+                .find(|t| {
+                    t.name
+                        .is_some_and(|n| context.string_cache.at(n) == "Outer")
+                })
+                .unwrap();
+            assert_eq!(outer.layout.get(), Some(Layout { size: 4, align: 4 }));
+            assert_eq!(outer.fields.get()[0].path.len(), depth + 1);
+            assert_eq!(outer.fields.get()[0].offset, 0);
+            if let Some(previous) = previous {
+                assert!(
+                    retained <= 3 * previous,
+                    "depth={depth}: {previous} -> {retained} retained bytes"
+                );
+            }
+            previous = Some(retained);
         }
-        previous = Some(retained);
-    }
+    });
 }
 
 #[test]

@@ -69,32 +69,27 @@ fn an_early_prototype_record_survives_later_parameter_lists() {
 
 #[test]
 fn parenthesized_declarators_meet_the_c99_floor_and_stress_the_heap_stack() {
-    for depth in [63, 4_096] {
-        let source = format!("int {}deep{};\n", "(".repeat(depth), ")".repeat(depth));
-        with_parse(&source, |parsed| {
-            assert_eq!(parsed.items.len(), 1);
-            assert!(
-                parser_errors(parsed).next().is_none(),
-                "{:#?}",
-                parsed.errors
-            );
-            assert!(
-                parsed
-                    .parser
-                    .trace
-                    .iter()
-                    .map(|event| event.depth)
-                    .max()
-                    .expect("nonempty trace")
-                    > depth,
-                "grammar depth must be represented by heap-backed frames"
-            );
-            assert!(
-                parsed.parser.context.source_segment_count() <= depth * 8 + 32,
-                "source provenance must grow linearly with grammar depth"
-            );
-        });
-    }
+    crate::test_support::on_compilation_stack(|| {
+        for depth in [63, 4_096] {
+            let source = format!("int {}deep{};\n", "(".repeat(depth), ")".repeat(depth));
+            with_parse(&source, |parsed| {
+                assert_eq!(parsed.items.len(), 1);
+                assert!(
+                    parser_errors(parsed).next().is_none(),
+                    "{:#?}",
+                    parsed.errors
+                );
+                assert!(
+                    parsed.parser.max_depth > depth,
+                    "every parenthesized declarator is a nested production"
+                );
+                assert!(
+                    parsed.parser.context.source_segment_count() <= depth * 8 + 32,
+                    "source provenance must grow linearly with grammar depth"
+                );
+            });
+        }
+    });
 }
 
 #[test]
@@ -144,9 +139,9 @@ fn source_storage_exhaustion_reports_one_resource_diagnostic() {
                     .count(),
                 1
             );
-            assert!(
-                parsed.parser.frames.is_empty(),
-                "resource exit retained frames"
+            assert_eq!(
+                parsed.parser.depth, 0,
+                "resource exit left productions entered"
             );
             assert_eq!(parsed.parser.scopes.depth(), 0);
         },
@@ -313,32 +308,34 @@ fn long_declaration_lists_keep_source_storage_linear() {
 
 #[test]
 fn source_storage_is_linear_in_token_count() {
-    // Frames merge provenance one token or child at a time; each fetched
-    // token must be stored once rather than re-copied for every enclosing
-    // construct.
-    let source_segments = |count: usize| {
-        let source = format!(
-            "struct S {{ int a : 3; int (*f)(int); }};\nint f(int x) {{ int t[2] = {{ [1] = {}x{} \
-             }}; {} return t[0]; }}\n",
-            "(".repeat(count),
-            ")".repeat(count),
-            "if (x) { x = (x + 1) * (x - 2) / 3; } ".repeat(count),
-        );
-        with_parse(&source, |parsed| {
-            assert!(
-                parser_errors(parsed).next().is_none(),
-                "{:#?}",
-                parsed.errors
+    crate::test_support::on_compilation_stack(|| {
+        // Frames merge provenance one token or child at a time; each fetched
+        // token must be stored once rather than re-copied for every enclosing
+        // construct.
+        let source_segments = |count: usize| {
+            let source = format!(
+                "struct S {{ int a : 3; int (*f)(int); }};\nint f(int x) {{ int t[2] = {{ [1] = \
+                 {}x{} }}; {} return t[0]; }}\n",
+                "(".repeat(count),
+                ")".repeat(count),
+                "if (x) { x = (x + 1) * (x - 2) / 3; } ".repeat(count),
             );
-            parsed.parser.context.source_segment_count()
-        })
-    };
-    let small = source_segments(256);
-    let large = source_segments(1_024);
-    assert!(
-        large <= small * 5,
-        "source storage grew superlinearly: {small} -> {large} segments"
-    );
+            with_parse(&source, |parsed| {
+                assert!(
+                    parser_errors(parsed).next().is_none(),
+                    "{:#?}",
+                    parsed.errors
+                );
+                parsed.parser.context.source_segment_count()
+            })
+        };
+        let small = source_segments(256);
+        let large = source_segments(1_024);
+        assert!(
+            large <= small * 5,
+            "source storage grew superlinearly: {small} -> {large} segments"
+        );
+    });
 }
 
 #[test]
@@ -368,8 +365,8 @@ fn configured_external_declaration_limit_has_boundary_evidence() {
                 limit:    2,
             }
         )));
-        assert!(parsed.parser.frames.is_empty());
-        assert!(parsed.parser.returned.is_none());
+        assert_eq!(parsed.parser.depth, 0);
+        assert!(parsed.parser.failure.is_none());
         assert_eq!(parsed.parser.scopes.depth(), 0);
     });
 }
@@ -401,14 +398,14 @@ fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
     with_parse_limits(
         "int value;\n",
         ParserLimits {
-            frame_depth: 1,
+            nesting_depth: 1,
             ..ParserLimits::default()
         },
         |parsed| {
             assert!(parser_errors(parsed).any(|error| matches!(
                 error,
                 ParserErrorType::ResourceLimitExceeded {
-                    resource: ParserResource::FrameDepth,
+                    resource: ParserResource::NestingDepth,
                     limit:    1,
                 }
             )));
@@ -423,13 +420,20 @@ fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
     let defaults = ParserLimits::default();
     assert_eq!(defaults.external_declarations, usize::MAX);
     assert_eq!(defaults.syntax_nodes, usize::MAX);
-    assert_eq!(defaults.frame_depth, u32::MAX as usize);
+    assert_eq!(
+        defaults.nesting_depth,
+        crate::configuration::DEFAULT_MAX_NESTING_DEPTH as usize
+    );
     assert_eq!(defaults.source_segments, usize::MAX);
+    let configured = ParserLimits::for_configuration(
+        crate::configuration::CompilerConfiguration::default().with_max_nesting_depth(7),
+    );
+    assert_eq!(configured.nesting_depth, 7);
 }
 
 fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
-    assert!(parsed.parser.frames.is_empty());
-    assert!(parsed.parser.returned.is_none());
+    assert_eq!(parsed.parser.depth, 0);
+    assert!(parsed.parser.failure.is_none());
     assert!(parsed.parser.recovery.active.is_none());
     assert_eq!(parsed.parser.scopes.depth(), 0);
     assert_eq!(
@@ -566,29 +570,21 @@ fn every_frame_retained_list_respects_the_exact_syntax_node_limit() {
 }
 
 #[test]
-fn configured_frame_depth_accepts_exact_limit_and_rejects_limit_plus_one() {
+fn configured_nesting_depth_accepts_exact_limit_and_rejects_limit_plus_one() {
     let source = "int f(void) { return sizeof(int (*)[2]) + ((1 + 2) * 3); }\n";
-    let exact_limit = with_parse(source, |baseline| {
-        baseline
-            .parser
-            .trace
-            .iter()
-            .map(|event| event.depth)
-            .max()
-            .expect("fixture must execute parser frames")
-    });
+    let exact_limit = with_parse(source, |baseline| baseline.parser.max_depth);
 
     with_parse_limits(
         source,
         ParserLimits {
-            frame_depth: exact_limit,
+            nesting_depth: exact_limit,
             ..ParserLimits::default()
         },
         |exact| {
             assert!(parser_errors(exact).all(|error| !matches!(
                 error,
                 ParserErrorType::ResourceLimitExceeded {
-                    resource: ParserResource::FrameDepth,
+                    resource: ParserResource::NestingDepth,
                     ..
                 }
             )));
@@ -598,14 +594,14 @@ fn configured_frame_depth_accepts_exact_limit_and_rejects_limit_plus_one() {
     with_parse_limits(
         source,
         ParserLimits {
-            frame_depth: exact_limit - 1,
+            nesting_depth: exact_limit - 1,
             ..ParserLimits::default()
         },
         |below| {
             assert!(parser_errors(below).any(|error| matches!(
                 error,
                 ParserErrorType::ResourceLimitExceeded {
-                    resource: ParserResource::FrameDepth,
+                    resource: ParserResource::NestingDepth,
                     limit,
                 } if *limit == exact_limit - 1
             )));
@@ -614,10 +610,12 @@ fn configured_frame_depth_accepts_exact_limit_and_rejects_limit_plus_one() {
 }
 
 #[test]
-fn syntax_limit_counts_nodes_retained_by_active_frames() {
+fn syntax_limit_stops_inside_a_root_with_pending_list_nodes() {
     let limit = 2;
+    let source = "enum E { A, B, C };\n";
+    let complete = with_parse(source, |parsed| parsed.parser.syntax.node_count());
     with_parse_limits(
-        "enum E { A, B, C };\n",
+        source,
         ParserLimits {
             syntax_nodes: limit,
             ..ParserLimits::default()
@@ -630,7 +628,10 @@ fn syntax_limit_counts_nodes_retained_by_active_frames() {
                     limit: actual,
                 } if *actual == limit
             )));
-            assert!(parsed.parser.syntax.node_count() <= limit);
+            // The enumerators reach the tree as one list and no production
+            // starts after it, so the limit is detected when the root
+            // completes; the root is then replaced by the error root.
+            assert!(parsed.parser.syntax.node_count() <= complete);
             assert!(matches!(
                 parsed.items.as_slice(),
                 [ExternalDeclaration::Error(_)]

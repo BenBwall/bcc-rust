@@ -2059,19 +2059,21 @@ fn always_inline_order_ignores_overridden_static_initializer_values() {
 /// never queries the enclosing owner of a block static's initializer.
 #[test]
 fn nested_static_initializer_ownership_stays_linear() {
-    let depth = 16_000;
-    let mut source = String::from(
-        "static inline __attribute__((always_inline)) int f(void) { return 1; } static inline \
-         __attribute__((always_inline)) int h(void) { return f(); } int main(void) {",
-    );
-    for index in 0..depth {
-        write!(source, "{{ static int (*p{index})(void) = h;").unwrap();
-    }
-    source.push_str(&"}".repeat(depth));
-    source.push_str("return h(); }");
-    let start = std::time::Instant::now();
-    drop(lower_with(&source, CompilerConfiguration::default()).unwrap());
-    assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
+    crate::test_support::on_compilation_stack(|| {
+        let depth = 16_000;
+        let mut source = String::from(
+            "static inline __attribute__((always_inline)) int f(void) { return 1; } static inline \
+             __attribute__((always_inline)) int h(void) { return f(); } int main(void) {",
+        );
+        for index in 0..depth {
+            write!(source, "{{ static int (*p{index})(void) = h;").unwrap();
+        }
+        source.push_str(&"}".repeat(depth));
+        source.push_str("return h(); }");
+        let start = std::time::Instant::now();
+        drop(lower_with(&source, CompilerConfiguration::default()).unwrap());
+        assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
+    });
 }
 
 /// PR #117's final review: labels prevent operand omission, and implicit

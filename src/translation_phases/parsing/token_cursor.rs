@@ -146,9 +146,9 @@ impl<'tu, 'p> TokenCursor<'tu, 'p> {
         self.at(0).and_then(|_| self.at(index.checked_add(1)?))
     }
 
-    /// Tokens consumed by a child frame, retained by an enclosing attribute
-    /// without reparsing or advancing the cursor. `start` is a saved consumed
-    /// count from this cursor.
+    /// Tokens consumed by a child production, retained by an enclosing
+    /// attribute without reparsing or advancing the cursor. `start` is a saved
+    /// consumed count from this cursor.
     pub(super) fn consumed_since(&self, start: usize) -> &[Token] {
         &self.upstream.tokens[start..self.position]
     }
@@ -240,7 +240,16 @@ impl<'tu, 'p> TokenCursor<'tu, 'p> {
                     }
                 }
             }
-            self.alignment_closures = Some(arena.alloc_slice_copy(&matches));
+            // C99 §6.7, p. 97; PDF p. 109 (GNU aligned operand extension):
+            // both study paths retain the same delimiter matches for parsing.
+            #[cfg(feature = "parser-study-leak-alignment")]
+            {
+                self.alignment_closures = Some(matches.leak());
+            }
+            #[cfg(not(feature = "parser-study-leak-alignment"))]
+            {
+                self.alignment_closures = Some(arena.alloc_slice_copy(&matches));
+            }
         }
         self.alignment_closures
             .is_some_and(|matches| matches.get(self.position) == Some(&true))

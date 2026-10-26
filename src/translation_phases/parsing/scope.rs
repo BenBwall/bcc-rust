@@ -6,7 +6,7 @@
 //! name space (paragraph 3, p. 123; PDF p. 135). This module tracks that one
 //! fact over the scopes of §6.2.1, pp. 29-30; PDF pp. 41-42 (file, block,
 //! and function prototype; labels' function scope is separate) and keeps
-//! function-local label and `switch` state for the statement frames.
+//! function-local label and `switch` state for the statement productions.
 //!
 //! Tags and members live in their own name spaces (§6.2.3 paragraph 1,
 //! p. 31; PDF p. 43) and never change typedef classification, so they are
@@ -127,11 +127,11 @@ impl ScopeStack<'_> {
         });
     }
 
-    /// Restores exactly the depth recorded by the owning frame.
+    /// Restores exactly the depth recorded by the owning production.
     pub(super) fn restore_depth(&mut self, depth: usize) {
         debug_assert!(
             depth <= self.nested_scopes.len(),
-            "a frame cannot restore below the scope depth at which it started"
+            "a production cannot restore below the scope depth at which it started"
         );
         while self.nested_scopes.len() > depth {
             let Scope { kind, start } = self.nested_scopes.pop().expect("scope depth was checked");
@@ -165,7 +165,7 @@ pub(super) enum NameClass {
     Ordinary,
 }
 
-/// Kind of parser-visible scope whose lifetime is owned by one frame.
+/// Kind of parser-visible scope whose lifetime is owned by one production.
 ///
 /// C99: the scope kinds of §6.2.1 paragraphs 2 and 4, pp. 29-30;
 /// PDF pp. 41-42.
@@ -261,7 +261,7 @@ pub(super) struct LabelScopes<'p> {
 /// State of one enclosing `switch` body.
 ///
 /// C99: a `switch` has at most one `default` label (§6.8.4.2 paragraph 3,
-/// p. 134; PDF p. 146), diagnosed by the statement frame.
+/// p. 134; PDF p. 146), diagnosed by the statement production.
 #[derive(Debug, Default)]
 pub(super) struct SwitchScope {
     pub(super) has_default: bool,

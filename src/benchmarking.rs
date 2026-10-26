@@ -22,6 +22,8 @@ mod input;
 
 // Compiler stages
 mod inspection;
+#[cfg(feature = "recursive-lowering-study")]
+mod lowering_study;
 mod prepared;
 mod preprocessing;
 mod semantic;
@@ -80,3 +82,9 @@ pub struct ParseBenchmarkSummary {
     pub external_declarations: usize,
     pub diagnostics:           usize,
 }
+
+#[cfg(feature = "recursive-lowering-study")]
+pub use lowering_study::{
+    LoweringMeasurement,
+    measure_lowering_source,
+};

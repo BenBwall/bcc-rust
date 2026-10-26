@@ -126,8 +126,8 @@ impl Context<'_> {
     }
 
     /// Joins an ordered list of exact source segments in one allocation.
-    /// List-owning parser frames defer this until reduction so a growing
-    /// prefix is not copied once for every child.
+    /// List-owning parser productions defer this until they complete so a
+    /// growing prefix is not copied once for every child.
     ///
     /// Parser anchors are dropped as in [`Self::merge_vectors`]: after the
     /// first nonempty range, or before the range they point at.

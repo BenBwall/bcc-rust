@@ -293,7 +293,7 @@ pub(crate) enum DesignatorType<'tu> {
 /// PDF pp. 111-112, kept distinct per spelling although paragraph 5, p. 100;
 /// PDF p. 112, makes each comma-separated set designate one type.
 /// `Complex` and `ComplexLong` are incomplete intermediate states that the
-/// specifier frame diagnoses if the list ends in them.
+/// specifier production diagnoses if the list ends in them.
 #[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub(crate) enum TypeSpecifiers<'tu> {
     #[default]

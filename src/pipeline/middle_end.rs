@@ -75,6 +75,7 @@ pub(crate) fn lower_translation_unit_diagnosed<'tu, 'ir>(
 /// backend cannot emit the retained initializer tree. Other emission roots,
 /// semantic diagnostics and optimization policy remain unchanged.
 /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+#[cfg(any(test, not(feature = "recursive-lowering-study")))]
 pub(crate) fn lower_translation_unit_with_locals<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
@@ -85,20 +86,88 @@ pub(crate) fn lower_translation_unit_with_locals<'tu, 'ir>(
     emission: (InlineCopies, bool),
 ) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
     let (copies, retain_locals) = emission;
+    lower_diagnosed(
+        context,
+        syntax,
+        sema,
+        arena,
+        optimizer,
+        profile,
+        LoweringControl {
+            copies,
+            retain_locals,
+            #[cfg(feature = "recursive-lowering-study")]
+            recursive: false,
+        },
+    )
+}
+
+/// Experimental CLI seam, called only inside the reserved compilation worker.
+#[cfg(feature = "recursive-lowering-study")]
+pub(crate) fn lower_translation_unit_recursive_with_locals<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    arena: &'ir Bump,
+    optimizer: Option<&OptimizerOptions<'_>>,
+    profile: Profile,
+    emission: (InlineCopies, bool),
+) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
+    let (copies, retain_locals) = emission;
+    lower_diagnosed(
+        context,
+        syntax,
+        sema,
+        arena,
+        optimizer,
+        profile,
+        LoweringControl {
+            copies,
+            retain_locals,
+            recursive: true,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct LoweringControl {
+    copies:        InlineCopies,
+    retain_locals: bool,
+    #[cfg(feature = "recursive-lowering-study")]
+    recursive:     bool,
+}
+
+fn lower_diagnosed<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    arena: &'ir Bump,
+    optimizer: Option<&OptimizerOptions<'_>>,
+    profile: Profile,
+    control: LoweringControl,
+) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
+    let copies = control.copies;
     let mut scratch = Bump::new();
     let target = context.configuration.target();
+    let mut options =
+        crate::lowering::LoweringOptions::default_for_build(copies == InlineCopies::Keep);
+    options.retain_locals = control.retain_locals;
+    #[cfg(feature = "recursive-lowering-study")]
+    {
+        options.recursive = control.recursive;
+    }
     let crate::lowering::LoweredUnit {
         mut module,
         function_sources,
         call_diagnostics,
-    } = crate::lowering::lower_with_emission(
+    } = crate::lowering::lower_with_options(
         context,
         syntax,
         sema,
         target,
         arena,
         &mut scratch,
-        (copies == InlineCopies::Keep, retain_locals),
+        &mut options,
     )
     .map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {

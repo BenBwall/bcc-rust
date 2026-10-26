@@ -49,10 +49,6 @@ use super::super::{
             Seh,
         },
     },
-    machine::{
-        ParseFrame,
-        ParseValue,
-    },
     syntax::{
         AttributedStatement,
         BlockItem,
@@ -122,8 +118,6 @@ fn syntax_nodes_keep_their_sizes() {
         ParenthesizedDeclarator<'_> => 32,
         BlockItem<'_> => 16,
         ExternalDeclaration<'_> => 16,
-        ParseValue<'_> => 40,
-        ParseFrame<'_, '_> => 152,
     ];
     let changed: Vec<_> = sizes
         .into_iter()

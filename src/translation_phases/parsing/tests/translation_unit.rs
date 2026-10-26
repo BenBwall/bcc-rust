@@ -289,8 +289,8 @@ fn every_representative_token_truncation_terminates_with_clean_state() {
                 continue;
             }
             with_parse(&fixture[..end], |parsed| {
-                assert!(parsed.parser.frames.is_empty(), "{fixture:?} at {end}");
-                assert!(parsed.parser.returned.is_none(), "{fixture:?} at {end}");
+                assert_eq!(parsed.parser.depth, 0, "{fixture:?} at {end}");
+                assert!(parsed.parser.failure.is_none(), "{fixture:?} at {end}");
                 assert!(
                     parsed.parser.recovery.active.is_none(),
                     "{fixture:?} at {end}"
@@ -319,14 +319,14 @@ fn declaration_only_specifiers_in_struct_members_make_progress() {
                 ParserErrorType::DeclarationSpecifierNotAllowedHere(_)
             )));
             assert_eq!(parsed.items.len(), 2, "{specifier}: {:#?}", parsed.items);
-            assert!(parsed.parser.frames.is_empty());
-            assert!(parsed.parser.returned.is_none());
+            assert_eq!(parsed.parser.depth, 0);
+            assert!(parsed.parser.failure.is_none());
         });
     }
 
     with_parse("struct { typedef", |truncated| {
-        assert!(truncated.parser.frames.is_empty());
-        assert!(truncated.parser.returned.is_none());
+        assert_eq!(truncated.parser.depth, 0);
+        assert!(truncated.parser.failure.is_none());
     });
 }
 
@@ -348,8 +348,8 @@ proptest! {
     ) {
         let source = pieces.join(" ");
         with_parse(&source, |parsed| {
-            prop_assert!(parsed.parser.frames.is_empty());
-            prop_assert!(parsed.parser.returned.is_none());
+            prop_assert_eq!(parsed.parser.depth, 0);
+            prop_assert!(parsed.parser.failure.is_none());
             prop_assert!(parsed.parser.recovery.active.is_none());
             prop_assert_eq!(parsed.parser.scopes.depth(), 0);
             prop_assert!(parsed.parser.label_scopes.is_empty());

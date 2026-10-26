@@ -53,6 +53,37 @@ fn lower_with(
     source: &str,
     configuration: crate::configuration::CompilerConfiguration,
 ) -> Result<String, Vec<String>> {
+    #[cfg(feature = "recursive-lowering-study")]
+    {
+        // Test-only overrides/counters belong to the originating test thread.
+        // Carry them explicitly rather than silently resetting test policy.
+        let minimum = initializers::REPLICATION_MINIMUM.get();
+        let replay = initializers::REPLAY_STEPS.get();
+        let effects = crate::test_support::EFFECT_RECIPE_STEPS.get();
+        let (result, replay, effects) = crate::with_compilation_stack(1024_usize.pow(3), || {
+            initializers::REPLICATION_MINIMUM.set(minimum);
+            initializers::REPLAY_STEPS.set(replay);
+            crate::test_support::EFFECT_RECIPE_STEPS.set(effects);
+            let result = lower_with_here(source, configuration);
+            (
+                result,
+                initializers::REPLAY_STEPS.get(),
+                crate::test_support::EFFECT_RECIPE_STEPS.get(),
+            )
+        })
+        .expect("reserved compilation worker");
+        initializers::REPLAY_STEPS.set(replay);
+        crate::test_support::EFFECT_RECIPE_STEPS.set(effects);
+        result
+    }
+    #[cfg(not(feature = "recursive-lowering-study"))]
+    lower_with_here(source, configuration)
+}
+
+fn lower_with_here(
+    source: &str,
+    configuration: crate::configuration::CompilerConfiguration,
+) -> Result<String, Vec<String>> {
     let target = configuration.target();
     let tu = Bump::new();
     let source = tu.alloc_str(&format!("{source}\n"));
@@ -66,6 +97,51 @@ fn lower_with(
     let sema = analyze_translation_unit(&mut context, &unit);
     let arena = Bump::new();
     let mut scratch = Bump::new();
+    #[cfg(feature = "recursive-lowering-study")]
+    {
+        let replay = initializers::REPLAY_STEPS.get();
+        let effects = crate::test_support::EFFECT_RECIPE_STEPS.get();
+        let baseline_ir = Bump::new();
+        let mut baseline_scratch = Bump::new();
+        let mut options = LoweringOptions::default_for_build(true);
+        options.recursive = false;
+        let baseline = lower_with_options(
+            &context,
+            &unit,
+            &sema,
+            target,
+            &baseline_ir,
+            &mut baseline_scratch,
+            &mut options,
+        );
+        let recursive_ir = Bump::new();
+        let mut recursive_scratch = Bump::new();
+        options.recursive = true;
+        options.plain_inline = true;
+        let recursive = lower_with_options(
+            &context,
+            &unit,
+            &sema,
+            target,
+            &recursive_ir,
+            &mut recursive_scratch,
+            &mut options,
+        );
+        let describe = |result: Result<LoweredUnit<'_>, LoweringErrors<'_>>| match result {
+            | Ok(unit) => format!(
+                "{}\n{:?}\n{:?}",
+                unit.module, unit.function_sources, unit.call_diagnostics
+            ),
+            | Err(errors) => format!("{:?}", errors.errors),
+        };
+        initializers::REPLAY_STEPS.set(replay);
+        crate::test_support::EFFECT_RECIPE_STEPS.set(effects);
+        pretty_assertions::assert_eq!(
+            describe(baseline),
+            describe(recursive),
+            "task/recursive IR, provenance and diagnostics identity"
+        );
+    }
     match lower_translation_unit(&context, &unit, &sema, target, &arena, &mut scratch) {
         | Ok(module) => {
             let verifier = Bump::new();

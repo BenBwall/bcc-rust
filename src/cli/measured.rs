@@ -66,6 +66,10 @@ pub fn compile_file_with_arguments_measured(
 /// # Errors
 ///
 /// Reading `path` or writing to `out` can fail.
+///
+/// Compilation runs on the calling thread, and the parser recurses once per
+/// nesting level; run deeply nested input inside
+/// [`crate::with_compilation_stack`].
 #[doc(hidden)]
 pub fn compile_file_measured(
     path: &Path,

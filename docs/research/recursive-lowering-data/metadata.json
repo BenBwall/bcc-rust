@@ -1,0 +1,32 @@
+{
+  "rust_source_commit": "932f32a89c75682029e7f90b208b74960fc71e94",
+  "linux_binary_hashes": {
+    "release": "204042dc0ef56fd5b042a93c2e73b83d5446f29a3a31c906f5387b8e9c0f75a7",
+    "debug": "725cf78b021619df68c2e313a3add1bdda07c618f35c59b557f1ad27be17393b"
+  },
+  "c_inputs_sha256": {
+    "benches/c/bits.c": "5b3db8d4c8c2c41a9df98da5702baa1c16006b8107c7b3c7d65f4b28c45de139",
+    "benches/c/bytecode.c": "3d5a6f27a14e43c4839a11e6ef4f3ce4117fd8a77b22a3a26b2a4d9d3b98fd45",
+    "benches/c/collatz.c": "9e4c24dbd50905287088f5a5ba3f1091ce8a7b5f83b950722678b9bcccb50d7c",
+    "benches/c/crc32.c": "052e843f1a2c2d8d1db68626a00bb629dbd35fe6a34b4ecf36560b2cd57fea3d",
+    "benches/c/fannkuch.c": "ff5e886cc2c8e44b3686e6c82c9bebafab99e6d8d146ff18b8659b4341bf5860",
+    "benches/c/hashtable.c": "700a75eeb73d6348da9896ef8989cbe789a3215957da86b479383064faf0111d",
+    "benches/c/levenshtein.c": "c33a577b905f169ad569e4d1f435d0a24337a157ec104c9874b6d7c2bea9f7f0",
+    "benches/c/linkedlist.c": "d790d03b76a742bd2b3fc0dafb207cc281d5316498e6e3084d16fe0ec53ae786",
+    "benches/c/mandel.c": "f676e0c3048eb6b5b9807c97c1de51cff911b63aa1b5d1a2dfc500a3a745c990",
+    "benches/c/matmul.c": "7a3d7925f306ed1aea912231dff4821bf64fc62a2be2559c8730b76bb5163e4b",
+    "benches/c/nqueens.c": "de3a26ed67138dd08e731d0c3688e4fec186b4b7ccba42f42429c96f605b2d73",
+    "benches/c/particles.c": "b365e2aac433ab1fff85c90eddb994526a8fc38dbc79f13d49c3dbc3a5a9e095",
+    "benches/c/sieve.c": "cef6f3c01fbaefa03a1c0b58a50362ac1505b6f9f1a5c82d6d1eae726a3ffac9",
+    "benches/c/sorts.c": "58dbf792ebc64b8c47fcfc84633965cf0b6975192be7b6c9cb1b7dc3551df465",
+    "benches/c/stencil.c": "9a0d9a99ab5e5a4e518e822b067c29513d854f4a7f6238f54829d402bfbda9ed",
+    "benches/c/strings.c": "9638d106fa52eb657120851b4b754c228204589f5387557dfcf129e7f1fb9953",
+    "benches/c/switchvm.c": "d9f98718a1b91f20ba0d12457f3e879199daae5967aeeaf975f988d742611b45"
+  },
+  "reproduction_scripts_sha256": {
+    "scripts/lowering_study_build.sh": "32a448b61340116f67da2aa13986435f55a90fd334dd193eabc54749eb6b424e",
+    "scripts/lowering_study_results.py": "dd5ac0818c8e8f1305403e51bc7ba6c35c43a2024c29c959e26968616d48bac3",
+    "scripts/lowering_study_width.py": "f3c1b9d7e7723bb9b8fac350847f8d979a69249a3c01f5776188bc6a75fb3df7",
+    "scripts/parser_study_native.py": "f5363d0772ecfb5592c37fb013d3ec4e7eeff0bfddd5042008759bf6871efe9c"
+  }
+}

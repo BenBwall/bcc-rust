@@ -72,7 +72,7 @@ Resettable storage for temporary macro-expansion work within preprocessing. It i
 The lifetime of one active expansion's temporary references and state. It ends before the expansion arena is reset; references that must survive an expansion belong to a longer-lived arena.
 
 **Parse arena** (`'parse`):
-The phase arena for parser frames, open scopes, and recovery state. It ends when parsing finishes; syntax reachable from the parsed translation unit remains in the translation-unit arena.
+The phase arena for parser scratch pools, open scopes, and recovery state. It ends when parsing finishes; syntax reachable from the parsed translation unit remains in the translation-unit arena.
 
 **Dedicated region**:
 Independent storage for a buffer that exists once per compilation and must grow without moving. It lasts as long as that buffer is needed; per-file temporary buffers instead belong in a phase arena.
@@ -181,40 +181,42 @@ A non-recursive precedence reducer that alternates operand-expected and operator
 **Expression dialect**:
 The grammar and reduction policy of one expression parser. The preprocessing dialect evaluates integer values, while the independently implemented language dialect constructs C expression AST nodes and accepts the full language operator set.
 
-## Parser stack-machine vocabulary
+## Parser production vocabulary
 
-The completed Phase 05 parser implements this vocabulary through whole
-translation units, declarations, function definitions, statements,
-expressions, type names, initializers, and recovery.
+The parser is a recursive descent parser over whole translation units,
+declarations, function definitions, statements, expressions, type names,
+initializers, and recovery.
 
-**ParserMachine** *(implemented as `Parser`)*:
-The single driver that holds the context and owns the token cursor, control stack, typed child return, syntax-node count, file-scope name classification, and diagnostic/recovery state for language parsing. It allocates syntax nodes in the translation-unit arena and its working memory in the parse arena.
-_Avoid_: Recursive-descent parser
+**Parser** *(implemented)*:
+The single driver that holds the context and owns the token cursor, nesting depth, syntax-node count, file-scope name classification, scratch pools, and diagnostic/recovery state for language parsing. It allocates syntax nodes in the translation-unit arena and its working memory in the parse arena.
 
-**ParseFrame** *(implemented)*:
-A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, expressions, type names, and initializers. Three delimiter-owning families serve later and vendor syntax, running their expression, type-name, and compound children on the same stack: `ModernFrame` (ISO C11 through C2y keyword operands such as `_Alignas`, `_Alignof`, `_Atomic(...)`, `typeof`, `_BitInt(...)`, and `_Countof`; generic selections; static assertions; and attribute specifiers in all three syntaxes, `[[...]]`, `__attribute__((...))`, and `__declspec(...)`), `GnuFrame` (GNU assembly, builtins, and `__label__` declarations), and `MsvcFrame` (MSVC SEH and inline-assembly statements). Other extensions add phases to the ordinary families.
-_Avoid_: Grammar call
+**Production** *(implemented)*:
+A `parse_*` method on `Parser` for one grammar nonterminal family. It consumes its tokens, calls the productions it is built from, owns its delimiters and scope changes, and returns its typed syntax. Families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, expressions, type names, and initializers. Three delimiter-owning extension families serve later and vendor syntax: Modern (ISO C11 through C2y keyword operands such as `_Alignas`, `_Alignof`, `_Atomic(...)`, `typeof`, `_BitInt(...)`, and `_Countof`; generic selections; static assertions; and attribute specifiers in all three syntaxes, `[[...]]`, `__attribute__((...))`, and `__declspec(...)`), GNU (assembly, builtins, and `__label__` declarations), and MSVC (SEH and inline-assembly statements). Other extensions add alternatives to the ordinary families.
+_Avoid_: Frame, grammar call
 
-**ExpressionFrame** *(implemented)*:
-The parse frame that owns the Double-E operator and operand stacks for a language expression and returns an expression result to its parent frame.
+**ProductionKind** *(implemented)*:
+The stable identity of a production family. `Parser::enter_production` records it as the active production, which every parser diagnostic captures, and recovery sets name the production that owns them.
 
-**ParseAction** *(implemented)*:
-A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set. After a forward phase change that needs no driver work, a frame may instead continue: frame dispatch runs it again at once with the same lookahead.
+**Nesting depth** *(implemented)*:
+The number of productions active at once, counted by `Parser::enter_production`. It is bounded by `--max-nesting-depth` (`CompilerConfiguration::max_nesting_depth`, default 2^18), which keeps recursion far inside the reserved compilation stack; crossing it is a parser resource limit.
 
-**ParseValue** *(implemented)*:
-The typed result passed from a completed child frame to its parent. Variants cover declarations, function definitions, compound statements, statements, expressions, constant expressions, type names, and initializers, plus the extension frames' results: a modern value (keyword operand, generic selection, static assertion, or attribute specifier) and a GNU value (assembly, builtin, or local-label list). `MsvcFrame` returns an ordinary statement.
+**Reserved compilation stack** *(implemented)*:
+The demand-paged 100 GiB native stack of the compilation worker thread (`src/compilation_stack.rs`). Pages are committed only when recursion touches them, so the reservation costs address space, not memory, and the parser never grows or switches stacks.
+
+**Expression production** *(implemented)*:
+The production that owns the Double-E operator and operand stacks for a language expression and returns the expression syntax to its caller.
 
 **Deferred child** *(historical phase seam)*:
 A present grammar child whose parser belonged to a later phase, retained as a typed source-backed slot rather than confused with syntactic absence. Phase 04 removed these seams from supported C99 grammar paths.
 _Avoid_: Skipped syntax
 
 **Synchronization set** *(implemented)*:
-The tokens at which a particular frame can safely resume or unwind after malformed input, paired with a legal recovery target.
+The tokens at which a particular production can safely resume or unwind after malformed input, paired with a legal recovery target.
 _Avoid_: Global recovery point
 
 **Recovered declaration** *(implemented at the external-declaration boundary)*:
 A declaration AST retained after one or more hard syntax diagnostics and local
-repair. Migrated frames finish synchronization and provenance collection, then
+repair. Productions finish synchronization and provenance collection, then
 yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's
 syntax. Later analysis may inspect the repaired tree to find additional
 problems, while the distinct variant prevents it from being mistaken for fully
@@ -230,10 +232,10 @@ meaningful AST can be recovered. Pure top-level garbage yields
 recovered syntax instead.
 
 **Structured parser diagnostic**:
-A parser diagnostic with a symbolic code, severity, active frame, expected and
+A parser diagnostic with a symbolic code, severity, active production, expected and
 found syntax categories, the found token's source spelling, primary provenance,
 optional ranges and related locations, an optional `;` insertion point, and
-recovery summary. Diagnostics are delivered in emission FIFO. The code, frame,
+recovery summary. Diagnostics are delivered in emission FIFO. The code, production,
 and recovery owner are machine-facing; rendering shows only source spellings
 and fixed wording.
 
@@ -244,7 +246,7 @@ rule), and help. Rendering never exposes internal representation.
 _Avoid_: Debug-formatted error
 
 **Parser resource limit**:
-A configured ceiling for external roots, syntax nodes, active frame depth, or
+A configured ceiling for external roots, syntax nodes, nesting depth, or
 stored source-vector segments. Crossing a ceiling emits a stable resource diagnostic, clears transient parser
 state, and returns an explicit external error root rather than panicking.
 
@@ -282,7 +284,7 @@ The GNU `({ block-items })` expression. Its compound child owns block scope;
 its expression owner retains the enclosing parentheses. Value/type analysis is deferred.
 
 **Nested function definition**:
-A GNU block item containing a complete function definition. Its parser frames
+A GNU block item containing a complete function definition. Its productions
 isolate function-local label/switch state while preserving enclosing typedef visibility.
 
 **Extension marker**:

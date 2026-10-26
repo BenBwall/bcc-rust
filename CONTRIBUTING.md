@@ -21,9 +21,9 @@ so nothing needs to be declared before it is used.
      views live in submodules. A module with no loop, such as a collection of
      utilities, gives this place to its entry point or its central type.
 
-  A file that implements one grammar frame or one view and keeps a single
-  helper child beside it (`parsing/frames/expression.rs` with
-  `expression/lookahead.rs`, `parsing/inspection.rs` with
+  A file that implements one grammar production family or one view and keeps a
+  single helper child beside it (`parsing/grammar/expressions.rs` with
+  `expressions/lookahead.rs`, `parsing/inspection.rs` with
   `inspection/labels.rs`) is not a module entry file in this sense: it keeps
   its body, with its central item first, as any other file does.
 - **Every file puts its most important item first.** Order items as a reader
@@ -32,9 +32,9 @@ so nothing needs to be declared before it is used.
   then trait impls such as `Debug`, `Display`, and `Default`. `#[cfg(test)]`
   modules come last.
 - **A family of parallel files gets its own directory.** When a module has one
-  file per grammar frame, extension frame, builtin table, directive, or scanner
+  file per grammar production family, builtin table, directive, or scanner
   concern, those files move into a subdirectory with its own entry file, as in
-  `parsing/frames/`, `parsing/extensions/`, `semantic_analysis/builtins/`,
+  `parsing/grammar/`, `parsing/extensions/`, `semantic_analysis/builtins/`,
   `preprocessing/directives/`, and `preprocessor_tokenizer/scanning/`. A
   subsystem with enough parts to need its own map gets one too: the
   preprocessor's working state in `preprocessing/runtime/`, and the arena and
@@ -53,7 +53,7 @@ WG14/N1256 (ISO/IEC 9899:TC3: C99 with Technical Corrigenda 1-3).
   the translation phases and clauses it implements, and where its
   responsibility stops (for example, a constraint left to semantic analysis).
   In an entry file these citations follow the module map.
-- A type, frame, function, or diagnostic that implements a specific grammar
+- A type, production, function, or diagnostic that implements a specific grammar
   production, constraint, semantic rule, translation limit, or
   implementation-defined choice carries a `C99:` line in its doc comment. Mark
   extensions and implementation-defined choices as such.

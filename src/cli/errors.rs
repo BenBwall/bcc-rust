@@ -18,6 +18,9 @@ use thiserror::Error;
               message."
 )]
 pub enum MainError {
+    /// Reserving a native compilation stack failed before compiler setup.
+    #[error("error: cannot create compilation stack: {0}")]
+    CompilationStack(io::Error),
     #[error("error: cannot read `{}`: {source}", path.display())]
     OpenInputFileError { path: PathBuf, source: io::Error },
     /// File output must not truncate or replace the source, including aliases.

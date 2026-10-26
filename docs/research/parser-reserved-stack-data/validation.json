@@ -1,0 +1,37 @@
+{
+  "reserved-build-1.log": {
+    "raw_sha256": "67c4fbfa5d3749cc6a9eb3c84d352985c7a72c394cc3bdce4ad615731e6a4a95",
+    "archived_sha256": "67c4fbfa5d3749cc6a9eb3c84d352985c7a72c394cc3bdce4ad615731e6a4a95",
+    "complete": false,
+    "test_results": []
+  },
+  "reserved-build-2.log": {
+    "raw_sha256": "57e7da142ebda44536938e6802b7b670c6d79571c796abb21d44190a06533add",
+    "archived_sha256": "57e7da142ebda44536938e6802b7b670c6d79571c796abb21d44190a06533add",
+    "complete": false,
+    "test_results": [
+      "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ]
+  },
+  "reserved-build-3.log": {
+    "raw_sha256": "b4544891dcc3da1483b025bff9a4530204e4ea023c5aaf1c41ab63b7fecc4670",
+    "archived_sha256": "b6998fdec99f82ccde2a03635438d0468bfe7b5b140b30f317bf6979af9773d3",
+    "complete": true,
+    "test_results": [
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ]
+  },
+  "reserved-checks.log": {
+    "raw_sha256": "e6e3ad677a1112eded2ec921eae89badf7cbff231077263af7c642f3a0bd092b",
+    "archived_sha256": "e6e3ad677a1112eded2ec921eae89badf7cbff231077263af7c642f3a0bd092b",
+    "complete": true,
+    "test_results": [
+      "test result: ok. 2304 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 48.36s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s",
+      "test result: ok. 254 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 55.51s",
+      "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 95.93s",
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2310 filtered out; finished in 0.70s"
+    ]
+  }
+}

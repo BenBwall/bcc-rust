@@ -1,0 +1,4802 @@
+[
+  {
+    "run": "reserved-debug-diff",
+    "input": "assignment-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "assignment-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "assignment-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "assignment-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "assignment-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "assignment-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "bits.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "bits.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "blocks-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "blocks-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "blocks-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "blocks-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "blocks-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "blocks-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "bytecode.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "bytecode.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "c99-floors.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "c99-floors.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "chain-1000.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "chain-1000.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "collatz.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "collatz.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "conditional-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "conditional-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "conditional-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "conditional-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "conditional-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "conditional-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "crc32.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "crc32.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "declarator-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "declarator-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "declarator-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "declarator-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "declarator-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "declarator-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "extensions.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "extensions.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "fannkuch.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "fannkuch.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "hashtable.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "hashtable.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-list-1000.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "initializer-list-1000.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "levenshtein.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "levenshtein.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "linkedlist.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "linkedlist.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "lua-supported.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "lua-supported.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "lua.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "lua.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "malformed.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "malformed.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "mandel.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "mandel.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "matmul.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "matmul.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "nqueens.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "nqueens.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "parentheses-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "parentheses-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "parentheses-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "parentheses-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "parentheses-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "parentheses-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "particles.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "particles.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "precedence.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "precedence.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "provenance.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "provenance.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "sieve.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "sieve.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "sorts.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "sorts.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "statements-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "statements-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "statements-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "statements-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "statements-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "statements-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "stencil.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "stencil.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "strings.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "strings.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "switchvm.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "switchvm.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "unary-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "unary-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "unary-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "unary-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "unary-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-diff",
+    "input": "unary-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-alignof-type.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-alignof-type.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-assignment-nonunary-left.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-assignment-nonunary-left.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-assignment-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-assignment-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-builtin-argument.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-builtin-argument.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-builtin-type.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-builtin-type.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-case-colon.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-case-colon.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-cast-operand.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-cast-operand.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-compound-literal-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-compound-literal-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-conditional-colon.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-conditional-colon.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-conditional-middle-comma.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-conditional-middle-comma.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-conditional-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-conditional-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-designation-bracket.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-designation-bracket.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-designation-equals.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-designation-equals.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-do-missing-while.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-do-missing-while.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-empty-call-argument.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-empty-call-argument.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-empty-subscript.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-empty-subscript.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-declarator.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-declarator.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-expression.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-expression.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-initializer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-initializer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-statement.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-eof-statement.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-for-declaration-init.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-for-declaration-init.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-for-extra-clause.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-for-extra-clause.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-goto-target.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-goto-target.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-if-empty-condition.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-if-empty-condition.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-if-missing-body.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-if-missing-body.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-if-stray-operand.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-if-stray-operand.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-initializer-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-initializer-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-initializer-empty-value.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-initializer-empty-value.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-mismatched-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-mismatched-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-call-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-call-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-call-comma.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-call-comma.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-group-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-group-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-member.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-member.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-operand.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-operand.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-subscript-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-missing-subscript-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-sizeof-type-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-sizeof-type-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-statement-expression-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-statement-expression-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-stray-else.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-stray-else.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-stray-operand-group.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-stray-operand-group.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-switch-condition.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-switch-condition.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-typedef-restoration.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-typedef-restoration.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-while-header-brace.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "bad-while-header-brace.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-abstract-types.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-abstract-types.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-aggregate.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-aggregate.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-array-parameters.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-array-parameters.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-function-pointers.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-function-pointers.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-old-style.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "decl-old-style.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-additive.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-additive.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-assignment-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-assignment-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-assignment-compound.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-assignment-compound.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-assignment-grouped-lhs.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-assignment-grouped-lhs.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-bitwise-and.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-bitwise-and.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-bitwise-or.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-bitwise-or.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-bitwise-xor.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-bitwise-xor.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-cast-array-pointer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-cast-array-pointer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-cast-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-cast-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-cast-function-pointer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-cast-function-pointer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-comma-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-comma-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-compound-literal-array.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-compound-literal-array.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-compound-literal-member.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-compound-literal-member.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-compound-literal-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-compound-literal-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-assignment-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-assignment-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-grouped-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-grouped-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-middle-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-middle-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-middle.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-middle.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-conditional-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-equality.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-equality.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-logical-and.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-logical-and.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-logical-or.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-logical-or.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-multiplicative.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-multiplicative.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-postfix-arguments.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-postfix-arguments.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-postfix-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-postfix-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-postfix-increments.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-postfix-increments.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-precedence-ladder.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-precedence-ladder.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-precedence-parenthesized.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-precedence-parenthesized.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-primary-constants.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-primary-constants.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-primary-grouping.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-primary-grouping.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-primary-strings.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-primary-strings.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-relational.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-relational.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-shift.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-shift.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-sizeof-binding.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-sizeof-binding.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-sizeof-compound-literal.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-sizeof-compound-literal.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-sizeof-forms.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-sizeof-forms.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-unary-nesting.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-unary-nesting.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-unary-operators.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "expr-unary-operators.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-alignof-expressions.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-alignof-expressions.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-alignof-types.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-alignof-types.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-asm.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-asm.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-call.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-call.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-choose.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-choose.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-offsetof.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-offsetof.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-types.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-types.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-va-arg.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-builtin-va-arg.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-case-range.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-case-range.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-complex-unary.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-complex-unary.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-extension-marker.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-extension-marker.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-generic.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-generic.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-local-label-computed-goto.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-local-label-computed-goto.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-nested-function.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-nested-function.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-obsolete-designators.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-obsolete-designators.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-omitted-conditional-assignment.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-omitted-conditional-assignment.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-omitted-conditional.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-omitted-conditional.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-range-designator.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-range-designator.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-statement-expression-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-statement-expression-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-statement-expression.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-statement-expression.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-typeof.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "ext-typeof.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-000.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-000.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-001.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-001.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-002.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-002.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-003.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-003.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-004.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-004.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-005.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-005.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-006.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-006.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-007.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-007.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-008.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-008.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-009.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-009.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-010.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-010.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-011.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-011.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-012.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-012.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-013.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-013.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-014.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-014.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-015.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "fuzz-expression-015.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "init-conditional-designator.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "init-conditional-designator.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "init-designator-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "init-designator-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "init-nested-braces.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "init-nested-braces.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-braced-else.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-braced-else.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-case-conditional.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-case-conditional.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-dangling-else.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-dangling-else.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-do-while.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-do-while.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-else-if.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-else-if.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-for-declaration.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-for-declaration.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-for-empty.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-for-empty.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-for-expression.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-for-expression.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-iteration-typedef.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-iteration-typedef.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-labels-goto.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-labels-goto.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-null-mixed.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-null-mixed.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-selection-typedef.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-selection-typedef.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-switch-in-loop.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-switch-in-loop.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-switch-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-switch-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-switch.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-switch.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-while.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "stmt-while.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-cast-group.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-cast-group.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-declarator-list.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-declarator-list.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-for-scope.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-for-scope.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-function-return-scope.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-function-return-scope.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-member-label.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-member-label.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-nested-restore.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-nested-restore.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-own-initializer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-own-initializer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-parameter.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-parameter.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-prototype.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-debug-grammar",
+    "input": "typedef-prototype.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "assignment-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "assignment-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "assignment-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "assignment-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "assignment-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "assignment-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "bits.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "bits.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "blocks-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "blocks-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "blocks-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "blocks-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "blocks-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "blocks-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "bytecode.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "bytecode.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "c99-floors.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "c99-floors.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "chain-1000.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "chain-1000.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "collatz.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "collatz.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "conditional-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "conditional-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "conditional-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "conditional-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "conditional-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "conditional-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "crc32.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "crc32.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "declarator-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "declarator-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "declarator-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "declarator-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "declarator-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "declarator-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "extensions.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "extensions.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "fannkuch.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "fannkuch.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "hashtable.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "hashtable.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-list-1000.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "initializer-list-1000.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "levenshtein.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "levenshtein.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "linkedlist.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "linkedlist.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "lua-supported.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "lua-supported.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "lua.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "lua.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "malformed.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "malformed.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "mandel.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "mandel.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "matmul.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "matmul.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "nqueens.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "nqueens.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "parentheses-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "parentheses-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "parentheses-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "parentheses-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "parentheses-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "parentheses-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "particles.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "particles.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "precedence.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "precedence.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "provenance.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "provenance.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "sieve.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "sieve.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "sorts.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "sorts.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "statements-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "statements-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "statements-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "statements-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "statements-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "statements-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "stencil.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "stencil.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "strings.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "strings.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "switchvm.i",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "switchvm.i",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "unary-127.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "unary-127.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "unary-256.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "unary-256.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "unary-32.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-diff",
+    "input": "unary-32.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-alignof-type.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-alignof-type.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-assignment-nonunary-left.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-assignment-nonunary-left.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-assignment-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-assignment-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-builtin-argument.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-builtin-argument.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-builtin-type.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-builtin-type.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-case-colon.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-case-colon.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-cast-operand.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-cast-operand.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-compound-literal-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-compound-literal-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-conditional-colon.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-conditional-colon.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-conditional-middle-comma.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-conditional-middle-comma.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-conditional-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-conditional-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-designation-bracket.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-designation-bracket.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-designation-equals.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-designation-equals.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-do-missing-while.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-do-missing-while.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-empty-call-argument.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-empty-call-argument.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-empty-subscript.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-empty-subscript.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-declarator.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-declarator.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-expression.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-expression.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-initializer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-initializer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-statement.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-eof-statement.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-for-declaration-init.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-for-declaration-init.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-for-extra-clause.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-for-extra-clause.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-goto-target.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-goto-target.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-if-empty-condition.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-if-empty-condition.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-if-missing-body.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-if-missing-body.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-if-stray-operand.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-if-stray-operand.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-initializer-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-initializer-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-initializer-empty-value.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-initializer-empty-value.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-mismatched-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-mismatched-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-call-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-call-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-call-comma.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-call-comma.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-group-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-group-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-member.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-member.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-operand.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-operand.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-subscript-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-missing-subscript-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-sizeof-type-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-sizeof-type-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-statement-expression-close.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-statement-expression-close.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-stray-else.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-stray-else.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-stray-operand-group.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-stray-operand-group.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-switch-condition.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-switch-condition.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-typedef-restoration.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-typedef-restoration.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-while-header-brace.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "bad-while-header-brace.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-abstract-types.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-abstract-types.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-aggregate.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-aggregate.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-array-parameters.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-array-parameters.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-function-pointers.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-function-pointers.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-old-style.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "decl-old-style.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-additive.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-additive.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-assignment-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-assignment-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-assignment-compound.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-assignment-compound.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-assignment-grouped-lhs.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-assignment-grouped-lhs.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-bitwise-and.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-bitwise-and.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-bitwise-or.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-bitwise-or.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-bitwise-xor.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-bitwise-xor.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-cast-array-pointer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-cast-array-pointer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-cast-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-cast-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-cast-function-pointer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-cast-function-pointer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-comma-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-comma-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-compound-literal-array.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-compound-literal-array.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-compound-literal-member.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-compound-literal-member.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-compound-literal-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-compound-literal-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-assignment-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-assignment-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-grouped-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-grouped-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-middle-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-middle-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-middle.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-middle.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-right.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-conditional-right.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-equality.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-equality.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-logical-and.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-logical-and.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-logical-or.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-logical-or.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-multiplicative.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-multiplicative.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-postfix-arguments.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-postfix-arguments.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-postfix-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-postfix-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-postfix-increments.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-postfix-increments.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-precedence-ladder.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-precedence-ladder.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-precedence-parenthesized.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-precedence-parenthesized.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-primary-constants.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-primary-constants.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-primary-grouping.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-primary-grouping.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-primary-strings.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-primary-strings.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-relational.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-relational.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-shift.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-shift.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-sizeof-binding.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-sizeof-binding.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-sizeof-compound-literal.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-sizeof-compound-literal.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-sizeof-forms.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-sizeof-forms.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-unary-nesting.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-unary-nesting.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-unary-operators.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "expr-unary-operators.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-alignof-expressions.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-alignof-expressions.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-alignof-types.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-alignof-types.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-asm.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-asm.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-call.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-call.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-choose.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-choose.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-offsetof.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-offsetof.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-types.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-types.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-va-arg.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-builtin-va-arg.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-case-range.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-case-range.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-complex-unary.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-complex-unary.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-extension-marker.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-extension-marker.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-generic.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-generic.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-local-label-computed-goto.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-local-label-computed-goto.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-nested-function.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-nested-function.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-obsolete-designators.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-obsolete-designators.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-omitted-conditional-assignment.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-omitted-conditional-assignment.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-omitted-conditional.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-omitted-conditional.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-range-designator.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-range-designator.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-statement-expression-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-statement-expression-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-statement-expression.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-statement-expression.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-typeof.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "ext-typeof.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-000.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-000.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-001.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-001.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-002.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-002.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-003.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-003.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-004.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-004.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-005.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-005.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-006.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-006.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-007.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-007.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-008.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-008.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-009.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-009.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-010.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-010.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-011.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-011.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-012.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-012.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-013.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-013.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-014.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-014.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-015.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "fuzz-expression-015.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "init-conditional-designator.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "init-conditional-designator.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "init-designator-chain.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "init-designator-chain.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "init-nested-braces.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "init-nested-braces.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-braced-else.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-braced-else.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-case-conditional.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-case-conditional.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-dangling-else.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-dangling-else.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-do-while.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-do-while.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-else-if.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-else-if.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-for-declaration.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-for-declaration.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-for-empty.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-for-empty.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-for-expression.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-for-expression.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-iteration-typedef.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-iteration-typedef.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-labels-goto.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-labels-goto.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-null-mixed.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-null-mixed.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-selection-typedef.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-selection-typedef.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-switch-in-loop.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-switch-in-loop.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-switch-nested.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-switch-nested.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-switch.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-switch.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-while.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "stmt-while.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-cast-group.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-cast-group.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-declarator-list.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-declarator-list.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-for-scope.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-for-scope.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-function-return-scope.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-function-return-scope.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-member-label.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-member-label.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-nested-restore.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-nested-restore.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-own-initializer.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-own-initializer.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-parameter.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-parameter.c",
+    "mode": "recursive",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-prototype.c",
+    "mode": "machine",
+    "identical": true
+  },
+  {
+    "run": "reserved-release-grammar",
+    "input": "typedef-prototype.c",
+    "mode": "recursive",
+    "identical": true
+  }
+]

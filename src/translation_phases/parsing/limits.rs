@@ -1,7 +1,8 @@
 //! Parser resource ceilings and terminal failure cleanup.
 //!
 //! [`Parser::resource_failure`] emits one resource diagnostic and ends parsing.
-//! [`ParserLimits`] sets ceilings on roots, nodes, frames, and source segments.
+//! [`ParserLimits`] sets ceilings on roots, nodes, nesting depth, and source
+//! segments.
 //! The defaults are representation bounds rather than fixed grammar limits.
 //! Memory exhaustion outside these counters is not handled here.
 //!
@@ -18,9 +19,15 @@ use super::{
         ParserResource,
     },
 };
-use crate::translation_phases::{
-    GetSourceFileIndex,
-    preprocessing::Token,
+use crate::{
+    configuration::{
+        CompilerConfiguration,
+        DEFAULT_MAX_NESTING_DEPTH,
+    },
+    translation_phases::{
+        GetSourceFileIndex,
+        preprocessing::Token,
+    },
 };
 
 impl<'tu> Parser<'_, 'tu, '_> {
@@ -59,11 +66,6 @@ impl<'tu> Parser<'_, 'tu, '_> {
             token,
         );
         self.cursor.abandon();
-        while let Some(frame) = self.frames.pop() {
-            frame.reclaim_pooled(&mut self.pools);
-        }
-        self.retained_frame_nodes = 0;
-        self.returned = None;
         self.recovery.abandon();
         self.scopes.restore_depth(0);
         self.scopes.clear_retained_bindings();
@@ -85,8 +87,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
 pub(super) struct ParserLimits {
     pub(super) external_declarations: usize,
     pub(super) syntax_nodes:          usize,
-    pub(super) frame_depth:           usize,
+    pub(super) nesting_depth:         usize,
     pub(super) source_segments:       usize,
+}
+
+impl ParserLimits {
+    /// The defaults with the configured nesting ceiling.
+    pub(super) fn for_configuration(configuration: CompilerConfiguration) -> Self {
+        Self {
+            nesting_depth: configuration.max_nesting_depth() as usize,
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for ParserLimits {
@@ -96,8 +108,9 @@ impl Default for ParserLimits {
             // There is no smaller grammar or representation limit.
             external_declarations: usize::MAX,
             syntax_nodes:          usize::MAX,
-            // Scope bindings store their nesting depth in a `u32`.
-            frame_depth:           u32::MAX as usize,
+            // Deep enough for generated code, shallow enough that the
+            // reserved compilation stack cannot overflow first.
+            nesting_depth:         DEFAULT_MAX_NESTING_DEPTH as usize,
             // Each source arena checks its own `u32` index space. Their
             // combined count has no smaller representation limit than usize.
             source_segments:       usize::MAX,

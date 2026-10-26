@@ -49,25 +49,6 @@ fn specifier_only_declaration_runs_through_the_machine() {
         );
         assert_eq!(declaration.init_declarators.len(), 0);
         assert!(parser_errors(parsed).next().is_none());
-        assert!(
-            parsed.parser.trace.iter().any(|event| {
-                event.frame == "declaration-specifiers" && event.action == "reduce"
-            })
-        );
-        assert!(
-            parsed
-                .parser
-                .trace
-                .iter()
-                .any(|event| event.token.is_some())
-        );
-        assert!(
-            parsed
-                .parser
-                .trace
-                .iter()
-                .any(|event| { event.frame == "external-declaration" && event.action == "reduce" })
-        );
     });
 }
 
