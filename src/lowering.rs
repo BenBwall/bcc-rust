@@ -556,9 +556,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// The block computed gotos branch through, once one exists.
     indirect:           Option<Block>,
     /// In a copy made for a call (`argument_pack.rs`), the anonymous
-    /// arguments it received, and the object sizes its call supplies.
+    /// arguments it received.
     pack:               Option<&'s [Item]>,
-    object_sizes:       &'tu [(usize, u64)],
 }
 
 /// Traversal controls kept outside the AST and retained IR.

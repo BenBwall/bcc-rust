@@ -483,17 +483,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
 }
 
 impl<'tu, 's> ResolvedBuilder<'tu, 's> {
-    /// Every resolved call so far, by expression index, in index order.
-    pub(in crate::translation_phases::semantic_analysis) fn calls(
-        &self,
-        scratch: &'s Bump,
-    ) -> ArenaVec<'s, (usize, CallFacts<'tu>)> {
-        let mut calls = ArenaVec::with_capacity_in(self.calls.len(), scratch);
-        calls.extend(self.calls.iter().map(|(&index, &facts)| (index, facts)));
-        calls.sort_unstable_by_key(|&(index, _)| index);
-        calls
-    }
-
     pub(in crate::translation_phases::semantic_analysis) fn new(
         tu: &'tu Bump,
         scratch: &'s Bump,

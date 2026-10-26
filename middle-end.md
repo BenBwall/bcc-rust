@@ -621,25 +621,7 @@ helper requests stays a bodiless declaration that nothing names, the
 bodies left unreached are dropped, as GCC drops them at -O2. The function's
 own body is lowered when it is an external definition, or internal and
 `used` or with an address live code takes; in any of these a pack it
-evaluates is an error, as in GCC. Each copy also answers the function's
-object-size queries (`__builtin_object_size`, `__builtin_dynamic_object_size`)
-with its call's arguments: semantic analysis records the queries a body
-folds to "unknown" and, at the end of the unit, evaluates them again for each
-direct call with the call's arguments substituted for the parameters the
-body never writes; the constant answers key the copy and replace the queries
-in it (and an expression containing one is not folded there), so glibc's
-`snprintf` wrapper checks the caller's buffer as GCC's does after inlining.
-A size test that semantic analysis folded with the unknown answer (and the
-arm it elided) stays folded, which only skips a check.
-
-**Known gap, independent of argument packs:** every other `always_inline`
-wrapper evaluates `__builtin_object_size` of its parameter as "unknown",
-because semantic analysis answers it once in the body, before any inlining.
-glibc's GCC-mode `memcpy`, `strcpy` and `read` wrappers (and the
-Clang-mode ones that do not use `pass_object_size`, such as `memcpy`) so
-pass `(size_t)-1` to their checked functions and detect no overflow. Clang
-answers the query after inlining (`llvm.objectsize`); a general fix needs an
-object-size operation in the IR that the optimizer resolves after inlining. Known deviations from GCC, which finds the pack after constant folding:
+evaluates is an error, as in GCC. Known deviations from GCC, which finds the pack after constant folding:
 bcc sees through parentheses, `__extension__`, casts and unary `+` that keep
 the type, generic selections, and `*`, `&` or a same-type cast on the
 callee, but not arithmetic (`0 + pack`) or a comma before the pack; and the

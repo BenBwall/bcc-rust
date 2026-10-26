@@ -585,11 +585,6 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// constant context reads zero. Lowering evaluates it structurally.
     /// GNU extension: GCC manual, "Other Builtins".
     pub(crate) runtime_query: bool,
-    /// The operand holds an object-size query whose answer is unknown in
-    /// its function's body ([`Analyzer::object_size_query`]); the copy of a
-    /// function using the GNU argument pack that knows its caller's buffer
-    /// evaluates it structurally instead of the folded unknown value.
-    pub(crate) size_query: bool,
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
     pub(crate) operation_type: Option<TypeId>,

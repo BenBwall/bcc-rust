@@ -27,12 +27,6 @@
 //! lowered, and either reports a pack it evaluates as an invalid use, as GCC
 //! does.
 //!
-//! Each copy also answers the function's object-size queries with its
-//! call's buffers ([`PackCopy::sizes`]): semantic analysis folds
-//! `__builtin_dynamic_object_size (__s, 1)` of a parameter to "unknown" in
-//! the body, but GCC answers it after inlining, and glibc's `snprintf`
-//! passes it on to `__snprintf_chk`.
-//!
 //! For `printf (" %d %s\n", 1, "a")` against glibc's
 //! `printf (const char *__fmt, ...) { return __printf_chk (1, __fmt,
 //! __va_arg_pack ()); }`, the caller calls `printf.va_arg_pack (ptr, i32,
@@ -294,9 +288,6 @@ pub(super) struct PackCopy<'a, 'tu> {
     pub(super) pack:   &'a [TypeId],
     /// The first call of it, where a copy nested too deeply is reported.
     pub(super) source: SourceVectors,
-    /// The constant answers of its object-size queries, by query expression
-    /// identity, that its calls' arguments supply.
-    pub(super) sizes:  &'tu [(usize, u64)],
 }
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
@@ -463,20 +454,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(())
     }
 
-    /// The value of the object-size query `expression` in this copy, when
-    /// its call's arguments answer it with a constant
-    /// ([`PackCopy::sizes`]): GCC answers it after inlining, so the copy
-    /// checks the caller's buffer, not an unknown one. Semantic analysis
-    /// folded the query to "unknown" in the function's own body.
-    /// GNU extension: GCC manual, "Object Size Checking".
-    pub(super) fn forwarded_object_size(&self, expression: &Expression<'_>) -> Option<u64> {
-        let identity = std::ptr::from_ref(expression).addr();
-        self.object_sizes
-            .binary_search_by_key(&identity, |&(query, _)| query)
-            .ok()
-            .map(|index| self.object_sizes[index].1)
-    }
-
     /// The value of `__builtin_va_arg_pack_len ()`: the number of anonymous
     /// arguments this copy received, an `int`.
     pub(super) fn pack_length(&mut self, source: SourceVectors) -> Result<Operand, LoweringError> {
@@ -550,10 +527,6 @@ impl<'tu> Unit<'_, 'tu, '_> {
     /// at its first call, and calls with the same anonymous argument types
     /// share it; [`lower_live_copies`] lowers it if live code still calls
     /// it once lowering ends.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "One call's callee, argument types, result, sizes and source key one copy."
-    )]
     pub(super) fn pack_copy(
         &mut self,
         binding: usize,
@@ -561,13 +534,14 @@ impl<'tu> Unit<'_, 'tu, '_> {
         arguments: &[TypeId],
         fixed: usize,
         result: TypeId,
-        sizes: &'tu [(usize, u64)],
         source: SourceVectors,
     ) -> Result<FuncId, LoweringErrorKind> {
         let pack = &arguments[fixed..];
-        if let Some(copy) = self.pack_copies.iter().find(|copy| {
-            std::ptr::eq(copy.record, record) && copy.pack == pack && copy.sizes == sizes
-        }) {
+        if let Some(copy) = self
+            .pack_copies
+            .iter()
+            .find(|copy| std::ptr::eq(copy.record, record) && copy.pack == pack)
+        {
             return Ok(copy.func);
         }
         let signature = self.signature_of(arguments.iter().copied(), result, false, self.tables)?;
@@ -588,7 +562,6 @@ impl<'tu> Unit<'_, 'tu, '_> {
             func,
             pack: self.tables.alloc_slice_copy(pack),
             source,
-            sizes,
         });
         Ok(func)
     }

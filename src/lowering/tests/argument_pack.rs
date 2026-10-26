@@ -348,50 +348,6 @@ static int helper(void) {{ return g(0, 1); }}
     }
 }
 
-/// Each copy answers the wrapper's object-size queries with its call's
-/// buffer, as GCC's inlining does: glibc's `snprintf` passes
-/// `__builtin_dynamic_object_size (__s, 1)` on to `__snprintf_chk`. Calls
-/// with different buffer sizes get different copies; a parameter the body
-/// writes stays unknown.
-#[test]
-fn copies_answer_object_size_queries_with_the_callers_buffers() {
-    let text = returns(
-        "extern int __snprintf_chk(char *, unsigned long, int, unsigned long, const char *, ...);
-extern __inline __attribute__((always_inline, gnu_inline)) int
-snprintf(char *s, unsigned long n, const char *f, ...)
-{ return __snprintf_chk(s, n, 1, __builtin_dynamic_object_size(s, 1), f, __builtin_va_arg_pack()); \
-         }
-static inline __attribute__((always_inline)) long moved(char *s, ...)
-{ s += 1; return (long)__builtin_object_size(s, 0) + __builtin_va_arg_pack_len(); }
-static inline __attribute__((always_inline)) long kept(char *s, ...)
-{ return (long)__builtin_object_size(s, 0) + __builtin_va_arg_pack_len(); }
-void use(void) { char a[4], b[8]; snprintf(a, 4, \"%d\", 1); snprintf(b, 8, \"%d\", 2);
- snprintf(a + 1, 3, \"%d\", 3); snprintf(b, 8, \"%d\", 4); }
-int main(void) { char c[6]; return (moved(c, 1) == 0) + (kept(c, 1) == 7) * 2; }",
-        3,
-    );
-    // The buffer size each copy passes to `__snprintf_chk`.
-    let size = |copy: &str| {
-        let copy = body(&text, copy);
-        assert!(copy.contains("call @__snprintf_chk("), "{copy}");
-        [4, 8, 3]
-            .into_iter()
-            .filter(|size| copy.contains(&format!("iconst.i64 {size}")))
-            .collect::<Vec<_>>()
-    };
-    // One copy per distinct buffer size, shared by the two calls on `b`.
-    assert_eq!(
-        [
-            size("snprintf.va_arg_pack"),
-            size("snprintf.va_arg_pack.1"),
-            size("snprintf.va_arg_pack.2"),
-        ],
-        [vec![4], vec![8], vec![3]],
-        "{text}"
-    );
-    assert!(!text.contains("snprintf.va_arg_pack.3"), "{text}");
-}
-
 /// A function that names the pack only where it is not evaluated (`sizeof`,
 /// unselected generic associations) is ordinary, and its address may be
 /// taken. One whose address live code takes gets its own body, as in GCC,

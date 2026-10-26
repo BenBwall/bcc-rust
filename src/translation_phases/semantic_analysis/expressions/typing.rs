@@ -89,7 +89,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if op == U::AddressOf {
             let operand = self.resolve_function_value(operand, None);
-            self.note_written(operand.binding);
             if operand.vector_element {
                 return self.vector_error(e);
             }
@@ -163,7 +162,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if operand.category != ValueCategory::ModifiableLvalue {
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
-            self.note_written(operand.binding);
             if !(self.real(ty)
                 || self
                     .pointer_target(ty)
@@ -261,7 +259,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if left.category != ValueCategory::ModifiableLvalue {
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
-            self.note_written(left.binding);
             if let Some(operation) = compound {
                 // This is one bounded delegation, never a traversal of syntax.
                 if matches!(operation, B::Addition | B::Subtraction) {
@@ -1321,13 +1318,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ExpressionType::AlignofType(_)
         ) {
             super::super::emission::expression_children(self.scratch, info.expression, |child| {
-                if let Some(&index) = self
+                info.runtime_query |= self
                     .expression_indices
                     .get(&std::ptr::from_ref(child).addr())
-                {
-                    info.runtime_query |= self.expressions[index].runtime_query;
-                    info.size_query |= self.expressions[index].size_query;
-                }
+                    .is_some_and(|&index| self.expressions[index].runtime_query);
             });
         }
         self.expressions.push(info);
@@ -1401,7 +1395,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             selected_expression: None,
             elided: false,
             runtime_query: false,
-            size_query: false,
             place_alignment: None,
             ty,
             operation_type: None,

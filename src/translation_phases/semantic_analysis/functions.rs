@@ -55,7 +55,6 @@ use crate::{
         arena_list::ArenaList,
         bump::{
             ArenaMap,
-            ArenaSet,
             ArenaVec,
             Bump,
         },
@@ -801,7 +800,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.function_records[function].va_arg_pack = true;
             }
         }
-        self.forward_object_sizes();
         let mut entities = ArenaVec::new_in(self.scratch);
         entities.extend(self.functions.entities.values().copied());
         entities.sort_unstable_by_key(|entity| entity.latest);
@@ -2135,128 +2133,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Records that the object `binding` (if any) designates may be written
-    /// through an assignment, an increment or decrement, or its address.
-    pub(in crate::translation_phases::semantic_analysis) fn note_written(
-        &mut self,
-        binding: Option<usize>,
-    ) {
-        if let Some(binding) = binding {
-            _ = self.functions.written.insert(binding);
-        }
-    }
-
-    /// Records an object-size query `call` of `operand` whose answer is
-    /// unknown in the current function's body, as for a pointer parameter:
-    /// [`Self::forward_object_sizes`] answers it again at each call of a
-    /// function using the argument pack, with the call's arguments. Returns
-    /// whether it was recorded ([`ExpressionInfo::size_query`]).
-    pub(in crate::translation_phases::semantic_analysis) fn object_size_query(
-        &mut self,
-        call: &'tu Expression<'tu>,
-        operand: &'tu Expression<'tu>,
-        mode: u8,
-        dynamic: bool,
-    ) -> bool {
-        let Some(function) = self.functions.current else {
-            return false;
-        };
-        self.functions.object_size_queries.push(ObjectSizeQuery {
-            function: function.id,
-            call,
-            operand,
-            mode,
-            dynamic,
-        });
-        true
-    }
-
-    /// Answers the object-size queries of each function using the argument
-    /// pack again at each direct call of it, with the call's arguments for
-    /// its parameters, and retains the constant answers for the copy
-    /// lowering makes for that call: glibc's GCC wrappers (`snprintf`) pass
-    /// `__builtin_dynamic_object_size (__s, 1)` of their buffer parameter
-    /// on, which GCC answers after inlining. A parameter the body writes
-    /// (assigns, increments, or takes the address of) is not replaced. GNU
-    /// extension: GCC manual, "Object Size Checking" and "Constructing
-    /// Calls".
-    fn forward_object_sizes(&mut self) {
-        if self.functions.object_size_queries.is_empty() {
-            return;
-        }
-        let mut packs = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
-        for (id, record) in self.function_records.iter().enumerate() {
-            if record.va_arg_pack
-                && let Some(binding) = record.binding
-            {
-                packs
-                    .entry(self.function_identity(binding))
-                    .or_insert_with(|| ArenaVec::new_in(self.scratch))
-                    .push(id);
-            }
-        }
-        if packs.is_empty() {
-            return;
-        }
-        let calls = self.resolved.calls(self.scratch);
-        let mut parameters = ArenaVec::new_in(self.scratch);
-        let mut arguments = ArenaVec::new_in(self.scratch);
-        let mut sizes = ArenaVec::new_in(self.scratch);
-        for (index, facts) in calls {
-            let super::Callee::Direct { binding, .. } = facts.callee else {
-                continue;
-            };
-            let Some(records) = packs.get(&self.function_identity(binding)) else {
-                continue;
-            };
-            arguments.clear();
-            arguments.extend(
-                facts
-                    .arguments
-                    .iter()
-                    .map(|argument| self.expressions[argument.expression.0].expression),
-            );
-            sizes.clear();
-            for &id in records {
-                parameters.clear();
-                parameters.extend(
-                    self.function_records[id]
-                        .parameter_facts
-                        .iter()
-                        .map(|facts| {
-                            facts
-                                .body_binding
-                                .filter(|binding| !self.functions.written.contains(binding))
-                        }),
-                );
-                for i in 0..self.functions.object_size_queries.len() {
-                    let query = self.functions.object_size_queries[i];
-                    if query.function != id {
-                        continue;
-                    }
-                    if let super::ObjectSize::Constant(size) = self.substituted_object_size(
-                        query.operand,
-                        query.mode,
-                        query.dynamic,
-                        &parameters,
-                        &arguments,
-                    ) {
-                        sizes.push((std::ptr::from_ref(query.call).addr(), size));
-                    }
-                }
-            }
-            if !sizes.is_empty() {
-                sizes.sort_unstable();
-                let call = self.expressions[index].expression;
-                let sizes = self.types.tu.alloc_slice_copy(&sizes);
-                _ = self
-                    .function_extensions
-                    .forwarded_object_sizes
-                    .insert(std::ptr::from_ref(call).addr(), sizes);
-            }
-        }
-    }
-
     /// A generated `break` gives its innermost switch or loop an exit edge.
     /// A nested target's break cannot make an enclosing infinite loop exit.
     /// C99: §6.8.6.3p2, p. 138; PDF p. 150.
@@ -2878,17 +2754,6 @@ struct GeneratedBreak {
     reference_context: Option<usize>,
 }
 
-/// An object-size query whose answer is unknown in its function's body
-/// ([`Analyzer::object_size_query`]).
-#[derive(Clone, Copy)]
-struct ObjectSizeQuery<'tu> {
-    function: usize,
-    call:     &'tu Expression<'tu>,
-    operand:  &'tu Expression<'tu>,
-    mode:     u8,
-    dynamic:  bool,
-}
-
 /// A use of a GNU argument pack builtin, by function record and evaluation
 /// contexts ([`Analyzer::argument_pack_use`]).
 #[derive(Clone, Copy)]
@@ -3008,9 +2873,6 @@ pub(super) struct State<'tu, 's> {
     /// and references remain independent of this code-generation fact.
     generated_breaks: ArenaVec<'s, GeneratedBreak>,
     argument_pack_uses: ArenaVec<'s, ArgumentPackUse>,
-    object_size_queries: ArenaVec<'s, ObjectSizeQuery<'tu>>,
-    /// Bindings an assignment, increment, decrement or `&` may write.
-    written: ArenaSet<'s, usize>,
     inline_objects: ArenaVec<'s, InlineObject>,
     /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
     pub(super) outside: [Option<usize>; 2],
@@ -3055,8 +2917,6 @@ impl<'s> State<'_, 's> {
             arm_ends: ArenaVec::new_in(scratch),
             generated_breaks: ArenaVec::new_in(scratch),
             argument_pack_uses: ArenaVec::new_in(scratch),
-            object_size_queries: ArenaVec::new_in(scratch),
-            written: ArenaSet::with_hasher_in(FxBuildHasher, scratch),
             inline_objects: ArenaVec::new_in(scratch),
             outside: [None; 2],
             generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
