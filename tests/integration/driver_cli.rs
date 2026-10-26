@@ -262,6 +262,52 @@ mod tests {
         .unwrap();
         let included = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "inc.c"]);
         assert_eq!(warnings(&included), ["r.h:1"], "{}", stderr(&included));
+        // So is one found through `-I` or named by an absolute path, as GCC
+        // takes the including position's system status on every path.
+        std::fs::create_dir_all(project.path("idir")).unwrap();
+        for (name, function) in [("idir/i.h", "i"), ("abs.h", "a")] {
+            std::fs::write(
+                project.path(name),
+                format!("static int {function}(void) {{ return ({{ 3; }}); }}\n"),
+            )
+            .unwrap();
+        }
+        let absolute = project.path("abs.h");
+        std::fs::write(
+            project.path("paths.c"),
+            format!(
+                "# 1 \"h.h\" 1 3\n#include \"i.h\"\n#include \"{}\"\n# 5 \"paths.c\" 2\nint x;\n",
+                absolute.display()
+            ),
+        )
+        .unwrap();
+        let paths = project.bcc(&[
+            "-fsyntax-only",
+            "-std=c11",
+            "-pedantic",
+            "-I",
+            "idir",
+            "paths.c",
+        ]);
+        succeeds(&paths);
+        assert!(warnings(&paths).is_empty(), "{}", stderr(&paths));
+        std::fs::write(
+            project.path("user.c"),
+            format!(
+                "#include \"i.h\"\n#include \"{}\"\nint x;\n",
+                absolute.display()
+            ),
+        )
+        .unwrap();
+        let user = project.bcc(&[
+            "-fsyntax-only",
+            "-std=c11",
+            "-pedantic",
+            "-I",
+            "idir",
+            "user.c",
+        ]);
+        assert_eq!(warnings(&user).len(), 2, "{}", stderr(&user));
         // `#warning` is still emitted inside the region, as GCC and Clang do.
         std::fs::write(
             project.path("warn.c"),

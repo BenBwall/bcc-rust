@@ -969,8 +969,11 @@ Clang read preprocessed output; the other flags are ignored, and a `#line`
 directive does not end the region. The flags must come in GCC's order, one of
 `1` or `2`, then `3`, then `4` (only after `3`): the first token out of that
 order is an error ("invalid flag"), and it and the flags after it are ignored,
-so `1 2 3` or `1 wat 3` makes no system header. A `"…"` include from a marked
-region is a system header too, as in GCC. A header that is a system header by its
+so `1 2 3` or `1 wat 3` makes no system header. A header included from a
+system header, a marked region or the part after `#pragma GCC system_header`
+included, is a system header too however it is found (beside the includer,
+through `-I`, or by an absolute path), as GCC takes the including position's
+status. A header that is a system header by its
 directory or pragma stays one. So `-E` output compiled again withholds its
 system headers' warnings, also from ordinary source. Already
 preprocessed input (`.i`, `-x cpp-output`) is read as GCC's
