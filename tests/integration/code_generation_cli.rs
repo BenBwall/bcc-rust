@@ -343,12 +343,32 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
         interpreter_matches_glibc("host_library.c", &["--interpret-allow-fs"]);
     }
 
-    /// `tests/fixtures/programs/scanf_cases.c` runs `sscanf` edge cases:
-    /// matching and input failures, suppression, widths, scansets, white
-    /// space and every form of floating input.
+    /// `tests/fixtures/programs/scanf_cases.c` runs the `sscanf` edge cases
+    /// that glibc 2.39 to 2.43 agree on: matching and input failures,
+    /// suppression, widths, scansets, white space and every form of floating
+    /// input.
     #[test]
     fn scanf_edge_cases_match_glibc() {
         interpreter_matches_glibc("scanf_cases.c", &[]);
+    }
+
+    /// `tests/fixtures/programs/scanf_cases_modern_glibc.c` runs the `sscanf`
+    /// cases that glibc 2.41 to 2.43 changed (NaN payloads, prefixes without
+    /// digits, field widths): the interpreter follows 2.43, so it must write
+    /// the checked-in `.expected` output on any glibc, and a host with glibc
+    /// 2.43 or later must still write it too.
+    #[test]
+    fn scanf_edge_cases_match_modern_glibc() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let expected =
+            std::fs::read_to_string(fixture_program("scanf_cases_modern_glibc.expected")).unwrap();
+        if host_glibc_version() >= (2, 43) {
+            let glibc = glibc_output("scanf_cases_modern_glibc.c");
+            assert_eq!(text(&glibc.stdout), expected, "glibc");
+        }
+        interpreter_writes("scanf_cases_modern_glibc.c", &[], &expected, "");
     }
 
     /// Builds a fixture with clang against glibc and checks that the
@@ -358,23 +378,43 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
         if host() != Some("x86_64-unknown-linux-gnu") {
             return;
         }
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/programs")
-            .join(fixture);
-        let source = source.to_str().unwrap();
+        let expected = glibc_output(fixture);
+        interpreter_writes(
+            fixture,
+            flags,
+            &text(&expected.stdout),
+            &text(&expected.stderr),
+        );
+    }
+
+    /// What a fixture built with clang against the host's glibc writes.
+    fn glibc_output(fixture: &str) -> Output {
+        let source = fixture_program(fixture);
         let reference = temporary("glibc-reference.exe");
         let built = Command::new("target/llvm/bin/clang")
-            .args([source, "-std=c99", "-O0", "-fno-builtin", "-w", "-lm", "-o"])
+            .arg(&source)
+            .args(["-std=c99", "-O0", "-fno-builtin", "-w", "-lm", "-o"])
             .arg(&reference)
             .output()
             .unwrap();
         assert!(built.status.success(), "{}", text(&built.stderr));
-        let expected = run_native(&mut Command::new(&reference)).unwrap();
-        assert_eq!(expected.status.code(), Some(0));
+        let output = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(output.status.code(), Some(0));
         std::fs::remove_file(reference).unwrap();
+        output
+    }
+
+    /// Checks that the interpreter, with `flags`, runs a fixture to exit
+    /// status 0 writing `stdout` and `stderr` under both optimization
+    /// settings.
+    fn interpreter_writes(fixture: &str, flags: &[&str], stdout: &str, stderr: &str) {
+        let source = fixture_program(fixture);
         for optimize in ["--opt=none", "--opt=bcc"] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
-            _ = command.args([source, "--interpret", optimize]).args(flags);
+            _ = command
+                .arg(&source)
+                .args(["--interpret", optimize])
+                .args(flags);
             let output = run_native(&mut command).unwrap();
             assert_eq!(
                 output.status.code(),
@@ -382,17 +422,33 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
                 "{fixture} {optimize}: {}",
                 text(&output.stderr)
             );
-            assert_eq!(
-                text(&output.stdout),
-                text(&expected.stdout),
-                "{fixture} {optimize}"
-            );
-            assert_eq!(
-                text(&output.stderr),
-                text(&expected.stderr),
-                "{fixture} {optimize}"
-            );
+            assert_eq!(text(&output.stdout), stdout, "{fixture} {optimize}");
+            assert_eq!(text(&output.stderr), stderr, "{fixture} {optimize}");
         }
+    }
+
+    /// The path of `tests/fixtures/programs/{fixture}`.
+    fn fixture_program(fixture: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs")
+            .join(fixture)
+    }
+
+    /// The host glibc's (major, minor) version, from
+    /// `getconf GNU_LIBC_VERSION` ("glibc 2.39").
+    fn host_glibc_version() -> (u32, u32) {
+        let output = Command::new("getconf")
+            .arg("GNU_LIBC_VERSION")
+            .output()
+            .unwrap();
+        let version = text(&output.stdout);
+        let (major, minor) = version
+            .trim()
+            .strip_prefix("glibc ")
+            .and_then(|version| version.split_once('.'))
+            .unwrap_or_else(|| panic!("glibc version {version:?}"));
+        let minor = minor.split('.').next().unwrap();
+        (major.parse().unwrap(), minor.parse().unwrap())
     }
 
     /// Host files are opt-in. Without `--interpret-allow-fs`, `fopen` in any
