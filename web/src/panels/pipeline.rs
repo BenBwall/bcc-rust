@@ -30,8 +30,12 @@ pub fn PipelineView(
     stage: RwSignal<Stage>,
     /// Whether to show `-O2` output rather than `-O0`.
     optimize: RwSignal<bool>,
-    /// The source's compilation at the selected level.
+    /// The source's compilation at the selected level, which places the
+    /// hover links.
     compilation: Memo<Option<Compilation>>,
+    /// What the view shows: `compilation`, or the last output while the next
+    /// one compiles.
+    shown: Memo<Option<Compilation>>,
     /// Its compilation at the other level, for the optimizer comparison.
     other: Memo<Option<Compilation>>,
     /// The in-browser compiler's progress on `source` at the selected level.
@@ -47,7 +51,7 @@ pub fn PipelineView(
 ) -> impl IntoView {
     let output = Memo::new(move |_| {
         let stage = stage.get();
-        compilation.with(|compilation| {
+        shown.with(|compilation| {
             compilation
                 .as_ref()
                 .and_then(|compilation| compilation.output(stage))
@@ -57,14 +61,22 @@ pub fn PipelineView(
     let text = Signal::derive(move || output.get().unwrap_or_default());
     let lesson = Memo::new(move |_| source.with(|source| demos::matching(source).is_some()));
     let language = Signal::derive(move || stage.get().language());
-    let links = Memo::new(move |_| {
-        compilation.with(|compilation| {
-            compilation
-                .as_ref()
-                .map(|compilation| source.with(|source| links(stage.get(), compilation, source)))
-                .unwrap_or_default()
+    let links_of = move |compilation: Memo<Option<Compilation>>| {
+        Memo::new(move |_| {
+            compilation.with(|compilation| {
+                compilation
+                    .as_ref()
+                    .map(|compilation| {
+                        source.with(|source| links(stage.get(), compilation, source))
+                    })
+                    .unwrap_or_default()
+            })
         })
-    });
+    };
+    let links = links_of(compilation);
+    // The note on linking describes the output on screen, so it stays while
+    // the next output compiles.
+    let shown_links = links_of(shown);
     let layers = Signal::derive(move || -> Vec<Layer> {
         let hovered = hover_source.get();
         let linked = if hovered > 0 {
@@ -90,7 +102,7 @@ pub fn PipelineView(
     view! {
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
-            <StageStrip stage compilation />
+            <StageStrip stage compilation=shown />
             <article class="card stage-card" id="stage-output">
                 <header class="stage-header">
                     <div>
@@ -106,10 +118,10 @@ pub fn PipelineView(
                     {move || format!("$ {}", stage.get().command(&filename.get(), optimize.get()))}
                 </code>
                 <p class="stage-explanation">{move || stage.get().explanation()}</p>
-                <StopBanner compilation />
-                <OptimizerNote stage optimize compilation other />
-                <p class="stage-note is-link" hidden=move || links.with(Links::is_empty)>
-                    {move || if links.with(Links::is_exact) {
+                <StopBanner compilation=shown />
+                <OptimizerNote stage optimize compilation=shown other />
+                <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
+                    {move || if shown_links.with(Links::is_exact) {
                         "Hover a source line to find what it became here, or hover here to find its source."
                     } else {
                         "Hover a source line to find its function here, or hover here to find the source. bcc's IR \
@@ -129,12 +141,12 @@ pub fn PipelineView(
                     />
                 </div>
                 <div class="stage-missing" hidden=move || output.with(Option::is_some)>
-                    {move || compilation.with(|compilation| {
+                    {move || shown.with(|compilation| {
                         missing(stage.get(), lesson.get(), compilation.as_ref(), &live.get())
                     })}
                 </div>
             </article>
-            <Diagnostics compilation live on_reveal />
+            <Diagnostics compilation=shown live on_reveal />
         </section>
     }
 }

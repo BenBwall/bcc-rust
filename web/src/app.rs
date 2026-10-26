@@ -103,6 +103,7 @@ pub fn App() -> impl IntoView {
                                     stage=state.stage
                                     optimize=state.optimize
                                     compilation=state.compilation
+                                    shown=state.shown
                                     other=state.other_level
                                     live=state.live_status.into()
                                     theme=state.theme_name
@@ -149,6 +150,9 @@ const COMPILED_LIMIT: usize = 8;
 /// A source and whether it is compiled at `-O2`.
 type CompileKey = (String, bool);
 
+/// Recent compilations, or why the Worker could not compile, oldest first.
+type Compiled = Vec<(CompileKey, Result<Compilation, String>)>;
+
 /// Which view of the program the workbench shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -191,9 +195,7 @@ struct State {
     starting:        RwSignal<bool>,
     /// Whether the pipeline view shows `-O2` rather than `-O0` output.
     optimize:        RwSignal<bool>,
-    /// Recent compilations, or why the Worker could not compile, oldest
-    /// first.
-    compiled:        RwSignal<Vec<(CompileKey, Result<Compilation, String>)>>,
+    compiled:        RwSignal<Compiled>,
     /// The compilation the Worker is running; one runs at a time.
     in_flight:       RwSignal<Option<CompileKey>>,
     /// The debounce timer while typing; dropping it cancels it.
@@ -209,6 +211,9 @@ struct State {
     /// The editor's text compiled at the selected level, with the
     /// precomputed LLVM IR for a lesson.
     compilation:     Memo<Option<Compilation>>,
+    /// What the pipeline view shows: `compilation`, or the last output while
+    /// the next one compiles.
+    shown:           Memo<Option<Compilation>>,
     /// The same at the other level, for the optimizer comparison.
     other_level:     Memo<Option<Compilation>>,
     /// bcc's diagnostics as squiggles in the source editor.
@@ -225,7 +230,7 @@ impl State {
         let editor_text = RwSignal::new(tour.source.to_owned());
         let error = RwSignal::new(None::<Diagnostic>);
         let optimize = RwSignal::new(false);
-        let compiled = RwSignal::new(Vec::<(CompileKey, Result<Compilation, String>)>::new());
+        let compiled = RwSignal::new(Compiled::new());
         let in_flight = RwSignal::new(None::<CompileKey>);
         let starting = RwSignal::new(false);
         let pending = RwSignal::new(false);
@@ -302,6 +307,7 @@ impl State {
                 editor_text.with(|text| source.with(|source| text != source))
             }),
             compilation: live.compilation,
+            shown: live.shown,
             other_level: live.other_level,
             markers: live.markers,
             placeholder: Memo::new(move |_| {
@@ -975,6 +981,7 @@ impl State {
 struct LiveViews {
     status:      Memo<LiveCompile>,
     compilation: Memo<Option<Compilation>>,
+    shown:       Memo<Option<Compilation>>,
     other_level: Memo<Option<Compilation>>,
     markers:     Memo<Vec<Marker>>,
 }
@@ -983,57 +990,26 @@ impl LiveViews {
     fn new(
         editor_text: RwSignal<String>,
         optimize: RwSignal<bool>,
-        compiled: RwSignal<Vec<(CompileKey, Result<Compilation, String>)>>,
+        compiled: RwSignal<Compiled>,
         in_flight: RwSignal<Option<CompileKey>>,
         pending: RwSignal<bool>,
         starting: RwSignal<bool>,
     ) -> Self {
-        // The compilation of the editor's text at `level`, if it succeeded.
         let at_level = move |level: bool| {
-            editor_text.with(|text| {
-                let llvm = demos::matching(text).and_then(|demo| {
-                    crate::pipeline::precomputed_llvm(demo.name.trim_end_matches(".c"), level)
-                });
-                let live = compiled.with(|compiled| {
-                    compiled
-                        .iter()
-                        .rev()
-                        .find(|((source, optimized), _)| source == text && *optimized == level)
-                        .and_then(|(_, result)| result.as_ref().ok().cloned())
-                });
-                match (live, llvm) {
-                    | (Some(live), llvm) => Some(Compilation {
-                        llvm: llvm.map(str::to_owned),
-                        ..live
-                    }),
-                    | (None, Some(llvm)) => Some(Compilation {
-                        llvm: Some(llvm.to_owned()),
-                        ..Compilation::default()
-                    }),
-                    | (None, None) => None,
-                }
-            })
+            editor_text.with(|text| compiled.with(|compiled| compilation_of(compiled, text, level)))
         };
-        let compilation = Memo::new(move |previous: Option<&Option<Compilation>>| {
-            let current = at_level(optimize.get());
-            let live = current
-                .as_ref()
-                .is_some_and(|compilation| compilation.tokens.is_some());
-            // Keep showing the last output while the next one compiles, so
-            // typing does not make the view flicker.
+        let compilation = Memo::new(move |_| at_level(optimize.get()));
+        let shown = Memo::new(move |previous: Option<&Option<Compilation>>| {
             let waiting = pending.get()
                 || in_flight.with(|key| {
                     key.as_ref()
                         .is_some_and(|key| editor_text.with(|text| key.0 == *text))
                 });
-            if !live
-                && waiting
-                && let Some(Some(previous)) = previous
-            {
-                return Some(previous.clone());
-            }
-            current
+            compilation
+                .with(|current| shown(current.as_ref(), previous.and_then(Option::as_ref), waiting))
         });
+        // Squiggles come only from the editor's own text: the previous
+        // output's diagnostics would mark the wrong places.
         let markers = Memo::new(move |_| {
             compilation.with(|compilation| {
                 compilation
@@ -1043,38 +1019,105 @@ impl LiveViews {
                     .collect()
             })
         });
-        let live_status = Memo::new(move |_| {
+        let status = Memo::new(move |_| {
             let level = optimize.get();
+            let pending = pending.get();
+            let starting = starting.get();
             editor_text.with(|text| {
-                let key_is = |key: &CompileKey| key.0 == *text && key.1 == level;
-                if in_flight.with(|key| key.as_ref().is_some_and(key_is)) {
-                    return if starting.get() {
-                        LiveCompile::Loading
-                    } else {
-                        LiveCompile::Compiling
-                    };
-                }
-                let result = compiled.with(|compiled| {
-                    compiled
-                        .iter()
-                        .rev()
-                        .find(|(key, _)| key_is(key))
-                        .map(|(_, result)| result.as_ref().err().cloned())
-                });
-                match result {
-                    | Some(Some(error)) => LiveCompile::Failed(error),
-                    | Some(None) => LiveCompile::Compiled,
-                    | None if pending.get() => LiveCompile::Compiling,
-                    | None => LiveCompile::Idle,
-                }
+                in_flight.with(|in_flight| {
+                    compiled.with(|compiled| {
+                        live_status(compiled, text, level, in_flight.as_ref(), pending, starting)
+                    })
+                })
             })
         });
         Self {
-            status: live_status,
+            status,
             compilation,
+            shown,
             other_level: Memo::new(move |_| at_level(!optimize.get())),
             markers,
         }
+    }
+}
+
+/// The compilation of `text` at `level`, if it succeeded, with the
+/// precomputed LLVM IR for a lesson.
+fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compilation> {
+    let llvm = demos::matching(text).and_then(|demo| {
+        crate::pipeline::precomputed_llvm(demo.name.trim_end_matches(".c"), level)
+    });
+    let live = lookup(compiled, text, level).and_then(|result| result.as_ref().ok().cloned());
+    match (live, llvm) {
+        | (Some(live), llvm) => Some(Compilation {
+            llvm: llvm.map(str::to_owned),
+            ..live
+        }),
+        | (None, Some(llvm)) => Some(Compilation {
+            llvm: Some(llvm.to_owned()),
+            ..Compilation::default()
+        }),
+        | (None, None) => None,
+    }
+}
+
+/// What the pipeline view shows: the `current` compilation or, while the
+/// next one compiles (`waiting`), the `previous` output, so typing does not
+/// make the view flicker. Only `current` places markers and links: the
+/// previous output came from other text or another level.
+fn shown(
+    current: Option<&Compilation>,
+    previous: Option<&Compilation>,
+    waiting: bool,
+) -> Option<Compilation> {
+    let live = current.is_some_and(|current| current.tokens.is_some());
+    match previous {
+        | Some(previous) if waiting && !live => Some(Compilation {
+            // A lesson's precomputed LLVM IR is always current.
+            llvm: current.and_then(|current| current.llvm.clone()),
+            ..previous.clone()
+        }),
+        | _ => current.cloned(),
+    }
+}
+
+/// The newest result for `text` at `level`.
+fn lookup<'a>(
+    compiled: &'a Compiled,
+    text: &str,
+    level: bool,
+) -> Option<&'a Result<Compilation, String>> {
+    compiled
+        .iter()
+        .rev()
+        .find(|((source, optimized), _)| source == text && *optimized == level)
+        .map(|(_, result)| result)
+}
+
+/// The compiler's progress on `text` at `level`, given what it is compiling
+/// (`in_flight`), whether typing is still being debounced (`pending`), and
+/// whether its Worker is `starting`.
+fn live_status(
+    compiled: &Compiled,
+    text: &str,
+    level: bool,
+    in_flight: Option<&CompileKey>,
+    pending: bool,
+    starting: bool,
+) -> LiveCompile {
+    let busy = if starting {
+        LiveCompile::Loading
+    } else {
+        LiveCompile::Compiling
+    };
+    if in_flight.is_some_and(|key| key.0 == text && key.1 == level) {
+        return busy;
+    }
+    match lookup(compiled, text, level) {
+        | Some(Ok(_)) => LiveCompile::Compiled,
+        | Some(Err(error)) => LiveCompile::Failed(error.clone()),
+        | None if pending => LiveCompile::Compiling,
+        | None => LiveCompile::Idle,
     }
 }
 
@@ -1526,3 +1569,6 @@ fn About() -> impl IntoView {
         </section>
     }
 }
+
+#[cfg(test)]
+mod tests;
