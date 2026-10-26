@@ -104,7 +104,8 @@ int f(void) { return selected(1)+selected(2.0)+plain(1); }
 
 /// glibc's `open` wrapper guards an `error` function with the argument
 /// pack's length, which is a constant in each call's copy: the guarded call
-/// is gone, without the optimizer too, unless the call passes too many.
+/// is gone, without the optimizer too, unless the call passes too many. A
+/// copy requested only from such a branch is not lowered at all.
 /// GNU extension: GCC manual, "Constructing Calls".
 #[test]
 fn argument_pack_length_guards_fold_before_call_diagnostics() {
@@ -120,7 +121,14 @@ open(const char *path, int flags, ...) {
     if (__builtin_va_arg_pack_len() < 1) return __open_2(path, flags);
     return __open_alias(path, flags, __builtin_va_arg_pack());
 }
-int f(void) { return open("a", 0) + open("a", 0101, 0600); }
+static inline __attribute__((always_inline)) int never(int n, ...) {
+    too_many(); return n;
+}
+static inline __attribute__((always_inline)) int guarded(int n, ...) {
+    if (__builtin_va_arg_pack_len() > 1) return never(n, __builtin_va_arg_pack());
+    return n;
+}
+int f(void) { return open("a", 0) + open("a", 0101, 0600) + guarded(1, 2); }
 int g(void) { return open("a", 0101, 0600, 1); }
 "#,
             optimized,

@@ -270,11 +270,32 @@ fn lower_unit<'tu, 'ir>(
             }
         }
     }
-    // The copies for calls passing on an argument pack, including those the
-    // copies themselves call. Their branches on the pack's length are folded
-    // at once, as GCC folds them when it inlines, at every optimization
-    // level. GNU extension: GCC manual, "Constructing Calls".
+    // The copies for calls passing on an argument pack that lowered bodies
+    // call, including those the copies themselves call. Their branches on
+    // the pack's length are folded at once, as GCC folds them when it
+    // inlines, at every optimization level, before their own calls are
+    // queued. GNU extension: GCC manual, "Constructing Calls".
+    if !unit.pack_copies.is_empty() {
+        let lowered = tables.alloc_slice_fill_iter(
+            unit.module
+                .functions()
+                .filter(|(_, function)| function.body.is_some())
+                .map(|(func, _)| func),
+        );
+        for &func in &*lowered {
+            unit.queue_called_copies(func);
+        }
+    }
     while let Some(copy) = unit.next_pack_copy() {
+        let copy = match copy {
+            | Ok(copy) => copy,
+            | Err(error) => {
+                if !errors.contains(&error) {
+                    errors.push(error);
+                }
+                continue;
+            },
+        };
         scratch.reset();
         if let Some(binding) = copy.record.binding {
             function_sources.push((
@@ -290,8 +311,10 @@ fn lower_unit<'tu, 'ir>(
             scratch,
             options,
         ) {
-            | Ok(()) =>
-                crate::optimizer::fold_constant_branches(&mut unit.module, copy.func, scratch),
+            | Ok(()) => {
+                crate::optimizer::fold_constant_branches(&mut unit.module, copy.func, scratch);
+                unit.queue_called_copies(copy.func);
+            },
             | Err(error) =>
                 if !errors.contains(&error) {
                     errors.push(error);

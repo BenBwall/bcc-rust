@@ -159,9 +159,11 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// length, by entity identity, as for `private_bodies`.
     pub(super) pack_functions: ArenaMap<'a, StringCacheId, &'tu FunctionRecord<'tu>>,
     /// Their copies specialized for calls, in declaration order
-    /// (`argument_pack.rs`), and how many of them have been lowered.
+    /// (`argument_pack.rs`), each copy's index by function, and the indexes
+    /// of the copies a lowered body calls that are still to be lowered.
     pub(super) pack_copies: ArenaVec<'a, super::argument_pack::PackCopy<'a, 'tu>>,
-    pub(super) lowered_pack_copies: usize,
+    pub(super) pack_copy_index: ArenaMap<'a, FuncId, usize>,
+    pub(super) pending_pack_copies: ArenaVec<'a, usize>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -1953,8 +1955,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         let mut pack_functions = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         for function in sema.functions {
+            // Only the definition calls reach: a later definition replaces
+            // a GNU `extern inline` body (GCC manual, "Inline").
             if function.va_arg_pack
                 && let Some(entity) = function.binding.and_then(|binding| sema.entity(binding))
+                && entity.function == function.binding
             {
                 _ = pack_functions.insert(entity.identity, function);
             }
@@ -1985,7 +1990,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             plain_inline: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             pack_functions,
             pack_copies: ArenaVec::new_in(tables),
-            lowered_pack_copies: 0,
+            pack_copy_index: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            pending_pack_copies: ArenaVec::new_in(tables),
         })
     }
 }

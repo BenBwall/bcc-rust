@@ -3,6 +3,24 @@
 //! anonymous arguments, and every other use is refused as GCC refuses it.
 //! GNU extension: GCC manual, "Constructing Calls".
 use super::*;
+use crate::backend::interpreter::{
+    RuntimeValue,
+    Termination,
+    run_text,
+};
+
+/// The IR of `source`, after checking that its `main` returns `expected`
+/// in the interpreter.
+#[track_caller]
+fn returns(source: &str, expected: u128) -> String {
+    let text = lowered(source);
+    assert_eq!(
+        run_text(&text, "main").result.unwrap().termination,
+        Termination::Returned(Some(RuntimeValue::Int(expected))),
+        "{source}\n{text}"
+    );
+    text
+}
 
 /// glibc's GCC `printf` and `open` wrappers (`bits/stdio2.h`,
 /// `bits/fcntl2.h`), with their library functions declared as glibc does.
@@ -133,6 +151,85 @@ int main(void) { struct S s = {{1}}; return outer(1, s, 2.0) + again(3, 'x'); }"
     assert!(again.contains("call @again.va_arg_pack("), "{again}");
     assert!(
         !text.contains("function @outer(") && !text.contains("function @again("),
+        "{text}"
+    );
+}
+
+/// A later definition replaces a GNU `extern inline` body, as in GCC, so
+/// calls reach it and not copies of the replaced body.
+#[test]
+fn a_replacing_definition_wins_over_a_pack_using_inline_body() {
+    let text = returns(
+        "extern inline __attribute__((gnu_inline, always_inline))
+int f(int n, ...) { return __builtin_va_arg_pack_len(); }
+int f(int n, ...) { return 42; }
+int main(void) { return f(0, 1, 2); }",
+        42,
+    );
+    assert!(!text.contains("va_arg_pack"), "{text}");
+}
+
+/// A copy requested only from a branch its caller's pack length rules out
+/// is never lowered: its calls of undefined functions are not emitted, and
+/// the copies it would request do not count toward the nesting limit.
+#[test]
+fn copies_requested_from_folded_branches_are_not_lowered() {
+    let text = returns(
+        "extern int missing(int, ...);
+static inline __attribute__((always_inline)) int g(int n, ...)
+{ return missing(n, __builtin_va_arg_pack()); }
+static inline __attribute__((always_inline)) int f(int n, ...)
+{ if (__builtin_va_arg_pack_len() < 1) return g(n, __builtin_va_arg_pack()); return 3; }
+int main(void) { return f(0, 1); }",
+        3,
+    );
+    assert!(!text.contains("call @missing"), "{text}");
+    assert!(
+        text.contains(
+            "function @g.va_arg_pack(i32 noundef, i32 noundef) -> i32 internal alwaysinline\n"
+        ),
+        "{text}"
+    );
+    let text = returns(
+        "static inline __attribute__((always_inline)) int f(int n, ...)
+{ if (__builtin_va_arg_pack_len() < 1) return f(n, 1, __builtin_va_arg_pack()); return 7; }
+int main(void) { return f(0, 1); }",
+        7,
+    );
+    assert!(
+        text.contains(
+            "function @f.va_arg_pack.1(i32 noundef, i32 noundef, i32 noundef) -> i32 internal \
+             alwaysinline\n"
+        ),
+        "{text}"
+    );
+}
+
+/// GCC finds the pack through what it folds away: `__extension__`, a cast
+/// to `int`, and a `_Generic` or `__builtin_choose_expr` selection; and
+/// `(*f)` and `(&f)` call a function using the pack as `f` does.
+#[test]
+fn transparent_packs_and_designators_reach_copies() {
+    let text = returns(
+        "int g(int n, ...) { __builtin_va_list ap; __builtin_va_start(ap, n);
+ int v = __builtin_va_arg(ap, int); __builtin_va_end(ap); return n * v; }
+static inline __attribute__((always_inline)) int a(int n, ...)
+{ return g(n, __extension__ __builtin_va_arg_pack()); }
+static inline __attribute__((always_inline)) int b(int n, ...)
+{ return g(n, (const int)(__builtin_va_arg_pack())); }
+static inline __attribute__((always_inline)) int c(int n, ...)
+{ return g(n, _Generic(0, int: __builtin_va_arg_pack(), default: 0)); }
+static inline __attribute__((always_inline)) int d(int n, ...)
+{ return g(n, __builtin_choose_expr(1, __builtin_va_arg_pack(), 0)); }
+static inline __attribute__((always_inline)) int e(int n, ...)
+{ return g(n + __builtin_va_arg_pack_len(), __builtin_va_arg_pack()); }
+int main(void) { return a(1, 2) + b(1, 3) + c(1, 4) + d(1, 5) + (*e)(0, 6) + (&e)(1, 7) + (**e)(2, \
+         1); }",
+        2 + 3 + 4 + 5 + 6 + 14 + 3,
+    );
+    // Every call reaches a copy, none an indirect call of `e`.
+    assert!(
+        !text.contains("call_indirect") && !text.contains("func_addr @e"),
         "{text}"
     );
 }

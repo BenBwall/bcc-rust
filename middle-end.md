@@ -609,7 +609,10 @@ anonymous argument types, which it takes as extra parameters. In the copy the
 pack expands to those parameters at a call whose last argument it is, the
 length is an `iconst`, and `fold`, `simplify-cfg` and `dce` run on it right
 after lowering, at every optimization level, so a guarded call of an `error`
-function disappears as GCC folds it when it inlines. The function's own body
+function disappears as GCC folds it when it inlines; a copy is lowered only
+when a lowered (and, for a copy, folded) body still calls it, so one
+requested from a folded branch stays a bodiless declaration that nothing
+names. The function's own body
 is lowered only when it is an external definition, where any use of the pack
 is an error, as in GCC. Functions carry
 their inline control in IR (`noinline` for GNU `noinline`/`noipa`,

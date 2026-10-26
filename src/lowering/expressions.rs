@@ -289,6 +289,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 if self
                     .resolved_direct_callee(call, function_expression.source_vectors)?
                     .is_none()
+                    && self.packed_callee(expression).is_none()
                 {
                     let Callee::Indirect(index) = call.callee else {
                         self.tasks.push(Task::Evaluate(function_expression));
@@ -1555,7 +1556,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         items.extend_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
         let direct = self.resolved_direct_callee(call, source)?;
-        let callee_value = if direct.is_some() {
+        // `(*f)(...)` of a function using the pack calls its copy too.
+        let packed_callee = direct
+            .is_none()
+            .then(|| self.packed_callee(info.expression))
+            .flatten();
+        let callee_value = if direct.is_some() || packed_callee.is_some() {
             None
         } else {
             let item = self.pop();
@@ -1719,9 +1725,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let packed = direct
             .filter(|_| !open_external)
+            .or(packed_callee)
             .and_then(|binding| Some((binding, self.unit.pack_function(binding)?)));
         let value = match (direct, callee_value) {
-            | (Some(_), _) if let Some((binding, record)) = packed => {
+            | _ if let Some((binding, record)) = packed => {
                 let types = self
                     .scratch
                     .alloc_slice_fill_iter(items.iter().map(|item| item.ty));
@@ -1733,7 +1740,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         types,
                         fixed,
                         result_type,
-                        self.pack_depth + 1,
+                        (self.pack_depth + 1, source),
                     )
                     .map_err(|kind| at(kind, source))?;
                 self.draft.push(Op::Call(func, args), result)

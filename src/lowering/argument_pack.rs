@@ -16,6 +16,11 @@
 //! as it is lowered, at every optimization level: glibc's `open` wrapper
 //! guards a call of a function with GCC's `error` attribute with
 //! `__va_arg_pack_len () > 1`, which must not survive when it is false.
+//! A copy is lowered only once a lowered body, folded if it is a copy,
+//! still calls it, so a copy requested from a folded branch never emits its
+//! calls. The pack belongs to the definition calls reach: a later
+//! definition replaces a GNU `extern inline` body, and a call through `*`
+//! or `&` of the function's designator is as direct as one through its name.
 //! The function's own body is never lowered when it is inline-only or
 //! internal, so a pack it uses never reaches a back end unresolved; an
 //! external definition is lowered and reports the invalid use, as GCC does.
@@ -41,7 +46,6 @@ use super::{
     module_items::{
         Unit,
         at,
-        peel,
     },
     types::Repr,
 };
@@ -51,11 +55,16 @@ use crate::{
     ir::{
         FuncId,
         InlineControl,
+        InstData,
         Linkage as IrLinkage,
     },
     translation_phases::{
         SourceVectors,
-        parsing::syntax::Expression,
+        parsing::syntax::{
+            Expression,
+            ExpressionType,
+            UnaryOperator,
+        },
         semantic_analysis::{
             BodyEmission,
             CallFacts,
@@ -83,12 +92,17 @@ pub(super) struct PackCopy<'a, 'tu> {
     pub(super) pack:   &'a [TypeId],
     /// How many copies the call that created this one is nested in.
     pub(super) depth:  u32,
+    /// The call that created it.
+    pub(super) source: SourceVectors,
+    /// Whether a lowered body calls it, so it is or will be lowered.
+    pub(super) queued: bool,
 }
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// The arguments a call passes on with `__builtin_va_arg_pack ()`, when
     /// that is its last argument and falls after the callee's named
-    /// parameters (an unprototyped callee has none), as GCC recognizes it;
+    /// parameters (an unprototyped callee has none), as GCC recognizes it,
+    /// through what GCC folds away around it ([`Self::transparent`]);
     /// `None` for any other call, whose pack, if any, is then evaluated as
     /// an ordinary operand and refused. Outside a copy, no call supplies the
     /// arguments, and the pack is refused here.
@@ -105,7 +119,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let Some(record) = self.unit.sema.expressions.get(last.expression.0) else {
             return Ok(None);
         };
-        let argument = peel(record.expression);
+        let argument = self.transparent(record.expression);
         let is_pack = self.unit.sema.call_facts(argument).is_some_and(|facts| {
             matches!(
                 facts.callee,
@@ -125,6 +139,71 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             ));
         }
         Ok(Some(argument))
+    }
+
+    /// `expression` without what GCC folds away around a call before it
+    /// looks for the pack: parentheses, `__extension__`, a cast to the
+    /// operand's own type, and the operand `_Generic` or
+    /// `__builtin_choose_expr` selects, whose other operands are not
+    /// evaluated. C99: §6.5.1p5, p. 67; PDF p. 79 (a parenthesized expression
+    /// is its operand); §6.5.4p4, p. 81; PDF p. 93 (a cast converts to the
+    /// named type). C11: §6.5.1.1p3, p. 79; PDF p. 97 (`_Generic`).
+    pub(super) fn transparent(&self, mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+        loop {
+            expression = match expression.kind {
+                | ExpressionType::Parenthesized { expression: inner }
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Extension,
+                    operand_expression: inner,
+                } => inner,
+                | ExpressionType::Cast {
+                    operand_expression, ..
+                } if self.info(expression).ok().map(|info| info.ty.unqualified())
+                    == self
+                        .info(operand_expression)
+                        .ok()
+                        .map(|info| info.ty.unqualified()) =>
+                    operand_expression,
+                | ExpressionType::Generic(_) | ExpressionType::Builtin(_) => {
+                    match self
+                        .info(expression)
+                        .ok()
+                        .and_then(|info| info.selected_expression)
+                    {
+                        | Some(selected) => selected,
+                        | None => return expression,
+                    }
+                },
+                | _ => return expression,
+            };
+        }
+    }
+
+    /// The function a call whose callee is not a plain identifier designates,
+    /// when it uses the pack: `(*f)(...)` and `(&f)(...)` call `f` as
+    /// directly as `f(...)`, so they call its copies too.
+    /// C99: §6.5.3.2p4, p. 79; PDF p. 91 (`*` of a function designator is
+    /// that designator); §6.5.2.2p3, p. 71; PDF p. 83.
+    pub(super) fn packed_callee(&self, call: &'tu Expression<'tu>) -> Option<usize> {
+        let ExpressionType::Call {
+            function_expression: mut callee,
+            ..
+        } = call.kind
+        else {
+            return None;
+        };
+        loop {
+            callee = match self.transparent(callee).kind {
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::AddressOf | UnaryOperator::Indirection,
+                    operand_expression,
+                } => operand_expression,
+                | ExpressionType::Identifier(_) => break,
+                | _ => return None,
+            };
+        }
+        let binding = self.info(self.transparent(callee)).ok()?.binding?;
+        self.unit.pack_function(binding).map(|_| binding)
     }
 
     /// Pushes the anonymous arguments this copy received, for the call that
@@ -221,11 +300,14 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             })
     }
 
-    /// The copy of `record` for a call whose arguments, named and
-    /// anonymous and after their conversions, have the types `arguments`,
-    /// the first `fixed` of them the named ones. It is declared, and queued
-    /// for lowering, at its first call; calls with the same anonymous
-    /// argument types share it. `depth` counts the copies the call is in.
+    /// The copy of `record` for a call at `source` whose arguments, named
+    /// and anonymous and after their conversions, have the types
+    /// `arguments`, the first `fixed` of them the named ones. It is declared
+    /// at its first call, and calls with the same anonymous argument types
+    /// share it; it is lowered only if a lowered body still calls it
+    /// ([`Self::queue_called_copies`]). `depth` counts the copies the call
+    /// is in, and is checked only then, so a request a folded branch drops
+    /// cannot exceed it.
     pub(super) fn pack_copy(
         &mut self,
         binding: usize,
@@ -233,7 +315,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         arguments: &[TypeId],
         fixed: usize,
         result: TypeId,
-        depth: u32,
+        (depth, source): (u32, SourceVectors),
     ) -> Result<FuncId, LoweringErrorKind> {
         let pack = &arguments[fixed..];
         if let Some(copy) = self
@@ -242,9 +324,6 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             .find(|copy| std::ptr::eq(copy.record, record) && copy.pack == pack)
         {
             return Ok(copy.func);
-        }
-        if depth > MAX_DEPTH {
-            return Err(LoweringErrorKind::InvalidArgumentPack(false));
         }
         let signature = self.signature_of(arguments.iter().copied(), result, false, self.tables)?;
         let signature = self.module.intern(signature);
@@ -258,19 +337,56 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             .sema
             .entity_attributes(binding)
             .is_some_and(|attributes| attributes.returns_twice);
+        _ = self.pack_copy_index.insert(func, self.pack_copies.len());
         self.pack_copies.push(PackCopy {
             record,
             func,
             pack: self.tables.alloc_slice_copy(pack),
             depth,
+            source,
+            queued: false,
         });
         Ok(func)
     }
 
-    /// The next declared copy still to be lowered.
-    pub(super) fn next_pack_copy(&mut self) -> Option<PackCopy<'a, 'tu>> {
-        let copy = self.pack_copies.get(self.lowered_pack_copies).copied()?;
-        self.lowered_pack_copies += 1;
-        Some(copy)
+    /// Queues for lowering the copies the lowered body of `func` calls that
+    /// are not queued yet. A copy is lowered only when a lowered body, after
+    /// a copy's branches are folded, still calls it: one requested only from
+    /// a branch its pack's length rules out is never lowered, so its own
+    /// calls (of an undefined or `error` function, or of deeper copies) are
+    /// never emitted, as GCC never expands an inline call it folds away. It
+    /// stays an internal declaration that nothing names.
+    pub(super) fn queue_called_copies(&mut self, func: FuncId) {
+        if self.pack_copies.is_empty() {
+            return;
+        }
+        let Some(body) = &self.module.function(func).body else {
+            return;
+        };
+        for block in body.blocks() {
+            for &inst in body.block_insts(block) {
+                if let InstData::Call { func: callee, .. } = *body.inst(inst)
+                    && let Some(&index) = self.pack_copy_index.get(&callee)
+                    && !self.pack_copies[index].queued
+                {
+                    self.pack_copies[index].queued = true;
+                    self.pending_pack_copies.push(index);
+                }
+            }
+        }
+    }
+
+    /// The next queued copy to lower, or the error of one nested deeper
+    /// than [`MAX_DEPTH`] copies.
+    pub(super) fn next_pack_copy(&mut self) -> Option<Result<PackCopy<'a, 'tu>, LoweringError>> {
+        let copy = self.pack_copies[self.pending_pack_copies.pop()?];
+        Some(if copy.depth > MAX_DEPTH {
+            Err(at(
+                LoweringErrorKind::InvalidArgumentPack(false),
+                copy.source,
+            ))
+        } else {
+            Ok(copy)
+        })
     }
 }
