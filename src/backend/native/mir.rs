@@ -905,11 +905,15 @@ pub(crate) enum MInst {
         src:   Reg,
     },
     Call {
-        callee:   Callee,
+        callee:        Callee,
         /// The argument registers the call reads.
-        uses:     PRegSet,
+        uses:          PRegSet,
         /// The registers the callee may change.
-        clobbers: PRegSet,
+        clobbers:      PRegSet,
+        /// Whether the callee may return twice (`setjmp`): the allocator
+        /// keeps every value live across the call where a second return
+        /// finds it.
+        returns_twice: bool,
     },
     Jmp {
         target: MBlock,
@@ -1150,6 +1154,7 @@ impl MInst {
                 callee,
                 uses,
                 clobbers,
+                ..
             } => {
                 if let Callee::Reg(reg) = callee {
                     visit(reg, Role::Use);

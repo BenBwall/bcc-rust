@@ -885,6 +885,69 @@ int main(void) {
     return (int)(h & 0x7f);
 }"#,
     },
+    // C99 §7.13: a longjmp three calls down, a jump back into a loop, and
+    // automatic objects across the second return. Non-volatile ones not
+    // changed since the setjmp keep their values (§7.13.2.1p3), including
+    // one copied into a variable the first pass changes before the jump;
+    // volatile ones keep their last stores. More such values are live than
+    // there are callee-saved registers, so some wait in spill slots.
+    Program {
+        name:   "setjmp_and_longjmp",
+        source: r#"int printf(const char *, ...);
+#ifdef _WIN32
+typedef unsigned long long jmp_buf[32];
+int _setjmp(jmp_buf, void *);
+#define setjmp(buffer) _setjmp(buffer, 0)
+#else
+typedef long jmp_buf[25];
+int _setjmp(jmp_buf);
+#define setjmp(buffer) _setjmp(buffer)
+#endif
+__attribute__((noreturn)) void longjmp(jmp_buf, int);
+static jmp_buf env;
+static int calls;
+static void leaf(int v) { calls++; longjmp(env, v); }
+static int middle(int v) { int r = v * 2; leaf(r); return r; }
+static int outer(int v) { return middle(v + 1) + 1; }
+static int locals(int n) {
+    int a = n * 3, b = n + 11, c = n * n, d = n - 5, e = n ^ 0x55, f = n << 4;
+    int g = n * 9 + 2, h = 100 - n, k = n * n * n, m = 7 - n, x = n * 5 + 1;
+    volatile int round = 0, first = 0, changed = 0, status = 0;
+    switch (setjmp(env)) {
+    case 0: break;
+    default: status = 1; break;
+    }
+    int y = x;
+    for (int i = 0; i < 4; i++) y = y * 3 + i;
+    if (round == 0) {
+        round = 1;
+        first = y;
+        changed = 41;
+        outer(n);
+        return -2;
+    }
+    printf("%d %d %d %d %d\n", status, changed, round, y == first, calls);
+    return a + b + c + d + e + f + g + h + k + m;
+}
+static int loop(void) {
+    jmp_buf here;
+    volatile int count = 0;
+    int base = calls * 5;
+    for (int i = 0; i < 3; i++) {
+        if (setjmp(here) == 0) {
+            count += 1;
+            longjmp(here, i + 1);
+        }
+        count += base + i;
+    }
+    return count;
+}
+int main(void) {
+    for (int n = 1; n <= 3; n++) printf("%d\n", locals(n));
+    printf("%d %d\n", loop(), calls);
+    return 0;
+}"#,
+    },
 ];
 
 /// Programs with `long double` values, which the interpreter does not

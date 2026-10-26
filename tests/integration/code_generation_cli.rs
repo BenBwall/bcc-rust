@@ -383,8 +383,8 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     /// `setjmp` and `longjmp` (#50) from `tests/fixtures/programs/setjmp.c`:
     /// MinGW-w64's declarations, whose `setjmp` passes `mingw_getsp()`, in
     /// the interpreter for the Windows target; the host's `<setjmp.h>` in the
-    /// interpreter and in native executables built through LLVM. The native
-    /// back end refuses returns-twice calls rather than miscompile them.
+    /// interpreter and in native executables built through LLVM and through
+    /// the native back end.
     #[test]
     fn setjmp_and_longjmp_run_in_the_interpreter_and_natively() {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/setjmp.c");
@@ -447,24 +447,18 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         }
         let executable = temporary("setjmp.exe");
         let path = executable.to_str().unwrap();
-        for opt in [&["--llvm-opt=O0"][..], &["--opt=bcc", "--llvm-opt=O2"][..]] {
+        for opt in [
+            &["--llvm-opt=O0"][..],
+            &["--opt=bcc", "--llvm-opt=O2"][..],
+            &["--backend=native", "--opt=none"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
             let built = compile(&[target, &["-o", path][..], opt].concat());
             assert!(built.status.success(), "{opt:?}: {}", text(&built.stderr));
             let output = run_native(&mut Command::new(&executable)).unwrap();
             assert_eq!(output.status.code(), Some(0), "{opt:?}");
         }
         std::fs::remove_file(&executable).unwrap();
-        let refused = compile(&[target, &["--backend=native", "-o", path][..]].concat());
-        assert!(!refused.status.success());
-        assert!(
-            text(&refused.stderr).contains(
-                "not yet supported by the native back end: a call to, or the address of, a \
-                 function that may return twice"
-            ),
-            "{}",
-            text(&refused.stderr)
-        );
-        assert!(!executable.exists());
     }
 
     #[test]

@@ -118,6 +118,7 @@ fn with_allocation<R>(
         body,
         target,
         crate::target::TlsModel::default(),
+        module.returns_twice_escapes(),
         &scratch,
     )
     .unwrap();
@@ -147,6 +148,7 @@ fn check_corrupted(
         body,
         target,
         crate::target::TlsModel::default(),
+        module.returns_twice_escapes(),
         &scratch,
     )
     .unwrap();

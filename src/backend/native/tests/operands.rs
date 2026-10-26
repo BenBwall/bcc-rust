@@ -362,6 +362,7 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
             callee,
             uses,
             clobbers,
+            ..
         } => {
             if let Callee::Reg(target) = callee {
                 at.reg(target, Read);
@@ -621,11 +622,12 @@ fn forms() -> Vec<MInst> {
         Call => [
             Callee::Symbol(SymbolRef::Runtime("memcpy")),
             Callee::Reg(v()),
-        ].map(|callee| MInst::Call {
+        ].into_iter().flat_map(|callee| [false, true].map(|returns_twice| MInst::Call {
             callee,
             uses: PRegSet::of(&[PReg::Rdi, PReg::Rsi, PReg::Xmm0]),
             clobbers: PRegSet::of(&[PReg::Rax, PReg::Rcx, PReg::R11, PReg::Xmm0, PReg::Xmm15]),
-        }),
+            returns_twice,
+        })).collect::<Vec<_>>(),
         Jmp => [MInst::Jmp { target: MBlock::new(1) }],
         Jcc => conds.map(|cond| MInst::Jcc {
             cond,

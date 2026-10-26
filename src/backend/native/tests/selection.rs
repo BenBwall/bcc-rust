@@ -5,8 +5,17 @@ use super::{
     assembly,
     function_text,
     refusal,
+    with_allocation,
 };
-use crate::target::Target;
+use crate::{
+    backend::native::mir::{
+        MInst,
+        Operand,
+        Reg,
+        Width,
+    },
+    target::Target,
+};
 
 const ADD: &str = "abi lowered
 function @add(i32, i32) -> i32 external {
@@ -468,45 +477,102 @@ function @missing() -> i32 weak
 }
 
 #[test]
-fn returns_twice_calls_and_addresses_are_refused() {
-    for body in [
-        "v1 = call @setjmp(v0)",
-        "v2 = func_addr @setjmp\n    v1 = iconst.i32 0",
-    ] {
-        let message = refusal(
-            &format!(
-                "abi lowered\nfunction @setjmp(ptr) -> i32 external\nfunction @f(ptr) -> i32 \
-                 external {{\nblock0(v0: ptr):\n    {body}\n    return v1\n}}\n"
-            ),
-            Target::LinuxGnu,
-        );
-        assert_eq!(
-            message,
-            "not yet supported by the native back end: a call to, or the address of, a function \
-             that may return twice, such as `setjmp` (in @f)"
-        );
-    }
-    // An alias of a defined attributed function inherits its contract, and
-    // an address stored in a global escapes to indirect calls.
-    let alias = refusal(
-        "abi lowered\nfunction @real(ptr) -> i32 external returns_twice {\nblock0(v0: ptr):\n    \
-         v1 = iconst.i32 0\n    return v1\n}\nfunction @save(ptr) -> i32 external alias \
-         @real\nfunction @f(ptr) -> i32 external {\nblock0(v0: ptr):\n    v1 = call @save(v0)\n    \
-         return v1\n}\n",
-        Target::LinuxGnu,
+fn returns_twice_calls_are_marked_for_the_allocator() {
+    // Whether each call in @f, in order, may return twice.
+    let marks = |ir: &str| {
+        with_allocation(ir, "f", Target::LinuxGnu, |_, func, _| {
+            func.blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .filter_map(|inst| match *inst {
+                    | MInst::Call { returns_twice, .. } => Some(returns_twice),
+                    | _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    // The catalog names `setjmp`; `g` is an ordinary function.
+    assert_eq!(
+        marks(
+            "abi lowered\nfunction @setjmp(ptr) -> i32 external\nfunction @g(ptr) -> i32 \
+             external\nfunction @f(ptr) -> i32 external {\nblock0(v0: ptr):\n    v1 = call \
+             @setjmp(v0)\n    v2 = call @g(v0)\n    v3 = iadd.i32 v1, v2\n    return v3\n}\n"
+        ),
+        [true, false]
     );
-    assert!(alias.ends_with("such as `setjmp` (in @f)"), "{alias}");
-    let escaped = refusal(
-        "abi lowered\nglobal @save internal size 8, align 8 = bytes \"0000000000000000\" relocs \
-         [0: @_setjmp]\nfunction @_setjmp(ptr) -> i32 external\nfunction @f(ptr) -> i32 external \
-         {\nblock0(v0: ptr):\n    v1 = global_addr @save\n    v2 = load.ptr v1, align 8\n    v3 = \
-         call_indirect v2(v0) : (ptr) -> i32\n    return v3\n}\n",
-        Target::LinuxGnu,
+    // An alias of a defined attributed function inherits its contract.
+    assert_eq!(
+        marks(
+            "abi lowered\nfunction @real(ptr) -> i32 external returns_twice {\nblock0(v0: \
+             ptr):\n    v1 = iconst.i32 0\n    return v1\n}\nfunction @save(ptr) -> i32 \
+             external alias @real\nfunction @f(ptr) -> i32 external {\nblock0(v0: ptr):\n    \
+             v1 = call @save(v0)\n    return v1\n}\n"
+        ),
+        [true]
     );
-    assert!(
-        escaped.ends_with("such as `setjmp` (in @save)"),
-        "{escaped}"
-    );
+    // Once a returns-twice address escapes, every indirect call may reach
+    // it; before, indirect calls are ordinary.
+    let indirect = |escapes: &str| {
+        format!(
+            "abi lowered\nglobal @save internal size 8, align 8 = bytes \"0000000000000000\" \
+             relocs [0: @{escapes}]\nfunction @_setjmp(ptr) -> i32 external\nfunction @g(ptr) -> \
+             i32 external\nfunction @f(ptr) -> i32 external {{\nblock0(v0: ptr):\n    v1 = \
+             global_addr @save\n    v2 = load.ptr v1, align 8\n    v3 = call_indirect v2(v0) : \
+             (ptr) -> i32\n    return v3\n}}\n"
+        )
+    };
+    assert_eq!(marks(&indirect("_setjmp")), [true]);
+    assert_eq!(marks(&indirect("g")), [false]);
+}
+
+/// A value live across `setjmp` keeps a location no other register shares:
+/// here the copy into the loop's parameter, after the call, would
+/// otherwise join the two, and the loop's later values would overwrite the
+/// one a second return reads again. C99 §7.13.2.1p3.
+#[test]
+fn values_live_across_returns_twice_calls_are_not_coalesced() {
+    let ir = "abi lowered
+function @setjmp(ptr) -> i32 external
+function @f(ptr, i64) -> i64 external {
+block0(v0: ptr, v1: i64):
+    v2 = imul.i64 v1, v1
+    v3 = call @setjmp(v0)
+    jump block1(v2)
+block1(v4: i64):
+    v5 = iconst.i64 3
+    v6 = imul.i64 v4, v5
+    v7 = icmp.i64 ult v6, v1
+    brif v7, block1(v6), block2
+block2:
+    return v6
+}
+";
+    with_allocation(ir, "f", Target::LinuxGnu, |_, func, allocation| {
+        let entry = &func.blocks[0].insts;
+        let call = entry
+            .iter()
+            .position(|inst| matches!(inst, MInst::Call { .. }))
+            .expect("the entry calls");
+        let copies: Vec<_> = entry[call..]
+            .iter()
+            .filter_map(|inst| match *inst {
+                | MInst::Mov {
+                    width: Width::B64,
+                    dst: Reg::Virt(dst),
+                    src: Operand::Reg(Reg::Virt(src)),
+                } => Some((dst, src)),
+                | _ => None,
+            })
+            .collect();
+        assert!(!copies.is_empty(), "no edge copy after the call");
+        for (dst, src) in copies {
+            assert_ne!(
+                allocation.representative(dst),
+                allocation.representative(src),
+                "the copy {dst:?} <- {src:?} was coalesced"
+            );
+        }
+    });
 }
 
 #[test]
