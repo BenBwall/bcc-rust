@@ -64,8 +64,8 @@ without a personality as well:
   relatives, in command-line order;
 - `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` dependency rules,
   named after the stage and output as GCC names them;
-- `-fsyntax-only` (`--syntax-only`), which, unlike bcc's inspection views,
-  fails after an error;
+- `-fsyntax-only` (`--syntax-only`), and a failing exit status from every
+  mode, the inspection views included, after an error;
 - GNU line markers (`# 12 "file.c" 1 3`) in input, so `.i` files from
   `-E` compile again with their original locations;
 - `--sysroot` for the libraries the bundled clang links against, not only the
