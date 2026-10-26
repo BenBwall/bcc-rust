@@ -513,6 +513,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | OneVoidConditional | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
+| ConstantCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |

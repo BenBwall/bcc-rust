@@ -105,6 +105,13 @@ pub(crate) enum Feature {
     /// GNU extension to C99 §6.5.15 paragraph 3, p. 90; PDF p. 102; GCC
     /// c/c-typeck.cc, `build_conditional_expr`.
     OneVoidConditional,
+    /// A compound literal of a static structure or union's own type, with
+    /// only constant elements, as its initializer: its braced list
+    /// initializes the object as if written in its place.
+    /// GNU extension: GCC manual, "Compound Literals",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Compound-Literals.html>; extends
+    /// C99 §6.7.8 paragraph 4, p. 125; PDF p. 137.
+    ConstantCompoundLiteral,
     ZeroLengthArrays,
     Int128,
     AutoType,
@@ -271,6 +278,7 @@ impl Feature {
             | Self::LocalLabels
             | Self::OmittedConditionalOperand
             | Self::OneVoidConditional
+            | Self::ConstantCompoundLiteral
             | Self::ZeroLengthArrays
             | Self::Int128
             | Self::AutoType
@@ -401,6 +409,7 @@ impl Feature {
         Self::LocalLabels,
         Self::OmittedConditionalOperand,
         Self::OneVoidConditional,
+        Self::ConstantCompoundLiteral,
         Self::ZeroLengthArrays,
         Self::Int128,
         Self::AutoType,

@@ -1,6 +1,8 @@
 //! A compound literal of a static structure or union's own type as its
-//! initializer (GNU extension): accepted only when every value the literal
-//! stores is a constant its destination accepts, as GCC and Clang require.
+//! initializer (GNU extension `ConstantCompoundLiteral`): accepted under the
+//! extension policy as GCC reports it with `-pedantic`, and only when every
+//! value the literal stores is a constant its destination accepts, as GCC
+//! and Clang require.
 
 use super::*;
 use crate::configuration::{
@@ -68,8 +70,14 @@ const ACCEPTED: &str = r#"struct s { int a, b; const char *n; };
     }"#;
 
 #[test]
-fn constant_compound_literals_initialize_statics() {
+fn constant_compound_literals_initialize_statics_as_an_extension() {
+    // GCC: "initializer element is not constant [-Wpedantic]" for each
+    // literal initializing a whole static object or subobject, an error
+    // with -pedantic-errors. A nested literal is reported only at file
+    // scope, where its own initializer is static, as in GCC.
     assert_eq!(diagnostics(ACCEPTED, ExtensionPolicy::Allow), (vec![], 0));
+    assert_eq!(diagnostics(ACCEPTED, ExtensionPolicy::Warn), (vec![], 10));
+    assert_eq!(diagnostics(ACCEPTED, ExtensionPolicy::Deny), (vec![], 10));
 }
 
 #[test]

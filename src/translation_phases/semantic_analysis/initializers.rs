@@ -745,6 +745,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let Some(initializer) = self.whole_compound_literal(target, e) else {
             return false;
         };
+        self.context.report_extension(
+            crate::configuration::Feature::ConstantCompoundLiteral,
+            "compound literal as a constant initializer",
+            e.source_vectors,
+        );
         self.check_static_plan(initializer);
         true
     }
