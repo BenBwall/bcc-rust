@@ -809,4 +809,60 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn every_personality_fails_after_an_error() {
+        let directory = Directory::new();
+        directory.write("bad.c", "int x = ;\n");
+        directory.write("stop.c", "#error stop\nint a;\n");
+        directory.write("pedantic.c", "int a[0];\n");
+        directory.write("good.c", "int a;\n");
+        let status = |mode: &str, args: &[&str]| directory.bcc(mode, args).status.code();
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            for args in [
+                &["-c", "bad.c"][..],
+                &["-E", "stop.c"],
+                &["bad.c"],
+                &["-std=c99", "-pedantic-errors", "-c", "pedantic.c"],
+            ] {
+                assert_ne!(status(mode, args), Some(0), "{mode} {args:?}");
+            }
+            assert_eq!(status(mode, &["-c", "good.c"]), Some(0), "{mode}");
+        }
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            assert_eq!(status(mode, &["-fsyntax-only", "bad.c"]), Some(1), "{mode}");
+            assert_eq!(
+                status(
+                    mode,
+                    &[
+                        "-fsyntax-only",
+                        "-std=c99",
+                        "-pedantic-errors",
+                        "pedantic.c"
+                    ]
+                ),
+                Some(1),
+                "{mode}"
+            );
+            assert_eq!(
+                status(mode, &["-fsyntax-only", "good.c"]),
+                Some(0),
+                "{mode}"
+            );
+        }
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            for args in [
+                &["/nologo", "/Zs", "bad.c"][..],
+                &["/nologo", "/c", "bad.c"],
+                &["/nologo", "/E", "stop.c"],
+            ] {
+                assert_ne!(status(mode, args), Some(0), "{mode} {args:?}");
+            }
+            assert_eq!(
+                status(mode, &["/nologo", "/Zs", "good.c"]),
+                Some(0),
+                "{mode}"
+            );
+        }
+    }
 }
