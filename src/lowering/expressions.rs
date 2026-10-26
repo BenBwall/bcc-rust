@@ -785,6 +785,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let ty = self.value_type(item.ty, source)?;
                 Ok(self.extend(truth, false, ty))
             },
+            // A vector lvalue reaches its value use unread: vector values
+            // have no IR representation yet, though their addresses do.
+            // GNU extension: GCC manual, "Vector Extensions".
+            | _ if matches!(self.unit.sema.types.kind(item.ty), TypeKind::Vector { .. }) =>
+                Err(LoweringError::unsupported(Construct::Vector, source)),
             | _ => Err(LoweringError::missing("an operand has no value", source)),
         }
     }
