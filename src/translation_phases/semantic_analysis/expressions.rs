@@ -417,6 +417,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)
                 };
+                // A call to a fortify wrapper bcc cannot expand reaches the
+                // library function without the wrapper's checks.
+                if let ExpressionType::Identifier(name) = vector_callee.kind
+                    && self.unchecked_wrappers.contains_key(&name.name)
+                {
+                    self.error(
+                        SemanticErrorKind::UncheckedFortifyWrapper,
+                        name.source_vectors,
+                        Some(name.name),
+                        None,
+                    );
+                }
             },
             | E::Builtin(b) => {
                 info = self.type_builtin(e, b);

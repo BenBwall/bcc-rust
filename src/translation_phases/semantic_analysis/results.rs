@@ -240,15 +240,19 @@ pub(crate) struct FunctionRecord<'tu> {
     /// bindings, retained when replaying the definition's prototype scope.
     /// C99: §6.9.1p10, p. 142; PDF p. 154.
     pub(crate) parameter_aliases: &'tu [(usize, usize)],
-    /// The body contains GNU or MSVC inline assembly, or forwards its
-    /// variadic arguments with GCC's `__builtin_va_arg_pack` or
-    /// `__builtin_va_arg_pack_len` (glibc's fortify wrappers), which
-    /// lowering cannot translate: an `always_inline` GNU inline body then
-    /// keeps calling the external definition rather than a private copy.
-    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125 (a call may use the
-    /// external definition). GNU extension: GCC manual, "Constructing
-    /// Calls", `__builtin_va_arg_pack`.
+    /// The body contains GNU or MSVC inline assembly, which lowering cannot
+    /// translate: an `always_inline` GNU inline body then keeps calling the
+    /// external definition rather than a private copy.
     pub(crate) assembly:          bool,
+    /// The body forwards its variadic arguments with GCC's
+    /// `__builtin_va_arg_pack` or `__builtin_va_arg_pack_len` (glibc's
+    /// fortify wrappers), which only an inlined call can do and bcc does
+    /// not implement: the body keeps calling the external definition, as
+    /// for [`Self::assembly`], and each call warns that the wrapper's checks
+    /// are skipped. C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125 (a call may
+    /// use the external definition). GNU extension: GCC manual,
+    /// "Constructing Calls", `__builtin_va_arg_pack`.
+    pub(crate) forwards_variadic: bool,
 }
 
 /// A lexical scope and its enclosing scope.

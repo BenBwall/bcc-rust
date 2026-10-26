@@ -1039,6 +1039,52 @@ mod tests {
         assert!(!memset_only.contains("memset"), "{memset_only}");
         assert!(memset_only.contains("sqrtsd"), "{memset_only}");
         assert!(assembly(&["-fno-builtin", "-fbuiltin"]).contains("memset"));
+        // `-fbuiltin` undoes `-fno-builtin` but keeps the named exclusions,
+        // as in GCC.
+        let named = assembly(&["-fno-builtin-memset", "-fbuiltin"]);
+        assert!(!named.contains("memset"), "{named}");
+        assert!(named.contains("sqrtsd"), "{named}");
+        // An inline definition's body reaches LLVM as the external
+        // function's `available_externally` body, which must carry the
+        // controls too, or LLVM folds `strlen("abc")` there before inlining.
+        directory.write(
+            "copy.c",
+            "unsigned long strlen(const char *);\ninline unsigned long h(void) { return \
+             strlen(\"abc\"); }\nunsigned long g(void) { return h(); }\n",
+        );
+        let copy = |options: &[&str]| {
+            let mut args = vec!["-O2", "-S", "-o", "-"];
+            args.extend(options);
+            args.push("copy.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert!(!copy(&[]).contains("strlen"), "{}", copy(&[]));
+        for options in [
+            &["-fno-builtin"][..],
+            &["-fno-builtin-strlen"],
+            &["-fno-builtin-strlen", "-fbuiltin"],
+        ] {
+            assert!(
+                copy(options).contains("strlen"),
+                "{options:?}: {}",
+                copy(options)
+            );
+        }
+        let copy_ir = directory.bcc("", &["--emit=llvm", "-O2", "-fno-builtin", "copy.c"]);
+        succeeds(&copy_ir);
+        let text = stdout(&copy_ir);
+        let helper = text
+            .lines()
+            .find(|line| line.starts_with("define available_externally") && line.contains("@h("))
+            .unwrap_or_else(|| panic!("{text}"));
+        let group = helper.rsplit('#').next().unwrap().trim_end_matches(" {");
+        let attributes = text
+            .lines()
+            .find(|line| line.starts_with(&format!("attributes #{group} ")))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(attributes.contains("\"no-builtins\""), "{attributes}");
         let ir = directory.bcc("", &["--emit=llvm", "-fno-builtin-sqrt", "b.c"]);
         assert!(
             stdout(&ir).contains("\"no-builtin-sqrt\""),
@@ -1141,5 +1187,65 @@ mod tests {
             assert_eq!(stdout(&run), "hello 5\n", "{mode}");
             assert_eq!(run.status.code(), Some(0), "{mode}");
         }
+    }
+
+    #[test]
+    fn fortify_wrappers_bcc_cannot_expand_warn() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu"))
+            || !Path::new("/usr/include/x86_64-linux-gnu/bits/stdio2.h").is_file()
+        {
+            eprintln!("skipping: the test reads the Linux GNU host's fortify headers");
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "f.c",
+            "#include <stdio.h>\n#include <string.h>\n#include <fcntl.h>\nint main(int c, char \
+             **v) {\n  char b[8];\n  sprintf(b, \"%d\", c);\n  printf(\"%s\\n\", b);\n  int fd = \
+             open(\"/dev/null\", O_RDONLY);\n  char d[4];\n  memcpy(d, \"abc\", 4);\n  return fd \
+             < 0;\n}\n",
+        );
+        let flags = ["-O2", "-D_FORTIFY_SOURCE=2", "f.c", "-o", "f"];
+        // glibc's GCC wrappers for sprintf, printf and open forward their
+        // variadic arguments with __builtin_va_arg_pack, which bcc lacks:
+        // each call says it skips them. memcpy's wrapper still applies.
+        let output = directory.bcc("--gcc-mode", &flags);
+        succeeds(&output);
+        let warnings = stderr(&output);
+        for (place, name) in [("6:3", "sprintf"), ("7:3", "printf"), ("8:12", "open")] {
+            assert!(
+                warnings.contains(&format!(
+                    "f.c:{place}: warning: _FORTIFY_SOURCE checks for `{name}` are not supported; \
+                     calling the unchecked function"
+                )),
+                "{warnings}"
+            );
+        }
+        assert_eq!(warnings.matches(": warning:").count(), 3, "{warnings}");
+        let run = Command::new(directory.path("f")).output().unwrap();
+        assert_eq!(run.status.code(), Some(0));
+        // The warning follows -w and -Werror.
+        let mut quiet = vec!["-w"];
+        quiet.extend(flags);
+        let output = directory.bcc("--gcc-mode", &quiet);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let mut strict = vec!["-Werror"];
+        strict.extend(flags);
+        let output = directory.bcc("--gcc-mode", &strict);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("f.c:6:3: error: _FORTIFY_SOURCE checks for `sprintf`"),
+            "{}",
+            stderr(&output)
+        );
+        // glibc's Clang wrappers need no variadic pack.
+        let output = directory.bcc("--clang-mode", &flags);
+        succeeds(&output);
+        assert!(
+            !stderr(&output).contains("_FORTIFY_SOURCE"),
+            "{}",
+            stderr(&output)
+        );
     }
 }

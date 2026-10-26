@@ -282,6 +282,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             scope: self.scope,
             parameter_aliases: &[],
             assembly: false,
+            forwards_variadic: false,
         });
         self.functions.current = Some(FunctionContext {
             id,

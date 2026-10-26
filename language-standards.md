@@ -114,9 +114,10 @@ glibc's headers then stop declaring them, so this identity also defines
 `_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as macros for
 the standard types of the same representation (`float`, `double`, `double`,
 `long double`, `__float128`); they are not distinct types. glibc's GCC fortify
-wrappers for `printf`-like functions need `__builtin_va_arg_pack`, which bcc
-lacks, so under this identity a call to one of them calls the library
-function without the wrapper's checks. `msvc` (`cl.exe`) removes the
+wrappers for the `printf` family, `open` and `syslog` need
+`__builtin_va_arg_pack`, which bcc lacks, so under this identity a call to
+one of them calls the library function without the wrapper's checks and
+warns that it does (`-w` and `-Werror` apply). `msvc` (`cl.exe`) removes the
 GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
 `_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
 /Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
@@ -139,7 +140,8 @@ its alignment) and ignores `#pragma pack` with GCC's warning, as GCC 15.2
 does. `-fno-pack-struct` undoes both. `-fno-builtin` keeps LLVM from
 treating any library function as a builtin (no `sqrt` instruction, no
 `memset` formed from a loop, no `printf` turned into `puts`);
-`-fno-builtin-NAME` does so for NAME, `-fbuiltin` restores them, and
+`-fno-builtin-NAME` does so for NAME, `-fbuiltin` undoes `-fno-builtin` but
+keeps the named exclusions, as in GCC, and
 `-ffreestanding` implies `-fno-builtin`, as in Clang. `-fvisibility=hidden`
 (or `protected`, `internal` as hidden, `default`) gives that visibility to
 the definitions with linkage that name none; declarations keep the default,

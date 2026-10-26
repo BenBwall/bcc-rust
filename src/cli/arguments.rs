@@ -414,10 +414,9 @@ impl Cli {
         let mut excluded = crate::util::bump::ArenaVec::new_in(arena);
         for option in &self.language_option {
             match option.as_str() {
-                | "-fbuiltin" => {
-                    none = false;
-                    excluded.clear();
-                },
+                // As in GCC, `-fbuiltin` undoes `-fno-builtin` but keeps
+                // the functions `-fno-builtin-NAME` named.
+                | "-fbuiltin" => none = false,
                 | "-fno-builtin" => none = true,
                 | _ =>
                     if let Some(name) = option.strip_prefix("-fno-builtin-") {

@@ -202,12 +202,21 @@ bcc lacks:
   `__float128`, which have the same representations. They are not distinct
   types, so `_Generic` cannot tell `_Float64` from `double`.
 - With `_FORTIFY_SOURCE` and optimization, glibc's GCC fortify wrappers for
-  `printf`-like functions forward variadic arguments with
-  `__builtin_va_arg_pack`, which only an inlined call can do and bcc does
-  not implement. bcc compiles a call to such a wrapper as a call to the
-  library function, as for a wrapper with inline assembly, so the program
-  builds and runs, without those wrappers' checks; the other fortify
-  wrappers (`memcpy`, `strcpy`, `read`, ...) are inlined.
+  the `printf` family, `open`/`openat`, `syslog` and a few others forward
+  their variadic arguments with `__builtin_va_arg_pack` or
+  `__builtin_va_arg_pack_len`, which only an inlined call can do and bcc
+  does not implement. **Limitation:** a call to such a wrapper calls the
+  library function directly, as for a wrapper with inline assembly, so the
+  program builds and runs but loses that wrapper's checks (`sprintf`'s
+  bounds check, `printf`'s writable-format `%n` protection, `open`'s
+  argument checks). Each such call warns,
+  `_FORTIFY_SOURCE checks for 'sprintf' are not supported; calling the
+  unchecked function`, which `-w` silences and `-Werror` makes an error.
+  The other fortify wrappers (`memcpy`, `strcpy`, `read`, ...) are
+  inlined. Implementing the builtins needs bcc itself to inline these
+  wrappers before LLVM, substituting the caller's extra arguments, since
+  LLVM has no such construct; the Clang personality avoids the issue,
+  because glibc's Clang wrappers need no variadic pack.
 
 **Banner.** `gcc (bcc 0.1.0) 14.2.0`, then a line that says bcc is not GCC
 and is not affiliated with the GNU Project or the Free Software Foundation.
@@ -397,8 +406,8 @@ These are compiler features, outside the driver, that the personalities
 would use:
 
 - `__builtin_va_arg_pack` and `__builtin_va_arg_pack_len` (glibc's GCC
-  fortify wrappers for `printf`-like functions, which now call the library
-  function unchecked).
+  fortify wrappers for the `printf` family, `open` and `syslog`, which now
+  call the library function unchecked, with a warning).
 - `-fsemantic-interposition`, `-fwrapv-pointer`,
   `-fno-delete-null-pointer-checks` and common symbols (`-fcommon`).
 - `_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as distinct

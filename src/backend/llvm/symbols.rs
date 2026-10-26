@@ -94,6 +94,9 @@ pub(super) fn declare<'id, 'a, 'm>(
         if let Some(external) = module.inline_copy_target(id) {
             let value = functions[external.index()];
             api.linkage(value, Linkage::AvailableExternally);
+            // The copy's body becomes the external function's, which was
+            // declared without one, so it takes the builtin controls here.
+            library_builtins(api, value, module.library_builtins(), arena);
             if let Some(keyword) = function.inlining.keyword() {
                 api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
             }
