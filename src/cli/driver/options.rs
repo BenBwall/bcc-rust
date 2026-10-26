@@ -35,9 +35,9 @@ pub(in crate::cli) struct DriverOptions {
     /// input instead of the text (also accepts GCC -dM).
     #[arg(long, requires = "preprocess")]
     pub(in crate::cli) dump_macros:        bool,
-    /// Check the input for errors without generating code, and exit with
-    /// status 1 after an error, unlike the inspection views (also accepts
-    /// GCC -fsyntax-only).
+    /// Check the input for errors without generating code or printing a
+    /// view; like every mode, exit with status 1 after an error (also
+    /// accepts GCC -fsyntax-only).
     #[arg(long, conflicts_with_all = ["generation", "preprocess", "tokens"])]
     pub(in crate::cli) syntax_only:        bool,
     /// Treat the input files after it as LANGUAGE: c, assembler,

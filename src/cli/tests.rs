@@ -134,7 +134,7 @@ fn token_reporter_high_water(repetitions: usize) -> usize {
     let mut context = Context::new(&tu);
     let mut reporter_arena = Bump::new();
     let mut out = CountDiagnostics(0);
-    print_preprocessor_output_in(
+    let errors = print_preprocessor_output_in(
         &mut context,
         Path::new("<input>"),
         source,
@@ -146,6 +146,7 @@ fn token_reporter_high_water(repetitions: usize) -> usize {
         },
     );
     assert_eq!(out.0, repetitions);
+    assert_eq!(errors, repetitions);
     reporter_arena.high_water()
 }
 

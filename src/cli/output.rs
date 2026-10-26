@@ -85,13 +85,13 @@ pub(super) fn print_parser_output<'tu>(
 }
 
 /// Prints the preprocessed translation unit, each token after the
-/// diagnostics its production reported.
+/// diagnostics its production reported, and returns the number of errors.
 pub(super) fn print_preprocessor_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
     search: HeaderSearch<'_>,
-) {
+) -> usize {
     let mut reporter_arena = Bump::new();
     let mut stderr = io::stderr();
     print_preprocessor_output_in(
@@ -104,11 +104,12 @@ pub(super) fn print_preprocessor_output<'tu>(
             reporter_arena: &mut reporter_arena,
             color:          RenderColor::for_stderr(),
         },
-    );
+    )
 }
 
 /// Keeps only the diagnostic counts between token batches. Each batch's
 /// folding state and copied locations are discarded before the next token.
+/// Returns the number of errors.
 pub(super) fn print_preprocessor_output_in<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
@@ -119,7 +120,7 @@ pub(super) fn print_preprocessor_output_in<'tu>(
         reporter_arena,
         color,
     }: TokenOutput<'_>,
-) {
+) -> usize {
     let mut scratch = Bump::new();
     let items = with_preprocessor(
         context,
@@ -167,6 +168,7 @@ pub(super) fn print_preprocessor_output_in<'tu>(
             | None => break,
         }
     }
+    errors
 }
 
 pub(super) struct TokenOutput<'a> {

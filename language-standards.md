@@ -1690,9 +1690,10 @@ The `float *` to `char *` argument execution regression explicitly uses
 contradict the observed Clang behavior. Function/void pointer conversions
 and pointer/zero ordering use the existing GNU extension policy adapter.
 
-Existing inspection views keep their historical success status while printing
-diagnostics. Code-generation modes (`--emit=ir`, `--interpret`, `-c`, `-o`)
-return failure for error diagnostics; flag regressions verify that lowering gate.
+Every mode, the inspection views included, returns failure after an error
+diagnostic, as a compiler must; code-generation modes (`--emit=ir`,
+`--interpret`, `-c`, `-o`) also stop before lowering, and flag regressions
+verify that gate.
 
 These defaults satisfy the diagnostic requirement of C99 §5.1.1.3p1
 (printed p. 11; PDF p. 23). The constraints remain §6.5.16.1p1

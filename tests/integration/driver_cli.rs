@@ -243,8 +243,8 @@ mod tests {
             Some(1)
         );
         succeeds(&project.bcc(&["-fsyntax-only", "main.c"]));
-        // The inspection views keep exiting with zero.
-        succeeds(&project.bcc(&["bad.c"]));
+        // So does the default analysis, as in any compiler.
+        assert_eq!(project.bcc(&["bad.c"]).status.code(), Some(1));
         let mut child = project
             .command(&["-E", "-P", "-x", "c", "-"])
             .stdin(Stdio::piped())
@@ -507,5 +507,58 @@ mod tests {
             "{}",
             stdout(&rules)
         );
+    }
+
+    #[test]
+    fn every_mode_fails_after_an_error() {
+        let project = Project::new();
+        let write = |name: &str, text: &str| std::fs::write(project.path(name), text).unwrap();
+        write("syntax.c", "int x = ;\n");
+        write("semantic.c", "int main(void) { return missing; }\n");
+        write("directive.c", "#error stop\nint a;\n");
+        write("pedantic.c", "int a[0];\n");
+        write("warned.c", "#warning careful\nint a;\n");
+        write("clean.c", "int a;\n");
+        let status = |args: &[&str]| project.bcc(args).status.code();
+        for args in [
+            &["syntax.c"][..],
+            &["--syntax-tree", "syntax.c"],
+            &["--raw-syntax", "syntax.c"],
+            &["--semantic-types", "semantic.c"],
+            &["semantic.c"],
+            &["-fsyntax-only", "semantic.c"],
+            &["--tokens", "directive.c"],
+            &["-E", "directive.c"],
+            &["-M", "directive.c"],
+            &["-c", "syntax.c"],
+            &["-S", "semantic.c", "-o", "-"],
+            &["--emit=ir", "semantic.c"],
+            // An extension is an error under -pedantic-errors, and a warning
+            // under -Werror.
+            &["-std=c99", "-pedantic-errors", "pedantic.c"],
+            &[
+                "-std=c99",
+                "-pedantic-errors",
+                "-fsyntax-only",
+                "pedantic.c",
+            ],
+            &["-std=c99", "-pedantic-errors", "-c", "pedantic.c"],
+            &["-Werror", "warned.c"],
+        ] {
+            assert_eq!(status(args), Some(1), "{args:?}");
+        }
+        assert!(!project.path("syntax.o").exists());
+        for args in [
+            &["clean.c"][..],
+            &["--syntax-tree", "clean.c"],
+            &["--tokens", "syntax.c"],
+            &["-E", "syntax.c"],
+            &["-std=c99", "-pedantic", "pedantic.c"],
+            &["-std=c99", "-pedantic-errors", "-E", "pedantic.c"],
+            &["warned.c"],
+            &["-c", "clean.c"],
+        ] {
+            assert_eq!(status(args), Some(0), "{args:?}");
+        }
     }
 }

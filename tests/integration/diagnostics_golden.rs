@@ -126,8 +126,14 @@ mod tests {
         for fixture in fixtures() {
             let output = run(&fixture);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if !output.status.success() {
-                failures.push(format!("{}: process failed: {stderr}", fixture.display()));
+            // The process fails exactly when it reported an error.
+            let errors = stderr.lines().any(|line| line.starts_with("error"));
+            if output.status.code() != Some(i32::from(errors)) {
+                failures.push(format!(
+                    "{}: exit status {:?} with errors: {errors}: {stderr}",
+                    fixture.display(),
+                    output.status.code()
+                ));
             }
             for forbidden in [
                 "StringCacheId",

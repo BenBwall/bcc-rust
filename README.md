@@ -26,8 +26,9 @@ language parser, and semantic analysis, and prints diagnostics. Pass
 `--semantic-types` for resolved declarations and types, `--syntax-tree` for a stable,
 source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
 the raw Rust debug form of the tree, or `--tokens` for parser-facing
-preprocessing tokens. Normal operation does not dump internal storage. These
-views exit with status 0 whatever they diagnose.
+preprocessing tokens. Normal operation does not dump internal storage. Every
+view, like every other mode, exits with status 1 when it reported an error
+(including `-pedantic-errors` and `-Werror` diagnostics) and 0 otherwise.
 
 Code generation runs only when asked for, after the same diagnostics:
 
@@ -47,7 +48,7 @@ bcc-rust a.c b.o -lm -o app            # compile, then link in order
 bcc-rust -E a.c [-P] [-o a.i]          # the preprocessed source
 bcc-rust -E -dM a.c                    # the macros defined at the end
 bcc-rust -MM a.c / -c -MMD a.c         # make dependency rules
-bcc-rust -fsyntax-only a.c             # check; exit 1 after an error
+bcc-rust -fsyntax-only a.c             # check only; exit 1 after an error
 ```
 
 The driver takes several inputs and runs one job per input, as GCC does: C
@@ -78,8 +79,8 @@ stage and `-o` as in GCC: `-c -o x.o` writes `x.d` for `x.o`, `-S -o x.s`
 source with `-o app` `app.d` for `app`. Linking several sources writes one
 rule per source, named after it (`a.d` for `a.o`), where GCC would overwrite
 one `app.d`. `-MF -` and `-o -` write the rules to stdout.
-`--syntax-only` (`-fsyntax-only`) analyzes like the default view but exits
-with status 1 after an error.
+`--syntax-only` (`-fsyntax-only`) analyzes like the default view. Every
+mode exits with status 1 after an error, as GCC and Clang do.
 
 Every back end receives the module after ABI lowering, which fixes how the
 `--target` passes structures by value and `va_arg`; `--emit=ir` prints the
@@ -648,8 +649,9 @@ unit includes all the standard headers together. Clang runs first with the
 configuration's target and include flags and `-fsyntax-only`, in `-std=gnu17`
 and, for the standard headers, also `-std=c17`. Clang's verdict decides which
 headers are valid: bcc does not run on headers that Clang rejects, and the
-results record why Clang rejected them. bcc exits 0 even after reporting
-errors, so the survey counts its rendered diagnostics instead. A crash or
+results record why Clang rejected them. bcc exits 1 when it reported an
+error, and the survey also counts its rendered diagnostics; any other exit,
+or exit 1 without an error, is a process failure. A crash or
 timeout makes the survey exit nonzero. `--config`, `--match` (a header glob),
 `--jobs`, and `--timeout` narrow or tune a run.
 

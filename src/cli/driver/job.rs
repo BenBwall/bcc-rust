@@ -194,26 +194,21 @@ fn run_job<'tu>(
             });
         },
         | Job::Inspect if !args.code_generation.requested() => {
-            if args.output.tokens {
-                print_preprocessor_output(context, source_filename, input_string, search);
+            let errors = if args.output.tokens {
+                print_preprocessor_output(context, source_filename, input_string, search)
             } else {
-                let errors = print_parser_output(
+                print_parser_output(
                     context,
                     source_filename,
                     input_string,
                     search,
                     &args.output.parser,
-                );
-                // The inspection views exit with zero; a syntax check fails.
-                if args.driver.syntax_only && errors != 0 {
-                    return Ok(Generated {
-                        status:         FAILURE_STATUS,
-                        atomic_runtime: false,
-                    });
-                }
-            }
+                )
+            };
+            // An error fails the command, as in any compiler, whichever
+            // view printed it.
             return Ok(Generated {
-                status:         0,
+                status:         if errors == 0 { 0 } else { FAILURE_STATUS },
                 atomic_runtime: false,
             });
         },
