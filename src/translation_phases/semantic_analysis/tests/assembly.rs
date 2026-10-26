@@ -343,3 +343,69 @@ fn every_goto_label_is_checked_for_variably_modified_scopes() {
         [SemanticErrorKind::JumpIntoVariableScope]
     );
 }
+
+/// `%z` writes the suffix of each operand's own mode, as GCC does: the C
+/// type, not the register class (an `int` in an SSE register is `l`, a
+/// `float` in a general one `s`), `s`, `l` and `t` for the floating types,
+/// and the byte size of an aggregate memory operand; a symbol address is
+/// `q`. GNU extension: GCC manual, "x86 Operand Modifiers", `z`.
+#[test]
+fn size_suffixes_follow_the_source_mode() {
+    let suffixes = |body: &str| {
+        let mut texts = Vec::new();
+        facts(
+            &format!(
+                "struct S {{ int x; }}; struct B {{ char c; }}; int g;\nvoid f(int i, float r, \
+                 double d, long double t, struct S *s, struct B *b) {{ {body} }}"
+            ),
+            |facts, _| {
+                assert!(
+                    facts.template.iter().all(|piece| !matches!(
+                        piece,
+                        AsmPiece::Operand {
+                            modifier: Some(b'z'),
+                            ..
+                        }
+                    )),
+                    "{body}"
+                );
+                texts.extend(facts.template.iter().filter_map(|piece| match piece {
+                    | AsmPiece::Text(text) => Some(String::from(*text)),
+                    | _ => None,
+                }));
+            },
+        );
+        texts.concat()
+    };
+    for (body, expected) in [
+        ("__asm__(\"z%z0\" :: \"x\"(i));", "zl"),
+        ("__asm__(\"z%z0\" :: \"r\"(r));", "zs"),
+        ("__asm__(\"fld%z0\" :: \"m\"(r));", "flds"),
+        ("__asm__(\"fld%z0\" :: \"m\"(d));", "fldl"),
+        ("__asm__(\"fld%z0\" :: \"m\"(t));", "fldt"),
+        ("__asm__(\"inc%z0\" : \"+m\"(*s));", "incl"),
+        ("__asm__(\"inc%z0\" : \"+m\"(*b));", "incb"),
+        ("__asm__(\"z%z0\" :: \"i\"(&g));", "zq"),
+    ] {
+        assert_eq!(suffixes(body), expected, "{body}");
+    }
+}
+
+/// `%z` has no suffix for a numeric constant, a flag output or an object
+/// of another size: GCC's "invalid operand type used with operand code
+/// 'z'".
+#[test]
+fn size_suffixes_without_a_mode_are_errors() {
+    for body in [
+        "__asm__(\"z%z0\" :: \"i\"(1));",
+        "int e; __asm__(\"z%z0\" : \"=@ccz\"(e));",
+        "struct T { char c[3]; } t; __asm__(\"z%z0\" :: \"m\"(t));",
+        "_Complex float c; __asm__(\"z%z0\" :: \"m\"(c));",
+    ] {
+        assert_eq!(
+            kinds(&format!("void f(void) {{ {body} }}")),
+            [SemanticErrorKind::InvalidAsm(AsmFault::SizeModifier)],
+            "{body}"
+        );
+    }
+}

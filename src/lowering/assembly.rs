@@ -137,8 +137,6 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         // operand's width.
         let widths = self.tied_widths(facts, source)?;
         let mut prints = ArenaVec::with_capacity_in(facts.operands.len(), self.scratch);
-        // Each operand's own integer type, which `%z` names the size of.
-        let mut sizes = ArenaVec::with_capacity_in(facts.operands.len(), self.scratch);
         for operand in facts.operands {
             let source = operand.expression.source_vectors;
             let mut next = || {
@@ -152,7 +150,6 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 let (descriptor, value, print) =
                     self.output_operand(operand, place, widened, &mut writes)?;
                 prints.push(print);
-                sizes.push(own_size(&descriptor, print));
                 if operand.role == AsmRole::Update && operand.kind == AsmOperandKind::Memory {
                     reads.push((
                         AsmOperand {
@@ -189,7 +186,6 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 };
                 let (descriptor, value, print) = self.input_operand(operand, item, &outputs)?;
                 prints.push(print);
-                sizes.push(own_size(&descriptor, print));
                 inputs.push((descriptor, value));
             }
         }
@@ -221,7 +217,6 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let template = llvm_template(
             facts,
             &prints,
-            &sizes,
             gcc_outputs,
             selector.map(|_| gcc_outputs),
             self.scratch,
@@ -693,7 +688,6 @@ fn clobbers(facts: &AsmFacts<'_>) -> AsmClobbers {
 fn llvm_template<'s>(
     facts: &AsmFacts<'_>,
     prints: &[Option<Type>],
-    sizes: &[Option<Type>],
     outputs: usize,
     selector: Option<usize>,
     scratch: &'s crate::util::bump::Bump,
@@ -721,19 +715,6 @@ fn llvm_template<'s>(
                 operand: index,
                 modifier,
             } => {
-                // `%z` is the instruction suffix of the operand's own size,
-                // which neither the shared register's width nor LLVM, which
-                // has no `z`, would give.
-                if modifier == Some(b'z')
-                    && let Some(suffix) = sizes
-                        .get(index as usize)
-                        .copied()
-                        .flatten()
-                        .and_then(size_suffix)
-                {
-                    text.push(suffix);
-                    continue;
-                }
                 // A reference to an operand narrower than the register it
                 // shares prints at the operand's own width.
                 let modifier = modifier.or_else(|| {
@@ -773,29 +754,6 @@ fn llvm_template<'s>(
         _ = write!(text, "\n{GOTO_PREFIX}${{:uid}}{end}:");
     }
     text.into_str()
-}
-
-/// The AT&T instruction suffix of an integer of `ty`'s width.
-fn size_suffix(ty: Type) -> Option<char> {
-    match ty {
-        | Type::I8 => Some('b'),
-        | Type::I16 => Some('w'),
-        | Type::I32 => Some('l'),
-        | Type::I64 | Type::Ptr => Some('q'),
-        | _ => None,
-    }
-}
-
-/// The integer type `%z` sizes an operand by: its own type before any
-/// widening, or the scalar a memory operand holds.
-fn own_size(operand: &AsmOperand, print: Option<Type>) -> Option<Type> {
-    let ty = print.unwrap_or(operand.ty);
-    let fits = match operand.constraint {
-        | AsmConstraint::General(_) | AsmConstraint::Tied(_) | AsmConstraint::Immediate => true,
-        | AsmConstraint::Memory => operand.bytes == ty.bytes(),
-        | AsmConstraint::Sse | AsmConstraint::Flag(_) => false,
-    };
-    (fits && (ty.is_int() || ty == Type::Ptr)).then_some(ty)
 }
 
 /// The register type of `base`'s class at `bits`: the floating type for an

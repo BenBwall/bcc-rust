@@ -112,6 +112,22 @@ static int suffix(long x) {
     __asm__("mov%z0 $1, %0" : "=a"(y) : "0"(x));
     return y;
 }
+static double x87_copy(double in) {
+    double out;
+    __asm__("fld%z1 %1\n\tfstp%z0 %0" : "=m"(out) : "m"(in));
+    return out;
+}
+static float x87_copy_float(float in) {
+    float out;
+    __asm__("fld%z1 %1\n\tfstp%z0 %0" : "=m"(out) : "m"(in));
+    return out;
+}
+struct counter { int value; };
+static int increment_struct(void) {
+    struct counter c = {41};
+    __asm__("inc%z0 %0" : "+m"(c));
+    return c.value;
+}
 static int unique(void) {
     int r;
     __asm__("jmp 1f\n1:\tmovl $%=, %0" : "=r"(r));
@@ -151,6 +167,8 @@ int main(void) {
     if (!wide_flag(0) || wide_flag(1)) return 25;
     if (sse_high(0x500000007L) != 5) return 26;
     if (suffix(0x700000000L) != 1) return 27;
+    if (x87_copy(2.5) != 2.5 || x87_copy_float(1.25f) != 1.25f) return 28;
+    if (increment_struct() != 42) return 29;
     return 0;
 }
 "#;

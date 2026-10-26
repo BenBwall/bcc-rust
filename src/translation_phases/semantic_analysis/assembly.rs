@@ -207,7 +207,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 labels:   &labels,
             };
             match template::parse(text, &names, tu) {
-                | Ok(pieces) => pieces,
+                | Ok(pieces) => self.size_suffixes(asm, operands, pieces)?,
                 | Err(fault) => {
                     let token = asm.template?;
                     let fault = match fault {
@@ -229,6 +229,96 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             clobbers,
             jumps,
         })
+    }
+
+    /// The template with each `%z` replaced by the AT&T suffix of its
+    /// operand's own mode, as GCC prints it: the C type of the operand, not
+    /// the register that holds it (an `int` in an SSE register is `l`, a
+    /// `float` in a general register `s`), `s`, `l` or `t` for floating
+    /// types, and the byte size of an aggregate memory operand. `%z` on a
+    /// numeric immediate, a flag output or any other operand is an error.
+    /// No `z` is left for lowering or a back end.
+    /// GNU extension: GCC manual, "x86 Operand Modifiers", `z`.
+    fn size_suffixes(
+        &mut self,
+        asm: &'tu Asm<'tu>,
+        operands: &[AsmOperandFacts<'tu>],
+        pieces: &'tu [AsmPiece<'tu>],
+    ) -> Option<&'tu [AsmPiece<'tu>]> {
+        if !pieces.iter().any(|piece| {
+            matches!(
+                piece,
+                AsmPiece::Operand {
+                    modifier: Some(b'z'),
+                    ..
+                }
+            )
+        }) {
+            return Some(pieces);
+        }
+        let mut resolved = ArenaVec::with_capacity_in(pieces.len(), self.context.tu_arena());
+        for &piece in pieces {
+            let AsmPiece::Operand {
+                operand,
+                modifier: Some(b'z'),
+            } = piece
+            else {
+                resolved.push(piece);
+                continue;
+            };
+            let Some(suffix) = self.size_suffix(&operands[operand as usize]) else {
+                let source = asm
+                    .template
+                    .map_or(asm.source_vectors, |token| token.source_vectors);
+                self.assembly_error(AsmFault::SizeModifier, source, None);
+                return None;
+            };
+            resolved.push(AsmPiece::Text(suffix));
+        }
+        Some(resolved.leak())
+    }
+
+    /// The suffix `%z` writes for an operand, or `None` where GCC reports
+    /// "invalid operand type used with operand code 'z'".
+    fn size_suffix(&mut self, operand: &AsmOperandFacts<'tu>) -> Option<&'static str> {
+        let info = self.expression_info(operand.expression);
+        let ty = match (operand.role, operand.kind) {
+            | (_, AsmOperandKind::Flag(_))
+            | (AsmRole::Input, AsmOperandKind::Immediate { symbolic: false }) => return None,
+            // A symbol's address is a 64-bit constant.
+            | (AsmRole::Input, AsmOperandKind::Immediate { symbolic: true }) => return Some("q"),
+            | (AsmRole::Input, AsmOperandKind::Memory) | (AsmRole::Output | AsmRole::Update, _) =>
+                self.value_type_of(info.ty),
+            | (AsmRole::Input, _) => self.value_type(info),
+        };
+        if let Some((bits, _)) = self.integer_type(ty) {
+            return match bits {
+                | 1 | 8 => Some("b"),
+                | 16 => Some("w"),
+                | 32 => Some("l"),
+                | 64 => Some("q"),
+                | _ => None,
+            };
+        }
+        if self.pointer_target(ty).is_some() {
+            return Some("q");
+        }
+        let size = self.types.layout(ty).map(|layout| layout.size);
+        match self.types.nodes[ty.index] {
+            | TypeKind::Scalar(Scalar::Float) => Some("s"),
+            | TypeKind::Scalar(Scalar::Double) => Some("l"),
+            // `long double` is the x87 format, or `double` on MSVC.
+            | TypeKind::Scalar(Scalar::LongDouble) => Some(if size == Some(8) { "l" } else { "t" }),
+            | TypeKind::Tag(_) | TypeKind::Array(..) if operand.kind == AsmOperandKind::Memory =>
+                match size {
+                    | Some(1) => Some("b"),
+                    | Some(2) => Some("w"),
+                    | Some(4) => Some("l"),
+                    | Some(8) => Some("q"),
+                    | _ => None,
+                },
+            | _ => None,
+        }
     }
 
     /// Each operand's constraint alternatives, parsed. Every operand of a
@@ -649,6 +739,7 @@ pub(crate) enum AsmFault {
     OperandNumber,
     OperandName,
     Modifier,
+    SizeModifier,
 }
 
 impl AsmFault {
@@ -671,6 +762,7 @@ impl AsmFault {
             | Self::ClobberConflict => "register is clobbered",
             | Self::Escape | Self::OperandNumber | Self::OperandName | Self::Modifier =>
                 "invalid template",
+            | Self::SizeModifier => "operand has no size suffix",
         }
     }
 
@@ -767,6 +859,12 @@ impl AsmFault {
             | Self::OperandName => (
                 "unknown symbolic operand name in inline asm string",
                 "GNU Extended Asm: '%[name]' names an operand and '%l[name]' a goto label",
+            ),
+            | Self::SizeModifier => (
+                "invalid operand type used with operand code 'z'",
+                "GNU x86 Operand Modifiers: 'z' is the instruction suffix of an integer, pointer, \
+                 floating or 1-, 2-, 4- or 8-byte memory operand, not of a numeric constant or \
+                 flag output",
             ),
             | Self::Modifier => (
                 "invalid operand modifier in inline asm string",

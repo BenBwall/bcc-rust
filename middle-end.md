@@ -1793,7 +1793,13 @@ x86-64 register name with or without `%`, `memory`, `cc` and its LLVM
 spellings. A clobber of the register an operand's constraint names alone is
 "impossible constraints". The template (`assembly/template.rs`) resolves
 `%N`, `%[name]`, the x86 modifiers, `%lN`/`%l[name]` goto labels, `%=`,
-`%%`, `%{` `%|` `%}` and `{…|…}` dialect alternatives; basic assembly
+`%%`, `%{` `%|` `%}` and `{…|…}` dialect alternatives, and rewrites each
+`%z` to the AT&T suffix of the operand's own mode (its C type: `b` `w` `l`
+`q` for integers and pointers, `s` `l` `t` for `float`, `double` and x87
+`long double`, the byte size of an aggregate memory operand, `q` for a
+symbol address), so lowering and the back ends never see `z`, which LLVM
+lacks; `%z` on a numeric constant, a flag output or an object of another
+size is an error, as in GCC; basic assembly
 (no colon) substitutes nothing. Each fault is `SemanticErrorKind::InvalidAsm`
 with GCC's or Clang's message. Every `asm goto` label is a jump of the
 statement, checked as a `goto` is (an undefined label, or entering a
@@ -1835,9 +1841,7 @@ narrower operand gets the size modifier of its own width (`%0` stays
 `%eax`), and the output takes the low bits when assigned. The shared
 register keeps the output's class: an SSE output tied to a wider integer
 is an `f64`, whose bits the `int` output truncates (`psrlq $32` on a
-`long`, as GCC accepts). `%z` writes the instruction suffix of the
-operand's own size, which neither the shared register nor LLVM (which has
-no `z`) gives. A flag output wider than 64 bits (`__int128`) is set from a
+`long`, as GCC accepts). A flag output wider than 64 bits (`__int128`) is set from a
 32-bit condition and zero-extended when assigned. Lowering checks each
 descriptor against the IR's operand rules (`InlineAsm::check`, which the
 verifier shares) and refuses one that breaks them, so no statement reaches
