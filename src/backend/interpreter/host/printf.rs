@@ -150,7 +150,9 @@ impl DefaultHost<'_> {
         memory: &Memory<'_>,
     ) -> Result<(), Fault> {
         let class = match conversion {
-            | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' if long_double =>
+            // MSVC's `long double` is binary64, passed as a `double` is.
+            | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A'
+                if long_double && self.long_double == Type::F80 =>
                 ArgumentClass::LongDouble,
             | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' => ArgumentClass::Double,
             | b'p' | b's' => ArgumentClass::Pointer,

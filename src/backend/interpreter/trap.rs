@@ -236,9 +236,6 @@ pub(crate) enum Unsupported {
     FormatWidth,
     /// A post-ABI `va_start` in a module without a supported target.
     VaListTarget,
-    /// A variadic argument wider than a Win64 slot, which the target would
-    /// pass by reference.
-    WideVariadic,
     /// A function that may return twice other than the `setjmp` family,
     /// such as `vfork` or one declared GNU `returns_twice`.
     ReturnsTwice,
@@ -253,7 +250,6 @@ impl fmt::Display for Unsupported {
             | Self::FormatConversion => "a printf conversion the host does not implement",
             | Self::FormatWidth => "a printf field width larger than the size limit",
             | Self::VaListTarget => "a target va_list in a module without a known target",
-            | Self::WideVariadic => "a Win64 variadic argument wider than eight bytes",
             | Self::ReturnsTwice => "a returns-twice function other than setjmp",
         })
     }
