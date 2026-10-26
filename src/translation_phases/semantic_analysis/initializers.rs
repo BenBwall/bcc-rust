@@ -246,7 +246,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                     site.scalar_source.unwrap_or(e.source_vectors),
                                 );
                             }
-                            if static_storage {
+                            if static_storage && !self.constant_compound_literal(target, e) {
                                 self.check_static_initializer(target, info, e, bit_field);
                             }
                         },
@@ -726,6 +726,64 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 None,
                 None,
             );
+        }
+    }
+
+    /// Whether `e` is a compound literal of structure or union type whose
+    /// initializer holds only constants, which GCC and Clang accept as
+    /// the constant initializer of a static object of its type: its
+    /// elements initialize the object as if they were written in braces.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6p10, p. 96;
+    /// PDF p. 108 permits other forms of constant expression.
+    fn constant_compound_literal(&mut self, target: TypeId, mut e: &'tu Expression<'tu>) -> bool {
+        if !matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
+        ) {
+            return false;
+        }
+        let initializer = loop {
+            match e.kind {
+                | ExpressionType::Parenthesized { expression } => e = expression,
+                | ExpressionType::CompoundLiteral { initializer, .. } => break initializer,
+                | _ => return false,
+            }
+        };
+        self.constant_initializer(initializer)
+    }
+
+    /// Whether every expression of `initializer` is a constant, a string
+    /// literal or such a compound literal. Its own check already diagnosed
+    /// conversions; a file-scope literal's check also proved its constants.
+    fn constant_initializer(&mut self, initializer: &'tu Initializer<'tu>) -> bool {
+        match initializer.kind {
+            | InitializerType::AssignmentExpression(e) => {
+                let mut inner = e;
+                while let ExpressionType::Parenthesized { expression } = inner.kind {
+                    inner = expression;
+                }
+                match inner.kind {
+                    | ExpressionType::StringLiteral(_) => true,
+                    | ExpressionType::CompoundLiteral { initializer, .. } =>
+                        self.constant_initializer(initializer),
+                    | _ => {
+                        // An array or function designator becomes an address
+                        // constant (C99 §6.6p9, p. 96; PDF p. 108).
+                        let info = self.expression_info(e);
+                        info.constant != ConstantClass::None
+                            || (info.static_address
+                                && matches!(
+                                    self.types.nodes[info.ty.index],
+                                    TypeKind::Array(..) | TypeKind::Function { .. }
+                                ))
+                    },
+                }
+            },
+            | InitializerType::InitializerList(list) => list
+                .elements
+                .as_slice()
+                .iter()
+                .all(|element| self.constant_initializer(element.initializer)),
         }
     }
 

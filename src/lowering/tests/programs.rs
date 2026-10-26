@@ -301,6 +301,50 @@ int main(void) {
         expected: 15,
     },
     Program {
+        // GNU and MSVC `#pragma push_macro` / `pop_macro`.
+        name:     "push_and_pop_macro",
+        source:   "#define VALUE 1
+#pragma push_macro(\"VALUE\")
+#undef VALUE
+#define VALUE 20
+static int inner(void) { return VALUE; }
+#pragma pop_macro(\"VALUE\")
+int main(void) { return inner() + VALUE; }",
+        expected: 21,
+    },
+    Program {
+        // GNU `\\e` (ESC) and a conditional with one void alternative.
+        name:     "gnu_escape_and_one_void_conditional",
+        source:   "static int calls;
+static void note(void) { calls++; }
+int main(void) {
+  int i = 1;
+  i ? note() : (void)0;
+  i ? (note(), 5) : (void)0;
+  !i ? 7 : note();
+  i ?: note();
+  0 ?: note();
+  return calls * 10 + \"\\e\"[0] + '\\E' - 27;
+}",
+        expected: 67,
+    },
+    Program {
+        // GNU constant compound literals initializing static structures,
+        // members, array elements and a block-scope static.
+        name:     "constant_compound_literal_statics",
+        source:   "struct s { int a, b; const char *n; };
+static int x = 4;
+struct s whole = (struct s){1, 2, \"x\"};
+struct w { struct s inner; int *p; } member = { ((struct s){.b = 3}), &x };
+struct s array[2] = { (struct s){5}, [1] = (struct s){.a = 6, .n = \"yz\"} };
+static int local(void) { static struct s kept = (struct s){7, 8}; return kept.a + kept.b; }
+int main(void) {
+  return whole.a + whole.b + whole.n[0] - 'x' + member.inner.b + *member.p + array[0].a
+       + array[1].a + array[1].n[1] - 'z' + local();
+}",
+        expected: 36,
+    },
+    Program {
         name:     "old_style_definition",
         source:   "int scale(x, k) char x; int k; { return x * k; }
 int main(void) { return scale(7, 6); }",

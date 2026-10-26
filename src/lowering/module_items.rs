@@ -1324,11 +1324,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     discard(&mut relocations, offset, offset + size as u64);
                     bytes[start..start + count].copy_from_slice(&string[..count]);
                 },
-                | Leaf::Copy { expression, .. } =>
-                    return Err(LoweringError::unsupported(
-                        Construct::StaticInitializer,
-                        expression.source_vectors,
-                    )),
+                | Leaf::Copy {
+                    offset,
+                    ty,
+                    expression,
+                    ..
+                } => self.static_copy(&mut bytes, &mut relocations, offset, ty, expression)?,
                 | Leaf::Replicate {
                     offset,
                     size,
@@ -1356,6 +1357,54 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // Native storage emission consumes the final addresses in order.
         relocations.sort_unstable_by_key(|relocation| relocation.offset);
         Ok((bytes, relocations))
+    }
+
+    /// Writes the structure or union a compound literal of its type gives a
+    /// static object: the bytes and addresses of the literal's own
+    /// initializer, as if it were written in braces. Semantic analysis
+    /// accepts no other expression here.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6p10, p. 96;
+    /// PDF p. 108.
+    fn static_copy(
+        &mut self,
+        bytes: &mut [u8],
+        relocations: &mut ArenaVec<'_, Relocation>,
+        offset: u64,
+        ty: TypeId,
+        mut expression: &'tu Expression<'tu>,
+    ) -> Result<(), LoweringError> {
+        let unsupported =
+            || LoweringError::unsupported(Construct::StaticInitializer, expression.source_vectors);
+        let literal = loop {
+            match expression.kind {
+                | ExpressionType::Parenthesized { expression: inner } => expression = inner,
+                | ExpressionType::CompoundLiteral { initializer, .. } => break initializer,
+                | _ => return Err(unsupported()),
+            }
+        };
+        let size = types::layout(&self.sema.types, ty)
+            .map_err(|kind| at(kind, expression.source_vectors))?
+            .size;
+        let literal_ty = self
+            .sema
+            .expression_info(expression)
+            .ok_or_else(unsupported)?
+            .ty;
+        let (literal_bytes, literal_relocations) =
+            self.static_bytes(literal_ty, size, literal, None)?;
+        let start = index(offset, expression)?;
+        bytes[start..start + literal_bytes.len()].copy_from_slice(&literal_bytes);
+        discard(relocations, offset, offset + size);
+        for relocation in literal_relocations {
+            insert(
+                relocations,
+                Relocation {
+                    offset: relocation.offset + offset,
+                    ..relocation
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Writes one scalar leaf: an integer or floating constant converted to
