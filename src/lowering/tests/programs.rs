@@ -345,6 +345,20 @@ int main(void) {
         expected: 36,
     },
     Program {
+        // GNU scalar compound literals of a static object's own type.
+        name:     "scalar_compound_literal_statics",
+        source:   "static int g = 9;
+static int i = (int){3};
+static double d = ((double){2.5});
+static char ch = (char){300};
+static int braces = (int){{6}};
+static int *p = (int *){&g};
+static _Bool b = (_Bool){2};
+static int local(void) { static long w = (long){7}; return (int)w; }
+int main(void) { return i + (int)(d * 2) + ch + braces + *p + b + local(); }",
+        expected: 75,
+    },
+    Program {
         name:     "old_style_definition",
         source:   "int scale(x, k) char x; int k; { return x * k; }
 int main(void) { return scale(7, 6); }",
