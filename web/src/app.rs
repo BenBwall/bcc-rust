@@ -78,6 +78,7 @@ pub fn App() -> impl IntoView {
             <EngineNotice state />
             <section class="workbench" id="workbench" aria-label="Workbench">
                 <Toolbar state />
+                <SiteError state />
                 <div class="workbench-grid">
                     <SourcePane state />
                     <div class="insight" id="insight">
@@ -305,8 +306,8 @@ impl State {
     }
 
     async fn load_program(self, text: String, name: String) -> Result<(), String> {
-        if text.len() > MAX_SOURCE_BYTES as usize {
-            return Err("The bounded Rust engine accepts at most 32 KiB of source.".into());
+        if !self.accepts(&text) {
+            return Ok(());
         }
         self.source.set(text.clone());
         self.editor_text.set(text.clone());
@@ -326,11 +327,13 @@ impl State {
     async fn stage_program(self, text: String, name: String) -> Result<(), String> {
         if self.has_engine.get_untracked() {
             self.load_program(text, name).await
-        } else {
+        } else if self.accepts(&text) {
             self.source.set(text.clone());
             self.editor_text.set(text);
             self.filename.set(name);
             self.clear_history();
+            Ok(())
+        } else {
             Ok(())
         }
     }
@@ -360,7 +363,8 @@ impl State {
             return;
         }
         if self.busy.get_untracked() {
-            self.queued.update(|queued| *queued = (*queued + 1).min(MAX_QUEUED_STEPS));
+            self.queued
+                .update(|queued| *queued = (*queued + 1).min(MAX_QUEUED_STEPS));
             return;
         }
         self.action(move || async move {
@@ -525,17 +529,25 @@ impl State {
         let Some(file) = input.files().and_then(|files| files.get(0)) else {
             return Ok(());
         };
+        // Clear the input so that choosing the same file again reopens it.
+        input.set_value("");
         if file.size() > f64::from(MAX_SOURCE_BYTES) {
-            return Err("The bounded Rust engine accepts source files up to 32 KiB.".into());
+            self.reject(format!(
+                "{} is {} KiB, but the bounded Rust engine accepts source files up to 32 KiB.",
+                file.name(),
+                (file.size() / 1024.0).ceil()
+            ));
+            return Ok(());
         }
-        let text = JsFuture::from(file.text())
+        let Some(text) = JsFuture::from(file.text())
             .await
             .ok()
             .and_then(|text| text.as_string())
-            .ok_or("The selected file could not be read as text.")?;
-        let result = self.stage_program(text, file.name()).await;
-        input.set_value("");
-        result
+        else {
+            self.reject(format!("{} could not be read as text.", file.name()));
+            return Ok(());
+        };
+        self.stage_program(text, file.name()).await
     }
 
     fn shortcut(self, event: &web_sys::KeyboardEvent) {
@@ -622,6 +634,35 @@ impl State {
             note:    "Reset or load a program to restart from a known engine state.".into(),
         }));
         self.announcement.set(error.into());
+    }
+
+    /// Whether `text` fits the engine's source limit; a larger program is
+    /// rejected without touching the loaded one.
+    fn accepts(self, text: &str) -> bool {
+        let fits = text.len() <= MAX_SOURCE_BYTES as usize;
+        if !fits {
+            self.reject(format!(
+                "This program is {} KiB, but the bounded Rust engine accepts at most 32 KiB of \
+                 source.",
+                text.len().div_ceil(1024)
+            ));
+        }
+        fits
+    }
+
+    /// Report a request the page refused before it reached the engine, which
+    /// keeps the program it had.
+    fn reject(self, message: String) {
+        self.announcement.set(message.clone());
+        self.error.set(Some(Diagnostic {
+            kind: None,
+            title: "Program not loaded".into(),
+            message,
+            clause: None,
+            note: "The previous program is still loaded and can keep running. Choose a smaller \
+                   file, or pick a lesson."
+                .into(),
+        }));
     }
 
     fn show_unavailable(self, error: &str) {
@@ -950,6 +991,43 @@ fn EngineNotice(state: State) -> impl IntoView {
                 <button type="button" class="button" disabled=move || state.busy.get() on:click=move |_| state.initialize()>
                     "Retry engine"
                 </button>
+            </div>
+        </section>
+    }
+}
+
+/// The page-level diagnostic: an engine request that failed, or a program the
+/// page refused to load, with how to recover.
+#[component]
+fn SiteError(state: State) -> impl IntoView {
+    let field = move |read: fn(&Diagnostic) -> String| {
+        move || {
+            state
+                .error
+                .with(|error| error.as_ref().map(read).unwrap_or_default())
+        }
+    };
+    view! {
+        <section class="notice site-error" aria-labelledby="site-error-title" hidden=move || state.error.with(Option::is_none)>
+            <div class="notice-icon" aria-hidden="true">"!"</div>
+            <div>
+                <h2 id="site-error-title">{field(|error| error.title.clone())}</h2>
+                <p>{field(|error| error.message.clone())}</p>
+                <p>{field(|error| error.note.clone())}</p>
+                <div class="notice-actions">
+                    <button
+                        type="button"
+                        class="button"
+                        hidden=move || !state.failed.get()
+                        disabled=move || state.locked_tracked() || !state.has_engine.get()
+                        on:click=move |_| state.reset()
+                    >
+                        "Reset program"
+                    </button>
+                    <button type="button" class="button ghost" on:click=move |_| state.error.set(None)>
+                        "Dismiss"
+                    </button>
+                </div>
             </div>
         </section>
     }
