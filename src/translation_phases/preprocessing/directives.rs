@@ -98,6 +98,11 @@ impl Expander<'_, '_, '_, '_> {
             | PreprocessorTokenType::Defined
             | PreprocessorTokenType::Identifier
             | PreprocessorTokenType::UniversalIdentifier => (),
+            // A GNU line marker, as preprocessed output spells `#line`.
+            | PreprocessorTokenType::Number => {
+                self.parse_line_marker(directive);
+                return;
+            },
             | _ => {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::HashMustBeFollowedByIdentifier,

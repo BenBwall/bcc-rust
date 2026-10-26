@@ -119,10 +119,16 @@ impl Bump {
     /// so it costs exactly its length and commits only what it fills.
     /// Files or repaired text exceeding `u32::MAX` bytes return `InvalidData`.
     pub(crate) fn read_to_str_lossy(&self, path: &Path) -> std::io::Result<&str> {
-        let mut file = std::fs::File::open(path)?;
+        let file = std::fs::File::open(path)?;
         if file.metadata()?.len() > u64::from(u32::MAX) {
             return Err(oversized_source());
         }
+        self.read_from_lossy(file)
+    }
+
+    /// Reads everything `reader` gives, such as stdin, as
+    /// [`Self::read_to_str_lossy`] reads a file.
+    pub(crate) fn read_from_lossy(&self, mut file: impl Read) -> std::io::Result<&str> {
         let mut bytes = self.tail_vec();
         let mut buffer = [0_u8; 8192];
         loop {

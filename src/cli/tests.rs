@@ -4,6 +4,7 @@ use std::{
         self,
         Write,
     },
+    path::Path,
 };
 
 use super::{
@@ -19,7 +20,12 @@ use crate::{
         MsvcFeature,
     },
     diagnostics::ColorChoice as RenderColor,
-    util::bump::ArenaString,
+    headers::HeaderSearch,
+    translation_phases::Context,
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 #[test]

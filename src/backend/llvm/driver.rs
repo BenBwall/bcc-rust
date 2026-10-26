@@ -68,18 +68,7 @@ pub(crate) fn compile_module_checked(
     file.write_all(buffer.bytes())?;
     drop(file);
     let toolchain = Toolchain::bundled(options.target)?;
-    let atomic_runtime = module.functions().any(|(_, f)| {
-        f.body.as_ref().is_some_and(|body| {
-            body.blocks().any(|block| {
-                body.block_insts(block).iter().any(|&inst| {
-                    matches!(body.inst(inst), crate::ir::InstData::Atomic { op, ty, align, .. }
-                        if op.is_bytes() || *ty == crate::ir::Type::I128
-                            || !op.is_fence() && align.bytes() < u64::from(ty.bits() / 8))
-                })
-            })
-        })
-    });
-    if !atomic_runtime {
+    if !needs_atomic_runtime(module) {
         return toolchain
             .link_object(&object.0, out_path, options)
             .map(|()| true);
@@ -92,6 +81,23 @@ pub(crate) fn compile_module_checked(
     } else {
         Err(io::Error::other(ClangError(output)))
     }
+}
+
+/// Whether LLVM lowers some atomic operation of `module` to a libatomic
+/// call: a generic byte-wise operation, a 128-bit one, or a misaligned one.
+/// An executable that contains it links `-latomic`.
+pub(crate) fn needs_atomic_runtime(module: &crate::ir::Module<'_>) -> bool {
+    module.functions().any(|(_, f)| {
+        f.body.as_ref().is_some_and(|body| {
+            body.blocks().any(|block| {
+                body.block_insts(block).iter().any(|&inst| {
+                    matches!(body.inst(inst), crate::ir::InstData::Atomic { op, ty, align, .. }
+                        if op.is_bytes() || *ty == crate::ir::Type::I128
+                            || !op.is_fence() && align.bytes() < u64::from(ty.bits() / 8))
+                })
+            })
+        })
+    })
 }
 
 /// A temporary file beside the output (an object, or the native back
@@ -309,6 +315,71 @@ impl Toolchain {
             _ = command.arg("-lm");
         }
         let output = command.output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(ClangError(output)))
+        }
+    }
+
+    /// Links `inputs` (objects, archives, libraries and linker options such
+    /// as `-lm` or `-Wl,...`, in command-line order) into `out_path`, the
+    /// way the driver links several translation units. `atomic_runtime`
+    /// adds `-latomic` after them, as one object's link adds it.
+    pub(crate) fn link_inputs<'a>(
+        &self,
+        inputs: impl IntoIterator<Item = &'a OsStr>,
+        out_path: &Path,
+        options: LlvmOptions,
+        atomic_runtime: bool,
+    ) -> io::Result<()> {
+        let mut command = Command::new(&self.clang);
+        _ = command
+            .arg(concat_os("--target=", options.target.triple().as_ref()))
+            .args(options.opt.map(OptLevel::flag));
+        if let Some(sysroot) = &self.sysroot {
+            _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
+        }
+        _ = command
+            .arg("-fuse-ld=lld")
+            .args(options.kind.link_flag())
+            .args(inputs)
+            .arg("-o")
+            .arg(out_path);
+        // C99 §7.12 real math is provided by a separate library on Linux.
+        if matches!(options.target, Target::LinuxGnu | Target::LinuxMusl) {
+            _ = command.arg("-lm");
+        }
+        if atomic_runtime {
+            _ = command.arg("-latomic");
+        }
+        let output = command.output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(ClangError(output)))
+        }
+    }
+
+    /// Assembles or compiles one input the bundled clang understands, such as
+    /// an assembly file, into the object `out_path`.
+    pub(crate) fn compile_foreign(
+        &self,
+        input: &Path,
+        out_path: &Path,
+        target: Target,
+    ) -> io::Result<()> {
+        let mut command = Command::new(&self.clang);
+        _ = command.arg(concat_os("--target=", target.triple().as_ref()));
+        if let Some(sysroot) = &self.sysroot {
+            _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
+        }
+        let output = command
+            .arg("-c")
+            .arg(input)
+            .arg("-o")
+            .arg(out_path)
+            .output()?;
         if output.status.success() {
             Ok(())
         } else {

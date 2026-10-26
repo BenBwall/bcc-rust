@@ -73,6 +73,7 @@ pub(super) fn prepare<'ir>(
             });
         }
     }
+    let mut atomic_runtime = false;
     let output = match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => {
             let mut text = ArenaString::new_in(arena);
@@ -87,8 +88,13 @@ pub(super) fn prepare<'ir>(
         },
         | (Some(Emit::Asm), _) => {
             let mut text = ArenaString::new_in(arena);
-            native::emit_assembly_with(module, target, code, &mut text)
-                .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
+            if options.backend == BackEnd::Native {
+                native::emit_assembly_with(module, target, code, &mut text)
+                    .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
+            } else {
+                llvm::emit_assembly_text(module, options.llvm_options(target, code), &mut text)
+                    .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
+            }
             Output::Text(text.into_str())
         },
         | (None, Some(path)) => {
@@ -149,6 +155,9 @@ pub(super) fn prepare<'ir>(
                     return Err(Failure::Calls(diagnostics));
                 }
             }
+            atomic_runtime = options.backend == BackEnd::Llvm
+                && options.output_kind() == OutputKind::Object
+                && llvm::needs_atomic_runtime(module);
             Output::Built
         },
         | (None, None) => {
@@ -171,6 +180,7 @@ pub(super) fn prepare<'ir>(
     Ok(Prepared {
         output,
         diagnostics,
+        atomic_runtime,
     })
 }
 
@@ -187,8 +197,10 @@ pub(super) enum Output<'ir> {
 }
 
 pub(super) struct Prepared<'ir> {
-    pub(super) output:      Output<'ir>,
-    pub(super) diagnostics: &'ir [CallDiagnostic],
+    pub(super) output:         Output<'ir>,
+    pub(super) diagnostics:    &'ir [CallDiagnostic],
+    /// Whether the object written needs the atomic runtime when linked.
+    pub(super) atomic_runtime: bool,
 }
 
 fn message<'ir>(arena: &'ir Bump, args: fmt::Arguments<'_>, status: i32) -> Failure<'ir> {

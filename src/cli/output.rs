@@ -37,13 +37,15 @@ use crate::{
     },
 };
 
+/// Parses and analyzes the input, prints the views `output` asks for and
+/// the diagnostics, and returns the number of errors.
 pub(super) fn print_parser_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
     search: HeaderSearch<'_>,
     output: &ParserOutput,
-) {
+) -> usize {
     let unit = parse_translation_unit(context, source_filename, input_string, search);
     let semantic = (output.semantic_types || (!output.syntax_tree && !output.raw_syntax))
         .then(|| crate::pipeline::analyze_translation_unit(context, &unit));
@@ -79,6 +81,7 @@ pub(super) fn print_parser_output<'tu>(
         eprint!("{}", semantic.inspect(context, &inspection));
     }
     expect_stderr(reporter.finish(context, stderr));
+    reporter.errors
 }
 
 /// Prints the preprocessed translation unit, each token after the

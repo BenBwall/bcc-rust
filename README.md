@@ -41,7 +41,28 @@ bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
 bcc-rust x.c --target=x86_64-w64-windows-gnu --backend=native -o x.exe
 bcc-rust x.c --target=x86_64-unknown-linux-gnu --backend=native --emit=asm
 bcc-rust lib.c -fPIC -shared -o libx.so   # a shared library (Linux)
+bcc-rust -c a.c b.c                    # a.o and b.o, as GCC names them
+bcc-rust -S a.c                        # a.s, LLVM's assembly
+bcc-rust a.c b.o -lm -o app            # compile, then link in order
+bcc-rust -E a.c [-P] [-o a.i]          # the preprocessed source
+bcc-rust -E -dM a.c                    # the macros defined at the end
+bcc-rust -MM a.c / -c -MMD a.c         # make dependency rules
+bcc-rust -fsyntax-only a.c             # check; exit 1 after an error
 ```
+
+The driver takes several inputs and runs one job per input, as GCC does: C
+sources (`.c`, `.i`, `.h`, or any file after `-x c`; `-` reads stdin),
+assembly (`.s`, `.S`), and objects, archives and libraries, which go to the
+linker in order with `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`,
+`-pthread` and `-nostdlib`. `-c` and `-S` name each output after its source
+in the working directory unless `-o` names the only one, and `-o -` writes
+`-S` or `-E` output to stdout. `-E` writes GCC's line markers (`# 3
+"a.c"`), unless `-P`, and keeps `#pragma pack` and `#pragma weak`; bcc reads
+such markers back, so a `.i` file compiles with its original locations.
+`-E -dM` lists the macros in effect at the end, sorted by name. `-M`, `-MM`,
+`-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write make rules as GCC does; the
+`-MM` forms leave out system headers. `--syntax-only` (`-fsyntax-only`)
+analyzes like the default view but exits with status 1 after an error.
 
 Every back end receives the module after ABI lowering, which fixes how the
 `--target` passes structures by value and `va_arg`; `--emit=ir` prints the

@@ -55,6 +55,25 @@ impl Expander<'_, '_, '_, '_> {
             }
             return;
         };
+        self.apply_line_directive(token, false);
+    }
+
+    /// A GNU line marker, `# 12 "file.c" 1 3`: the form GCC and Clang write
+    /// in preprocessed output, which they read back as a `#line` directive
+    /// whose name is followed by flags. `number` is the line number after
+    /// the `#`. The flags (1 entering an include, 2 returning from one, 3 a
+    /// system header, 4 extern "C") are read and ignored.
+    ///
+    /// GNU extension: GCC manual, "Preprocessor Output"
+    /// <https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html>, over
+    /// the non-directive of C99 §6.10 paragraph 1, p. 145; PDF p. 157.
+    pub(super) fn parse_line_marker(&mut self, number: PreprocessorToken) {
+        self.apply_line_directive(number, true);
+    }
+
+    /// Checks and applies the line number `token` and the optional file
+    /// name after it; a line `marker` may end with flags.
+    fn apply_line_directive(&mut self, token: PreprocessorToken, marker: bool) {
         let digits = self
             .context
             .string_cache
@@ -154,7 +173,9 @@ impl Expander<'_, '_, '_, '_> {
                     | _ => {},
                 }
             }
-            if self
+            if marker {
+                self.skip_until_newline();
+            } else if self
                 .expect_token_without_rewind::<true>(
                     |_, t| t.kind == PreprocessorTokenType::Newline,
                     |_, t| {

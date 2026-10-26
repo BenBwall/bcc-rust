@@ -24,6 +24,9 @@
 //! - Input frames and output reading: `runtime/frames.rs`, `runtime/reader.rs`.
 //! - Locations, builtins, and macro-use diagnostics: `runtime/location.rs`,
 //!   `runtime/builtins.rs`, `runtime/diagnostics.rs`.
+//! - Preprocessed-text output (`-E`): where the reader is in its source file,
+//!   and the `-dM` listing of the definitions in effect:
+//!   `runtime/text_output.rs`.
 //!
 //! C99: translation phases 4-7, §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p.
 //! 22.
@@ -48,6 +51,9 @@ mod reader;
 mod builtins;
 mod diagnostics;
 mod location;
+
+// Preprocessed-text output.
+mod text_output;
 
 use builtins::TranslationTimestamp;
 pub(super) use builtins::spell_string_literal;

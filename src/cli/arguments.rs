@@ -89,6 +89,41 @@ pub(super) fn normalize_language_arguments(
             }
         } else if text.starts_with("-D") || text.starts_with("-U") {
             normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
+        } else if let Some(option) = dependency_option(text, &mut arguments) {
+            normalized.push(option);
+        } else if text == "-fsyntax-only" {
+            normalized.push("--syntax-only".into());
+        } else if text == "-dM" {
+            normalized.push("--dump-macros".into());
+        } else if text == "-x" {
+            normalized.push("--language".into());
+            opaque_value = true;
+        } else if let Some(language) = text.strip_prefix("-x") {
+            normalized.push(format!("--language={language}").into());
+        } else if matches!(text, "-l" | "-L" | "-Xlinker") {
+            // The operand is the next argument, which keeps its place
+            // among the inputs.
+            let operand = arguments.next();
+            if text == "-Xlinker" {
+                normalized.push("--link-option=-Xlinker".into());
+                if let Some(operand) = operand {
+                    let mut option = std::ffi::OsString::from("--link-option=");
+                    option.push(operand);
+                    normalized.push(option);
+                }
+            } else {
+                let mut option = std::ffi::OsString::from(format!("--link-option={text}"));
+                if let Some(operand) = operand {
+                    option.push(operand);
+                }
+                normalized.push(option);
+            }
+        } else if text.starts_with("-l")
+            || text.starts_with("-L")
+            || text.starts_with("-Wl,")
+            || SINGLE_DASH_LINKER_OPTIONS.contains(&text)
+        {
+            normalized.push(format!("--link-option={text}").into());
         } else if text == "-O" {
             normalized.push("--optimization=O1".into());
         } else if let Some(value) = text.strip_prefix("-O") {
@@ -144,6 +179,10 @@ pub(super) fn normalize_language_arguments(
                     | "--interpret-step-limit"
                     | "--language-option"
                     | "--preprocessing-option"
+                    | "--language"
+                    | "--link-option"
+                    | "--dependency-file"
+                    | "--dependency-target"
                     | "-o"
                     | "--output"
             );
@@ -151,6 +190,81 @@ pub(super) fn normalize_language_arguments(
         }
     }
     Ok(normalized)
+}
+
+/// GCC's dependency options as the driver's: `-M`, `-MM`, `-MD`, `-MMD`,
+/// `-MP`, and `-MF`, `-MT` and `-MQ` with their operand joined or next.
+/// `-MQ` quotes its target for make as GCC does.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Startup argv normalization owns OS strings beside clap."
+)]
+fn dependency_option(
+    text: &str,
+    arguments: &mut impl Iterator<Item = std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
+    let fixed = match text {
+        | "-M" => Some("--dependencies=all"),
+        | "-MM" => Some("--dependencies=user"),
+        | "-MD" => Some("--write-dependencies=all"),
+        | "-MMD" => Some("--write-dependencies=user"),
+        | "-MP" => Some("--phony-dependencies"),
+        | _ => None,
+    };
+    if let Some(fixed) = fixed {
+        return Some(fixed.into());
+    }
+    let (flag, joined) = ["-MF", "-MT", "-MQ"]
+        .into_iter()
+        .find_map(|flag| Some((flag, text.strip_prefix(flag)?)))?;
+    let operand = if joined.is_empty() {
+        arguments.next()?.to_string_lossy().into_owned()
+    } else {
+        joined.into()
+    };
+    Some(
+        match flag {
+            | "-MF" => format!("--dependency-file={operand}"),
+            | "-MT" => format!("--dependency-target={operand}"),
+            | _ => format!("--dependency-target={}", quote_for_make(&operand)),
+        }
+        .into(),
+    )
+}
+
+/// `target` with the characters make treats specially escaped, as GCC's
+/// `-MQ` writes it: `$` doubled, `#` and blanks backslashed, and the
+/// backslashes before a blank doubled.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Startup argv normalization owns its strings beside clap."
+)]
+fn quote_for_make(target: &str) -> String {
+    let mut quoted = String::with_capacity(target.len());
+    let mut backslashes = 0;
+    for character in target.chars() {
+        match character {
+            | '\\' => backslashes += 1,
+            | ' ' | '\t' => {
+                for _ in 0..=backslashes {
+                    quoted.push('\\');
+                }
+                backslashes = 0;
+            },
+            | '$' => {
+                quoted.push('$');
+                backslashes = 0;
+            },
+            | '#' => {
+                quoted.push('\\');
+                backslashes = 0;
+            },
+            | _ => backslashes = 0,
+        }
+        quoted.push(character);
+    }
+    quoted
 }
 
 /// Clang's numeric aliases are driver policy, before clap sees the internal
@@ -393,11 +507,17 @@ impl LanguageFlag {
 )]
 pub(super) struct CliInput {
     /// Input string to be parsed.
-    #[clap(short, long, conflicts_with = "input_file", allow_hyphen_values = true)]
-    pub(super) input:      Option<String>,
-    /// Input file to be parsed.
+    #[clap(
+        short,
+        long,
+        conflicts_with = "input_files",
+        allow_hyphen_values = true
+    )]
+    pub(super) input:       Option<String>,
+    /// Input files: C sources, `-` for stdin, assembly, and the objects,
+    /// archives and libraries to link.
     #[clap(conflicts_with = "input")]
-    pub(super) input_file: Option<PathBuf>,
+    pub(super) input_files: Vec<PathBuf>,
 }
 
 /// The seconds since the Unix epoch that `__DATE__` and `__TIME__` spell,
@@ -450,6 +570,19 @@ const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
     "nostdinc",
     "nostdlibinc",
     "nobuiltininc",
+];
+
+/// GCC's linker options without an operand, which the driver passes to the
+/// link in order with the inputs.
+const SINGLE_DASH_LINKER_OPTIONS: [&str; 8] = [
+    "-static",
+    "-nostdlib",
+    "-nostartfiles",
+    "-nodefaultlibs",
+    "-rdynamic",
+    "-pthread",
+    "-static-libgcc",
+    "-shared-libgcc",
 ];
 
 /// GCC's single-dash link options, which clap receives with two dashes:
