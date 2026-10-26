@@ -663,6 +663,15 @@ fn char_values_are_promoted_and_out_of_range_stores_wrap() {
 }
 
 #[test]
+fn unary_plus_cites_its_own_paragraph() {
+    let plus = states("int main(void) { int x = 1; return +x; }")
+        .into_iter()
+        .find(|state| state.event.kind == EventKind::Unary)
+        .expect("unary plus is evaluated");
+    assert_eq!(plus.event.clauses[0].id, "6.5.3.3p2");
+}
+
+#[test]
 fn schema_two_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();

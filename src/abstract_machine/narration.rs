@@ -368,7 +368,7 @@ impl Machine {
             | _ => (
                 format!("Unary plus: {shown}"),
                 format!("Unary plus yields its (promoted) operand unchanged: {shown}."),
-                clauses::UNARY_MINUS,
+                clauses::UNARY_PLUS,
             ),
         };
         let mut event = explained(Event::new(EventKind::Unary, range, title), &text, &[clause]);

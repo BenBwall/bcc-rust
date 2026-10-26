@@ -110,6 +110,9 @@ clauses! {
     /// C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91.
     INDIRECTION = "6.5.3.2p4", "p. 79; PDF p. 91", "Address and indirection operators",
         "*p designates the object p points to; using * on a null or invalid pointer is undefined.";
+    /// C99: §6.5.3.3 paragraph 2, p. 79; PDF p. 91.
+    UNARY_PLUS = "6.5.3.3p2", "p. 79; PDF p. 91", "Unary arithmetic operators",
+        "Unary + yields the value of its operand after the integer promotions.";
     /// C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91.
     UNARY_MINUS = "6.5.3.3p3", "p. 79; PDF p. 91", "Unary arithmetic operators",
         "Unary - negates its (promoted) operand.";
