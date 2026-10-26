@@ -27,6 +27,7 @@ use super::{
     BindingKind,
     Duration,
     FlexibleArray,
+    InitOperation,
     Linkage,
     ScopeKind,
     SemanticErrorKind,
@@ -246,7 +247,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                     site.scalar_source.unwrap_or(e.source_vectors),
                                 );
                             }
-                            if static_storage && !self.constant_compound_literal(target, e) {
+                            if static_storage && !self.check_static_compound_literal(target, e) {
                                 self.check_static_initializer(target, info, e, bit_field);
                             }
                         },
@@ -729,61 +730,85 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
-    /// Whether `e` is a compound literal of structure or union type whose
-    /// initializer holds only constants, which GCC and Clang accept as
-    /// the constant initializer of a static object of its type: its
-    /// elements initialize the object as if they were written in braces.
-    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6p10, p. 96;
-    /// PDF p. 108 permits other forms of constant expression.
-    fn constant_compound_literal(&mut self, target: TypeId, mut e: &'tu Expression<'tu>) -> bool {
+    /// Checks `e` as the initializer of a static structure or union of type
+    /// `target` when it is a compound literal of that type, which GCC and
+    /// Clang accept as if its braced list were written in its place, and
+    /// returns whether it was. Each value the literal's plan stores is
+    /// checked against its destination as the static object's own would
+    /// be. A literal in a block is an automatic object (§6.5.2.5p6), so
+    /// neither it nor an array literal nested in it gives an address
+    /// constant (§6.6p9).
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6 paragraph
+    /// 10, p. 96; PDF p. 108 permits other forms of constant expression;
+    /// §6.5.2.5 paragraph 6, p. 75; PDF p. 87.
+    fn check_static_compound_literal(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
+        let Some(initializer) = self.whole_compound_literal(target, e) else {
+            return false;
+        };
+        self.check_static_plan(initializer);
+        true
+    }
+
+    /// The initializer of `e` when it is a (parenthesized) compound literal
+    /// and `target` a structure or union, which the literal then copies.
+    fn whole_compound_literal(
+        &self,
+        target: TypeId,
+        mut e: &'tu Expression<'tu>,
+    ) -> Option<&'tu Initializer<'tu>> {
         if !matches!(
             self.types.nodes[self.types.non_atomic(target).index],
             TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
         ) {
-            return false;
+            return None;
         }
-        let initializer = loop {
+        loop {
             match e.kind {
                 | ExpressionType::Parenthesized { expression } => e = expression,
-                | ExpressionType::CompoundLiteral { initializer, .. } => break initializer,
-                | _ => return false,
+                | ExpressionType::CompoundLiteral { initializer, .. } => return Some(initializer),
+                | _ => return None,
             }
-        };
-        self.constant_initializer(initializer)
+        }
     }
 
-    /// Whether every expression of `initializer` is a constant, a string
-    /// literal or such a compound literal. Its own check already diagnosed
-    /// conversions; a file-scope literal's check also proved its constants.
-    fn constant_initializer(&mut self, initializer: &'tu Initializer<'tu>) -> bool {
-        match initializer.kind {
-            | InitializerType::AssignmentExpression(e) => {
-                let mut inner = e;
-                while let ExpressionType::Parenthesized { expression } = inner.kind {
-                    inner = expression;
-                }
-                match inner.kind {
-                    | ExpressionType::StringLiteral(_) => true,
-                    | ExpressionType::CompoundLiteral { initializer, .. } =>
-                        self.constant_initializer(initializer),
-                    | _ => {
-                        // An array or function designator becomes an address
-                        // constant (C99 §6.6p9, p. 96; PDF p. 108).
+    /// Applies [`Self::check_static_initializer`] to every value the plan
+    /// of a compound literal's `initializer` stores, and descends into the
+    /// compound literals it copies. A literal without a plan was rejected,
+    /// with its own diagnostics, or is unmodeled and refused by lowering.
+    fn check_static_plan(&mut self, initializer: &'tu Initializer<'tu>) {
+        let Some(&plan) = self.initializers.plan(initializer) else {
+            return;
+        };
+        for operation in plan.operations {
+            match *operation {
+                | InitOperation::Store {
+                    value,
+                    destination,
+                    bit_field,
+                    ..
+                } => {
+                    let e = plan.values[value.0 as usize].expression;
+                    let info = self.expression_info(e);
+                    self.check_static_initializer(destination.ty, info, e, bit_field.is_some());
+                },
+                | InitOperation::Copy {
+                    value, destination, ..
+                } => {
+                    let e = plan.values[value.0 as usize].expression;
+                    if let Some(nested) = self.whole_compound_literal(destination.ty, e) {
+                        self.check_static_plan(nested);
+                    } else {
                         let info = self.expression_info(e);
-                        info.constant != ConstantClass::None
-                            || (info.static_address
-                                && matches!(
-                                    self.types.nodes[info.ty.index],
-                                    TypeKind::Array(..) | TypeKind::Function { .. }
-                                ))
-                    },
-                }
-            },
-            | InitializerType::InitializerList(list) => list
-                .elements
-                .as_slice()
-                .iter()
-                .all(|element| self.constant_initializer(element.initializer)),
+                        self.check_static_initializer(destination.ty, info, e, false);
+                    }
+                },
+                | InitOperation::Zero { .. }
+                | InitOperation::Select { .. }
+                | InitOperation::String { .. }
+                | InitOperation::Repeat { .. }
+                | InitOperation::EmptyScalar { .. }
+                | InitOperation::Unmodeled { .. } => {},
+            }
         }
     }
 
