@@ -1437,7 +1437,8 @@ fn write_asm_operand(
             | Some(b'k') => write!(out, "{}", RegName(register, Width::B32)),
             | Some(b'q') => write!(out, "{}", RegName(register, Width::B64)),
             | Some(b'h') => write!(out, "%{}", ["ah", "ch", "dh", "bh"][register.index()]),
-            | Some(b'V') => out.write_str(register.name(width)),
+            // GCC's naked full register: 64 bits whatever the operand's width.
+            | Some(b'V') => out.write_str(register.name(Width::B64)),
             | Some(b'z') => out.write_char(width.suffix()),
             | Some(b'a') => write!(out, "({})", RegName(register, Width::B64)),
             | _ => write!(out, "{}", RegName(register, width)),

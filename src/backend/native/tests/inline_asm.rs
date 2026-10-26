@@ -233,3 +233,22 @@ block0(v0: ptr):
     let before = text.split("#APP").next().unwrap();
     assert_eq!(before.matches("movq").count(), 1, "{text}");
 }
+
+/// `%V` is the naked 64-bit register, whatever the operand's width, as GCC
+/// prints it: an `int` in `%eax` is `rax`, so `movq %%%V0` is `movq %rax`.
+/// GNU extension: GCC manual, "x86 Operand Modifiers".
+#[test]
+fn naked_registers_are_64_bits_wide() {
+    let text = listing(
+        "abi lowered
+function @f(i32, i8) external {
+block0(v0: i32, v1: i8):
+    asm sideeffect \"movq %${0:V}, %r11 # ${1:V} $0 $1\" (in \"{rax}\" i32 v0, in \"{rbx}\" i8 v1) \
+         clobber(r11)
+    return
+}
+",
+        Target::LinuxGnu,
+    );
+    assert_eq!(statements(&text), ["\tmovq %rax, %r11 # rbx %eax %bl"]);
+}

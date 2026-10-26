@@ -368,10 +368,10 @@ pub(crate) enum AsmLocation {
 
 impl AsmLocation {
     /// Whether the listing writes this operand with `modifier`: `b`, `h`
-    /// (`%ah`-`%bh`), `w`, `k`, `q`, `V` (no `%`), `z` (the size suffix),
-    /// `a` (as an address) and `x` for registers; `a` and `H` (eight bytes
-    /// on) and the ignored size letters for memory; `c`, `P`, `p`, `a`
-    /// (without `$`) and `n` (negated) for immediates.
+    /// (`%ah`-`%bh`), `w`, `k`, `q`, `V` (the 64-bit name without `%`), `z`
+    /// (the size suffix), `a` (as an address) and `x` for registers; `a` and
+    /// `H` (eight bytes on) and the ignored size letters for memory; `c`, `P`,
+    /// `p`, `a` (without `$`) and `n` (negated) for immediates.
     /// GNU extension: GCC manual, "x86 Operand Modifiers".
     pub(crate) fn writes(self, modifier: Option<u8>) -> bool {
         let Some(modifier) = modifier else {
