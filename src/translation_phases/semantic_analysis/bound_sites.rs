@@ -31,13 +31,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// A cast or compound literal evaluates the size expressions and typeof
+    /// operands of its type name when the expression is evaluated.
+    /// C99: §6.7.5.2p5, p. 117; PDF p. 129; §6.5.2.5p6, p. 76; PDF p. 88.
     pub(super) fn retain_expression_actions(&mut self, expression: &'tu Expression<'tu>) {
         // Normalize the written type site once. Both effect classification and
         // value/effects lowering consume this same generic prelude record.
-        if let ExpressionType::Cast { target_type, .. } = expression.kind
+        if let ExpressionType::Cast {
+            target_type: type_name,
+            ..
+        }
+        | ExpressionType::CompoundLiteral { type_name, .. } = expression.kind
             && let Some(&site) = self
                 .type_name_sites
-                .get(&super::type_name_identity(target_type))
+                .get(&super::type_name_identity(type_name))
         {
             _ = self
                 .expression_actions
@@ -63,6 +70,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ty = element;
                 },
                 | TypeKind::Pointer(element) => ty = element,
+                // A function result's bounds are written at this site, as in
+                // the parameter `int (*a(void))[n]`; its own parameters' are
+                // at prototype scope and never evaluated.
+                // C99: §6.9.1p10, p. 142; PDF p. 154.
+                | TypeKind::Function { result, .. } => ty = result,
                 | _ => break,
             }
         }
