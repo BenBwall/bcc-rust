@@ -14,11 +14,13 @@ use clap::Parser;
 use super::{
     Cli,
     arguments::normalize_language_arguments,
-    diagnostic_reporter::DiagnosticReporter,
 };
 use crate::{
     configuration::CompilerConfiguration,
-    diagnostics::ColorChoice as RenderColor,
+    diagnostics::{
+        ColorChoice as RenderColor,
+        DiagnosticReporter,
+    },
     headers::HeaderSearch,
     pipeline::parse_translation_unit,
     translation_phases::Context,

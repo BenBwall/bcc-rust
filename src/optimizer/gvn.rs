@@ -207,9 +207,12 @@ impl<'s> Regions<'s> {
 
 /// A step of the walk over the dominator tree.
 #[derive(Clone, Copy, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "Leave stores two arena scope marks; boxing would allocate per block."
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        variant_size_differences,
+        reason = "Leave stores two arena scope marks; boxing would allocate per block."
+    )
 )]
 enum Visit {
     /// Number a block's instructions, then visit its children.

@@ -281,8 +281,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         None
     }
 
-    /// The file `path` names in `directory`, interned, when it exists there.
-    /// The resource directory holds exactly the embedded headers.
+    /// The file `path` names in `directory`, interned, when it exists there
+    /// or the context holds it in memory. The resource directory holds
+    /// exactly the embedded headers.
     pub(in crate::translation_phases::preprocessing) fn probe_header(
         &mut self,
         directory: &Path,
@@ -297,8 +298,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         // before the next one, so a lookup leaves nothing there.
         let mut buffer = ArenaVec::new_in(self.scratch);
         let candidate = join_path(&mut buffer, directory, path);
-        candidate
-            .is_file()
+        (self.context.virtual_file(candidate).is_some() || candidate.is_file())
             .then(|| self.context.intern_source_file(candidate))
     }
 

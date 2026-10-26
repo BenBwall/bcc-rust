@@ -15,8 +15,9 @@
 //!
 //! Files by role:
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
-//! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`,
-//!   `output_file.rs`.
+//! - Output: `output.rs`, `output_file.rs`; the token view and the diagnostic
+//!   reporter it shares with the explorer live in `pipeline/views.rs` and
+//!   `diagnostics/reporter.rs`.
 //! - Code generation: `code_generation.rs`.
 //! - Measurement entry points: `measured.rs`.
 //! - CLI fixtures: `tests.rs`.
@@ -32,10 +33,8 @@ mod search;
 
 // Output and diagnostic reporting
 mod code_generation;
-mod diagnostic_reporter;
 mod output;
 mod output_file;
-mod token;
 
 // Measurements
 mod measured;
@@ -73,7 +72,6 @@ use output::{
     print_preprocessor_output,
 };
 use search::CliHeaderSearch;
-pub(crate) use token::describe_token;
 
 use crate::{
     configuration::LanguageMode,
@@ -94,7 +92,7 @@ pub fn run() -> Result<i32, MainError> {
 
 /// Address space reserved for the compilation worker's stack. Pages are
 /// committed only as recursion touches them, so the size costs no memory.
-const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
+pub(crate) const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
 
 /// Keeps all compilation arenas, phases and output on the same thread.
 fn run_on_current_thread() -> Result<i32, MainError> {

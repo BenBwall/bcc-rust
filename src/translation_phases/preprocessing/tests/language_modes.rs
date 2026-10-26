@@ -4,11 +4,11 @@ use std::fmt::Write;
 
 use super::*;
 use crate::{
-    cli::describe_token,
     configuration::{
         Feature,
         MsvcFeature,
     },
+    pipeline::describe_token,
 };
 
 pub(super) fn observe(source: &str, config: CompilerConfiguration) -> (Vec<String>, Vec<String>) {
