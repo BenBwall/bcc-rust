@@ -40,7 +40,10 @@ mod tests {
 
     fn run(fixture: &Path) -> Output {
         let flags = fs::read_to_string(fixture.with_extension("args")).unwrap_or_default();
+        // The goldens hold on every host: the host's C library, which bcc
+        // searches when it compiles for the host, is left out.
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .arg("-nostdlibinc")
             .args(flags.split_whitespace())
             .arg(fixture.file_name().expect("fixture must have a file name"))
             .current_dir(fixture_directory())

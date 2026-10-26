@@ -376,12 +376,18 @@ both forms then search, in order, each `-I` directory, `CPATH`, each
 `-isystem` directory, `C_INCLUDE_PATH`, the embedded `<built-in>` resource
 directory, the C library's directories, and each `-idirafter` directory. User
 headers therefore take precedence over resource headers, and a resource header
-can `#include_next` the C library's header of the same name. `--sysroot <dir>`
-names the C library's directories `<dir>/usr/local/include` and
-`<dir>/usr/include`; without it no library directory is searched, so a C
-library elsewhere (MinGW-w64, the MSVC UCRT, a multiarch
-`/usr/include/x86_64-linux-gnu`) is added with `-idirafter` or `-isystem`.
-Target-driven discovery of these directories is future work. `-nostdinc`
+can `#include_next` the C library's header of the same name. Compiling for
+the host on an x86-64 Linux host (the default target on a glibc system), the
+C library's directories are the host's, as Clang searches them:
+`/usr/local/include`, the multiarch `/usr/include/x86_64-linux-gnu` and
+`/usr/include`, so `#include <stdio.h>` needs no option, and the link finds
+the host's C library as before. `--sysroot <dir>` replaces them with
+`<dir>/usr/local/include`, `<dir>/usr/include/<multiarch>` (for a Linux
+target, when it exists) and `<dir>/usr/include`, and is also the root the
+bundled clang links against. Any other target is a cross target and searches
+no library directory without `--sysroot`, so a C library elsewhere
+(MinGW-w64, the MSVC UCRT, musl on a glibc host) is added with `--sysroot`,
+`-idirafter` or `-isystem`. `-nostdinc`
 removes the resource and library directories, `-nostdlibinc` only the library
 directories, and `-nobuiltininc` only the resource directory; `-idirafter`
 directories stay. The GCC single-dash spellings `-iquote`, `-isystem` and

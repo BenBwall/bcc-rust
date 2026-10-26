@@ -99,7 +99,7 @@ pub(super) fn compile(
             });
         }
     }
-    let directories = args.search.directories();
+    let directories = args.search.directories(args.target);
     let search = HeaderSearch {
         quote:    tu.alloc_slice_fill_iter(directories.quote.iter().map(AsRef::as_ref)),
         angled:   tu.alloc_slice_fill_iter(directories.angled.iter().map(AsRef::as_ref)),

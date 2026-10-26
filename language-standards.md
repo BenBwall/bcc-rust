@@ -250,7 +250,7 @@ In a hosted translation a header that Clang chains to the C library tests
 before supplying what remains; `-ffreestanding` skips the C library entirely.
 The headers are searched after the `-I`,
 `-isystem` and environment directories and before the C library's directories
-(`--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
+(the host's when compiling for the host, or `--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
 `-iquote` headers priority. `-nostdinc` and `-nobuiltininc` remove the resource
 directory. `__has_include` uses the same search.
 This follows Clang resource-header availability; use of newer language syntax

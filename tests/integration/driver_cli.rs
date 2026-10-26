@@ -455,4 +455,57 @@ mod tests {
         let run = Command::new(project.path("solo")).output().unwrap();
         assert_eq!(run.status.code(), Some(3));
     }
+
+    #[test]
+    fn the_host_c_library_needs_no_options() {
+        let project = Project::new();
+        std::fs::write(
+            project.path("hello.c"),
+            "#include <stdio.h>\nint main(void) {\n  printf(\"hello, world\\n\");\n  return \
+             0;\n}\n",
+        )
+        .unwrap();
+        let missing = |output: &Output| {
+            assert_eq!(output.status.code(), Some(1));
+            assert!(
+                stderr(output).contains("cannot find header `stdio.h`"),
+                "{}",
+                stderr(output)
+            );
+        };
+        // A cross target searches no C library unless told where it is.
+        missing(&project.bcc(&[
+            "--target=x86_64-w64-windows-gnu",
+            "-fsyntax-only",
+            "hello.c",
+        ]));
+        if !linkable_host() {
+            eprintln!("skipping the host cases: they need a Linux GNU host");
+            return;
+        }
+        succeeds(&project.bcc(&["hello.c", "-o", "hello"]));
+        let run = Command::new(project.path("hello")).output().unwrap();
+        assert_eq!(stdout(&run), "hello, world\n");
+        // musl is a cross target on a glibc host.
+        missing(&project.bcc(&[
+            "--target=x86_64-unknown-linux-musl",
+            "-fsyntax-only",
+            "hello.c",
+        ]));
+        // -nostdinc and -nostdlibinc remove the host's directories, and a
+        // --sysroot replaces them.
+        missing(&project.bcc(&["-nostdinc", "-fsyntax-only", "hello.c"]));
+        missing(&project.bcc(&["-nostdlibinc", "-fsyntax-only", "hello.c"]));
+        std::fs::create_dir(project.path("empty-root")).unwrap();
+        missing(&project.bcc(&["--sysroot=empty-root", "-fsyntax-only", "hello.c"]));
+        succeeds(&project.bcc(&["--sysroot=/", "hello.c", "-o", "rooted"]));
+        // The multiarch directory follows the sysroot, as in Clang.
+        let rules = project.bcc(&["--sysroot=/", "-M", "hello.c"]);
+        succeeds(&rules);
+        assert!(
+            stdout(&rules).contains("/usr/include/x86_64-linux-gnu/"),
+            "{}",
+            stdout(&rules)
+        );
+    }
 }

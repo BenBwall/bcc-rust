@@ -20,30 +20,29 @@ use std::{
 
 use clap::Args;
 
+use crate::target::Target;
+
 impl CliHeaderSearch {
     /// Groups the directories in search order. GCC searches `CPATH` like
     /// trailing `-I` directories and `C_INCLUDE_PATH` like trailing
     /// `-isystem` ones; `-isystem`, `C_INCLUDE_PATH`, the resource
     /// directory, the library's directories and `-idirafter` are system
-    /// directories. C99: implementation-defined places, §6.10.2p2-3,
-    /// pp. 149-150; PDF pp. 161-162.
+    /// directories. The C library's directories are those under
+    /// `--sysroot`, or, compiling for the host on a Linux host, the host's
+    /// own ([`library_directories`]). C99: implementation-defined places,
+    /// §6.10.2p2-3, pp. 149-150; PDF pp. 161-162.
     #[expect(
         clippy::disallowed_types,
-        clippy::disallowed_methods,
         reason = "Startup owns the directories from argv and the environment as `Vec<PathBuf>`."
     )]
-    pub(super) fn directories(&self) -> SearchDirectories {
+    pub(super) fn directories(&self, target: Target) -> SearchDirectories {
         let mut angled = self.include.clone();
         angled.extend(include_path_from_env("CPATH"));
         let mut system = self.system_include.clone();
         system.extend(include_path_from_env("C_INCLUDE_PATH"));
         let mut after = Vec::new();
-        if let Some(sysroot) = &self.sysroot
-            && !self.nostdinc
-            && !self.nostdlibinc
-        {
-            after.push(sysroot.join("usr").join("local").join("include"));
-            after.push(sysroot.join("usr").join("include"));
+        if !self.nostdinc && !self.nostdlibinc {
+            after.extend(library_directories(target, self.sysroot.as_deref()));
         }
         after.extend(self.after_include.iter().cloned());
         SearchDirectories {
@@ -54,6 +53,39 @@ impl CliHeaderSearch {
             after,
         }
     }
+}
+
+/// The C library's header directories for `target`, as Clang's Linux
+/// driver finds them: under `sysroot`, `usr/local/include`, the multiarch
+/// directory `usr/include/x86_64-linux-gnu` (or `-musl`) when the target is
+/// Linux and the directory exists, and `usr/include`. Without a sysroot the
+/// root is the host's own, but only when bcc runs on the Linux host it
+/// compiles for; any other target is a cross target, which stays hermetic
+/// until `--sysroot`, `-isystem` or `-idirafter` names its library.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::disallowed_macros,
+    reason = "Startup owns the directories beside clap's arguments as `PathBuf`s."
+)]
+fn library_directories(target: Target, sysroot: Option<&Path>) -> Vec<PathBuf> {
+    let root = match sysroot {
+        | Some(sysroot) => sysroot,
+        | None if is_host(target) => Path::new("/"),
+        | None => return Vec::new(),
+    };
+    let include = root.join("usr").join("include");
+    let multiarch = match target {
+        | Target::LinuxGnu => Some("x86_64-linux-gnu"),
+        | Target::LinuxMusl => Some("x86_64-linux-musl"),
+        | _ => None,
+    }
+    .map(|triple| include.join(triple))
+    .filter(|directory| directory.is_dir());
+    let mut directories = vec![root.join("usr").join("local").join("include")];
+    directories.extend(multiarch);
+    directories.push(include);
+    directories
 }
 
 impl CliHeaderSearch {
@@ -150,6 +182,18 @@ pub(super) struct CliHeaderSearch {
     /// Do not search the built-in headers.
     #[clap(long)]
     nobuiltininc:   bool,
+}
+
+/// Whether bcc runs on the system `target` describes: an x86-64 Linux host
+/// with the same C library. Only such a host's own headers belong to the
+/// target.
+const fn is_host(target: Target) -> bool {
+    cfg!(all(target_os = "linux", target_arch = "x86_64"))
+        && match target {
+            | Target::LinuxGnu => cfg!(target_env = "gnu"),
+            | Target::LinuxMusl => cfg!(target_env = "musl"),
+            | Target::WindowsGnu | Target::WindowsMsvc => false,
+        }
 }
 
 /// Returns the directories of a GCC-style search-path variable.
