@@ -406,6 +406,19 @@ impl FunctionBuilder<'_, '_> {
         })
     }
 
+    /// Adds an inline assembly descriptor to the module.
+    pub(crate) fn add_inline_asm(&mut self, asm: &super::InlineAsm<'_>) -> super::AsmId {
+        self.module.add_inline_asm(asm)
+    }
+
+    /// Inline assembly: adds the descriptor to the module and the
+    /// instruction with one value per descriptor operand.
+    pub(crate) fn inline_asm(&mut self, asm: &super::InlineAsm<'_>, args: &[Value]) -> Inst {
+        let asm = self.module.add_inline_asm(asm);
+        let args = self.value_list(args);
+        self.insert(InstData::InlineAsm { asm, args })
+    }
+
     pub(crate) fn inst_result(&self, inst: Inst) -> Option<Value> {
         self.body.results[inst]
     }

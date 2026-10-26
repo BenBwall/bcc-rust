@@ -918,6 +918,7 @@ impl Verifier<'_, '_, '_, '_> {
                         sig.as_u32(),
                     )),
                 },
+            | InstData::InlineAsm { asm, args } => checker.inline_asm(asm, args),
             | InstData::Jump { dest } => checker.edges(&[dest]),
             | InstData::Brif { cond, dests } => {
                 checker.operand(0, cond, Type::I1);
@@ -1036,6 +1037,102 @@ impl InstChecker<'_, '_, '_, '_, '_> {
     fn operands(&mut self, values: &[Value], expected: &[Type]) {
         for (index, (&value, &ty)) in values.iter().zip(expected).enumerate() {
             self.operand(index, value, ty);
+        }
+    }
+
+    /// Checks an `asm` instruction against its descriptor: one value per
+    /// operand, outputs first, each value of the type its location takes
+    /// (a `ptr` for outputs and memory), immediates that are constants, tied
+    /// inputs that match a register output, and a template whose operand
+    /// references exist.
+    /// GNU extension: GCC manual, "Extended Asm".
+    fn inline_asm(&mut self, asm: super::AsmId, args: super::ValueList) {
+        use super::AsmConstraint as C;
+        let Some(descriptor) = self.verifier.module.get_inline_asm(asm) else {
+            self.report(VerifierErrorKind::InvalidReference(
+                EntityKind::InlineAsm,
+                asm.as_u32(),
+            ));
+            return;
+        };
+        let values = self.verifier.body.value_list(args);
+        if values.len() != descriptor.operands.len() {
+            self.report(VerifierErrorKind::InlineAsm(
+                "the operand count differs from the descriptor's",
+            ));
+            return;
+        }
+        let body = self.verifier.body;
+        let constant = |value: Value| {
+            value.index() < body.value_count()
+                && matches!(body.value_def(value), ValueDef::Result(inst) if matches!(
+                    body.inst(inst),
+                    InstData::Const { opcode: Opcode::Iconst, .. }
+                        | InstData::GlobalAddr { .. }
+                        | InstData::FuncAddr { .. }
+                ))
+        };
+        let outputs = descriptor.output_count();
+        if descriptor.operands[outputs..]
+            .iter()
+            .any(|operand| operand.output)
+        {
+            self.report(VerifierErrorKind::InlineAsm("an output follows an input"));
+        }
+        for (index, (operand, &value)) in descriptor.operands.iter().zip(values).enumerate() {
+            let ty = operand.ty;
+            let expected = if operand.output || operand.constraint == C::Memory {
+                Type::Ptr
+            } else {
+                ty
+            };
+            self.operand(index, value, expected);
+            let rule = match operand.constraint {
+                | C::General(mask) if mask == 0 || mask & (1 << 4) != 0 =>
+                    Some("a general register set is empty or holds %rsp"),
+                | C::General(_)
+                    if !(ty == Type::Ptr || (ty.is_int() && ty != Type::I1 && ty.bits() <= 64)) =>
+                    Some("a general register holds an integer or pointer of at most 64 bits"),
+                | C::Sse if !matches!(ty, Type::F32 | Type::F64) =>
+                    Some("an SSE register holds a f32 or f64"),
+                | C::Memory if operand.bytes == 0 => Some("a memory operand has no bytes"),
+                | C::Immediate if operand.output => Some("an immediate is an output"),
+                | C::Immediate if !constant(value) =>
+                    Some("an immediate is not an iconst, global_addr or func_addr"),
+                | C::Tied(output) => match descriptor.operands.get(output as usize) {
+                    | _ if operand.output => Some("a tied operand is an output"),
+                    | Some(tied)
+                        if (output as usize) < outputs
+                            && matches!(tied.constraint, C::General(_) | C::Sse)
+                            && tied.ty == ty =>
+                        None,
+                    | _ => Some("a tied input names no register output of its type"),
+                },
+                | C::Flag(condition)
+                    if !operand.output
+                        || !ty.is_int()
+                        || usize::from(condition) >= super::ASM_CONDITIONS.len() =>
+                    Some("a flag operand is not an integer output"),
+                | _ if operand.early_clobber && !operand.output =>
+                    Some("an input is early-clobber"),
+                | _ => None,
+            };
+            if let Some(rule) = rule {
+                self.report(VerifierErrorKind::InlineAsm(rule));
+            }
+        }
+        for piece in super::inline_asm::template_pieces(descriptor.template) {
+            let rule = match piece {
+                | Err(()) => Some("the template has a malformed `$` escape"),
+                | Ok(super::inline_asm::TemplatePiece::Operand { operand, .. })
+                    if operand as usize >= values.len() =>
+                    Some("the template names a missing operand"),
+                | Ok(_) => None,
+            };
+            if let Some(rule) = rule {
+                self.report(VerifierErrorKind::InlineAsm(rule));
+                break;
+            }
         }
     }
 
@@ -1395,6 +1492,8 @@ pub(crate) enum VerifierErrorKind {
     },
     /// A `call_indirect` without a callee operand.
     MissingCallee,
+    /// An `asm` instruction breaks the descriptor rule named.
+    InlineAsm(&'static str),
     ReturnValue {
         expected: Option<Type>,
         found:    Option<Type>,
@@ -1537,6 +1636,7 @@ pub(crate) enum EntityKind {
     CaseList,
     BlockList,
     Label,
+    InlineAsm,
 }
 
 impl fmt::Display for VerifierError<'_> {
@@ -1634,6 +1734,7 @@ impl fmt::Display for VerifierErrorKind {
                 found,
             } => write!(f, "call argument {index} is {found}, expected {expected}"),
             | Self::MissingCallee => f.write_str("call_indirect has no callee"),
+            | Self::InlineAsm(rule) => write!(f, "invalid inline assembly: {rule}"),
             | Self::ReturnValue { expected, found } => write!(
                 f,
                 "the function returns {}, but the return gives {}",
@@ -1721,6 +1822,7 @@ impl fmt::Display for EntityKind {
             | Self::CaseList => "case list",
             | Self::BlockList => "block list",
             | Self::Label => "label",
+            | Self::InlineAsm => "inline assembly descriptor",
         })
     }
 }

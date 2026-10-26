@@ -26,7 +26,8 @@ impl Verifier<'_, '_, '_, '_> {
                 let valid = match *body.inst(inst) {
                     | InstData::Atomic { args, .. }
                     | InstData::Call { args, .. }
-                    | InstData::CallIndirect { args, .. } =>
+                    | InstData::CallIndirect { args, .. }
+                    | InstData::InlineAsm { args, .. } =>
                         self.pool_list(inst, EntityKind::ValueList, args.0, 1, 1),
                     | InstData::Jump { dest } => self.pool_edge(inst, dest),
                     | InstData::Brif { dests, .. } => {

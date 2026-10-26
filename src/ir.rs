@@ -54,6 +54,7 @@
 mod bits;
 mod entities;
 mod function;
+mod inline_asm;
 mod instructions;
 mod module;
 mod types;
@@ -79,6 +80,7 @@ pub(crate) use cfg::ControlFlowGraph;
 pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
     AccessTag,
+    AsmId,
     Block,
     BlockLabel,
     ConstId,
@@ -96,6 +98,13 @@ pub(crate) use function::{
     StackSlotData,
     ValueData,
     ValueDef,
+};
+pub(crate) use inline_asm::{
+    AsmClobbers,
+    AsmConstraint,
+    AsmOperand,
+    CONDITIONS as ASM_CONDITIONS,
+    InlineAsm,
 };
 pub(crate) use instructions::{
     Align,
@@ -181,6 +190,8 @@ pub(crate) struct Module<'ir> {
     /// File-scope assembly blocks, in source order, each passed to the
     /// assembler verbatim before any function or global.
     asm_blocks:     ArenaVec<'ir, &'ir str>,
+    /// The descriptors of the functions' `asm` instructions.
+    inline_asm:     Table<'ir, AsmId, InlineAsm<'ir>>,
 }
 
 /// A function of a module. It is defined if it has a body.
