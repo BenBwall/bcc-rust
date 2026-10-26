@@ -672,6 +672,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_some()
         {
             lt.unqualified()
+        } else if let Some(void) = [lt, rt]
+            .into_iter()
+            .find(|ty| matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void)))
+        {
+            // GCC and Clang give a conditional with one void alternative
+            // void type, discarding the other alternative's value.
+            // GNU extension to C99 §6.5.15p3, p. 90; PDF p. 102.
+            self.context.report_extension(
+                crate::configuration::Feature::OneVoidConditional,
+                "conditional expression with only one void alternative",
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+            );
+            void
         } else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
         };

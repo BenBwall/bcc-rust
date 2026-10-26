@@ -70,12 +70,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let truth = self.truth(item, source)?;
         let ty = self.info(e)?.ty;
-        let result = self.convert_value(item, ty, source)?;
-        let value = self.value(result, source)?;
-        let edges = [
-            self.draft.edge(merge, &[value]),
-            self.draft.edge(otherwise, &[]),
-        ];
+        // A void alternative makes the whole expression void (GNU), so the
+        // tested value is discarded rather than passed to the merge.
+        let true_edge = if self.repr(ty, source)? == super::types::Repr::Void {
+            self.draft.edge(merge, &[])
+        } else {
+            let result = self.convert_value(item, ty, source)?;
+            let value = self.value(result, source)?;
+            self.draft.edge(merge, &[value])
+        };
+        let edges = [true_edge, self.draft.edge(otherwise, &[])];
         self.draft.terminate(Terminator::Brif(truth, edges));
         self.draft.seal(otherwise);
         self.draft.switch_to(otherwise);
