@@ -468,3 +468,125 @@ fn custom_host_results_are_checked_before_entering_typed_slots() {
         ));
     }
 }
+
+/// `qsort` calls an interpreted comparison function and sorts stably;
+/// `bsearch` finds the element through the same function.
+#[test]
+fn qsort_and_bsearch_call_back_into_the_program() {
+    let text = "\
+global @values internal size 16, align 4 = bytes \"03000000010000000400000001000000\"
+function @qsort(ptr, i64, i64, ptr) external
+function @bsearch(ptr, ptr, i64, i64, ptr) -> ptr external
+function @compare(ptr, ptr) -> i32 external {
+block0(v0: ptr, v1: ptr):
+    v2 = load.i32 v0, align 4
+    v3 = load.i32 v1, align 4
+    v4 = isub.i32 v2, v3
+    return v4
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0:
+    v0 = global_addr @values
+    v1 = iconst.i64 4
+    v2 = iconst.i64 4
+    v3 = func_addr @compare
+    call @qsort(v0, v1, v2, v3)
+    v4 = iconst.i64 12
+    v5 = ptr_add v0, v4
+    v6 = load.i32 v5, align 4
+    v7 = stack_addr slot0
+    v8 = iconst.i32 3
+    store.i32 v8, v7, align 4
+    v9 = call @bsearch(v7, v0, v1, v2, v3)
+    v10 = ptrtoint.i64 v9
+    v11 = ptrtoint.i64 v0
+    v12 = isub.i64 v10, v11
+    v13 = trunc.i32 v12
+    v14 = iconst.i32 16
+    v15 = imul.i32 v6, v14
+    v16 = iadd.i32 v15, v13
+    return v16
+}
+";
+    // The largest value, 4, comes last; 3 is at byte offset 8.
+    assert_eq!(returned(text, "main"), int(4 * 16 + 8));
+    // A trap in the comparison names the comparison function.
+    let trapping = text.replace("isub.i32 v2, v3", "sdiv.i32 v2, v4");
+    let trapping = trapping.replace(
+        "    v4 = sdiv.i32 v2, v4\n",
+        "    v5 = iconst.i32 0\n    v4 = sdiv.i32 v2, v5\n",
+    );
+    let run = run_text(&trapping, "main");
+    assert!(
+        matches!(
+            run.result,
+            Err(Trap::UndefinedBehavior(UbKind::DivisionByZero, _))
+        ),
+        "{:?}",
+        run.result
+    );
+    assert!(run.message.unwrap().contains("@compare"));
+    // A comparison function of another type is refused before any call.
+    let wrong = text
+        .replace(
+            "function @compare(ptr, ptr) -> i32",
+            "function @compare(ptr, ptr) -> i64",
+        )
+        .replace(
+            "    v4 = isub.i32 v2, v3\n    return v4",
+            "    v4 = isub.i32 v2, v3\n    v5 = sext.i64 v4\n    return v5",
+        );
+    let run = run_text(&wrong, "main");
+    assert!(
+        matches!(
+            run.result,
+            Err(Trap::UndefinedBehavior(UbKind::InvalidComparison, _))
+        ),
+        "{:?}",
+        run.result
+    );
+}
+
+/// `stdout` and `stderr` are objects holding stream pointers; `fprintf`
+/// writes through them, and a stream used after `fclose` is undefined.
+#[test]
+fn standard_streams_are_objects_the_stream_functions_accept() {
+    let text = format!(
+        "{}{}global @stdout external size 8, align 8
+global @stderr external size 8, align 8
+function @fprintf(ptr, ptr, ...) -> i32 external
+function @fclose(ptr) -> i32 external
+function @fputs(ptr, ptr) -> i32 external
+function @main() -> i32 external {{
+block0:
+    v0 = global_addr @stdout
+    v1 = load.ptr v0, align 8
+    v2 = global_addr @format
+    v3 = iconst.i32 7
+    v4 = call @fprintf(v1, v2, v3)
+    v5 = global_addr @stderr
+    v6 = load.ptr v5, align 8
+    v7 = call @fprintf(v6, v2, v4)
+    v8 = call @fclose(v6)
+    v9 = call @fputs(v2, v6)
+    return v9
+}}
+",
+        c_string("format", "[%d]"),
+        ""
+    );
+    let arena = Bump::new();
+    let module = parse_module(&arena, &text).unwrap();
+    let mut host = DefaultHost::new_in(&arena);
+    let result = run(&module, "main", &[], &mut host);
+    assert!(
+        matches!(
+            result,
+            Err(Trap::UndefinedBehavior(UbKind::InvalidStream, _))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(host.output(), b"[7]");
+    assert_eq!(host.errors(), b"[3]");
+}

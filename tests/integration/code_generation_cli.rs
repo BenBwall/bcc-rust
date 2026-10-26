@@ -328,6 +328,44 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
         }
     }
 
+    /// `tests/fixtures/programs/host_library.c` exercises the host's streams
+    /// and files, `va_list` formatting, `scanf`, `qsort` and `bsearch` with
+    /// interpreted comparisons, and its string, wide-string, character and
+    /// conversion functions: the interpreter must write what the program
+    /// built against glibc writes, to stdout and to stderr.
+    #[test]
+    fn host_library_functions_match_glibc() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/host_library.c");
+        let source = source.to_str().unwrap();
+        let reference = temporary("host-library.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .args([source, "-std=c99", "-O0", "-fno-builtin", "-w", "-lm", "-o"])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(expected.status.code(), Some(0));
+        std::fs::remove_file(reference).unwrap();
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.args([source, "--interpret", optimize]);
+            let output = run_native(&mut command).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{optimize}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), text(&expected.stdout), "{optimize}");
+            assert_eq!(text(&output.stderr), text(&expected.stderr), "{optimize}");
+        }
+    }
+
     /// The interpreter computes the exact x87 `long double` functions and
     /// refuses the transcendental ones, whose glibc results it cannot
     /// reproduce bit for bit.
