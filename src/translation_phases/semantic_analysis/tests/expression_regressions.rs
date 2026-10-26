@@ -169,54 +169,52 @@ fn vla_alignof_is_an_element_alignment_ice() {
 
 #[test]
 fn nested_subscript_type_classification_scales_linearly() {
-    crate::test_support::on_compilation_stack(|| {
-        for n in [128, 512] {
-            let source = format!(
-                "int a{}; int f(void) {{ return a{}; }}\n",
-                "[1]".repeat(n),
-                "[0]".repeat(n)
-            );
-            let tu = Bump::new();
-            let scratch = Bump::new();
-            let mut context = Context::new(&tu);
-            let unit = crate::pipeline::parse_translation_unit(
-                &mut context,
-                Path::new("<input>"),
-                tu.alloc_str(&source),
-                crate::headers::HeaderSearch::default(),
-            );
-            let mut analyzer = Analyzer::new(&mut context, &scratch);
-            for &root in unit.external_declarations().iter().rev() {
-                analyzer.work.push(Work::Root(root));
-            }
-            while let Some(work) = analyzer.work.pop() {
-                analyzer.step(work);
-            }
-            analyzer.finish_translation_unit();
-            assert_eq!(analyzer.context.pending_error_count(), 0);
-            let subscripts = analyzer.expressions.iter().filter(|info| {
-                matches!(
-                    info.expression.kind,
-                    ExpressionType::Binary {
-                        operator: BinaryOperator::Subscript,
-                        ..
-                    }
-                )
-            });
-            assert_eq!(subscripts.count(), n);
-            let last = analyzer.expressions.last().unwrap();
-            assert_eq!(
-                analyzer.types.nodes[last.ty.index],
-                TypeKind::Scalar(Scalar::Int)
-            );
-            assert_eq!(last.category, ValueCategory::ModifiableLvalue);
-            let steps = analyzer.types.steps.get();
-            assert!(
-                steps <= 16 * n,
-                "{n} dimensions examined {steps} type nodes"
-            );
+    for n in [128, 512] {
+        let source = format!(
+            "int a{}; int f(void) {{ return a{}; }}\n",
+            "[1]".repeat(n),
+            "[0]".repeat(n)
+        );
+        let tu = Bump::new();
+        let scratch = Bump::new();
+        let mut context = Context::new(&tu);
+        let unit = crate::pipeline::parse_translation_unit(
+            &mut context,
+            Path::new("<input>"),
+            tu.alloc_str(&source),
+            crate::headers::HeaderSearch::default(),
+        );
+        let mut analyzer = Analyzer::new(&mut context, &scratch);
+        for &root in unit.external_declarations().iter().rev() {
+            analyzer.work.push(Work::Root(root));
         }
-    });
+        while let Some(work) = analyzer.work.pop() {
+            analyzer.step(work);
+        }
+        analyzer.finish_translation_unit();
+        assert_eq!(analyzer.context.pending_error_count(), 0);
+        let subscripts = analyzer.expressions.iter().filter(|info| {
+            matches!(
+                info.expression.kind,
+                ExpressionType::Binary {
+                    operator: BinaryOperator::Subscript,
+                    ..
+                }
+            )
+        });
+        assert_eq!(subscripts.count(), n);
+        let last = analyzer.expressions.last().unwrap();
+        assert_eq!(
+            analyzer.types.nodes[last.ty.index],
+            TypeKind::Scalar(Scalar::Int)
+        );
+        assert_eq!(last.category, ValueCategory::ModifiableLvalue);
+        let steps = analyzer.types.steps.get();
+        assert!(
+            steps <= 16 * n,
+            "{n} dimensions examined {steps} type nodes"
+        );
+    }
 }
 
 #[test]
