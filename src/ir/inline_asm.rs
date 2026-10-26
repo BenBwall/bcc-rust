@@ -51,6 +51,75 @@ impl InlineAsm<'_> {
         }
     }
 
+    /// Calls `report` with each rule the descriptor breaks, apart from those
+    /// on its operand values: outputs come first; each operand's type fits
+    /// its constraint (a general register holds an integer or pointer of at
+    /// most 64 bits, an SSE register a `f32` or `f64`, a flag output an
+    /// integer of at most 64 bits); a tied input names an earlier register
+    /// output of its type; only outputs are early-clobber; and the template
+    /// is well formed and names existing operands. Lowering checks the same
+    /// rules before it emits a descriptor.
+    pub(crate) fn check(&self, mut report: impl FnMut(&'static str)) {
+        use AsmConstraint as C;
+        let outputs = self.output_count();
+        if self.operands[outputs..]
+            .iter()
+            .any(|operand| operand.output)
+        {
+            report("an output follows an input");
+        }
+        for operand in self.operands {
+            let ty = operand.ty;
+            let rule = match operand.constraint {
+                | C::General(mask) if mask == 0 || mask & (1 << 4) != 0 =>
+                    Some("a general register set is empty or holds %rsp"),
+                | C::General(_)
+                    if !(ty == Type::Ptr || (ty.is_int() && ty != Type::I1 && ty.bits() <= 64)) =>
+                    Some("a general register holds an integer or pointer of at most 64 bits"),
+                | C::Sse if !matches!(ty, Type::F32 | Type::F64) =>
+                    Some("an SSE register holds a f32 or f64"),
+                | C::Memory if operand.bytes == 0 => Some("a memory operand has no bytes"),
+                | C::Immediate if operand.output => Some("an immediate is an output"),
+                | C::Immediate if !(ty.is_int() || ty == Type::Ptr) =>
+                    Some("an immediate is not an integer or pointer"),
+                | C::Tied(output) => match self.operands.get(output as usize) {
+                    | _ if operand.output => Some("a tied operand is an output"),
+                    | Some(tied)
+                        if (output as usize) < outputs
+                            && matches!(tied.constraint, C::General(_) | C::Sse)
+                            && tied.ty == ty =>
+                        None,
+                    | _ => Some("a tied input names no register output of its type"),
+                },
+                | C::Flag(condition)
+                    if !operand.output
+                        || !ty.is_int()
+                        || ty.bits() > 64
+                        || usize::from(condition) >= CONDITIONS.len() =>
+                    Some("a flag operand is not an integer output of at most 64 bits"),
+                | _ if operand.early_clobber && !operand.output =>
+                    Some("an input is early-clobber"),
+                | _ => None,
+            };
+            if let Some(rule) = rule {
+                report(rule);
+            }
+        }
+        for piece in template_pieces(self.template) {
+            let rule = match piece {
+                | Err(()) => Some("the template has a malformed `$` escape"),
+                | Ok(TemplatePiece::Operand { operand, .. })
+                    if operand as usize >= self.operands.len() =>
+                    Some("the template names a missing operand"),
+                | Ok(_) => None,
+            };
+            if let Some(rule) = rule {
+                report(rule);
+                break;
+            }
+        }
+    }
+
     /// The number of operands that are outputs; they come first.
     pub(crate) fn output_count(&self) -> usize {
         self.operands

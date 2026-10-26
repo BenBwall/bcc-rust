@@ -125,6 +125,76 @@ fn wider_matching_inputs_widen_the_shared_register() {
     assert!(ir.contains("trunc.i32"), "{ir}");
 }
 
+/// An SSE output keeps its class when a wider integer input widens it: the
+/// shared register is an `f64`, and the `int` output takes the low 32 bits
+/// of its bits, as GCC does for `psrlq $32` on a `long`.
+#[test]
+fn widened_sse_outputs_stay_sse_registers() {
+    let ir = lower_for(
+        "int f(long x) { int y; __asm__(\"psrlq $32, %0\" : \"=x\"(y) : \"0\"(x)); return y; }",
+        Target::LinuxGnu,
+    )
+    .unwrap();
+    assert!(
+        ir.contains("asm \"psrlq $$32, $0\" (out \"x\" f64 v1, in \"0\" f64 v2)"),
+        "{ir}"
+    );
+    for expected in ["bitcast.f64 v0", "bitcast.i64", "trunc.i32"] {
+        assert!(ir.contains(expected), "{expected}: {ir}");
+    }
+}
+
+/// `%z` is the suffix of the operand's own size, not the wider register's
+/// it shares, so `mov%z0` with an `int` output tied to a `long` is `movl`,
+/// as in GCC; LLVM has no `z`, so lowering writes the suffix itself.
+#[test]
+fn size_suffixes_follow_the_operands_own_width() {
+    for (source, expected) in [
+        (
+            "int f(long x) { int y; __asm__(\"mov%z0 $1, %0\" : \"=a\"(y) : \"0\"(x)); return y; }",
+            "\"movl $$1, ${0:k}\"",
+        ),
+        (
+            "short f(void) { short y; __asm__(\"mov%z0 $1, %0\" : \"=r\"(y)); return y; }",
+            "\"movw $$1, $0\"",
+        ),
+        (
+            "void f(long *p) { __asm__(\"inc%z0 %0\" : \"+m\"(*p)); }",
+            "\"incq $0\"",
+        ),
+    ] {
+        let ir = lower_for(source, Target::LinuxGnu).unwrap();
+        assert!(ir.contains(expected), "{source}\n{ir}");
+    }
+}
+
+/// No combination of output and input types and register classes tied by
+/// a matching constraint reaches the verifier with a malformed statement:
+/// each lowers to verified IR or is refused with a diagnostic.
+#[test]
+fn matching_combinations_lower_or_are_refused() {
+    let types = [
+        "char", "short", "int", "long", "float", "double", "void *", "_Bool",
+    ];
+    for output in types {
+        for input in types {
+            for constraint in ["r", "x", "a", "q", "g"] {
+                let source = format!(
+                    "void f({output} *p, {input} v) {{ __asm__(\"\" : \"={constraint}\"(*p) : \
+                     \"0\"(v)); }}"
+                );
+                // `lower_for` verifies every module it lowers.
+                if let Err(errors) = lower_for(&source, Target::LinuxGnu) {
+                    assert!(
+                        errors.iter().all(|error| !error.contains("missing")),
+                        "{source}: {errors:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// A flag output wider than a register is zero-extended from the 0 or 1
 /// the condition gives, as GCC does for `__int128`.
 #[test]

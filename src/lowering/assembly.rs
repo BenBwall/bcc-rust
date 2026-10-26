@@ -137,6 +137,8 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         // operand's width.
         let widths = self.tied_widths(facts, source)?;
         let mut prints = ArenaVec::with_capacity_in(facts.operands.len(), self.scratch);
+        // Each operand's own integer type, which `%z` names the size of.
+        let mut sizes = ArenaVec::with_capacity_in(facts.operands.len(), self.scratch);
         for operand in facts.operands {
             let source = operand.expression.source_vectors;
             let mut next = || {
@@ -150,6 +152,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 let (descriptor, value, print) =
                     self.output_operand(operand, place, widened, &mut writes)?;
                 prints.push(print);
+                sizes.push(own_size(&descriptor, print));
                 if operand.role == AsmRole::Update && operand.kind == AsmOperandKind::Memory {
                     reads.push((
                         AsmOperand {
@@ -186,6 +189,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 };
                 let (descriptor, value, print) = self.input_operand(operand, item, &outputs)?;
                 prints.push(print);
+                sizes.push(own_size(&descriptor, print));
                 inputs.push((descriptor, value));
             }
         }
@@ -217,6 +221,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let template = llvm_template(
             facts,
             &prints,
+            &sizes,
             gcc_outputs,
             selector.map(|_| gcc_outputs),
             self.scratch,
@@ -227,20 +232,22 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             clobbers: clobbers(facts),
             side_effects: facts.volatile,
         });
+        // A combination of operands the IR cannot express is refused here,
+        // never handed to the verifier.
+        let mut broken = None;
+        asm.check(|rule| _ = broken.get_or_insert(rule));
+        if broken.is_some() {
+            return Err(LoweringError::unsupported(
+                Construct::InlineAssemblyOperand,
+                source,
+            ));
+        }
         _ = self.draft.push(Op::InlineAsm(asm, args.leak()), None);
-        for &(slot, place, register, base, value_type, ty) in &writes {
+        for &(slot, place, register, value_type, ty) in &writes {
             let value = self.load_register(slot, register);
-            // A widened output keeps its low bits; a flag zero-extends.
-            let value = match register.bits().cmp(&base.bits()) {
-                | std::cmp::Ordering::Greater => self.convert(Opcode::Trunc, base, value),
-                | std::cmp::Ordering::Less => self.extend(value, false, base),
-                | std::cmp::Ordering::Equal => value,
-            };
-            let value = if base == value_type {
-                value
-            } else {
-                self.convert(Opcode::Bitcast, value_type, value)
-            };
+            // A widened output keeps its low bits, a flag zero-extends, and
+            // a value in the other kind of register keeps its bits.
+            let value = self.reinterpret(value, value_type, false);
             let item = Item {
                 operand: Operand::Value(value),
                 ty,
@@ -304,17 +311,14 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 )),
         };
         let base = register;
-        let register = widened.unwrap_or(base);
+        // The shared register keeps the output's class: an SSE output
+        // widens to the `f64` of the wider input's bits.
+        let register = widened.map_or(base, |widened| same_class(base, widened.bits()));
         let print = (register != base).then_some(base);
         let bytes = register.bytes();
         let align = Align::from_bytes(u64::from(bytes)).unwrap_or(Align::BYTE);
         let slot = self.fresh_object(u64::from(bytes), align, source)?;
-        let base = if matches!(operand.kind, AsmOperandKind::Flag(_)) {
-            value_type
-        } else {
-            base
-        };
-        writes.push((slot, place, register, base, value_type, value_ty));
+        writes.push((slot, place, register, value_type, value_ty));
         Ok((
             AsmOperand {
                 output: true,
@@ -511,32 +515,33 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
     ) -> Result<Value, LoweringError> {
         let signed = self.repr(item.ty, source)?.signed();
         let value = self.value(item, source)?;
-        let ty = self.draft.value_type(value);
-        Ok(match (ty, output) {
-            | _ if ty == output => value,
-            | (Type::Ptr, Type::I64) => self.convert(Opcode::Ptrtoint, output, value),
-            | (Type::Ptr, _) if output.is_int() => {
-                let bits = self.convert(Opcode::Ptrtoint, Type::I64, value);
-                self.convert(Opcode::Trunc, output, bits)
-            },
-            | (_, Type::Ptr) if ty.is_int() => {
-                let bits = if ty == Type::I64 {
-                    value
-                } else {
-                    self.extend(value, signed, Type::I64)
-                };
-                self.convert(Opcode::Inttoptr, output, bits)
-            },
-            | _ if ty.is_int() && output.is_int() && ty.bits() < output.bits() =>
-                self.extend(value, signed, output),
-            | _ if ty.is_int() && output.is_int() => self.convert(Opcode::Trunc, output, value),
-            | _ if ty.bits() == output.bits() => self.convert(Opcode::Bitcast, output, value),
-            | _ =>
-                return Err(LoweringError::missing(
-                    "a tied asm input does not fit its output",
-                    source,
-                )),
-        })
+        Ok(self.reinterpret(value, output, signed))
+    }
+
+    /// `value` as IR type `to` through its bits: a pointer or floating value
+    /// becomes the integer of its width, that integer is extended (by
+    /// `signed`) or truncated to `to`'s width, and becomes `to`.
+    fn reinterpret(&mut self, value: Value, to: Type, signed: bool) -> Value {
+        let from = self.draft.value_type(value);
+        if from == to {
+            return value;
+        }
+        let bits = match from {
+            | Type::Ptr => self.convert(Opcode::Ptrtoint, Type::I64, value),
+            | _ if from.is_float() => self.convert(Opcode::Bitcast, integer_of(from), value),
+            | _ => value,
+        };
+        let target = integer_of(to);
+        let bits = match integer_of(from).bits().cmp(&target.bits()) {
+            | std::cmp::Ordering::Less => self.extend(bits, signed, target),
+            | std::cmp::Ordering::Greater => self.convert(Opcode::Trunc, target, bits),
+            | std::cmp::Ordering::Equal => bits,
+        };
+        match to {
+            | Type::Ptr => self.convert(Opcode::Inttoptr, to, bits),
+            | _ if to.is_float() => self.convert(Opcode::Bitcast, to, bits),
+            | _ => bits,
+        }
     }
 
     fn load_register(&mut self, slot: Value, ty: Type) -> Value {
@@ -688,6 +693,7 @@ fn clobbers(facts: &AsmFacts<'_>) -> AsmClobbers {
 fn llvm_template<'s>(
     facts: &AsmFacts<'_>,
     prints: &[Option<Type>],
+    sizes: &[Option<Type>],
     outputs: usize,
     selector: Option<usize>,
     scratch: &'s crate::util::bump::Bump,
@@ -715,6 +721,19 @@ fn llvm_template<'s>(
                 operand: index,
                 modifier,
             } => {
+                // `%z` is the instruction suffix of the operand's own size,
+                // which neither the shared register's width nor LLVM, which
+                // has no `z`, would give.
+                if modifier == Some(b'z')
+                    && let Some(suffix) = sizes
+                        .get(index as usize)
+                        .copied()
+                        .flatten()
+                        .and_then(size_suffix)
+                {
+                    text.push(suffix);
+                    continue;
+                }
                 // A reference to an operand narrower than the register it
                 // shares prints at the operand's own width.
                 let modifier = modifier.or_else(|| {
@@ -756,6 +775,48 @@ fn llvm_template<'s>(
     text.into_str()
 }
 
+/// The AT&T instruction suffix of an integer of `ty`'s width.
+fn size_suffix(ty: Type) -> Option<char> {
+    match ty {
+        | Type::I8 => Some('b'),
+        | Type::I16 => Some('w'),
+        | Type::I32 => Some('l'),
+        | Type::I64 | Type::Ptr => Some('q'),
+        | _ => None,
+    }
+}
+
+/// The integer type `%z` sizes an operand by: its own type before any
+/// widening, or the scalar a memory operand holds.
+fn own_size(operand: &AsmOperand, print: Option<Type>) -> Option<Type> {
+    let ty = print.unwrap_or(operand.ty);
+    let fits = match operand.constraint {
+        | AsmConstraint::General(_) | AsmConstraint::Tied(_) | AsmConstraint::Immediate => true,
+        | AsmConstraint::Memory => operand.bytes == ty.bytes(),
+        | AsmConstraint::Sse | AsmConstraint::Flag(_) => false,
+    };
+    (fits && (ty.is_int() || ty == Type::Ptr)).then_some(ty)
+}
+
+/// The register type of `base`'s class at `bits`: the floating type for an
+/// SSE register, else the integer.
+fn same_class(base: Type, bits: u32) -> Type {
+    match (base.is_float(), bits) {
+        | (true, 32) => Type::F32,
+        | (true, _) => Type::F64,
+        | (false, _) => types::int_type(bits),
+    }
+}
+
+/// The integer type with `ty`'s bits; a pointer is a 64-bit integer.
+fn integer_of(ty: Type) -> Type {
+    if ty == Type::Ptr {
+        Type::I64
+    } else {
+        types::int_type(ty.bits())
+    }
+}
+
 /// The x86 modifier that names an integer register at `ty`'s width.
 fn size_modifier(ty: Type) -> Option<u8> {
     match ty {
@@ -768,12 +829,10 @@ fn size_modifier(ty: Type) -> Option<u8> {
 }
 
 /// A register output's slot and lvalue, the register type it shares with
-/// its tied inputs, the register type of its own value, and its value's IR
-/// and C types.
+/// its tied inputs, and its value's IR and C types.
 type Write = (
     Value,
     Item,
-    Type,
     Type,
     Type,
     crate::translation_phases::semantic_analysis::TypeId,

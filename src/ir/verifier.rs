@@ -1072,67 +1072,18 @@ impl InstChecker<'_, '_, '_, '_, '_> {
                         | InstData::FuncAddr { .. }
                 ))
         };
-        let outputs = descriptor.output_count();
-        if descriptor.operands[outputs..]
-            .iter()
-            .any(|operand| operand.output)
-        {
-            self.report(VerifierErrorKind::InlineAsm("an output follows an input"));
-        }
+        descriptor.check(|rule| self.report(VerifierErrorKind::InlineAsm(rule)));
         for (index, (operand, &value)) in descriptor.operands.iter().zip(values).enumerate() {
-            let ty = operand.ty;
             let expected = if operand.output || operand.constraint == C::Memory {
                 Type::Ptr
             } else {
-                ty
+                operand.ty
             };
             self.operand(index, value, expected);
-            let rule = match operand.constraint {
-                | C::General(mask) if mask == 0 || mask & (1 << 4) != 0 =>
-                    Some("a general register set is empty or holds %rsp"),
-                | C::General(_)
-                    if !(ty == Type::Ptr || (ty.is_int() && ty != Type::I1 && ty.bits() <= 64)) =>
-                    Some("a general register holds an integer or pointer of at most 64 bits"),
-                | C::Sse if !matches!(ty, Type::F32 | Type::F64) =>
-                    Some("an SSE register holds a f32 or f64"),
-                | C::Memory if operand.bytes == 0 => Some("a memory operand has no bytes"),
-                | C::Immediate if operand.output => Some("an immediate is an output"),
-                | C::Immediate if !constant(value) =>
-                    Some("an immediate is not an iconst, global_addr or func_addr"),
-                | C::Tied(output) => match descriptor.operands.get(output as usize) {
-                    | _ if operand.output => Some("a tied operand is an output"),
-                    | Some(tied)
-                        if (output as usize) < outputs
-                            && matches!(tied.constraint, C::General(_) | C::Sse)
-                            && tied.ty == ty =>
-                        None,
-                    | _ => Some("a tied input names no register output of its type"),
-                },
-                | C::Flag(condition)
-                    if !operand.output
-                        || !ty.is_int()
-                        || ty.bits() > 64
-                        || usize::from(condition) >= super::ASM_CONDITIONS.len() =>
-                    Some("a flag operand is not an integer output of at most 64 bits"),
-                | _ if operand.early_clobber && !operand.output =>
-                    Some("an input is early-clobber"),
-                | _ => None,
-            };
-            if let Some(rule) = rule {
-                self.report(VerifierErrorKind::InlineAsm(rule));
-            }
-        }
-        for piece in super::inline_asm::template_pieces(descriptor.template) {
-            let rule = match piece {
-                | Err(()) => Some("the template has a malformed `$` escape"),
-                | Ok(super::inline_asm::TemplatePiece::Operand { operand, .. })
-                    if operand as usize >= values.len() =>
-                    Some("the template names a missing operand"),
-                | Ok(_) => None,
-            };
-            if let Some(rule) = rule {
-                self.report(VerifierErrorKind::InlineAsm(rule));
-                break;
+            if operand.constraint == C::Immediate && !operand.output && !constant(value) {
+                self.report(VerifierErrorKind::InlineAsm(
+                    "an immediate is not an iconst, global_addr or func_addr",
+                ));
             }
         }
     }

@@ -102,6 +102,16 @@ static int wide_flag(int a) {
     __asm__("testl %1, %1" : "=@ccz"(eq) : "r"(a));
     return eq == 1;
 }
+static int sse_high(long x) {
+    int y;
+    __asm__("psrlq $32, %0" : "=x"(y) : "0"(x));
+    return y;
+}
+static int suffix(long x) {
+    int y;
+    __asm__("mov%z0 $1, %0" : "=a"(y) : "0"(x));
+    return y;
+}
 static int unique(void) {
     int r;
     __asm__("jmp 1f\n1:\tmovl $%=, %0" : "=r"(r));
@@ -139,6 +149,8 @@ int main(void) {
     long whole = 0;
     if (wide_match(0x100000002L, &whole) != 1 || whole != 0x100000002L) return 24;
     if (!wide_flag(0) || wide_flag(1)) return 25;
+    if (sse_high(0x500000007L) != 5) return 26;
+    if (suffix(0x700000000L) != 1) return 27;
     return 0;
 }
 "#;

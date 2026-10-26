@@ -1832,9 +1832,16 @@ pair the wider mode: a narrower input is extended by its signedness, a
 wider integer or pointer input keeps all its bits (so `%q2` reads all of
 a 64-bit input tied to an `int` output), each unmodified reference to a
 narrower operand gets the size modifier of its own width (`%0` stays
-`%eax`), and the output takes the low bits when assigned. A flag output
-wider than 64 bits (`__int128`) is set from a 32-bit condition and
-zero-extended when assigned. A local that is a memory operand lives in memory
+`%eax`), and the output takes the low bits when assigned. The shared
+register keeps the output's class: an SSE output tied to a wider integer
+is an `f64`, whose bits the `int` output truncates (`psrlq $32` on a
+`long`, as GCC accepts). `%z` writes the instruction suffix of the
+operand's own size, which neither the shared register nor LLVM (which has
+no `z`) gives. A flag output wider than 64 bits (`__int128`) is set from a
+32-bit condition and zero-extended when assigned. Lowering checks each
+descriptor against the IR's operand rules (`InlineAsm::check`, which the
+verifier shares) and refuses one that breaks them, so no statement reaches
+the verifier malformed. A local that is a memory operand lives in memory
 (`address_taken.rs`). `asm goto` adds a selector output in a stack slot
 (a memory operand, so a statement that clobbers every general register
 still has room for it) that the template's appended code sets: 0 on
