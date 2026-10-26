@@ -85,8 +85,10 @@ bcc target defaults to signed). Plain `char` stays a distinct type; semantic
 analysis, constant folding and lowering take its signedness from
 `CompilerConfiguration::layout`, character constants such as `'\xff'` take its
 value range, and `__CHAR_UNSIGNED__` is defined, with `_CHAR_UNSIGNED` on the
-MSVC target as Clang defines it there. `#if` keeps its non-negative narrow
-character values (§6.10.1p4). Only `__STRICT_ANSI__` distinguishes
+MSVC target as Clang defines it there. `#if` reads a one-byte narrow
+character constant the same way (§6.10.1p4 lets it), so `#if '\xff' < 0` is
+true exactly where plain `char` is signed, as in GCC and Clang; wide constants
+keep their `wchar_t` value. Only `__STRICT_ANSI__` distinguishes
 strict modes from GNU modes in these macros. On the MSVC target,
 explicitly enabling `-fms-extensions` defines
 `_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and

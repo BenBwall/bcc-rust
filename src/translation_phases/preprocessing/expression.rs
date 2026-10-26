@@ -400,9 +400,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     ),
                     (PreprocessorTokenType::Character, UNARY) => {
                         let character = self.parse_character(token);
-                        let value = character.target_value(&self.context.configuration.target().layout());
+                        // Plain `char`'s signedness follows `-f[un]signed-char`.
+                        let layout = self.context.configuration.layout();
+                        let value = character.target_value(&layout);
                         let unsigned = matches!(character, super::CharacterTokenType::WideChar(_))
-                            && !self.context.configuration.target().layout().integer(self.context.configuration.target().layout().wchar_t).unwrap().1;
+                            && !layout.integer(layout.wchar_t).unwrap().1;
                         self.expression_parser.operand_stack.push(if unsigned { PreprocessorExpressionOperand::Unsigned(value as u64) } else { PreprocessorExpressionOperand::Signed(value) });
                         self.expression_parser.state = BINARY;
                     },

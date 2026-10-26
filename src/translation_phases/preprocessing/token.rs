@@ -434,12 +434,23 @@ impl LiteralEncoding {
 }
 
 impl CharacterTokenType {
-    /// Interpret a wide code unit in the target's `wchar_t` representation.
-    /// Narrow preprocessing values retain the existing implementation choice.
-    /// C99: §6.4.4.4p11, p. 61; PDF p. 73; §6.10.1p4, p. 148; PDF p. 160.
+    /// The value of the constant under `target`: a wide code unit in the
+    /// representation of `wchar_t`, and a one-byte narrow constant as a
+    /// plain `char` converted to `int`, so negative where `char` is signed
+    /// (`'\xff'` is -1), in `#if` (§6.10.1p4) as in phase 7. Other
+    /// constants keep their stored value.
+    /// C99: §6.4.4.4p10-11, p. 61; PDF p. 73; §6.10.1p4, p. 148; PDF p. 160.
     pub(crate) fn target_value(self, target: &crate::target::TargetLayout) -> i64 {
         let Self::WideChar(unit) = self else {
-            return self.into();
+            let value = self.into();
+            return if matches!(self, Self::Char(_))
+                && target.char_signed
+                && (128..=255).contains(&value)
+            {
+                value - 256
+            } else {
+                value
+            };
         };
         let (bits, signed) = target.integer(target.wchar_t).unwrap();
         let value = i64::from(unit & (u32::MAX >> (32 - bits)));
@@ -1158,12 +1169,10 @@ impl Display for FloatTokenType {
     }
 }
 
-/// The stored value before target-wide signedness is applied. A one-byte
-/// narrow constant is
-/// never negative here, which C99 leaves implementation-defined (§6.10.1
-/// paragraph 4, p. 148; PDF p. 160). Whether plain `char` is signed in
-/// phase 7 (§6.2.5 paragraph 15, p. 35; PDF p. 47) is left to semantic
-/// analysis.
+/// The stored value before target-wide signedness is applied: a one-byte
+/// narrow constant is never negative here.
+/// [`CharacterTokenType::target_value`] applies whether plain `char` is
+/// signed (§6.2.5 paragraph 15, p. 35; PDF p. 47).
 impl From<CharacterTokenType> for i64 {
     fn from(v: CharacterTokenType) -> Self {
         match v {

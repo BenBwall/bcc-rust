@@ -182,15 +182,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => Scalar::Int,
                 };
                 info.ty = self.types.scalar(scalar);
-                let mut value = i128::from(value.target_value(&self.types.target));
-                if matches!(
-                    e.kind,
-                    E::Constant(Constant::Char(CharacterTokenType::Char(_)))
-                ) && self.types.target.char_signed
-                    && (128..=255).contains(&value)
-                {
-                    value -= 256;
-                }
+                let value = i128::from(value.target_value(&self.types.target));
                 let (bits, signed) = self
                     .integer_type(info.ty)
                     .expect("character type is integer");

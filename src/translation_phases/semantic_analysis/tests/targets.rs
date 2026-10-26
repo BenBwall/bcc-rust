@@ -463,9 +463,13 @@ fn unsigned_plain_char_follows_the_configuration() {
     let unsigned = "_Static_assert((char)-1 > 0 && (char)200 == 200 && '\\xff' == 255, \
                     \"value\");\n_Static_assert(_Generic((char)0, char: 1, unsigned char: 2, \
                     default: 3) == 1, \"type\");\n_Static_assert(sizeof(char) == 1 && (char)256 \
-                    == 0, \"width\");\n#ifndef __CHAR_UNSIGNED__\n#error marker\n#endif\n";
+                    == 0, \"width\");\n#ifndef __CHAR_UNSIGNED__\n#error marker\n#endif\n#if \
+                    '\\xff' != 255 || '\\x7f' != 127 || L'\\x7f' != 127\n#error if\n#endif\n";
+    // `#if` reads narrow constants as phase 7 does (C99 §6.10.1p4) and keeps
+    // wide ones in `wchar_t`.
     let signed = "_Static_assert((char)-1 < 0 && '\\xff' == -1, \"value\");\n#ifdef \
-                  __CHAR_UNSIGNED__\n#error marker\n#endif\n";
+                  __CHAR_UNSIGNED__\n#error marker\n#endif\n#if '\\xff' != -1 || !('\\x80' < 0) \
+                  || '\\x7f' != 127 || L'\\xff' != 255\n#error if\n#endif\n";
     for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
         let configuration = CompilerConfiguration::default().with_target(target);
         for (source, configuration) in [
