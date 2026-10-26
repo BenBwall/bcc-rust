@@ -550,7 +550,16 @@ impl Machine {
             )
         };
         let mut cited = vec![clause];
-        if value != stored {
+        let converted = value != stored;
+        if converted && self.object_type(target) == Some(Type::Pointer) {
+            let _ = write!(
+                text,
+                " The integer constant 0 is a null pointer constant: storing it into a pointer \
+                 converts it to a null pointer, which points to no object, so {location} now \
+                 holds NULL."
+            );
+            cited.push(clauses::NULL_POINTER);
+        } else if converted && self.object_type(target) == Some(Type::Char) {
             let _ = write!(
                 text,
                 " But {} does not fit in a char, whose range is -128 to 127. That conversion is \

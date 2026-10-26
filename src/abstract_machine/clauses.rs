@@ -78,6 +78,10 @@ clauses! {
     ARRAY_DECAY = "6.3.2.1p3", "p. 46; PDF p. 58", "Lvalues, arrays, and function designators",
         "An array used in an expression (other than with & or sizeof) becomes a pointer to its \
          first element.";
+    /// C99: §6.3.2.3 paragraph 3, p. 47; PDF p. 59.
+    NULL_POINTER = "6.3.2.3p3", "p. 47; PDF p. 59", "Pointers",
+        "The integer constant 0 converted to a pointer type becomes a null pointer, which points \
+         to no object at all.";
     /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
     INTEGER_CONSTANT = "6.4.4.1p5", "pp. 55-56; PDF pp. 67-68", "Integer constants",
         "A decimal constant without a suffix has type int when its value fits in an int.";

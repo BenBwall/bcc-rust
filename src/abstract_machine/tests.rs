@@ -672,6 +672,33 @@ fn unary_plus_cites_its_own_paragraph() {
 }
 
 #[test]
+fn storing_zero_into_a_pointer_explains_the_null_pointer() {
+    for source in [
+        "int main(void) { int *p = 0; return 0; }",
+        "int main(void) { int x = 1; int *p = &x; p = 0; return 0; }",
+    ] {
+        let store = states(source)
+            .into_iter()
+            .rfind(|state| state.event.title.contains("NULL"))
+            .expect("0 is stored into p");
+        let ids = store
+            .event
+            .clauses
+            .iter()
+            .map(|clause| clause.id)
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"6.3.2.3p3"), "{ids:?}");
+        assert!(!ids.contains(&"6.3.1.3p3"), "{ids:?}");
+        assert!(
+            store.event.explanation.contains("null pointer")
+                && !store.event.explanation.contains("char"),
+            "{}",
+            store.event.explanation
+        );
+    }
+}
+
+#[test]
 fn schema_two_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
