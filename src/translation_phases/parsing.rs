@@ -104,7 +104,6 @@ use extensions::{
 };
 pub(crate) use gnu::{
     Asm,
-    AsmOperand,
     Builtin,
     OffsetMember,
 };

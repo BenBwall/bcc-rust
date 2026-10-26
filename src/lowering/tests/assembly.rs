@@ -47,8 +47,9 @@ fn templates_escape_dollars_and_keep_modifiers() {
     );
 }
 
-/// A memory operand keeps a scalar local in memory; registers named by
-/// their constraint letters and the clobbers carry over.
+/// A memory operand keeps a scalar local in memory, and a `+m` one is
+/// also read, as Clang's `=*m,*m`; registers named by their constraint
+/// letters and the clobbers carry over.
 #[test]
 fn memory_operands_pass_addresses_and_clobbers_carry_over() {
     let ir = lower_for(
@@ -59,8 +60,8 @@ fn memory_operands_pass_addresses_and_clobbers_carry_over() {
     .unwrap();
     assert!(
         ir.contains(
-            "(out \"{rax}\" i32 v3, out \"{rdx}\" i32 v4, out \"m\" i32 v2) clobber(memory, \
-             flags, rcx, xmm1)"
+            "(out \"{rax}\" i32 v3, out \"{rdx}\" i32 v4, out \"m\" i32 v2, in \"m\" i32 v2) \
+             clobber(memory, flags, rcx, xmm1)"
         ),
         "{ir}"
     );
@@ -127,9 +128,9 @@ fn asm_goto_dispatches_on_a_selector() {
         .expect("an asm instruction");
     for expected in [
         "testl $1, $1; jz .Lbcc_asm_goto${:uid}_0; js .Lbcc_asm_goto${:uid}_1",
-        "movl $$0, ${0:k}",
-        ".Lbcc_asm_goto${:uid}_1:\\u{a}\\u{9}movl $$2, ${0:k}",
-        "(out \"&r\" i32 v1, in \"r\" i32 v0)",
+        "movl $$0, $0",
+        ".Lbcc_asm_goto${:uid}_1:\\u{a}\\u{9}movl $$2, $0",
+        "(out \"m\" i32 v1, in \"r\" i32 v0)",
     ] {
         assert!(asm.contains(expected), "{expected}: {asm}");
     }

@@ -48,6 +48,7 @@ use super::{
     AsmRole,
     ConstantClass,
     ExpressionInfo,
+    JumpId,
     Scalar,
     SemanticErrorKind,
     TypeId,
@@ -61,7 +62,6 @@ use crate::{
         SourceVectors,
         parsing::{
             Asm,
-            AsmOperand,
             syntax::Statement,
         },
         preprocessing::{
@@ -70,13 +70,16 @@ use crate::{
             TokenType,
         },
     },
-    util::bump::ArenaVec,
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
+    },
 };
 
-impl<'tu> Analyzer<'_, 'tu, '_> {
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Schedules the operand expressions of a statement-level `asm`, with
     /// [`StatementWork::AssemblyDone`] after them, and records each goto
-    /// label as one of the statement's jumps.
+    /// label as a jump of the statement, checked as a `goto` is.
     /// GNU extension: GCC manual, "Extended Asm", "Goto Labels".
     pub(super) fn assembly_statement(
         &mut self,
@@ -86,27 +89,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if asm.recovered {
             return;
         }
+        let mut jumps = ArenaVec::new_in(self.scratch);
+        if asm.qualifiers.goto {
+            for &label in asm.labels {
+                jumps.extend(self.label(statement, label, false));
+            }
+        }
+        let jumps = &*self.context.tu_arena().alloc_slice_copy(&jumps);
         self.work
             .push(Work::StatementWork(StatementWork::AssemblyDone(
-                statement, asm,
+                statement, asm, jumps,
             )));
         for operand in asm.operands.iter().rev() {
             self.work.push(Work::Expression(operand.expression));
-        }
-        if asm.qualifiers.goto {
-            for &label in asm.labels {
-                self.label(statement, label, false);
-            }
         }
     }
 
     /// Checks a statement-level `asm` whose operands are typed and retains
     /// its facts when it has no error.
-    pub(super) fn finish_assembly(&mut self, statement: &'tu Statement<'tu>, asm: &'tu Asm<'tu>) {
+    pub(super) fn finish_assembly(
+        &mut self,
+        statement: &'tu Statement<'tu>,
+        asm: &'tu Asm<'tu>,
+        jumps: &'tu [JumpId],
+    ) {
         let errors = self.semantic_errors;
-        let facts = self.check_assembly(asm);
+        let facts = self.check_assembly(asm, jumps);
+        // A goto label without a jump is in tainted code, which has errors.
         if let Some(facts) = facts
             && self.semantic_errors == errors
+            && jumps.len() == asm.labels.len()
         {
             _ = self
                 .assembly
@@ -114,7 +126,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    fn check_assembly(&mut self, asm: &'tu Asm<'tu>) -> Option<AsmFacts<'tu>> {
+    fn check_assembly(
+        &mut self,
+        asm: &'tu Asm<'tu>,
+        jumps: &'tu [JumpId],
+    ) -> Option<AsmFacts<'tu>> {
         let tu = self.context.tu_arena();
         let text = self.assembly_string(asm.template?)?;
         let basic = asm.sections == 0;
@@ -148,14 +164,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .iter()
             .take_while(|operand| operand.output)
             .count();
-        let mut operands = ArenaVec::with_capacity_in(asm.operands.len(), tu);
+        let constraints = self.assembly_constraints(asm)?;
+        let operands = self.assembly_operands(asm, &names, outputs, &constraints)?;
         let mut valid = true;
-        for operand in asm.operands {
-            match self.assembly_operand(asm, &names, outputs, operand) {
-                | Some(facts) => operands.push(facts),
-                | None => valid = false,
-            }
-        }
         let mut clobbers = AsmClobbers::default();
         for &token in asm.clobbers {
             let name = self.assembly_string(token)?;
@@ -169,7 +180,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         if valid {
-            valid = self.check_clobber_conflicts(asm, &operands, clobbers);
+            valid = self.check_clobber_conflicts(asm, operands, clobbers);
         }
         let template = if basic {
             &*tu.alloc_slice_copy(&[AsmPiece::Text(text)])
@@ -182,8 +193,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .alloc_str(self.context.string_cache.at(label.name)),
                 );
             }
+            // GCC numbers the input each `+` output reads after the written
+            // inputs, and the goto labels after those.
+            let mut updates = ArenaVec::new_in(self.scratch);
+            for (index, operand) in operands.iter().enumerate() {
+                if operand.role == AsmRole::Update {
+                    updates.push(u32::try_from(index).ok()?);
+                }
+            }
             let names = Names {
                 operands: &names,
+                updates:  &updates,
                 labels:   &labels,
             };
             match template::parse(text, &names, tu) {
@@ -202,91 +222,184 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         };
         let goto = asm.qualifiers.goto;
-        valid.then(|| AsmFacts {
+        valid.then_some(AsmFacts {
             volatile: asm.qualifiers.volatile || basic || goto || outputs == 0,
             template,
-            operands: operands.leak(),
+            operands,
             clobbers,
-            labels: u32::try_from(asm.labels.len()).unwrap_or(u32::MAX),
+            jumps,
         })
     }
 
-    /// Picks operand `index`'s location from its constraint and expression
-    /// and records the value conversion of an operand read from a register.
-    /// Outputs are modifiable lvalues and memory operands addressable ones;
-    /// immediates are constants of the kind their letter allows.
-    fn assembly_operand(
+    /// Each operand's constraint alternatives, parsed. Every operand of a
+    /// statement has the same number of alternatives, as GCC requires.
+    fn assembly_constraints(
+        &mut self,
+        asm: &'tu Asm<'tu>,
+    ) -> Option<ArenaVec<'s, &'s [Constraint<'tu>]>> {
+        let mut parsed = ArenaVec::with_capacity_in(asm.operands.len(), self.scratch);
+        let mut valid = true;
+        for operand in asm.operands {
+            let Some(text) = self.assembly_string(operand.constraint) else {
+                valid = false;
+                continue;
+            };
+            match constraints::parse(text, operand.output, self.scratch) {
+                | Ok(alternatives) => parsed.push(alternatives),
+                | Err(fault) => {
+                    let fault = match fault {
+                        | ConstraintFault::MissingOutputModifier => AsmFault::OutputModifier,
+                        | ConstraintFault::Invalid if operand.output => AsmFault::OutputConstraint,
+                        | ConstraintFault::Invalid => AsmFault::InputConstraint,
+                    };
+                    self.assembly_error(
+                        fault,
+                        operand.constraint.source_vectors,
+                        Some(operand.constraint.contents),
+                    );
+                    valid = false;
+                },
+            }
+        }
+        if !valid {
+            return None;
+        }
+        if let Some(first) = parsed.first()
+            && let Some(index) = parsed.iter().position(|other| other.len() != first.len())
+        {
+            let constraint = asm.operands[index].constraint;
+            self.assembly_error(
+                AsmFault::Alternatives,
+                constraint.source_vectors,
+                Some(constraint.contents),
+            );
+            return None;
+        }
+        Some(parsed)
+    }
+
+    /// Picks the first constraint alternative in which every operand has a
+    /// location, as GCC picks one alternative for the whole statement, and
+    /// records the value conversion of each operand read from a register.
+    /// When no alternative fits, the first one's fault is reported.
+    fn assembly_operands(
         &mut self,
         asm: &'tu Asm<'tu>,
         names: &[Option<&str>],
         outputs: usize,
-        operand: &AsmOperand<'tu>,
-    ) -> Option<AsmOperandFacts<'tu>> {
-        let text = self.assembly_string(operand.constraint)?;
-        let source = operand.expression.source_vectors;
-        let constraint = match constraints::parse(text, operand.output) {
-            | Ok(constraint) => constraint,
-            | Err(fault) => {
-                let fault = match fault {
-                    | ConstraintFault::MissingOutputModifier => AsmFault::OutputModifier,
-                    | ConstraintFault::Invalid if operand.output => AsmFault::OutputConstraint,
-                    | ConstraintFault::Invalid => AsmFault::InputConstraint,
-                };
-                self.assembly_error(
+        constraints: &[&[Constraint<'tu>]],
+    ) -> Option<&'tu [AsmOperandFacts<'tu>]> {
+        for operand in asm.operands {
+            if self
+                .types
+                .unanalyzed(self.expression_info(operand.expression).ty)
+            {
+                return None;
+            }
+        }
+        let alternatives = constraints.first().map_or(1, |first| first.len());
+        let mut kinds = ArenaVec::with_capacity_in(asm.operands.len(), self.scratch);
+        let mut first_fault = None;
+        let mut chosen = None;
+        for column in 0..alternatives {
+            kinds.clear();
+            match self.alternative(asm, names, outputs, constraints, column, &mut kinds) {
+                | Ok(()) => {
+                    chosen = Some(column);
+                    break;
+                },
+                | Err(fault) => _ = first_fault.get_or_insert(fault),
+            }
+        }
+        let Some(column) = chosen else {
+            let (fault, source, name) = first_fault?;
+            self.assembly_error(fault, source, name);
+            return None;
+        };
+        let tu = self.context.tu_arena();
+        let mut operands = ArenaVec::with_capacity_in(asm.operands.len(), tu);
+        for ((operand, &kind), alternatives) in asm.operands.iter().zip(&kinds).zip(constraints) {
+            let constraint = alternatives[column];
+            let role = constraint.role?;
+            // Lowering reads an operand in a register, or a `+` one, through
+            // its value conversion; a memory operand stays an lvalue.
+            let read = match role {
+                | AsmRole::Output => false,
+                | AsmRole::Update => kind != AsmOperandKind::Memory,
+                | AsmRole::Input => matches!(
+                    kind,
+                    AsmOperandKind::Register(_)
+                        | AsmOperandKind::Tied(_)
+                        | AsmOperandKind::Immediate { symbolic: true }
+                ),
+            };
+            if read {
+                _ = self.converted(self.expression_info(operand.expression));
+            }
+            operands.push(AsmOperandFacts {
+                expression: operand.expression,
+                role,
+                kind,
+                early_clobber: constraint.early_clobber,
+            });
+        }
+        Some(operands.leak())
+    }
+
+    /// The location of every operand under alternative `column`, or the
+    /// fault, its provenance and the name it reports of the first operand
+    /// without one. A tied input needs its output in a register.
+    fn alternative(
+        &mut self,
+        asm: &'tu Asm<'tu>,
+        names: &[Option<&str>],
+        outputs: usize,
+        constraints: &[&[Constraint<'tu>]],
+        column: usize,
+        kinds: &mut ArenaVec<'_, AsmOperandKind>,
+    ) -> Result<(), (AsmFault, SourceVectors, Option<StringCacheId>)> {
+        for (operand, alternatives) in asm.operands.iter().zip(constraints) {
+            let constraint = &alternatives[column];
+            let at_expression = |fault| (fault, operand.expression.source_vectors, None);
+            let at_constraint = |fault| {
+                (
                     fault,
                     operand.constraint.source_vectors,
                     Some(operand.constraint.contents),
-                );
-                return None;
-            },
-        };
-        let info = self.expression_info(operand.expression);
-        if self.types.unanalyzed(info.ty) {
-            return None;
-        }
-        let role = constraint.role?;
-        let kind = if role.writes() {
-            self.output_location(info, &constraint, source)?
-        } else if let Some(tie) = constraint.tied {
-            let output = match tie {
-                | Tie::Number(number) => usize::try_from(number).ok().filter(|&n| n < outputs),
-                | Tie::Name(name) => names[..outputs]
-                    .iter()
-                    .position(|&known| known == Some(name)),
+                )
             };
-            let Some(output) = output else {
-                self.assembly_error(
-                    AsmFault::TiedOperand,
-                    operand.constraint.source_vectors,
-                    Some(operand.constraint.contents),
-                );
-                return None;
+            let info = self.expression_info(operand.expression);
+            let kind = if constraint.role.is_some_and(AsmRole::writes) {
+                self.output_location(info, constraint)
+                    .map_err(at_expression)?
+            } else if let Some(tie) = constraint.tied {
+                let output = match tie {
+                    | Tie::Number(number) => usize::try_from(number).ok().filter(|&n| n < outputs),
+                    | Tie::Name(name) => names[..outputs]
+                        .iter()
+                        .position(|&known| known == Some(name)),
+                };
+                let output = output
+                    .filter(|&output| {
+                        matches!(
+                            kinds.get(output),
+                            Some(AsmOperandKind::Register(
+                                AsmRegisterClass::General(_)
+                                    | AsmRegisterClass::Sse
+                                    | AsmRegisterClass::Other(_)
+                            ))
+                        )
+                    })
+                    .ok_or_else(|| at_constraint(AsmFault::TiedOperand))?;
+                self.tied_location(asm, output, info)
+                    .map_err(at_expression)?
+            } else {
+                self.input_location(info, constraint)
+                    .map_err(at_expression)?
             };
-            self.tied_location(asm, output, info, source)?
-        } else {
-            self.input_location(info, &constraint, source)?
-        };
-        // Lowering reads an operand in a register, or a `+` one, through
-        // its value conversion; a memory operand stays an lvalue.
-        let read = match role {
-            | AsmRole::Output => false,
-            | AsmRole::Update => kind != AsmOperandKind::Memory,
-            | AsmRole::Input => matches!(
-                kind,
-                AsmOperandKind::Register(_)
-                    | AsmOperandKind::Tied(_)
-                    | AsmOperandKind::Immediate { symbolic: true }
-            ),
-        };
-        if read {
-            _ = self.converted(info);
+            kinds.push(kind);
         }
-        Some(AsmOperandFacts {
-            expression: operand.expression,
-            role,
-            kind,
-            early_clobber: constraint.early_clobber,
-        })
+        Ok(())
     }
 
     /// An output's location: a flag, a register when the constraint allows
@@ -296,31 +409,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         info: ExpressionInfo<'tu>,
         constraint: &Constraint<'_>,
-        source: SourceVectors,
-    ) -> Option<AsmOperandKind> {
+    ) -> Result<AsmOperandKind, AsmFault> {
         if info.category != ValueCategory::ModifiableLvalue {
-            self.assembly_error(AsmFault::OutputLvalue, source, None);
-            return None;
+            return Err(AsmFault::OutputLvalue);
         }
         if let Some(condition) = constraint.flag {
             if self.integer_type(info.ty).is_none() {
-                self.assembly_error(AsmFault::OperandType, source, None);
-                return None;
+                return Err(AsmFault::OperandType);
             }
-            return Some(AsmOperandKind::Flag(condition));
+            return Ok(AsmOperandKind::Flag(condition));
         }
         if let Some(class) = self.assembly_register_class(info.ty, constraint) {
-            return Some(AsmOperandKind::Register(class));
+            return Ok(AsmOperandKind::Register(class));
         }
         if constraint.memory {
             if !addressable(info) {
-                self.assembly_error(AsmFault::OutputLvalue, source, None);
-                return None;
+                return Err(AsmFault::OutputLvalue);
             }
-            return Some(AsmOperandKind::Memory);
+            return Ok(AsmOperandKind::Memory);
         }
-        self.assembly_error(AsmFault::OperandType, source, None);
-        None
+        Err(AsmFault::OperandType)
     }
 
     /// An input's location: an immediate for a constant the constraint
@@ -330,8 +438,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         info: ExpressionInfo<'tu>,
         constraint: &Constraint<'_>,
-        source: SourceVectors,
-    ) -> Option<AsmOperandKind> {
+    ) -> Result<AsmOperandKind, AsmFault> {
         let integer = info
             .integer
             .filter(|_| info.ice)
@@ -349,36 +456,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // instruction encodes as an immediate takes instead.
             let encodable = register.is_none() || i32::try_from(value).is_ok();
             if (generic.is_some() && encodable) || in_range {
-                return Some(AsmOperandKind::Immediate { symbolic: false });
+                return Ok(AsmOperandKind::Immediate { symbolic: false });
             }
         }
         // A function designator decays to an address constant (§6.6p9).
         let address = matches!(info.constant, ConstantClass::Address)
             || info.category == ValueCategory::FunctionDesignator;
         if generic == Some(true) && register.is_none() && address {
-            return Some(AsmOperandKind::Immediate { symbolic: true });
+            return Ok(AsmOperandKind::Immediate { symbolic: true });
         }
         if let Some(class) = register {
-            return Some(AsmOperandKind::Register(class));
+            return Ok(AsmOperandKind::Register(class));
         }
         if constraint.memory {
             if !addressable(info) {
-                self.assembly_error(AsmFault::InputLvalue, source, None);
-                return None;
+                return Err(AsmFault::InputLvalue);
             }
-            return Some(AsmOperandKind::Memory);
+            return Ok(AsmOperandKind::Memory);
         }
         if generic.is_some() || ranged {
-            let fault = if integer.is_some() {
+            return Err(if integer.is_some() {
                 AsmFault::ImmediateRange
             } else {
                 AsmFault::ImmediateRequired
-            };
-            self.assembly_error(fault, source, None);
-            return None;
+            });
         }
-        self.assembly_error(AsmFault::OperandType, source, None);
-        None
+        Err(AsmFault::OperandType)
     }
 
     /// An input tied to `output`, which must be in a register: both are
@@ -390,8 +493,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         asm: &'tu Asm<'tu>,
         output: usize,
         info: ExpressionInfo<'tu>,
-        source: SourceVectors,
-    ) -> Option<AsmOperandKind> {
+    ) -> Result<AsmOperandKind, AsmFault> {
         let output_info = self.expression_info(asm.operands[output].expression);
         let value = self.value_type(info);
         let input = self.assembly_register_bits(value);
@@ -402,10 +504,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => value == self.value_type_of(output_info.ty) && self.arithmetic(value),
         };
         if !fits {
-            self.assembly_error(AsmFault::TiedType, source, None);
-            return None;
+            return Err(AsmFault::TiedType);
         }
-        Some(AsmOperandKind::Tied(u32::try_from(output).ok()?))
+        u32::try_from(output)
+            .map(AsmOperandKind::Tied)
+            .map_err(|_| AsmFault::TiedOperand)
     }
 
     /// Rejects a clobber of a register an operand's constraint names alone:
@@ -498,7 +601,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         fault: AsmFault,
         source: SourceVectors,
-        name: Option<crate::util::string_cache::StringCacheId>,
+        name: Option<StringCacheId>,
     ) {
         self.error(SemanticErrorKind::InvalidAsm(fault), source, name, None);
     }
@@ -528,6 +631,7 @@ const MAX_OPERANDS: usize = 30;
 pub(crate) enum AsmFault {
     WideString,
     TooManyOperands,
+    Alternatives,
     DuplicateName,
     OutputModifier,
     OutputConstraint,
@@ -553,6 +657,7 @@ impl AsmFault {
         match self {
             | Self::WideString => "wide or Unicode string literal",
             | Self::TooManyOperands => "more than 30 operands",
+            | Self::Alternatives => "different number of alternatives",
             | Self::DuplicateName => "operand name used before",
             | Self::OutputModifier
             | Self::OutputConstraint
@@ -580,6 +685,11 @@ impl AsmFault {
             | Self::TooManyOperands => (
                 "more than 30 operands in 'asm'",
                 "GNU Extended Asm: a statement has at most 30 output and input operands",
+            ),
+            | Self::Alternatives => (
+                "operand constraints for 'asm' differ in number of alternatives",
+                "GNU Multiple Alternative Constraints: every operand lists the same number of \
+                 comma-separated alternatives, and one alternative is chosen for all of them",
             ),
             | Self::DuplicateName => (
                 "duplicate asm operand name",

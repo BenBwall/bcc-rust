@@ -227,6 +227,14 @@ pub(crate) enum EmitError<'m> {
     NotAbiLowered,
     #[error("the input module does not verify as bcc IR")]
     InvalidIr,
+    /// An inline assembly operand allows a set of general registers that
+    /// no LLVM constraint names exactly; a wider one would let LLVM pick a
+    /// register the statement does not allow.
+    #[error(
+        "inline assembly operand restricted to the general registers {0}, a set no LLVM \
+         constraint names; use a single register or one of r, q, Q, R"
+    )]
+    AsmRegisterSet(crate::ir::AsmConstraint),
     /// Two relocations of a global share bytes; the verifier only checks
     /// that each fits.
     #[error("@{global}: the relocations at offsets {first} and {second} overlap")]

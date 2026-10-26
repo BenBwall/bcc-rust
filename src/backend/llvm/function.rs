@@ -797,7 +797,10 @@ impl<'m> BodyBuilder<'_, '_, 'm, '_> {
                 },
                 | constraint => {
                     match constraint {
-                        | C::General(mask) => constraints.push_str(general_constraint(mask)),
+                        | C::General(mask) => constraints.push_str(
+                            general_constraint(mask)
+                                .ok_or(EmitError::AsmRegisterSet(operand.constraint))?,
+                        ),
                         | C::Sse => constraints.push('x'),
                         | C::Immediate => constraints.push('i'),
                         | C::Tied(output) => write!(constraints, "{output}")?,
@@ -877,21 +880,22 @@ impl<'m> BodyBuilder<'_, '_, 'm, '_> {
     }
 }
 
-/// The LLVM constraint for a set of general registers: one register by
-/// Clang's name, `Q` and `R` for subsets of their classes, else `r`.
-fn general_constraint(mask: u16) -> &'static str {
+/// The LLVM constraint that allows exactly the general registers of
+/// `mask` (never `%rsp`): one register by Clang's name, `r` for all of them,
+/// `Q` for `%rax`-`%rbx` and `R` for the eight legacy registers; `None` for
+/// a set LLVM has no constraint for.
+fn general_constraint(mask: u16) -> Option<&'static str> {
     const SINGLE: [&str; 16] = [
         "{ax}", "{cx}", "{dx}", "{bx}", "{sp}", "{bp}", "{si}", "{di}", "{r8}", "{r9}", "{r10}",
         "{r11}", "{r12}", "{r13}", "{r14}", "{r15}",
     ];
-    if mask.is_power_of_two() {
-        SINGLE[mask.trailing_zeros() as usize]
-    } else if mask & !0b1111 == 0 {
-        "Q"
-    } else if mask & !0xFF == 0 {
-        "R"
-    } else {
-        "r"
+    let mask = mask & crate::ir::AsmConstraint::ANY_GENERAL;
+    match mask {
+        | crate::ir::AsmConstraint::ANY_GENERAL => Some("r"),
+        | 0b1111 => Some("Q"),
+        | 0b1110_1111 => Some("R"),
+        | _ if mask.is_power_of_two() => Some(SINGLE[mask.trailing_zeros() as usize]),
+        | _ => None,
     }
 }
 

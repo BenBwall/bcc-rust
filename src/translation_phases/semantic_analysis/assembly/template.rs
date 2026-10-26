@@ -29,6 +29,9 @@ pub(super) enum TemplateFault {
 pub(super) struct Names<'n> {
     /// Each operand's `[name]`, in operand order.
     pub(super) operands: &'n [Option<&'n str>],
+    /// The `+` outputs, in order: GCC numbers the input each one reads
+    /// after the written operands, so `%N` there names the output again.
+    pub(super) updates:  &'n [u32],
     /// Each goto label, in label order.
     pub(super) labels:   &'n [&'n str],
 }
@@ -100,6 +103,9 @@ fn escape<'t>(
         return Err(TemplateFault::Modifier);
     }
     let operands = names.operands.len();
+    // The hidden inputs of `+` outputs follow the written operands, and the
+    // goto labels follow them.
+    let numbered = operands + names.updates.len();
     let (reference, end) = match bytes.get(index) {
         | Some(b'[') => {
             let length = text[index + 1..].find(']').ok_or(TemplateFault::Escape)?;
@@ -120,11 +126,15 @@ fn escape<'t>(
             let number: usize = text[index..end]
                 .parse()
                 .map_err(|_| TemplateFault::OperandNumber)?;
-            // Labels are numbered after the operands.
             let number = if label {
                 number
-                    .checked_sub(operands)
+                    .checked_sub(numbered)
                     .ok_or(TemplateFault::OperandNumber)?
+            } else if let Some(&output) = number
+                .checked_sub(operands)
+                .and_then(|hidden| names.updates.get(hidden))
+            {
+                output as usize
             } else {
                 number
             };

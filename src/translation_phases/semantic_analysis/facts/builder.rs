@@ -243,10 +243,8 @@ impl<'tu, 's> Builder<'tu, 's> {
         statement: &Statement<'_>,
         target: ControlTarget,
         destination: ControlPoint,
-    ) {
-        let Some(id) = self.statement_id(statement) else {
-            return;
-        };
+    ) -> Option<JumpId> {
+        let id = self.statement_id(statement)?;
         let source = self.point().expect("statement has a region");
         let jump = JumpId(self.jumps.len());
         self.jumps.push(JumpFacts {
@@ -257,8 +255,9 @@ impl<'tu, 's> Builder<'tu, 's> {
             provenance: statement.source_vectors,
         });
         // An `asm goto` records one jump per label; the statement names the
-        // first, and the others follow it in order.
+        // first, and `AsmFacts::jumps` names them all.
         _ = self.statements[id.0].jump.get_or_insert(jump);
+        Some(jump)
     }
 
     /// Records that `expression` takes the address of `label`, numbering the

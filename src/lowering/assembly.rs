@@ -13,12 +13,13 @@
 //! is reinterpreted with `bitcast`. The template is rewritten in LLVM's
 //! syntax with the IR's operand numbers.
 //!
-//! `asm goto` becomes an `asm` with one more output, a selector the
-//! template sets: the assembly falls through with 0, and each goto label
-//! names a local stub inside the same template that sets its label's number
-//! and joins the fall-through. A `switch` on the selector then takes the
-//! label's jump, with any cleanups it leaves, so outputs are valid on every
-//! path and no IR terminator needs to know about assembly.
+//! `asm goto` becomes an `asm` with one more output, a selector in memory
+//! that the template sets, so it needs no register: the assembly falls
+//! through with 0, and each goto label names a local stub inside the same
+//! template that sets its label's number and joins the fall-through. A `switch`
+//! on the selector then takes the label's jump, with any cleanups it leaves, so
+//! outputs are valid on every path and no IR terminator needs to know about
+//! assembly.
 //!
 //! For `asm ("addl %1, %0" : "+r" (x) : "g" (5));` the instruction is
 //! `asm sideeffect "addl $1, $0" (out "r" i32 v1, in "i" i32 v2, in "0" i32
@@ -127,6 +128,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut outputs = ArenaVec::new_in(self.scratch);
         let mut inputs = ArenaVec::new_in(self.scratch);
         let mut tied = ArenaVec::new_in(self.scratch);
+        // The read of each `+` memory operand, as Clang's `=*m,*m`.
+        let mut reads = ArenaVec::new_in(self.scratch);
         // Each register output's slot, lvalue and register type.
         let mut writes = ArenaVec::new_in(self.scratch);
         for operand in facts.operands {
@@ -139,7 +142,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             if operand.role.writes() {
                 let place = next()?;
                 let (descriptor, value) = self.output_operand(operand, place, &mut writes)?;
-                if operand.role == AsmRole::Update && operand.kind != AsmOperandKind::Memory {
+                if operand.role == AsmRole::Update && operand.kind == AsmOperandKind::Memory {
+                    reads.push((
+                        AsmOperand {
+                            output: false,
+                            ..descriptor
+                        },
+                        value,
+                    ));
+                } else if operand.role == AsmRole::Update {
                     let current = next()?;
                     let value = self.register_value(current, descriptor.ty, source)?;
                     let index = u32::try_from(outputs.len())
@@ -165,15 +176,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
         }
         let gcc_outputs = outputs.len();
-        let selector = if facts.labels == 0 {
+        // The selector is memory, so a statement that clobbers every
+        // register can still set it.
+        let selector = if facts.jumps.is_empty() {
             None
         } else {
             let slot = self.fresh_object(4, Align::from_bytes(4).unwrap_or(Align::BYTE), source)?;
             outputs.push((
                 AsmOperand {
                     output:        true,
-                    early_clobber: true,
-                    constraint:    AsmConstraint::General(AsmConstraint::ANY_GENERAL),
+                    early_clobber: false,
+                    constraint:    AsmConstraint::Memory,
                     ty:            Type::I32,
                     bytes:         4,
                 },
@@ -183,7 +196,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         let mut operands = ArenaVec::new_in(self.scratch);
         let mut args = ArenaVec::new_in(self.scratch);
-        for &(operand, value) in outputs.iter().chain(&inputs).chain(&tied) {
+        for &(operand, value) in outputs.iter().chain(&inputs).chain(&tied).chain(&reads) {
             operands.push(operand);
             args.push(value);
         }
@@ -214,7 +227,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             _ = self.write(place, item, source)?;
         }
         if let Some(slot) = selector {
-            self.goto_dispatch(statement, facts, slot, source)?;
+            self.goto_dispatch(facts, slot, source)?;
         }
         Ok(())
     }
@@ -476,25 +489,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// `goto`s are).
     fn goto_dispatch(
         &mut self,
-        statement: &'tu Statement<'tu>,
         facts: &AsmFacts<'tu>,
         slot: Value,
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
-        let first = self
-            .unit
-            .sema
-            .control
-            .statement(statement)
-            .and_then(|facts| facts.jump)
-            .ok_or_else(|| LoweringError::missing("asm goto jumps are not retained", source))?;
         let selector = self.load_register(slot, Type::I32);
         let next = self.draft.create_block(&[]);
         let mut cases = ArenaVec::new_in(self.draft.scratch());
         let mut stubs = ArenaVec::new_in(self.scratch);
-        for label in 0..facts.labels {
+        for label in 0..facts.jumps.len() {
             let stub = self.draft.create_block(&[]);
-            cases.push((i128::from(label) + 1, self.draft.edge(stub, &[])));
+            let case = i128::try_from(label + 1)
+                .map_err(|_| LoweringError::missing("too many asm goto labels", source))?;
+            cases.push((case, self.draft.edge(stub, &[])));
             stubs.push(stub);
         }
         let default = self.draft.edge(next, &[]);
@@ -511,7 +518,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 .sema
                 .control
                 .jumps
-                .get(first.0 + index)
+                .get(facts.jumps[index].0)
                 .copied()
                 .ok_or_else(|| {
                     LoweringError::missing("an asm goto jump is not retained", source)
@@ -653,12 +660,12 @@ fn llvm_template<'s>(
         let end = "_end";
         _ = write!(
             text,
-            "\n\tmovl $$0, ${{{selector}:k}}\n\tjmp {GOTO_PREFIX}${{:uid}}{end}"
+            "\n\tmovl $$0, ${selector}\n\tjmp {GOTO_PREFIX}${{:uid}}{end}"
         );
-        for label in 0..facts.labels {
+        for label in 0..facts.jumps.len() {
             _ = write!(
                 text,
-                "\n{GOTO_PREFIX}${{:uid}}_{label}:\n\tmovl $${}, ${{{selector}:k}}\n\tjmp \
+                "\n{GOTO_PREFIX}${{:uid}}_{label}:\n\tmovl $${}, ${selector}\n\tjmp \
                  {GOTO_PREFIX}${{:uid}}{end}",
                 label + 1
             );

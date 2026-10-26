@@ -1770,7 +1770,11 @@ alternatives, the generic `r` `m` `o` `V` `<` `>` `g` `X` `i` `n` `s` `p`
 `E` `F`, the x86 registers `a` `b` `c` `d` `S` `D` `q` `Q` `R` `l` `U`
 `x` `v`, the accepted but unlowered `A` `f` `t` `u` `y` `k` `Y…`, the
 ranged immediates `I` `J` `K` `L` `M` `N` `O` `e` `Z`, matching digits and
-`[name]`, and `=@cc` flag outputs) and the operand gets one location:
+`[name]`, and `=@cc` flag outputs). Every operand lists the same number
+of comma-separated alternatives; analysis takes the first alternative
+column in which every operand has a location, as GCC chooses one
+alternative for the whole statement, so `"=a,b"` and `"=b,a"` never share
+a register. In that column each operand gets one location:
 
 - an output is a modifiable lvalue; it takes a flag, a register when its
   constraint allows one and its type fits (an integer or pointer of at most
@@ -1779,7 +1783,7 @@ ranged immediates `I` `J` `K` `L` `M` `N` `O` `e` `Z`, matching digits and
   only when the value fits a sign-extended 32-bit field; `i`, `g` and `X`
   also take an address constant, but `g` prefers a register for one), else
   a register, else the lvalue's memory;
-- a matching input names an earlier register output; integers and
+- a matching input names an earlier output in a register; integers and
   pointers may differ in width (the register holds the input widened or
   narrowed to the output's width, as in GCC), floating values may not.
 
@@ -1793,8 +1797,11 @@ spellings. A clobber of the register an operand's constraint names alone is
 (no colon) substitutes nothing. Each fault is `SemanticErrorKind::InvalidAsm`
 with GCC's or Clang's message. Every `asm goto` label is a jump of the
 statement, checked as a `goto` is (an undefined label, or entering a
-variably modified scope, is an error); the statement records them as
-consecutive jump facts. `AssemblyFacts` retains, by statement, the template
+variably modified scope, is an error), and each has its own jump fact,
+which `AsmFacts::jumps` lists in label order. Template numbering follows
+GCC: the input each `+` output reads is numbered after the written inputs
+(`%N` there names the output), and goto labels after those, so with one
+`+r` output the first label is `%l2`. `AssemblyFacts` retains, by statement, the template
 pieces, each operand's role and location, the clobbers and whether the
 statement is volatile (written so, basic, without outputs, or `goto`).
 
@@ -1813,14 +1820,18 @@ template's operand numbers.
 **Lowering** (`lowering/assembly.rs`). Operands are evaluated in order: an
 output or memory operand as a place, an input as its converted value, a `+`
 register operand as both (it becomes an output and a tied input; a `+`
-memory operand is read and written in place). A register output passes a
+memory operand becomes a memory output and a memory input of the same
+address, Clang's `=*m,*m`, so the statement reads the object as well as
+writing it). A register output passes a
 fresh slot; its value is then assigned to the lvalue as an assignment
 would, so SSA locals, bit-fields, volatile and atomic objects are written
 correctly. A `float` in a general register, or an integer in an SSE
 register, is reinterpreted with `bitcast`; a narrower matching input is
-extended by its signedness. A local that is a memory operand lives in memory
-(`address_taken.rs`). `asm goto` adds a selector output that the template's
-appended code sets: 0 on fall-through, and `N + 1` in a local stub
+extended by its signedness and a wider one keeps its low bits. A local that is a memory operand lives in memory
+(`address_taken.rs`). `asm goto` adds a selector output in a stack slot
+(a memory operand, so a statement that clobbers every general register
+still has room for it) that the template's appended code sets: 0 on
+fall-through, and `N + 1` in a local stub
 `.Lbcc_asm_goto${:uid}_N` that each `%lN` names; a `switch` on it takes each
 label's jump with the cleanups that jump leaves. Outputs are therefore valid
 on every path, and no IR terminator needs to know about assembly. Operands in
@@ -1835,10 +1846,12 @@ copies it with its operands; each copy gets its own `${:uid}`.
 **LLVM.** `LLVMGetInlineAsm` with Clang's constraint string: register and
 flag outputs are the call's results (`=r`, `={ax}`, `=&r`, `={@ccz}`),
 stored to their output pointers after the call; memory operands are `=*m`
-and `*m` with an `elementtype` attribute; specific registers use Clang's
-names (`{ax}`, `{r8}`), and sets of the `Q` and `R` classes those letters;
-every x86 statement clobbers `~{dirflag},~{fpsr},~{flags}`, and `memory`
-adds `~{memory}`.
+and `*m` with an `elementtype` attribute. A register set becomes the LLVM
+constraint that allows exactly it: one register by Clang's name (`{ax}`,
+`{r8}`), `r`, `Q` (`%rax`-`%rbx`) or `R` (the legacy registers); any other
+set, such as `ab` or `U`, is refused rather than widened. Every x86
+statement clobbers `~{dirflag},~{fpsr},~{flags}`, and `memory` adds
+`~{memory}`.
 
 **Interpreter.** Executing an `asm` traps with "unsupported by the
 interpreter: inline assembly, which only compiled code can run"; a program

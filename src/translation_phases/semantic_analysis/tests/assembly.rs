@@ -138,7 +138,7 @@ fn templates_resolve_names_modifiers_labels_and_escapes() {
                     AsmPiece::Label(0),
                 ]
             );
-            assert_eq!(facts.labels, 1);
+            assert_eq!(facts.jumps.len(), 1);
             assert!(facts.volatile, "asm goto is implicitly volatile");
             let clobbers = facts.clobbers;
             assert!(clobbers.flags && clobbers.memory);
@@ -230,28 +230,18 @@ fn goto_labels_are_checked_as_jumps() {
     );
 }
 
-/// The goto labels' jumps are the statement's, in label order.
+/// Each goto label has its own jump, in label order.
 #[test]
-fn goto_jumps_follow_the_statement_in_label_order() {
+fn goto_jumps_follow_the_labels_in_order() {
     with_source(
         "void f(void) { __asm__ goto(\"\" :::: second, first); first: ; second: ; }",
         |context, s| {
             assert_eq!(context.pending_error_count(), 0);
-            let first = s
-                .control
-                .statements
+            let facts = s.assembly.iter().next().expect("the asm is retained");
+            let labels: Vec<_> = facts
+                .jumps
                 .iter()
-                .find_map(|statement| {
-                    matches!(
-                        statement.syntax.kind,
-                        crate::translation_phases::parsing::syntax::StatementType::Asm(_)
-                    )
-                    .then_some(statement.jump)
-                })
-                .flatten()
-                .expect("asm goto has jumps");
-            let labels: Vec<_> = (0..2)
-                .map(|index| match s.control.jumps[first.0 + index].target {
+                .map(|jump| match s.control.jumps[jump.0].target {
                     | ControlTarget::Label(label) => {
                         let definition = s.control.labels[label.0]
                             .definition
@@ -273,16 +263,83 @@ fn goto_jumps_follow_the_statement_in_label_order() {
     );
 }
 
-/// GCC's matching forms: a wider integer or a pointer tied to a narrower
-/// integer output (`20030222-1.c`, `stkalign.c`) and x87 operands of one
-/// type (`990413-2.c`), which lowering then refuses.
+/// One alternative column is chosen for the whole statement: `=a,b` and
+/// `=b,a` take `%rax` and `%rbx` together, never one register twice, and
+/// an aggregate input moves every operand to the memory column.
+/// GNU extension: GCC manual, "Multiple Alternative Constraints".
 #[test]
-fn matching_inputs_follow_gcc() {
-    for body in [
-        "int i; long long x = 0; __asm__(\"\" : \"=r\"(i) : \"0\"(x));",
-        "unsigned x; __asm__(\"\" : \"=g\"(x) : \"0\"(&x));",
-        "long double v, x = 2; __asm__(\"fsqrt\" : \"=t\"(v) : \"0\"(x));",
+fn alternatives_are_chosen_for_the_whole_statement() {
+    facts(
+        "void f(void) { int x, y; __asm__(\"\" : \"=a,b\"(x), \"=b,a\"(y)); }",
+        |facts, _| {
+            let kinds: Vec<_> = facts.operands.iter().map(|operand| operand.kind).collect();
+            assert_eq!(
+                kinds,
+                [
+                    AsmOperandKind::Register(AsmRegisterClass::General(1)),
+                    AsmOperandKind::Register(AsmRegisterClass::General(1 << 3)),
+                ]
+            );
+        },
+    );
+    facts(
+        "struct S { int a[4]; } s; void f(void) { int x; __asm__(\"\" : \"=r,m\"(x) : \
+         \"r,m\"(s)); }",
+        |facts, _| {
+            let kinds: Vec<_> = facts.operands.iter().map(|operand| operand.kind).collect();
+            assert_eq!(kinds, [AsmOperandKind::Memory, AsmOperandKind::Memory]);
+        },
+    );
+    for (body, expected) in [
+        (
+            "__asm__(\"\" : \"=r,m\"(x) : \"r\"(x));",
+            AsmFault::Alternatives,
+        ),
+        // The tied output is in memory in the only alternative.
+        (
+            "__asm__(\"\" : \"=m\"(x) : \"0\"(x));",
+            AsmFault::TiedOperand,
+        ),
+        ("__asm__(\"\" : \"=r,\"(x));", AsmFault::OutputConstraint),
     ] {
-        assert_eq!(kinds(&format!("void f(void) {{ {body} }}")), [], "{body}");
+        let kinds = kinds(&format!("void f(void) {{ int x; {body} }}"));
+        assert_eq!(kinds, [SemanticErrorKind::InvalidAsm(expected)], "{body}");
     }
+}
+
+/// GCC numbers the input each `+` output reads after the written inputs,
+/// and the goto labels after those: with one `+r` output the first label
+/// is `%l2`, and `%1` names the output again.
+#[test]
+fn update_outputs_count_twice_before_goto_labels() {
+    facts(
+        "void f(int x) { __asm__ goto(\"%1 %l2\" : \"+r\"(x) ::: out); out: ; }",
+        |facts, _| {
+            assert_eq!(
+                facts.template,
+                [
+                    AsmPiece::Operand {
+                        operand:  0,
+                        modifier: None,
+                    },
+                    AsmPiece::Text(" "),
+                    AsmPiece::Label(0),
+                ]
+            );
+        },
+    );
+    assert_eq!(
+        kinds("void f(int x) { __asm__ goto(\"%l1\" : \"+r\"(x) ::: out); out: ; }"),
+        [SemanticErrorKind::InvalidAsm(AsmFault::OperandNumber)]
+    );
+}
+
+/// Every goto label is checked, not only the first.
+/// C99: §6.8.6.1p1, p. 137; PDF p. 149.
+#[test]
+fn every_goto_label_is_checked_for_variably_modified_scopes() {
+    assert_eq!(
+        kinds("void f(int n) { __asm__ goto(\"\" :::: ok, in); ok: { int a[n]; in: a[0] = 0; } }"),
+        [SemanticErrorKind::JumpIntoVariableScope]
+    );
 }

@@ -365,7 +365,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Statement(s.statement, new_scope));
             },
             | S::Label(name, child) => {
-                self.label(s, name, true);
+                _ = self.label(s, name, true);
                 // A label is a jump target: code generation emits from it,
                 // in a block that the code before it can branch to.
                 self.functions.dead = false;
@@ -373,7 +373,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Goto(name) => {
-                self.label(s, name, false);
+                _ = self.label(s, name, false);
                 self.functions.dead = true;
             },
             | S::LocalLabels(names) => self.local_labels(names),
@@ -543,7 +543,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::Return(slot) => {
                 if let Some(function) = self.functions.current {
                     let control = self.function_records[function.id].control;
-                    self.control.jump(
+                    _ = self.control.jump(
                         s,
                         super::ControlTarget::FunctionExit(control.id),
                         super::ControlPoint {

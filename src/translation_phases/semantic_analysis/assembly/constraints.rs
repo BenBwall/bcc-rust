@@ -1,7 +1,8 @@
 //! The GNU operand constraint grammar for x86-64: one constraint string to
-//! the registers, memory and immediates it allows, its `=`/`+`/`&`
-//! modifiers, and a matching operand or flag output. Alternatives separated
-//! by `,` are merged: analysis picks one location for the whole statement.
+//! its alternatives, each the registers, memory and immediates it allows,
+//! its `&` modifier, and a matching operand or flag output; the `=` or `+`
+//! role leads the string and applies to every alternative. Analysis picks
+//! one alternative column for the whole statement.
 //! GNU extension: GCC manual, "Constraints for asm Operands": "Simple
 //! Constraints", "Multiple Alternatives", "Modifiers", "Machine
 //! Constraints" (x86 family) and "Flag Output Operands".
@@ -11,6 +12,10 @@ use super::super::{
     AsmCondition,
     AsmRegisterClass,
     AsmRole,
+};
+use crate::util::bump::{
+    ArenaVec,
+    Bump,
 };
 
 /// What one constraint string allows.
@@ -49,35 +54,52 @@ pub(super) enum ConstraintFault {
     MissingOutputModifier,
 }
 
-/// Parses `text` as an output (`output`) or input constraint.
-pub(super) fn parse(text: &str, output: bool) -> Result<Constraint<'_>, ConstraintFault> {
-    let bytes = text.as_bytes();
-    let mut constraint = Constraint::default();
-    let mut index = 0;
-    if output {
-        constraint.role = Some(match bytes.first() {
-            | Some(b'=') => AsmRole::Output,
-            | Some(b'+') => AsmRole::Update,
+/// Parses `text` as an output (`output`) or input constraint into its
+/// comma-separated alternatives, in `arena`.
+pub(super) fn parse<'c, 'a>(
+    text: &'c str,
+    output: bool,
+    arena: &'a Bump,
+) -> Result<&'a [Constraint<'c>], ConstraintFault> {
+    let (role, rest) = if output {
+        match text.as_bytes().first() {
+            | Some(b'=') => (AsmRole::Output, &text[1..]),
+            | Some(b'+') => (AsmRole::Update, &text[1..]),
             | _ => return Err(ConstraintFault::MissingOutputModifier),
-        });
-        index = 1;
+        }
     } else {
-        constraint.role = Some(AsmRole::Input);
+        (AsmRole::Input, text)
+    };
+    let mut alternatives = ArenaVec::new_in(arena);
+    for alternative in rest.split(',') {
+        alternatives.push(parse_alternative(alternative, role, output)?);
     }
+    Ok(alternatives.leak())
+}
+
+/// One alternative of a constraint whose role is `role`.
+fn parse_alternative(
+    text: &str,
+    role: AsmRole,
+    output: bool,
+) -> Result<Constraint<'_>, ConstraintFault> {
+    let bytes = text.as_bytes();
+    let mut constraint = Constraint {
+        role: Some(role),
+        ..Constraint::default()
+    };
+    let mut index = 0;
     let mut empty = true;
     while let Some(&byte) = bytes.get(index) {
         index += 1;
         match byte {
             | b'&' if output => constraint.early_clobber = true,
             // Commutative pairs, disparagement and blanks change no location.
-            | b'%' | b',' | b'*' | b'?' | b'!' | b' ' | b'\t' => {},
-            | b'#' =>
-                while bytes.get(index).is_some_and(|&byte| byte != b',') {
-                    index += 1;
-                },
+            | b'%' | b'*' | b'?' | b'!' | b' ' | b'\t' => {},
+            // The rest of the alternative is ignored.
+            | b'#' => index = bytes.len(),
             | b'@' if output => {
-                let rest = &text[index..];
-                let condition = rest
+                let condition = text[index..]
                     .strip_prefix("cc")
                     .and_then(AsmCondition::named)
                     .ok_or(ConstraintFault::Invalid)?;

@@ -40,8 +40,7 @@ impl<'tu> AssemblyFacts<'tu> {
 
 /// One checked `asm` statement. Operands keep GCC's numbering: outputs in
 /// order, then inputs; an output written `+` is one operand that is read
-/// and written. Goto labels follow the operands in template numbering, and
-/// their jumps are the statement's consecutive control jumps.
+/// and written. Goto labels follow the operands in template numbering.
 /// GNU extension: GCC manual, "Extended Asm".
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AsmFacts<'tu> {
@@ -53,8 +52,8 @@ pub(crate) struct AsmFacts<'tu> {
     pub(crate) template: &'tu [AsmPiece<'tu>],
     pub(crate) operands: &'tu [AsmOperandFacts<'tu>],
     pub(crate) clobbers: AsmClobbers,
-    /// The number of `asm goto` labels.
-    pub(crate) labels:   u32,
+    /// The control jump of each `asm goto` label, in label order.
+    pub(crate) jumps:    &'tu [super::JumpId],
 }
 
 /// A piece of a parsed template.

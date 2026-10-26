@@ -70,6 +70,28 @@ zero:
 negative:
     return -1;
 }
+static int all_clobbered(int x) {
+    if (x)
+        __asm__ goto("jmp %l[taken]" ::: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9",
+                     "r10", "r11", "r12", "r13", "r14", "r15", "cc" : taken);
+    return 0;
+taken:
+    return 1;
+}
+static int internal_target;
+static int dialect(void) { int r; __asm__("{movl $1, %0|mov %0, 2}" : "=r"(r)); return r; }
+static int bare(void) { int r; __asm__("movl $%c1, %0" : "=r"(r) : "i"(42)); return r; }
+static int *symbol(void) {
+    int *p;
+    __asm__("leaq %P1(%%rip), %0" : "=r"(p) : "i"(&internal_target));
+    return p;
+}
+static int alternatives(void) {
+    int x, y;
+    __asm__("movl $1, %%eax\n\tmovl $2, %%ebx\n\tmovl %%eax, %0\n\tmovl %%ebx, %1"
+            : "=a,b"(x), "=b,a"(y));
+    return x * 10 + y;
+}
 static int unique(void) {
     int r;
     __asm__("jmp 1f\n1:\tmovl $%=, %0" : "=r"(r));
@@ -99,6 +121,11 @@ int main(void) {
     if (barrier() != 1) return 16;
     if (sign(0) != 0 || sign(5) != 1 || sign(-5) != -1) return 17;
     if (!unique()) return 18;
+    if (all_clobbered(1) != 1 || all_clobbered(0) != 0) return 19;
+    if (dialect() != 1) return 20;
+    if (bare() != 42) return 21;
+    if (symbol() != &internal_target) return 22;
+    if (alternatives() != 12) return 23;
     return 0;
 }
 "#;
@@ -145,8 +172,8 @@ int main(void) {
     }
 
     /// The template reaches LLVM with Clang's constraints: results for
-    /// register outputs, `elementtype` memory operands, and the flags every
-    /// x86 statement clobbers.
+    /// register outputs, `elementtype` memory operands with a `+m` one also
+    /// read, and the flags every x86 statement clobbers.
     #[test]
     fn llvm_inline_asm_uses_clangs_constraints() {
         let source = "int f(int x, int *p) { int r; __asm__(\"op %0, %1, %2\" : \"=&r\"(r), \
@@ -160,10 +187,76 @@ int main(void) {
         assert!(
             llvm.contains(
                 "call i32 asm \"op $0, $1, $2\", \
-                 \"=&r,=*m,{ax},~{dirflag},~{fpsr},~{flags},~{memory},~{cx}\"(ptr elementtype(i32)"
+                 \"=&r,=*m,{ax},*m,~{dirflag},~{fpsr},~{flags},~{memory},~{cx}\"(ptr \
+                 elementtype(i32)"
             ),
             "{llvm}"
         );
+    }
+
+    /// LLVM gets exactly the registers a constraint allows: `Q` and one
+    /// register have LLVM constraints, a set like `ab` has none and is
+    /// refused rather than widened.
+    #[test]
+    fn llvm_register_sets_are_exact_or_refused() {
+        let output = bcc(
+            "int f(void) { int x, y; __asm__(\"\" : \"=Q\"(x), \"=D\"(y)); return x + y; }",
+            &["--target=x86_64-unknown-linux-gnu", "--emit=llvm"],
+        );
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        assert!(
+            text(&output.stdout).contains("\"=Q,={di},"),
+            "{}",
+            text(&output.stdout)
+        );
+        let output = bcc(
+            "int f(void) { int x; __asm__(\"\" : \"=ab\"(x)); return x; }",
+            &["--target=x86_64-unknown-linux-gnu", "--emit=llvm"],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            text(&output.stderr)
+                .contains("inline assembly operand restricted to the general registers {rax,rbx}"),
+            "{}",
+            text(&output.stderr)
+        );
+    }
+
+    /// An initialized local incremented through `+m` is read by the
+    /// statement (Clang's `=*m,*m`), so optimization keeps its initial
+    /// value: the program returns 15 at O2, through LLVM's and bcc's
+    /// optimizers.
+    #[test]
+    fn optimized_update_memory_operands_are_read() {
+        let source = "__attribute__((noinline)) int f(void) { int m = 5; __asm__(\"addl $10, %0\" \
+                      : \"+m\"(m)); return m; }\nint main(void) { return f() != 15; }\n";
+        let output = bcc(
+            source,
+            &["--target=x86_64-unknown-linux-gnu", "--emit=llvm"],
+        );
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let llvm = text(&output.stdout);
+        assert!(
+            llvm.contains(
+                "\"=*m,*m,~{dirflag},~{fpsr},~{flags}\"(ptr elementtype(i32) %slot0, ptr \
+                 elementtype(i32) %slot0)"
+            ),
+            "{llvm}"
+        );
+        let Some(target) = host() else {
+            return;
+        };
+        for flags in [&["-O2"][..], &["-O2", "--opt=bcc"][..]] {
+            let executable = temporary("inline-asm-update.exe");
+            let built = bcc(
+                source,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{flags:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
     }
 
     #[test]
