@@ -60,6 +60,7 @@ use crate::{
             UnaryOperator,
         },
         semantic_analysis::{
+            ArrayBound,
             CallFacts,
             Callee,
             ConversionKind,
@@ -510,7 +511,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     Place::Memory(address)
                 };
-                if rvalue {
+                if rvalue
+                    && let TypeKind::Array(_, ArrayBound::Incomplete) =
+                        self.unit.sema.types.kind(access_ty)
+                {
+                    // A flexible array member of a structure rvalue has no
+                    // size to copy; it stays an array at its offset in the
+                    // temporary and decays from there.
+                    // C99: §6.7.2.1p16, p. 103; PDF p. 115.
+                    self.push_item(Operand::Aggregate(address), access_ty);
+                } else if rvalue {
                     // A member of a structure rvalue is not an lvalue
                     // (§6.5.2.3p3), so it is read at once.
                     let item = self.read(place, access_ty, info.ty.unqualified(), source)?;
