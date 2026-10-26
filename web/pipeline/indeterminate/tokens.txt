@@ -1,0 +1,20 @@
+indeterminate.c:1:1: keyword `int`
+indeterminate.c:1:5: identifier `main`
+indeterminate.c:1:9: punctuator `(`
+indeterminate.c:1:10: keyword `void`
+indeterminate.c:1:14: punctuator `)`
+indeterminate.c:1:16: punctuator `{`
+indeterminate.c:2:5: keyword `int`
+indeterminate.c:2:9: identifier `uninitialized`
+indeterminate.c:2:22: punctuator `;`
+indeterminate.c:3:5: keyword `int`
+indeterminate.c:3:9: identifier `result`
+indeterminate.c:3:16: punctuator `=`
+indeterminate.c:3:18: identifier `uninitialized`
+indeterminate.c:3:32: punctuator `+`
+indeterminate.c:3:34: integer constant `1` = 1 (int)
+indeterminate.c:3:35: punctuator `;`
+indeterminate.c:4:5: keyword `return`
+indeterminate.c:4:12: identifier `result`
+indeterminate.c:4:18: punctuator `;`
+indeterminate.c:5:1: punctuator `}`

@@ -1,0 +1,9 @@
+<main>:
+     0  b8 64 00 00 00           mov $0x64,%eax
+     5  83 c0 64                 add $0x64,%eax
+     8  b9 64 00 00 00           mov $0x64,%ecx
+     d  83 c1 64                 add $0x64,%ecx
+    10  83 c1 01                 add $0x1,%ecx
+    13  0f be c9                 movsbl %cl,%ecx
+    16  29 c8                    sub %ecx,%eax
+    18  c3                       ret

@@ -1,0 +1,45 @@
+function-definition factorial type=int storage=none qualifiers=none function-specifiers=none @2:1
+  declarator: declarator pointer-levels=0 @2:5
+    identifier factorial @2:5
+    function variadic=false
+      parameter type=int storage=none qualifiers=none function-specifiers=none @2:15
+        declarator: declarator pointer-levels=0 @2:19
+          identifier n @2:19
+  body: compound @2:22
+    block-item: if @3:5
+      condition: binary <= @3:9
+        lhs: identifier n @3:9
+        rhs: constant 1 (int) @3:14
+      then: compound @3:17
+        block-item: return @4:9
+          return-value: constant 1 (int) @4:16
+    block-item: declaration storage=none type=int qualifiers=none function-specifiers=none @6:5
+      declarator smaller @6:9
+        shape: declarator pointer-levels=0 @6:9
+          identifier smaller @6:9
+        initializer: assignment-expression @6:19
+          assignment-expression: call @6:19
+            callee: identifier factorial @6:19
+            argument: binary - @6:29
+              lhs: identifier n @6:29
+              rhs: constant 1 (int) @6:33
+    block-item: return @7:5
+      return-value: binary * @7:12
+        lhs: identifier n @7:12
+        rhs: identifier smaller @7:16
+function-definition main type=int storage=none qualifiers=none function-specifiers=none @10:1
+  declarator: declarator pointer-levels=0 @10:5
+    identifier main @10:5
+    function variadic=false
+      parameter type=void storage=none qualifiers=none function-specifiers=none @10:10
+  body: compound @10:16
+    block-item: declaration storage=none type=int qualifiers=none function-specifiers=none @11:5
+      declarator result @11:9
+        shape: declarator pointer-levels=0 @11:9
+          identifier result @11:9
+        initializer: assignment-expression @11:18
+          assignment-expression: call @11:18
+            callee: identifier factorial @11:18
+            argument: constant 4 (int) @11:28
+    block-item: return @12:5
+      return-value: identifier result @12:12
