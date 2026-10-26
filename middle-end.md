@@ -1150,6 +1150,21 @@ conversion of `double` and `long double` exactly, digit for digit as glibc
 does, with halfway cases to even. Guest errno and floating-environment APIs
 remain outside the host implementation.
 
+The host's C library also covers streams and files: `stdin`, `stdout` and
+`stderr` are objects holding pointers to stream objects the program cannot
+access, `stderr` output reaches the command line's standard error, and
+`fopen`, `freopen`, `tmpnam` and `remove` act on the host's file system
+(unbuffered, without `errno`). It provides the `fprintf`, `vprintf`,
+`vfprintf`, `vsprintf` and `vsnprintf` family and glibc's `__printf_chk` forms,
+`sscanf`/`fscanf`/`scanf` (decimal floating input only), string search and
+concatenation, `strtol` and its relatives, the "C" locale's character classes
+including the tables glibc's `<ctype.h>` reads through `__ctype_b_loc`, the
+wide-string basics at the target's `wchar_t` width, and `conj`, `cproj`,
+`cabs` and `carg`. `qsort` and `bsearch` run in the machine: each comparison
+pushes the comparison function's frame and steps until it returns, so its
+instructions count against the step limit and a trap inside it names it.
+`qsort` follows glibc's stable merge sort call for call.
+
 The interpreter runs one translation unit and links nothing else. A call
 that reaches the external definition of an inline-only function, because
 the always-inliner walk did not expand it (#109) or the function is plain

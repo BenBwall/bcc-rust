@@ -9,8 +9,8 @@
 //!
 //! The `flag` operand of the formatting functions enables the library's
 //! extra `%n` checks; the host's `printf` implements no `%n`, so every flag
-//! formats alike. `__vfprintf_chk` writes to a `FILE`, which the host does
-//! not model: it is not provided, and a call traps as an unknown function.
+//! formats alike. The stream forms `__printf_chk`, `__fprintf_chk` and
+//! `__vfprintf_chk` live with the streams in `stdio.rs`.
 //!
 //! GNU extension: GCC "Object Size Checking"; Linux Standard Base Core,
 //! "Interfaces for libc" (`__memcpy_chk` ... `__vsnprintf_chk`).

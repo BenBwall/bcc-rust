@@ -176,6 +176,14 @@ pub(crate) enum UbKind {
     PoisonInHostCall,
     /// `printf` ran out of arguments for its conversions.
     MissingFormatArgument,
+    /// A stream argument that is not an open `FILE`, such as one already
+    /// closed.
+    /// C99: §7.19.3 paragraph 4, p. 264; PDF p. 276.
+    InvalidStream,
+    /// A comparison function of `qsort` or `bsearch` whose type is not
+    /// `int (const void *, const void *)`, or one the host defines.
+    /// C99: §7.20.5 paragraph 2, p. 318; PDF p. 330.
+    InvalidComparison,
     /// `longjmp` with a buffer that holds no environment `setjmp` saved,
     /// or one whose function has returned since.
     /// C99: §7.13.2.1 paragraph 2, p. 244; PDF p. 256.
@@ -212,6 +220,8 @@ impl fmt::Display for UbKind {
             | Self::VaArgTypeMismatch => "va_arg of the wrong type",
             | Self::PoisonInHostCall => "poison passed to a host function",
             | Self::MissingFormatArgument => "printf has too few arguments",
+            | Self::InvalidStream => "a stream argument that is not an open FILE",
+            | Self::InvalidComparison => "a qsort or bsearch comparison function of the wrong type",
             | Self::InvalidJmpBuf =>
                 "longjmp to an environment that no active setjmp invocation saved",
         })
@@ -239,6 +249,8 @@ pub(crate) enum Unsupported {
     /// A function that may return twice other than the `setjmp` family,
     /// such as `vfork` or one declared GNU `returns_twice`.
     ReturnsTwice,
+    /// A `longjmp` out of a function `qsort` or `bsearch` called.
+    CallbackEscape,
 }
 
 impl fmt::Display for Unsupported {
@@ -251,6 +263,7 @@ impl fmt::Display for Unsupported {
             | Self::FormatWidth => "a printf field width larger than the size limit",
             | Self::VaListTarget => "a target va_list in a module without a known target",
             | Self::ReturnsTwice => "a returns-twice function other than setjmp",
+            | Self::CallbackEscape => "a longjmp out of a qsort or bsearch comparison",
         })
     }
 }
@@ -288,10 +301,6 @@ impl fmt::Display for EntryError {
 /// A trap before the main loop knows where it happened; `Machine::trap`
 /// adds the location.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "An unresolved-object fault carries the global ID needed to name its symbol."
-)]
 pub(crate) enum Fault {
     Ub(UbKind),
     Unsupported(Unsupported),
@@ -300,6 +309,9 @@ pub(crate) enum Fault {
     /// The module declares the object but supplies no storage for it.
     UnknownGlobal(GlobalId),
     StackDepthLimit,
+    /// A trap inside a function the C library called back, such as a
+    /// `qsort` comparison, which already knows its location.
+    Nested(Trap),
 }
 
 impl From<UbKind> for Fault {

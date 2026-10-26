@@ -34,7 +34,8 @@
 //! - Execution: `machine.rs` loads a module and moves between frames and
 //!   blocks; `execute.rs` dispatches one instruction; `varargs.rs` implements
 //!   `va_start`, `va_arg`, `va_copy` and `va_end`; `nonlocal.rs` `setjmp` and
-//!   `longjmp`. `main.rs` supplies writable arguments for hosted C entry;
+//!   `longjmp`; `callbacks.rs` `qsort` and `bsearch`, which call back into the
+//!   program. `main.rs` supplies writable arguments for hosted C entry;
 //!   `startup.rs` orders and runs constructors and destructors around it.
 //! - Semantics of values: `value.rs` defines runtime values and pointers;
 //!   `arithmetic.rs` the arithmetic, comparisons and conversions; `memory.rs`
@@ -54,6 +55,7 @@
 //! storage.
 
 // Execution
+pub(crate) mod callbacks;
 mod execute;
 mod machine;
 mod main;
@@ -211,24 +213,27 @@ impl Machine<'_, '_, '_> {
     /// Executes an entered program until it terminates or traps.
     fn run(&mut self, host: &mut dyn Host) -> Result<Outcome, Trap> {
         loop {
-            if self.limits.steps != 0 && self.steps == self.limits.steps {
-                return Err(Trap::StepLimit);
-            }
-            // Unlimited execution must not overflow its observation counter.
-            self.steps = self.steps.saturating_add(1);
-            let (location, inst) = self.fetch();
-            match self.execute(inst, host) {
-                | Ok(None) => {},
-                | Ok(Some(termination)) =>
-                    return Ok(Outcome {
-                        termination,
-                        steps: self.steps,
-                        #[cfg(test)]
-                        memory_cells: self.memory.backing_cells(),
-                    }),
-                | Err(fault) => return Err(self.trap(fault, location)),
+            if let Some(termination) = self.step(host)? {
+                return Ok(Outcome {
+                    termination,
+                    steps: self.steps,
+                    #[cfg(test)]
+                    memory_cells: self.memory.backing_cells(),
+                });
             }
         }
+    }
+
+    /// Executes one instruction, saying whether the program ended.
+    fn step(&mut self, host: &mut dyn Host) -> Result<Option<Termination>, Trap> {
+        if self.limits.steps != 0 && self.steps == self.limits.steps {
+            return Err(Trap::StepLimit);
+        }
+        // Unlimited execution must not overflow its observation counter.
+        self.steps = self.steps.saturating_add(1);
+        let (location, inst) = self.fetch();
+        self.execute(inst, host)
+            .map_err(|fault| self.trap(fault, location))
     }
 }
 
@@ -268,4 +273,7 @@ struct Machine<'m, 'ir, 'a> {
     activations:    u64,
     /// The last value `read_timestamp` produced.
     timestamp:      u64,
+    /// While a C library function runs a comparison function: the frame
+    /// depth its frame returns to, then the value it returned.
+    callback:       Option<callbacks::Callback>,
 }

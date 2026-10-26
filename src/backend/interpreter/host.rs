@@ -1,28 +1,37 @@
 //! Host functions: what a call to a declared but undefined function does.
 //!
 //! The interpreter hands such a call to a [`Host`] by name. [`DefaultHost`]
-//! implements the small part of the C library that test programs use to
-//! report results and manage memory, and captures their output in an arena
-//! buffer. `checked.rs` adds the object-size-checking `__*_chk` entry
-//! points of fortified C libraries, and `arguments.rs` reads the variadic
-//! arguments of formatted output, including from a `va_list`.
+//! implements the part of the C library that test programs use to report
+//! results, manage memory and handle strings and files, and captures their
+//! output in arena buffers. `stdio.rs` holds the streams and files,
+//! `printf.rs` and `scanf.rs` formatted input and output, `strings.rs` the
+//! string, wide-string, character and conversion functions, `math.rs` and
+//! `complex.rs` the numeric library, and `checked.rs` the
+//! object-size-checking `__*_chk` entry points of fortified C libraries;
+//! `library.rs` gives the signatures of the functions outside the builtin
+//! catalog, and `arguments.rs` reads the variadic arguments of formatted
+//! output, including from a `va_list`. `qsort` and `bsearch`, which call back
+//! into the program, run in the machine (`callbacks.rs`).
 
-// Formatted output
+// Formatted input and output
 mod arguments;
 mod floating;
 mod printf;
+mod scanf;
 
 // Library families
 mod checked;
 mod complex;
+mod library;
 mod math;
+mod stdio;
+mod strings;
 
 pub(crate) use arguments::HostVaList;
 use arguments::{
     ArgumentClass,
     FormatArguments,
 };
-pub(crate) use checked::va_list_operand;
 
 use super::{
     memory::{
@@ -64,6 +73,15 @@ pub(crate) trait Host {
     /// not say defines nothing weak.
     fn provides(&self, _name: &str) -> bool {
         false
+    }
+
+    /// The standard stream a declared but undefined object names, if the
+    /// host's C library defines that object: `stdin`, `stdout` and `stderr`
+    /// (0, 1 and 2) are objects holding a `FILE *`. A host that does not say
+    /// defines no streams.
+    /// C99: §7.19.1 paragraph 3, p. 263; PDF p. 275.
+    fn standard_stream(&self, _name: &str) -> Option<u32> {
+        None
     }
 }
 
@@ -111,30 +129,68 @@ pub(crate) enum HostReturn {
 /// C99: §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251 (real math).
 /// C99: §7.4.1.8, p. 183; PDF p. 195 (`isprint` in the initial C locale).
 pub(crate) struct DefaultHost<'a> {
-    output:      ArenaVec<'a, u8>,
-    scratch:     ArenaVec<'a, u8>,
-    text:        ArenaVec<'a, u8>,
+    allocator:     &'a Bump,
+    output:        ArenaVec<'a, u8>,
+    /// What the program wrote to `stderr`.
+    errors:        ArenaVec<'a, u8>,
+    /// The open streams.
+    streams:       stdio::Streams,
+    /// A file name being passed to the host's file system.
+    path:          ArenaVec<'a, u8>,
+    /// `tmpnam`'s static buffer, once made.
+    tmpnam_buffer: Option<Pointer>,
+    /// glibc's character tables, by `strings::ctype_table` slot, once made.
+    ctype:         [Option<Pointer>; 3],
+    /// Where `strtok` continues.
+    strtok:        RuntimeValue,
+    scratch:       ArenaVec<'a, u8>,
+    text:          ArenaVec<'a, u8>,
     /// Digit space for floating conversions.
-    floating:    floating::Scratch<'a>,
+    floating:      floating::Scratch<'a>,
     /// The width of `long` in bits, which `printf`'s `l` modifier reads.
-    long_width:  u32,
+    long_width:    u32,
     /// The target's existing long double representation (f64 or unsupported
     /// f80).
-    long_double: Type,
-    target:      Target,
+    long_double:   Type,
+    target:        Target,
 }
 
 impl Host for DefaultHost<'_> {
     fn provides(&self, name: &str) -> bool {
-        HOST_FUNCTIONS.contains(&name) || complex::provides(name) || checked::provides(name)
+        HOST_FUNCTIONS.contains(&name)
+            || complex::provides(name)
+            || complex::basic_provides(name)
+            || checked::provides(name)
+            || library::signature(name).is_some()
+    }
+
+    fn standard_stream(&self, name: &str) -> Option<u32> {
+        stdio::standard_stream(name)
     }
 
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
+        // Standard output written by any function follows a `freopen`.
+        let before = self.output.len();
+        let result = self.dispatch(call, memory);
+        self.redirect_output(before);
+        result
+    }
+}
+
+impl DefaultHost<'_> {
+    fn dispatch(
+        &mut self,
+        call: HostCall<'_>,
+        memory: &mut Memory<'_>,
+    ) -> Result<HostReturn, Fault> {
         if crate::builtins::external_signature(call.name).is_some()
             || HOST_FUNCTIONS.contains(&call.name)
             || checked::provides(call.name)
         {
             check_signature(call, self.long_width, self.long_double)?;
+        } else if let Some(signature) = library::signature(call.name) {
+            let windows = matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc);
+            library::check(call, signature, self.long_width, windows)?;
         }
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
             return result;
@@ -149,6 +205,12 @@ impl Host for DefaultHost<'_> {
             return value.map(|value| HostReturn::Value(Some(value)));
         }
         if let Some(result) = self.checked(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.stdio(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.strings(call, memory) {
             return result;
         }
         let args = call.args;
@@ -189,6 +251,28 @@ impl Host for DefaultHost<'_> {
                 self.output.truncate(before);
                 result?;
                 RuntimeValue::Int(count as u128)
+            },
+            | "sscanf" | "__isoc99_sscanf" | "fscanf" | "__isoc99_fscanf" | "scanf"
+            | "__isoc99_scanf" => {
+                let fixed = if call.name.ends_with("_scanf") || call.name == "scanf" {
+                    1
+                } else {
+                    2
+                };
+                let input = if fixed == 1 {
+                    scanf::Input::Stream(0)
+                } else if call.name.contains("sscanf") {
+                    scanf::Input::String {
+                        pointer: arg(0),
+                        offset:  0,
+                    }
+                } else {
+                    scanf::Input::Stream(self.stream(arg(0), memory)?)
+                };
+                let mut values =
+                    FormatArguments::Values(args.get(fixed..).unwrap_or_default().iter());
+                let count = self.scanf(input, arg(fixed - 1), &mut values, memory)?;
+                RuntimeValue::int(Type::I32, u128::from(count.cast_unsigned()))
             },
             | "malloc" => allocate(memory, integer(arg(0))?, false)?,
             | "calloc" => {
@@ -290,6 +374,17 @@ impl Host for DefaultHost<'_> {
             | RuntimeValue::Int(bits) if ty.is_int() => RuntimeValue::int(ty, bits),
             | value => value,
         })))
+    }
+}
+
+/// The operand index of the `va_list` a host function reads, if any.
+/// C99: §7.19.6.8-§7.19.6.13, pp. 292-294; PDF pp. 304-306.
+pub(crate) fn va_list_operand(name: &str) -> Option<usize> {
+    match name {
+        | "vprintf" => Some(1),
+        | "vfprintf" | "vsprintf" => Some(2),
+        | "vsnprintf" => Some(3),
+        | _ => checked::va_list_operand(name),
     }
 }
 
@@ -427,6 +522,11 @@ impl DefaultHost<'_> {
     pub(crate) fn output(&self) -> &[u8] {
         &self.output
     }
+
+    /// Everything the program has written to `stderr`.
+    pub(crate) fn errors(&self) -> &[u8] {
+        &self.errors
+    }
 }
 
 /// An integer argument, which must not be poison.
@@ -470,16 +570,23 @@ impl<'a> DefaultHost<'a> {
     /// A host whose output and scratch space live in `arena`.
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            output:      ArenaVec::new_in(arena),
-            scratch:     ArenaVec::new_in(arena),
-            text:        ArenaVec::new_in(arena),
-            floating:    floating::Scratch {
+            allocator:     arena,
+            output:        ArenaVec::new_in(arena),
+            errors:        ArenaVec::new_in(arena),
+            streams:       stdio::Streams::default(),
+            path:          ArenaVec::new_in(arena),
+            tmpnam_buffer: None,
+            ctype:         [None; 3],
+            strtok:        RuntimeValue::NULL,
+            scratch:       ArenaVec::new_in(arena),
+            text:          ArenaVec::new_in(arena),
+            floating:      floating::Scratch {
                 integer:     ArenaVec::new_in(arena),
                 significant: ArenaVec::new_in(arena),
             },
-            long_width:  64,
-            long_double: Type::F80,
-            target:      Target::LinuxGnu,
+            long_width:    64,
+            long_double:   Type::F80,
+            target:        Target::LinuxGnu,
         }
     }
 

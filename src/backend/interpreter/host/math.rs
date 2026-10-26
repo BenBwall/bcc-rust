@@ -621,7 +621,7 @@ fn double(
 
 // Safe scalar interfaces; pointer outputs always refer to Rust temporaries,
 // never to guest memory. Library state (errno/fenv) is the native host's.
-mod native {
+pub(super) mod native {
     use std::ffi::{
         c_char,
         c_int,
@@ -639,7 +639,7 @@ mod native {
                     $(pub(super) fn $name($($arg: $ty),*) -> $result;)*
                 }
             }
-            $(pub(super) fn $name($($arg: $ty),*) -> $result {
+            $(pub(in crate::backend::interpreter::host) fn $name($($arg: $ty),*) -> $result {
                 // SAFETY: Scalars have their declared C types; any output
                 // reference names writable Rust storage, never guest memory.
                 unsafe { ffi::$name($($arg),*) }

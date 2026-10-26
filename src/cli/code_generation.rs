@@ -510,6 +510,9 @@ fn interpret(module: &Module<'_>, target: Target, steps: Option<u64>) -> i32 {
         limits.steps = steps;
     }
     let result = interpreter::run_main_with_limits(module, &mut host, limits);
+    // What the program wrote to `stderr`; a closed stream is not an error
+    // of the compiler.
+    _ = io::stderr().lock().write_all(host.errors()).ok();
     let mut stdout = io::stdout().lock();
     if let Err(error) = stdout
         .write_all(host.output())
