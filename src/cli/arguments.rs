@@ -127,6 +127,10 @@ pub(super) fn normalize_language_arguments(
                 }
                 normalized.push(option);
             }
+        } else if text == "-pthread" {
+            // GCC and Clang link the thread library and define `_REENTRANT`.
+            normalized.push("--link-option=-pthread".into());
+            normalized.push("--preprocessing-option=D_REENTRANT".into());
         } else if text.starts_with("-l")
             || text.starts_with("-L")
             || text.starts_with("-Wl,")

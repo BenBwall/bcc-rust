@@ -84,6 +84,22 @@ impl Expander<'_, '_, '_, '_> {
                 source_vectors: token.source_vectors,
             });
         }
+        // GCC's `-fpreprocessed` reads a directive only when its `#` starts
+        // the line; an indented one is not a directive there.
+        if self.context.preprocessed_input
+            && self
+                .context
+                .first_source_vector(token.source_vectors)
+                .column
+                != 1
+        {
+            self.language_error(
+                "preprocessed input takes a directive only at the start of a line",
+                token.source_vectors,
+            );
+            self.skip_until_newline();
+            return;
+        }
         let Some(directive) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
         else {
             return;

@@ -421,6 +421,34 @@ mod tests {
             "{}",
             stderr(&include)
         );
+        // Phases 1 and 2 ran when it was written: GCC replaces no trigraph
+        // and splices no line again, and reads a directive only in column 1.
+        // UCNs still spell identifiers.
+        std::fs::write(
+            project.path("lexed.i"),
+            "# 1 \"lexed.c\"\nconst char s[] = \"??=\";\nint caf\\u00e9 = \
+             2;\n_Static_assert(sizeof s == 4, \"trigraph kept\");\n#ident \"id\"\n#pragma \
+             pack(1)\nstruct p { char c; int i; };\n_Static_assert(sizeof(struct p) == 5, \
+             \"pragma\");\n",
+        )
+        .unwrap();
+        succeeds(&project.bcc(&["-std=c99", "-fsyntax-only", "lexed.i"]));
+        std::fs::write(project.path("splice.i"), "int sp\\\nlice;\n").unwrap();
+        let splice = project.bcc(&["-fsyntax-only", "splice.i"]);
+        assert_eq!(splice.status.code(), Some(1));
+        assert!(
+            stderr(&splice).contains("unexpected character `\\`"),
+            "{}",
+            stderr(&splice)
+        );
+        std::fs::write(project.path("indented.i"), "  #pragma pack(1)\nint i;\n").unwrap();
+        let indented = project.bcc(&["-fsyntax-only", "indented.i"]);
+        assert_eq!(indented.status.code(), Some(1));
+        assert!(
+            stderr(&indented).contains("a directive only at the start of a line"),
+            "{}",
+            stderr(&indented)
+        );
         // `-E` skips it, as GCC does, with Clang's warning.
         let again = project.bcc(&["-E", "p.i"]);
         succeeds(&again);
@@ -559,6 +587,30 @@ mod tests {
             &["-c", "clean.c"],
         ] {
             assert_eq!(status(args), Some(0), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn pthread_defines_reentrant_as_well_as_linking() {
+        let project = Project::new();
+        std::fs::write(
+            project.path("r.c"),
+            "#ifndef _REENTRANT\n#error no _REENTRANT\n#endif\nint main(void) { return 0; }\n",
+        )
+        .unwrap();
+        succeeds(&project.bcc(&["-pthread", "-fsyntax-only", "r.c"]));
+        assert_eq!(
+            project.bcc(&["-fsyntax-only", "r.c"]).status.code(),
+            Some(1)
+        );
+        let text = project.bcc(&["-pthread", "-E", "-dM", "r.c"]);
+        assert!(
+            stdout(&text).contains("#define _REENTRANT 1"),
+            "{}",
+            stdout(&text)
+        );
+        if linkable_host() {
+            succeeds(&project.bcc(&["-pthread", "r.c", "-o", "r"]));
         }
     }
 }

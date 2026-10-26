@@ -58,7 +58,8 @@ preprocessor reads first with the `-D`, `-U`, `-include` and header search
 options; `-x assembler` and `-x assembler-with-cpp` reach the bundled clang),
 and objects, archives and libraries, which go to the linker in order with
 `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`, `-pthread` and
-`-nostdlib`. `-Wa,` and `-Xassembler` options go to the assembly inputs; C
+`-nostdlib`; `-pthread` also defines `_REENTRANT`, as in GCC and Clang.
+`-Wa,` and `-Xassembler` options go to the assembly inputs; C
 sources, which bcc assembles itself, warn about any but `--noexecstack`. An
 output that is one of the input files, even through a symbolic or hard link,
 is refused before any job runs. `--sysroot` also selects the libraries the
@@ -67,9 +68,10 @@ in the working directory unless `-o` names the only one, and `-o -` writes
 `-S` or `-E` output to stdout. `-E` writes GCC's line markers (`# 3
 "a.c"`), unless `-P`, and keeps `#pragma pack` and `#pragma weak`; bcc reads
 such markers back, so a `.i` file compiles with its original locations.
-Preprocessed input is read as GCC's `-fpreprocessed` reads it: no macro is
-replaced, `-D`, `-U` and `-include` do not apply, only line markers,
-`#pragma`, `#ident`, `#define` and `#undef` are read (any other directive is
+Preprocessed input is read as GCC's `-fpreprocessed` reads it: no trigraph
+is replaced and no line spliced again, no macro is replaced, `-D`, `-U` and
+`-include` do not apply, only line markers, `#pragma`, `#ident`, `#define`
+and `#undef` starting in the first column are read (any other directive is
 an error), and `-E` skips it with a warning.
 `-E -dM` lists the macros in effect at the end, sorted by name. `-M`, `-MM`,
 `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write make rules as GCC does; the
