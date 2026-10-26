@@ -77,7 +77,16 @@ the other absent. Before C99 (including C95), GNU89 inline is the default;
 from C99 on, C99 inline is the default. `-fgnu89-inline` and
 `-fno-gnu89-inline` override this choice independently of `-std`, with the
 last inline flag winning. bcc permits explicitly selecting C99 inline even
-in a pre-C99 mode; GCC diagnoses that combination. Only `__STRICT_ANSI__` distinguishes
+in a pre-C99 mode; GCC diagnoses that combination. `-funsigned-char` (or
+`-fno-signed-char`) makes plain `char` unsigned on every target, and
+`-fsigned-char` (or `-fno-unsigned-char`) signed, the last flag winning, as in
+GCC and Clang (C99 §6.2.5p15 leaves the choice to the implementation; every
+bcc target defaults to signed). Plain `char` stays a distinct type; semantic
+analysis, constant folding and lowering take its signedness from
+`CompilerConfiguration::layout`, character constants such as `'\xff'` take its
+value range, and `__CHAR_UNSIGNED__` is defined, with `_CHAR_UNSIGNED` on the
+MSVC target as Clang defines it there. `#if` keeps its non-negative narrow
+character values (§6.10.1p4). Only `__STRICT_ANSI__` distinguishes
 strict modes from GNU modes in these macros. On the MSVC target,
 explicitly enabling `-fms-extensions` defines
 `_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and
@@ -260,7 +269,7 @@ still follows the configured extension policy.
 | --- | --- |
 | `float.h` | C99 floating limits; C11 adds true minima, subnormal and decimal-digit macros. `FLT_ROUNDS` is the default round-to-nearest value `1`; `FLT_EVAL_METHOD` is `0`. Runtime changes to the rounding environment require backend support. Hosted with `__MINGW32__` or `_MSC_VER` defined, it first reads the C library's `<float.h>` and then replaces its characteristics, as Clang does; it defines GCC's guard `_FLOAT_H___` first, so MinGW-w64's header does not look for GCC's. |
 | `iso646.h` | The eleven C alternative operator macros. |
-| `limits.h` | Target-derived signed/unsigned limits; long-long limits from C99 onward. Hosted, it first reads the C library's `<limits.h>` for its POSIX and other additions, defining `_GCC_LIMITS_H_` in GNU modes so glibc does not look for GCC's header, then replaces the integer limits with the target's, as Clang does. `MB_LEN_MAX` is defined only if the C library did not (glibc 16, musl 4, MSVC 5); the fallback is `4`, since bcc's literals are UTF-8 and 4 bytes cover every stateless encoding. Clang's fallback is `1`. |
+| `limits.h` | Target-derived signed/unsigned limits; long-long limits from C99 onward. `CHAR_MIN` and `CHAR_MAX` are `0` and `UCHAR_MAX` when `__CHAR_UNSIGNED__` is defined (`-funsigned-char`), as in Clang's header. Hosted, it first reads the C library's `<limits.h>` for its POSIX and other additions, defining `_GCC_LIMITS_H_` in GNU modes so glibc does not look for GCC's header, then replaces the integer limits with the target's, as Clang does. `MB_LEN_MAX` is defined only if the C library did not (glibc 16, musl 4, MSVC 5); the fallback is `4`, since bcc's literals are UTF-8 and 4 bytes cover every stateless encoding. Clang's fallback is `1`. |
 | `stdarg.h` | `va_list` and the four `va_*` macros in every mode, plus GNU `__gnuc_va_list` and `__va_copy`. Like Clang's, it may be included repeatedly; `__need___va_list`, `__need_va_list`, `__need_va_arg`, `__need___va_copy` and `__need_va_copy` request one part, and each part keeps its conventional guard (`__GNUC_VA_LIST`, `_VA_LIST`). The intrinsic type is an array of one opaque 24-byte, 8-aligned SysV record on Linux, and `char *` on Windows. |
 | `stdbool.h` | `__bool_true_false_are_defined`; `bool`, `true`, `false` macros before C23. C23 uses language keywords. |
 | `stddef.h` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, `offsetof`; C11 adds `max_align_t`, and `__STDC_WANT_LIB_EXT1__` adds `rsize_t`. Like Clang's, it may be included repeatedly: `__need_size_t`, `__need_ptrdiff_t`, `__need_wchar_t`, `__need_NULL`, `__need_wint_t`, `__need_rsize_t`, `__need_max_align_t` and `__need_offsetof` request one part, as glibc's headers do. Each type keeps its conventional guard (`_SIZE_T`, `_PTRDIFF_T`, `_WCHAR_T`, `_WINT_T`, `_RSIZE_T`), so a definition the C library made first is kept; a requested `NULL` is always restored to `((void *)0)`. As in Clang, `_MSC_EXTENSIONS` also defines vcruntime.h's `_WCHAR_T_DEFINED` guard with `wchar_t`, and `max_align_t` is `double` on the MSVC target (`_M_X64` without `__MINGW32__`), otherwise the GCC-style record, independently of MSVC extension flags. |
