@@ -63,23 +63,29 @@ pub(crate) struct FunctionExtensions<'tu> {
     /// the automatic object's binding rather than expression syntax.
     pub(in crate::translation_phases::semantic_analysis) cleanup_sizes:
         ArenaMap<'tu, usize, ObjectSize<'tu>>,
+    /// For a direct call of a function using the GNU argument pack, the
+    /// constant answers its object-size queries have with the call's
+    /// arguments, by query expression.
+    pub(in crate::translation_phases::semantic_analysis) forwarded_object_sizes:
+        ArenaMap<'tu, usize, &'tu [(usize, u64)]>,
 }
 
 impl<'tu> FunctionExtensions<'tu> {
     pub(in crate::translation_phases::semantic_analysis) fn new(arena: &'tu Bump) -> Self {
         Self {
-            functions:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            calls:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            values:             ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            anonymous_names:    ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            local_names:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            abi_names:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_types:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_fields:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_type_names: ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            typedef_names:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            object_sizes:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            cleanup_sizes:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            functions:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            calls:                  ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            values:                 ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            anonymous_names:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            local_names:            ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            abi_names:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_types:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_fields:         ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_type_names:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            typedef_names:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            object_sizes:           ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            cleanup_sizes:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            forwarded_object_sizes: ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
     }
 
@@ -101,6 +107,15 @@ impl<'tu> FunctionExtensions<'tu> {
 
     pub(crate) fn cleanup_size(&self, variable: usize) -> Option<ObjectSize<'tu>> {
         self.cleanup_sizes.get(&variable).copied()
+    }
+
+    /// The constant object sizes a call of a function using the argument
+    /// pack supplies, by query expression identity, ordered by it.
+    pub(crate) fn forwarded_object_sizes(&self, call: &Expression<'tu>) -> &'tu [(usize, u64)] {
+        self.forwarded_object_sizes
+            .get(&identity(call))
+            .copied()
+            .unwrap_or_default()
     }
 }
 

@@ -154,8 +154,9 @@ int main(void) {
     /// chooses its GCC `_FORTIFY_SOURCE` wrappers, which forward their
     /// anonymous arguments with `__builtin_va_arg_pack ()` and count them
     /// with `__builtin_va_arg_pack_len ()`. Every call then reaches the
-    /// checked function, with and without the bcc optimizer, on both back
-    /// ends and in the interpreter, whose host has the checked formatting
+    /// checked function with the caller's buffer size, so an overflow
+    /// aborts, with and without the bcc optimizer, on both back ends and in
+    /// the interpreter, whose host has the checked formatting
     /// functions but not `__printf_chk`, files or `%f`.
     #[test]
     fn glibc_gcc_fortify_wrappers_forward_argument_packs() {
@@ -237,6 +238,37 @@ int main(int argc, char **argv) {
                 (output.status.code(), text(&output.stdout).as_str()),
                 (Some(0), "ab:12/z2.5 10 7\nab:12/z2.5\n"),
                 "{options:?}: {}",
+                text(&output.stderr)
+            );
+        }
+        // The checked call gets the caller's buffer size, as GCC's inlining
+        // gives it, so an overflow stops the program as glibc reports it.
+        let overflow = r#"
+#include <stdio.h>
+int main(void) { char buf[4]; return snprintf(buf, 16, "%s", "abcdefgh"); }
+"#;
+        for options in [
+            &["--opt=none"][..],
+            &["--opt=bcc"][..],
+            &["--opt=none", "--backend=native"][..],
+            &["--opt=bcc", "--backend=native"][..],
+        ] {
+            let built = bcc(
+                overflow,
+                &[&gcc[..], options, &["-o", executable.to_str().unwrap()]].concat(),
+            );
+            assert!(
+                built.status.success(),
+                "{options:?}: {}",
+                text(&built.stderr)
+            );
+            let output =
+                run_native(Command::new(&executable).env("LIBC_FATAL_STDERR_", "1")).unwrap();
+            assert!(
+                output.status.code().is_none()
+                    && text(&output.stderr).contains("buffer overflow detected"),
+                "{options:?}: {:?} {}",
+                output.status,
                 text(&output.stderr)
             );
         }

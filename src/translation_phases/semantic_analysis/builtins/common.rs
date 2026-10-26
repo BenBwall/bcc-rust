@@ -206,6 +206,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     super::super::ObjectSize::Unknown
                 };
+                if matches!(size, super::super::ObjectSize::Unknown)
+                    && self.effects_pure(args[0], super::super::EffectContext::Value)
+                {
+                    info.size_query = self.object_size_query(e, args[0], mode, dynamic);
+                }
                 let size = match size {
                     | super::super::ObjectSize::Unknown =>
                         super::super::ObjectSize::Constant(if mode >= 2 { 0 } else { u64::MAX }),

@@ -1049,6 +1049,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             indirect: None,
             pack: None,
+            object_sizes: copy.map_or(&[], |copy| copy.sizes),
         };
         // Address-taken labels become IR labels in their semantic address
         // order, so a label's address index is its IR label number, also in
