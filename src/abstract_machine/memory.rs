@@ -11,10 +11,10 @@
 //! C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91 (invalid indirection).
 
 use super::{
+    clauses,
     machine::{
         Machine,
         ObjectMetadata,
-        text,
     },
     model::{
         Diagnostic,
@@ -33,7 +33,8 @@ impl Machine {
         ty: Type,
         scope: usize,
         value: Value,
-    ) -> Result<(), Diagnostic> {
+        parameter: bool,
+    ) -> Result<usize, Diagnostic> {
         let cells = match ty {
             | Type::Array(count) => count,
             | _ => 1,
@@ -58,22 +59,41 @@ impl Machine {
         };
         let r#type = match ty {
             | Type::Int => String::from("int"),
+            | Type::Char => String::from("char"),
             | Type::Pointer => String::from("int *"),
-            | Type::Array(count) => text(format_args!("int[{count}]")),
+            | Type::Array(count) => format!("int[{count}]"),
         };
         let top = self.activations.len() - 1;
+        let id = self.state.objects.len() + 1;
         self.state.objects.push(Object {
-            id: self.state.objects.len() + 1,
+            id,
             name: String::from(name),
             r#type,
             frame_id: self.activations[top].id,
             storage_duration: "automatic",
             lifetime: "alive",
+            parameter,
             value,
         });
         self.metadata.push(ObjectMetadata { scope, ty });
         self.cells += cells;
-        Ok(())
+        Ok(id)
+    }
+
+    /// The value stored at a location, without lifetime or bounds checks.
+    pub fn peek(&self, target: usize, offset: i32) -> Option<Value> {
+        let object = self.state.objects.get(target.checked_sub(1)?)?;
+        match &object.value {
+            | Value::Array(elements) => elements.get(usize::try_from(offset).ok()?).cloned(),
+            | value => Some(value.clone()),
+        }
+    }
+
+    /// The declared type of an object.
+    pub fn object_type(&self, target: usize) -> Option<Type> {
+        self.metadata
+            .get(target.checked_sub(1)?)
+            .map(|metadata| metadata.ty)
     }
 
     pub fn named(&self, name: &str) -> Result<usize, Diagnostic> {
@@ -103,26 +123,27 @@ impl Machine {
             // representations; this prototype stops conservatively,
             // rather than asserting every possible indeterminate
             // read must be UB.
-            return Err(Diagnostic {
-                citation: Some("C99 §6.7.8p10, p. 126; PDF p. 138"),
-                ..Diagnostic::new(
-                    "indeterminate",
-                    self.state.source_range,
-                    "read of an indeterminate value; prototype policy stops execution without \
-                     claiming all such reads are UB",
-                )
-            });
+            return Err(Diagnostic::indeterminate(
+                self.state.source_range,
+                "read of an indeterminate value; prototype policy stops execution without \
+                 claiming all such reads are UB",
+                &clauses::INDETERMINATE,
+            ));
         }
         self.check_pointer_lifetime(&value)?;
         Ok(value)
     }
 
+    /// Stores `value`, converted to the object's type, and returns the stored
+    /// value. A `char` keeps the low 8 bits of an int as two's complement, the
+    /// implementation-defined result x86-64 compilers give.
+    /// C99: §6.3.1.3 paragraph 3, p. 43; PDF p. 55.
     pub fn store(
         &mut self,
         target: usize,
         offset: i32,
         mut value: Value,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<Value, Diagnostic> {
         let index = self.checked_location(target, offset)?;
         let object = &self.state.objects[target - 1];
         if self.metadata[object.id - 1].ty == Type::Pointer && value == Value::Integer(0) {
@@ -130,6 +151,16 @@ impl Machine {
                 target: None,
                 offset: 0,
             };
+        }
+        if self.metadata[object.id - 1].ty == Type::Char
+            && let Value::Integer(integer) = value
+        {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Keeping the low 8 bits is the modeled conversion."
+            )]
+            let low = integer as i8;
+            value = Value::Integer(i32::from(low));
         }
         let valid = match self.metadata[object.id - 1].ty {
             | Type::Pointer => matches!(value, Value::Pointer { .. }),
@@ -140,10 +171,10 @@ impl Machine {
         }
         self.check_pointer_lifetime(&value)?;
         match &mut self.state.objects[target - 1].value {
-            | Value::Array(elements) => elements[index] = value,
-            | slot => *slot = value,
+            | Value::Array(elements) => elements[index] = value.clone(),
+            | slot => *slot = value.clone(),
         }
-        Ok(())
+        Ok(value)
     }
 
     pub fn dereference(&self, pointer: &Value) -> Result<(usize, i32), Diagnostic> {
@@ -158,7 +189,7 @@ impl Machine {
             | Value::Pointer { target: None, .. } => Err(Diagnostic::ub(
                 self.state.source_range,
                 "indirection through a null pointer",
-                "C99 §6.5.3.2p4, p. 79; PDF p. 91",
+                &clauses::INDIRECTION,
             )),
             | _ => Err(self.error("indirection requires an int pointer")),
         }
@@ -177,7 +208,7 @@ impl Machine {
             Diagnostic::ub(
                 self.state.source_range,
                 "access outside an object or through a one-past pointer",
-                "C99 §6.5.6p8, p. 83; PDF p. 95",
+                &clauses::POINTER_ARITHMETIC,
             )
         })
     }
@@ -193,7 +224,7 @@ impl Machine {
             return Err(Diagnostic::ub(
                 self.state.source_range,
                 "object accessed outside its lifetime",
-                "C99 §6.2.4p2, p. 32; PDF p. 44",
+                &clauses::LIFETIME,
             ));
         }
         Ok(object)
@@ -210,15 +241,12 @@ impl Machine {
                 .get(target - 1)
                 .is_some_and(|object| object.lifetime != "alive")
         {
-            return Err(Diagnostic {
-                citation: Some("C99 §6.2.4p2, p. 32; PDF p. 44"),
-                ..Diagnostic::new(
-                    "indeterminate",
-                    self.state.source_range,
-                    "pointer became indeterminate when its target lifetime ended; prototype \
-                     policy stops on use",
-                )
-            });
+            return Err(Diagnostic::indeterminate(
+                self.state.source_range,
+                "pointer became indeterminate when its target lifetime ended; prototype policy \
+                 stops on use",
+                &clauses::LIFETIME,
+            ));
         }
         Ok(())
     }
@@ -296,7 +324,7 @@ impl Machine {
         Diagnostic::ub(
             self.state.source_range,
             "signed int result is outside the representable range",
-            "C99 §6.5p5, p. 67; PDF p. 79",
+            &clauses::EXCEPTIONAL_CONDITION,
         )
     }
 
@@ -305,7 +333,7 @@ impl Machine {
             return Err(Diagnostic::ub(
                 self.state.source_range,
                 "integer division or remainder by zero",
-                "C99 §6.5.5p5, p. 82; PDF p. 94",
+                &clauses::DIVISION,
             ));
         }
         let result = match operator {
@@ -334,7 +362,7 @@ impl Machine {
             return Err(Diagnostic::ub(
                 self.state.source_range,
                 "pointer arithmetic requires a pointer to an object",
-                "C99 §6.5.6p8, p. 83; PDF p. 95",
+                &clauses::POINTER_ARITHMETIC,
             ));
         };
         let object = self.live_object(target)?;
@@ -350,7 +378,7 @@ impl Machine {
             return Err(Diagnostic::ub(
                 self.state.source_range,
                 "pointer arithmetic leaves the object and its one-past position",
-                "C99 §6.5.6p8, p. 83; PDF p. 95",
+                &clauses::POINTER_ARITHMETIC,
             ));
         };
         let offset =

@@ -1,5 +1,7 @@
 //! Public observations and compact internal operations for the subset engine.
 
+use super::clauses::Clause;
+
 /// A compiled bounded-subset program, independent of native compiler storage.
 #[derive(Debug, Clone)]
 pub struct Program {
@@ -18,8 +20,10 @@ pub struct State {
     pub status:          &'static str,
     /// The next operation, or the failing/last operation at termination.
     pub source_range:    SourceRange,
-    /// The last completed operation's explanation.
-    pub event:           String,
+    /// What the last completed operation did, and why.
+    pub event:           Event,
+    /// The full expression the innermost activation is evaluating.
+    pub evaluation:      Option<Evaluation>,
     /// Active calls, outermost first.
     pub frames:          Vec<Frame>,
     /// All allocated objects, retaining ended lifetimes for explanation.
@@ -36,6 +40,209 @@ impl State {
     pub(super) fn terminal(&self) -> bool {
         !matches!(self.status, "ready" | "running")
     }
+}
+
+/// One completed operation as structured data: what kind of rule ran, on
+/// which source, with which values, and the clauses of C99 that define it.
+/// The title and explanation are plain-language renderings of the same data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Event {
+    /// The rule applied.
+    pub kind:           EventKind,
+    /// The exact source the operation evaluated (a subexpression, not a line).
+    pub range:          SourceRange,
+    /// A short headline, such as "Read `total`".
+    pub title:          String,
+    /// A beginner-oriented paragraph naming the values involved.
+    pub explanation:    String,
+    /// The rules applied, most specific first.
+    pub clauses:        Vec<Clause>,
+    /// Input values, in evaluation order.
+    pub operands:       Vec<Operand>,
+    /// The value or designation the operation produced.
+    pub result:         Option<Operand>,
+    /// Objects created, read, written or ended by this operation.
+    pub objects:        Vec<usize>,
+    /// Whether a full expression ended here (C99 §6.8p4).
+    pub sequence_point: bool,
+}
+
+impl Event {
+    pub(super) fn new(kind: EventKind, range: SourceRange, title: String) -> Self {
+        Self {
+            kind,
+            range,
+            title,
+            explanation: String::new(),
+            clauses: Vec::new(),
+            operands: Vec::new(),
+            result: None,
+            objects: Vec::new(),
+            sequence_point: false,
+        }
+    }
+}
+
+/// The rule an operation applied. [`EventKind::category`] groups kinds for
+/// colour coding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventKind {
+    /// The initial state: `main` is about to run.
+    Start,
+    /// Execution entered a block.
+    EnterBlock,
+    /// A block finished, ending its objects' lifetimes.
+    LeaveBlock,
+    /// A declaration created an object with an indeterminate value.
+    Declare,
+    /// An integer constant produced its value.
+    Constant,
+    /// An identifier evaluated to the lvalue designating its object.
+    Designate,
+    /// An lvalue was read for its stored value.
+    LvalueConversion,
+    /// A `char` value was promoted to `int`.
+    IntegerPromotion,
+    /// An array was converted to a pointer to its first element.
+    ArrayDecay,
+    /// `&` formed a pointer to an object.
+    AddressOf,
+    /// `*` designated the object a pointer points to.
+    Dereference,
+    /// `a[i]` designated an array element.
+    Subscript,
+    /// A unary `+`, `-` or `!` produced its value.
+    Unary,
+    /// An integer `+`, `-`, `*`, `/` or `%` produced its value.
+    Arithmetic,
+    /// A pointer moved by a number of elements.
+    PointerArithmetic,
+    /// A relational or equality operator produced 0 or 1.
+    Comparison,
+    /// An initializer stored an object's first value.
+    Initialize,
+    /// An assignment replaced an object's value.
+    Assign,
+    /// `++` or `--` updated an object.
+    Increment,
+    /// An expression statement's value was discarded.
+    Discard,
+    /// Control moved without a test (loop back, skip an else).
+    Jump,
+    /// A controlling expression chose the next statement.
+    Branch,
+    /// A function call created a new activation.
+    Call,
+    /// A function returned a value to its caller.
+    Return,
+    /// A diagnostic stopped execution.
+    Fault,
+}
+
+impl EventKind {
+    /// The kind's stable wire name, such as `lvalue_conversion`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            | Self::Start => "start",
+            | Self::EnterBlock => "enter_block",
+            | Self::LeaveBlock => "leave_block",
+            | Self::Declare => "declare",
+            | Self::Constant => "constant",
+            | Self::Designate => "designate",
+            | Self::LvalueConversion => "lvalue_conversion",
+            | Self::IntegerPromotion => "integer_promotion",
+            | Self::ArrayDecay => "array_decay",
+            | Self::AddressOf => "address_of",
+            | Self::Dereference => "dereference",
+            | Self::Subscript => "subscript",
+            | Self::Unary => "unary",
+            | Self::Arithmetic => "arithmetic",
+            | Self::PointerArithmetic => "pointer_arithmetic",
+            | Self::Comparison => "comparison",
+            | Self::Initialize => "initialize",
+            | Self::Assign => "assign",
+            | Self::Increment => "increment",
+            | Self::Discard => "discard",
+            | Self::Jump => "jump",
+            | Self::Branch => "branch",
+            | Self::Call => "call",
+            | Self::Return => "return",
+            | Self::Fault => "fault",
+        }
+    }
+
+    /// `evaluate`, `convert`, `memory`, `lifetime`, `control`, `call` or
+    /// `fault`.
+    #[must_use]
+    pub const fn category(self) -> &'static str {
+        match self {
+            | Self::Constant
+            | Self::Unary
+            | Self::Arithmetic
+            | Self::PointerArithmetic
+            | Self::Comparison => "evaluate",
+            | Self::LvalueConversion | Self::IntegerPromotion | Self::ArrayDecay => "convert",
+            | Self::Designate
+            | Self::AddressOf
+            | Self::Dereference
+            | Self::Subscript
+            | Self::Initialize
+            | Self::Assign
+            | Self::Increment => "memory",
+            | Self::EnterBlock | Self::LeaveBlock | Self::Declare => "lifetime",
+            | Self::Start | Self::Discard | Self::Jump | Self::Branch => "control",
+            | Self::Call | Self::Return => "call",
+            | Self::Fault => "fault",
+        }
+    }
+}
+
+/// An evaluated operand: a value, or the object (element) an lvalue
+/// designates before any read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Operand {
+    /// An rvalue.
+    Value(Value),
+    /// An lvalue designating element `offset` of object `target`.
+    Address {
+        /// The designated object's ID.
+        target: usize,
+        /// The element within it (0 for a scalar).
+        offset: i32,
+    },
+}
+
+/// Progress through one full expression: the static tree from
+/// [`Program::expression`] plus the values its nodes have produced so far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Evaluation {
+    /// Index of the function in [`Program::functions`] order.
+    pub function: usize,
+    /// The root node of the full expression.
+    pub root:     usize,
+    /// Node values in completion order; a later entry replaces an earlier one.
+    pub values:   Vec<(usize, Operand)>,
+    /// The node the last completed operation evaluated.
+    pub last:     Option<usize>,
+    /// A call in progress from this full expression.
+    pub calling:  Option<usize>,
+}
+
+/// One node of a statement's expression tree. Children precede their parent,
+/// so a tree occupies the node range `first..=root`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpressionNode {
+    /// Operator, identifier, constant, or statement form (`=`, `return`).
+    pub label:    String,
+    /// The source the node covers.
+    pub range:    SourceRange,
+    /// Operand nodes, in source order.
+    pub children: Vec<usize>,
+    /// The first node of this node's subtree.
+    pub first:    usize,
+    /// The root of the full expression containing this node.
+    pub root:     usize,
 }
 
 /// A source range in the submitted UTF-8 source (ASCII syntax only).
@@ -81,6 +288,8 @@ pub struct Object {
     pub storage_duration: &'static str,
     /// `alive` or `ended`.
     pub lifetime:         &'static str,
+    /// Whether this object is a function parameter.
+    pub parameter:        bool,
     /// Stored scalar or aggregate contents.
     pub value:            Value,
 }
@@ -90,7 +299,7 @@ pub struct Object {
 pub enum Value {
     /// No value has been stored yet (not implicitly zero).
     Indeterminate,
-    /// Signed 32-bit `int`.
+    /// Signed 32-bit `int`, or a `char` value in -128..=127.
     Integer(i32),
     /// An `int *`, with offset measured in int elements; `None` means null.
     Pointer {
@@ -115,6 +324,8 @@ pub struct Diagnostic {
     pub source_range: SourceRange,
     /// Verified C99 rule, when applicable.
     pub citation:     Option<&'static str>,
+    /// The same rule with its title and a plain-language gloss.
+    pub clause:       Option<&'static Clause>,
 }
 
 impl Diagnostic {
@@ -124,6 +335,7 @@ impl Diagnostic {
             message: String::from(message),
             source_range: range,
             citation: None,
+            clause: None,
         }
     }
 
@@ -131,10 +343,23 @@ impl Diagnostic {
         Self::new("limit", range, message)
     }
 
-    pub(super) fn ub(range: SourceRange, message: &str, citation: &'static str) -> Self {
+    pub(super) fn ub(range: SourceRange, message: &str, clause: &'static Clause) -> Self {
         Self {
-            citation: Some(citation),
+            citation: Some(clause.citation),
+            clause: Some(clause),
             ..Self::new("undefined_behavior", range, message)
+        }
+    }
+
+    pub(super) fn indeterminate(
+        range: SourceRange,
+        message: &str,
+        clause: &'static Clause,
+    ) -> Self {
+        Self {
+            citation: Some(clause.citation),
+            clause: Some(clause),
+            ..Self::new("indeterminate", range, message)
         }
     }
 }
@@ -144,12 +369,15 @@ pub(super) struct Function {
     pub name:       String,
     pub parameters: Vec<(String, Type)>,
     pub code:       Vec<Instruction>,
+    pub nodes:      Vec<ExpressionNode>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct Instruction {
     pub op:    Op,
     pub range: SourceRange,
+    /// The expression-tree node this operation evaluates, if any.
+    pub node:  Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -158,19 +386,34 @@ pub(super) enum Op {
     Leave,
     Declare(String, Type),
     Push(i32),
+    /// The implicit zero of an array element without an initializer.
+    Zero,
     Address(String),
+    /// Element `index` of the array being initialized.
+    Element(String, i32),
     Load,
+    /// The integer promotion of a loaded `char` to `int`.
+    Promote,
     Decay(String),
     AddressOf,
     Dereference,
     Index,
     Unary(&'static str),
     Binary(&'static str),
-    Store,
-    Increment(i32),
+    Store {
+        /// An initializer rather than an assignment expression.
+        initializer:     bool,
+        /// Whether this store ends a full expression (C99 §6.8p4).
+        full_expression: bool,
+    },
+    Increment {
+        delta:  i32,
+        prefix: bool,
+    },
     Pop,
     Jump(usize),
-    Branch(usize),
+    /// Skip to the target when the condition of the named statement is zero.
+    Branch(usize, &'static str),
     Call(String, usize),
     Return,
     Fallthrough,
@@ -179,6 +422,9 @@ pub(super) enum Op {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Type {
     Int,
+    /// Plain `char`, signed with 8 bits as on x86-64 (implementation-defined;
+    /// C99 §6.2.5p15).
+    Char,
     Pointer,
     Array(usize),
 }

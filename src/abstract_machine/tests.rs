@@ -2,6 +2,8 @@
 
 use super::{
     DEMO_SOURCE,
+    EventKind,
+    Operand,
     Session,
     State,
     Value,
@@ -355,7 +357,7 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":1"), "versioned schema");
+    assert!(json.contains("\"schema_version\":2"), "versioned schema");
     assert!(
         json.contains("\"kind\":\"pointer\",\"target\":1,\"offset\":0"),
         "object-based pointer"
@@ -375,4 +377,296 @@ fn format_args_source(depth: usize) -> String {
     source.push_str(&")".repeat(depth));
     source.push_str("; }");
     source
+}
+
+/// Every state of a run, from the initial one.
+fn states(source: &str) -> Vec<State> {
+    let program = compile(source).expect("test source must compile");
+    let mut session = program.session();
+    let mut states = vec![session.state().clone()];
+    while !session.state().terminal() {
+        states.push(session.step().clone());
+    }
+    states
+}
+
+fn kinds(states: &[State]) -> Vec<&'static str> {
+    states.iter().map(|state| state.event.kind.name()).collect()
+}
+
+#[test]
+fn events_name_the_rule_source_values_and_clause() {
+    let source = "int main(void) { int x = 2; x = x + 3; return x; }";
+    let states = states(source);
+    assert_eq!(
+        kinds(&states),
+        [
+            "start",
+            "enter_block",
+            "declare",
+            "designate",
+            "constant",
+            "initialize",
+            "designate",
+            "designate",
+            "lvalue_conversion",
+            "constant",
+            "arithmetic",
+            "assign",
+            "designate",
+            "lvalue_conversion",
+            "return",
+        ]
+    );
+    let read = &states[8].event;
+    assert_eq!(
+        &source[read.range.start..read.range.end],
+        "x",
+        "exact operand range"
+    );
+    assert_eq!(read.result, Some(Operand::Value(Value::Integer(2))));
+    assert_eq!(
+        read.clauses[0].id, "6.3.2.1p2",
+        "lvalue conversion is cited"
+    );
+    assert!(read.explanation.contains('2'), "{}", read.explanation);
+    let sum = &states[10].event;
+    assert_eq!(&source[sum.range.start..sum.range.end], "x + 3");
+    assert_eq!(
+        sum.operands,
+        [
+            Operand::Value(Value::Integer(2)),
+            Operand::Value(Value::Integer(3))
+        ]
+    );
+    assert_eq!(sum.title, "Compute 2 + 3 = 5");
+    let assign = &states[11].event;
+    assert_eq!(&source[assign.range.start..assign.range.end], "x = x + 3");
+    assert!(
+        assign.sequence_point,
+        "an expression statement ends a full expression"
+    );
+    assert!(
+        assign
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.5.16.1p2")
+    );
+    assert!(
+        assign.explanation.contains("previously 2"),
+        "{}",
+        assign.explanation
+    );
+    let done = &states[14].event;
+    assert_eq!(done.title, "Return 5 from main");
+    assert_eq!(done.clauses[0].id, "5.1.2.2.3p1");
+    for state in &states {
+        assert!(!state.event.title.is_empty() && !state.event.explanation.is_empty());
+        assert!(
+            !state.event.clauses.is_empty(),
+            "{} cites a clause",
+            state.event.kind.name()
+        );
+    }
+}
+
+#[test]
+fn expression_trees_fill_in_as_evaluation_proceeds() {
+    let source = "int main(void) { int a = 4; int b = a * (a - 1); return b; }";
+    let program = compile(source).expect("compiles");
+    let states = states(source);
+    let product = states
+        .iter()
+        .position(|state| {
+            state.event.kind == EventKind::Arithmetic && state.event.title.contains('*')
+        })
+        .expect("the product is computed");
+    let evaluation = states[product]
+        .evaluation
+        .as_ref()
+        .expect("a full expression is active");
+    let nodes = program.expression(evaluation.function, evaluation.root);
+    let labels: Vec<&str> = nodes.iter().map(|node| node.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["b", "a", "a", "1", "-", "*", "="],
+        "children precede parents"
+    );
+    let first = nodes.first().map(|node| node.first).expect("nodes");
+    let value = |label: &str| {
+        let index = labels
+            .iter()
+            .rposition(|candidate| *candidate == label)
+            .expect("label")
+            + first;
+        evaluation
+            .values
+            .iter()
+            .find(|(node, _)| *node == index)
+            .map(|(_, value)| value.clone())
+    };
+    assert_eq!(value("-"), Some(Operand::Value(Value::Integer(3))));
+    assert_eq!(value("*"), Some(Operand::Value(Value::Integer(12))));
+    assert_eq!(value("="), None, "the store has not run yet");
+    assert_eq!(
+        evaluation.last,
+        Some(first + 5),
+        "the product node just completed"
+    );
+    let stored = states[product + 1]
+        .evaluation
+        .as_ref()
+        .expect("same expression");
+    assert_eq!(stored.root, evaluation.root);
+    assert!(
+        stored
+            .values
+            .iter()
+            .any(|(node, value)| *node == evaluation.root
+                && *value == Operand::Value(Value::Integer(12)))
+    );
+}
+
+#[test]
+fn calls_returns_and_block_exits_explain_frames_and_lifetimes() {
+    let source = "int twice(int n) { int r = n + n; return r; } int main(void) { int v = \
+                  twice(3); { int t = v; } return v; }";
+    let states = states(source);
+    let call = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Call)
+        .expect("a call");
+    assert!(call.event.sequence_point);
+    assert!(
+        call.event.explanation.contains("`n` = 3"),
+        "{}",
+        call.event.explanation
+    );
+    assert!(
+        call.event
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.5.2.2p4")
+    );
+    assert!(
+        call.evaluation.is_none(),
+        "the callee starts a fresh evaluation"
+    );
+    let returned = states
+        .iter()
+        .position(|state| state.event.kind == EventKind::Return)
+        .expect("twice returns");
+    let event = &states[returned].event;
+    assert_eq!(event.title, "Return 6 from twice");
+    assert!(
+        event.explanation.contains("`twice(3)` now has the value 6"),
+        "{}",
+        event.explanation
+    );
+    assert_eq!(event.objects.len(), 2, "n and r end with the frame");
+    let caller = states[returned]
+        .evaluation
+        .as_ref()
+        .expect("the caller's expression resumes");
+    assert!(
+        caller
+            .values
+            .iter()
+            .any(|(_, value)| *value == Operand::Value(Value::Integer(6))),
+        "the call node holds the returned value"
+    );
+    let leave = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::LeaveBlock && !state.event.objects.is_empty())
+        .expect("the inner block ends t");
+    assert_eq!(leave.event.title, "End the lifetime of `t`");
+    let recursive = self::states(
+        "int f(int n) { if (n == 0) return 0; int r = f(n - 1); return r + 1; } int main(void) { \
+         return f(2); }",
+    );
+    assert!(
+        recursive
+            .iter()
+            .any(|state| state.event.kind == EventKind::Call
+                && state.event.explanation.contains("recursive"))
+    );
+}
+
+#[test]
+fn pointer_events_describe_decay_one_past_and_indirection() {
+    let source =
+        "int main(void) { int a[2] = {5}; int *p = a; int *end = p + 2; p = p + 1; return *p; }";
+    let states = states(source);
+    let find = |kind: EventKind| {
+        states
+            .iter()
+            .filter(|state| state.event.kind == kind)
+            .map(|state| &state.event)
+            .collect::<Vec<_>>()
+    };
+    assert!(find(EventKind::ArrayDecay)[0].explanation.contains("a[0]"));
+    assert!(
+        find(EventKind::Constant)
+            .iter()
+            .any(|event| event.title == "Supply an implicit 0"),
+        "partial initialization fills with zero"
+    );
+    let arithmetic = find(EventKind::PointerArithmetic);
+    assert!(
+        arithmetic[0].explanation.contains("one-past-the-end"),
+        "{}",
+        arithmetic[0].explanation
+    );
+    assert!(!arithmetic[1].explanation.contains("one-past-the-end"));
+    let indirection = find(EventKind::Dereference);
+    assert_eq!(indirection[0].title, "`*p` designates a[1]");
+    let fault = run("int main(void) { int a[2] = {1, 2}; return a[2]; }");
+    let event = &fault.state().event;
+    assert_eq!(event.kind, EventKind::Fault);
+    assert_eq!(event.title, "Undefined behavior");
+    assert_eq!(event.clauses[0].id, "6.5.6p8");
+}
+
+#[test]
+fn char_values_are_promoted_and_out_of_range_stores_wrap() {
+    let source =
+        "int main(void) { char c = 100; char d = c + c; int w = c + c; c++; return w + d; }";
+    returned(source, 200 - 56);
+    let states = states(source);
+    let promotions = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::IntegerPromotion)
+        .count();
+    assert_eq!(promotions, 5, "each char read is promoted");
+    let wrapped = states
+        .iter()
+        .find(|state| state.event.title == "Initialize `d` = -56")
+        .expect("200 converts to char");
+    assert!(
+        wrapped
+            .event
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.3.1.3p3")
+    );
+    returned("int main(void) { char c = 127; c++; return c; }", -128);
+    for rejected in [
+        "int main(void) { char c = 1; int *p = &c; return 0; }",
+        "int main(void) { char s[2]; return 0; }",
+    ] {
+        let _diagnostic =
+            compile(rejected).expect_err("char pointers and arrays are outside the subset");
+    }
+}
+
+#[test]
+fn schema_two_encodes_events_and_evaluations() {
+    let session = run("int main(void) { int x = 1; return x; }");
+    let json = session.state_json();
+    assert!(json.contains("\"schema_version\":2"));
+    assert!(
+        json.contains("\"kind\":\"return\",\"category\":\"call\""),
+        "{json}"
+    );
+    assert!(json.contains("\"id\":\"5.1.2.2.3p1\""), "{json}");
 }

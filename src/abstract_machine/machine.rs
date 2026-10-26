@@ -1,28 +1,30 @@
 //! One-operation execution over real activations and an object-aware operand
-//! stack. C99: §6.2.4 paragraph 2, p. 32; PDF p. 44 (lifetime).
+//! stack. Each operation reports an [`Event`] that `narration.rs` explains.
+//!
+//! C99: §6.2.4 paragraph 2, p. 32; PDF p. 44 (lifetime).
 //! C99: §5.1.2.2.3 paragraph 1, p. 13; PDF p. 25 (main fallthrough).
 //! C99: §6.9.1 paragraph 12, p. 142; PDF p. 154 (other fallthrough;
 //! conservatively rejected regardless of whether its value is used).
 
-use std::{
-    fmt::{
-        self,
-        Write,
-    },
-    mem::size_of,
-};
+use std::mem::size_of;
 
-use super::model::{
-    Diagnostic,
-    Frame,
-    Instruction,
-    MAX_FRAMES,
-    MAX_OPERANDS,
-    Op,
-    Program,
-    State,
-    Type,
-    Value,
+use super::{
+    model::{
+        Diagnostic,
+        Evaluation,
+        Event,
+        Frame,
+        Instruction,
+        MAX_FRAMES,
+        MAX_OPERANDS,
+        Op,
+        Operand,
+        Program,
+        State,
+        Type,
+        Value,
+    },
+    narration,
 };
 
 #[derive(Debug, Clone)]
@@ -48,11 +50,19 @@ impl Machine {
         self.state.source_range = instruction.range;
         self.state.status = "running";
         self.state.pending_effects.clear();
-        self.state.event = text(format_args!("{}", operation_name(&instruction.op)));
         let top = self.activations.len() - 1;
         self.activations[top].pc += 1;
-        if let Err(diagnostic) = self.operation(&instruction, program) {
-            self.stop(diagnostic);
+        self.track(program, &instruction);
+        match self.operation(&instruction, program) {
+            | Ok(event) => {
+                if let (Some(node), Some(result)) = (instruction.node, &event.result)
+                    && !matches!(instruction.op, Op::Call(..) | Op::Return | Op::Fallthrough)
+                {
+                    self.record(node, result.clone());
+                }
+                self.state.event = event;
+            },
+            | Err(diagnostic) => self.stop(diagnostic),
         }
         self.refresh(program);
     }
@@ -61,123 +71,199 @@ impl Machine {
         &mut self,
         instruction: &Instruction,
         program: &Program,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<Event, Diagnostic> {
         let top = self.activations.len() - 1;
-        match &instruction.op {
+        let range = instruction.range;
+        let source = &program.source;
+        Ok(match &instruction.op {
             | Op::Enter => {
                 self.activations[top].scope += 1;
+                narration::enter_block(range)
             },
             | Op::Leave => {
                 let frame = &self.activations[top];
+                let mut ended = Vec::new();
                 for object in &mut self.state.objects {
                     if object.frame_id == frame.id
+                        && object.lifetime == "alive"
                         && self.metadata[object.id - 1].scope == frame.scope
                     {
                         object.lifetime = "ended";
+                        ended.push(object.id);
                     }
                 }
                 self.activations[top].scope -= 1;
+                self.leave_block(range, ended)
             },
             | Op::Declare(name, ty) => {
-                self.allocate(name, *ty, self.activations[top].scope, Value::Indeterminate)?;
+                let id = self.allocate(
+                    name,
+                    *ty,
+                    self.activations[top].scope,
+                    Value::Indeterminate,
+                    false,
+                )?;
+                self.declare(range, id, *ty)
             },
-            | Op::Push(integer) => self.push(Operand::Value(Value::Integer(*integer)))?,
+            | Op::Push(integer) => {
+                let value = Operand::Value(Value::Integer(*integer));
+                self.push(value.clone())?;
+                narration::constant(range, *integer, value)
+            },
+            | Op::Zero => {
+                let value = Operand::Value(Value::Integer(0));
+                self.push(value.clone())?;
+                narration::implicit_zero(range, value)
+            },
             | Op::Address(name) => {
                 let id = self.named(name)?;
-                self.push(Operand::Address {
+                let operand = Operand::Address {
                     target: id,
                     offset: 0,
-                })?;
+                };
+                self.push(operand.clone())?;
+                self.designate(range, id, operand)
+            },
+            | Op::Element(name, index) => {
+                let id = self.named(name)?;
+                let operand = Operand::Address {
+                    target: id,
+                    offset: *index,
+                };
+                self.push(operand.clone())?;
+                self.element(range, id, *index, operand)
             },
             | Op::Decay(name) => {
                 let id = self.named(name)?;
-                self.push(Operand::Value(Value::Pointer {
+                let value = Value::Pointer {
                     target: Some(id),
                     offset: 0,
-                }))?;
+                };
+                self.push(Operand::Value(value.clone()))?;
+                self.decay(range, id, value)
             },
             | Op::Load => {
                 let (target, offset) = self.pop_address()?;
                 let value = self.read(target, offset)?;
-                self.push(Operand::Value(value))?;
+                self.push(Operand::Value(value.clone()))?;
+                self.load(range, target, offset, value)
+            },
+            | Op::Promote => {
+                let value = self.pop_value()?;
+                self.push(Operand::Value(value.clone()))?;
+                self.promote(range, value)
             },
             | Op::AddressOf => {
                 let (target, offset) = self.pop_address()?;
-                self.push(Operand::Value(Value::Pointer {
+                let value = Value::Pointer {
                     target: Some(target),
                     offset,
-                }))?;
+                };
+                self.push(Operand::Value(value.clone()))?;
+                self.address_of(range, target, offset, value)
             },
             | Op::Dereference => {
                 let pointer = self.pop_value()?;
                 let (target, offset) = self.dereference(&pointer)?;
                 self.push(Operand::Address { target, offset })?;
+                self.indirection(range, source, pointer, target, offset)
             },
             | Op::Index => {
                 let index = self.pop_value()?;
                 let base = self.pop_value()?;
-                let pointer = self.binary_value("+", base, index)?;
+                let pointer = self.binary_value("+", base.clone(), index.clone())?;
                 let (target, offset) = self.dereference(&pointer)?;
                 self.push(Operand::Address { target, offset })?;
+                self.subscript(range, base, index, target, offset)
             },
             | Op::Unary(operator) => {
                 let value = self.pop_value()?;
-                let result = match (operator, value) {
-                    | (&"+", Value::Integer(integer)) => Value::Integer(integer),
+                let result = match (operator, &value) {
+                    | (&"+", Value::Integer(integer)) => Value::Integer(*integer),
                     | (&"-", Value::Integer(integer)) =>
                         Value::Integer(integer.checked_neg().ok_or_else(|| self.overflow())?),
-                    | (&"!", value) => Value::Integer(i32::from(!self.truth(&value)?)),
+                    | (&"!", value) => Value::Integer(i32::from(!self.truth(value)?)),
                     | _ => return Err(self.error("unsupported unary operand")),
                 };
-                self.push(Operand::Value(result))?;
+                self.push(Operand::Value(result.clone()))?;
+                self.unary(range, operator, value, result)
             },
             | Op::Binary(operator) => {
                 let right = self.pop_value()?;
                 let left = self.pop_value()?;
-                let result = self.binary_value(operator, left, right)?;
-                self.push(Operand::Value(result))?;
+                let result = self.binary_value(operator, left.clone(), right.clone())?;
+                self.push(Operand::Value(result.clone()))?;
+                self.binary(range, source, operator, left, right, result)
             },
-            | Op::Store => {
+            | &Op::Store {
+                initializer,
+                full_expression,
+            } => {
                 let value = self.pop_value()?;
                 let (target, offset) = self.pop_address()?;
-                self.store(target, offset, value)?;
-                self.state.event = text(format_args!("stored object {target} at element {offset}"));
+                let previous = self.peek(target, offset);
+                let stored = self.store(target, offset, value.clone())?;
+                self.stored(
+                    range,
+                    initializer,
+                    full_expression,
+                    target,
+                    offset,
+                    previous,
+                    value,
+                    stored,
+                )
             },
-            | Op::Increment(delta) => {
+            | &Op::Increment { delta, prefix } => {
                 let (target, offset) = self.pop_address()?;
                 let current = self.read(target, offset)?;
-                let result = self.binary_value("+", current, Value::Integer(*delta))?;
-                self.store(target, offset, result)?;
+                let sum = self.binary_value("+", current.clone(), Value::Integer(delta))?;
+                let stored = self.store(target, offset, sum.clone())?;
+                self.increment(
+                    range, source, delta, prefix, target, offset, current, &sum, stored,
+                )
             },
             | Op::Pop => {
-                let _value = self.pop_value()?;
-            },
-            | Op::Jump(target) => self.activations[top].pc = *target,
-            | Op::Branch(target) => {
                 let value = self.pop_value()?;
-                if !self.truth(&value)? {
-                    self.activations[top].pc = *target;
-                }
+                self.discard(range, source, value)
             },
-            | Op::Call(name, count) => self.call(program, name, *count)?,
+            | &Op::Jump(target) => {
+                let backward = target < self.activations[top].pc;
+                self.activations[top].pc = target;
+                narration::jump(range, backward)
+            },
+            | &Op::Branch(target, statement) => {
+                let value = self.pop_value()?;
+                let truth = self.truth(&value)?;
+                if !truth {
+                    self.activations[top].pc = target;
+                }
+                self.branch(range, source, statement, value, truth)
+            },
+            | Op::Call(name, count) => self.call(program, instruction, name, *count)?,
             | Op::Return => {
                 let value = self.pop_value()?;
-                self.return_from(value)?;
+                self.return_from(program, range, value, false)?
             },
             | Op::Fallthrough =>
                 if self.activations[top].function == program.entry {
-                    self.return_from(Value::Integer(0))?;
+                    self.return_from(program, range, Value::Integer(0), true)?
                 } else {
                     return Err(self.error(
                         "reaching the end of a non-main function is outside the subset; write an \
                          explicit return",
                     ));
                 },
-        }
-        Ok(())
+        })
     }
 
-    fn call(&mut self, program: &Program, name: &str, count: usize) -> Result<(), Diagnostic> {
+    fn call(
+        &mut self,
+        program: &Program,
+        instruction: &Instruction,
+        name: &str,
+        count: usize,
+    ) -> Result<Event, Diagnostic> {
         if self.activations.len() >= MAX_FRAMES {
             return Err(Diagnostic::limit(
                 self.state.source_range,
@@ -196,6 +282,14 @@ impl Machine {
             arguments.push(self.pop_value()?);
         }
         arguments.reverse();
+        let recursive = self
+            .activations
+            .iter()
+            .any(|activation| activation.function == function);
+        let caller = self.activations.len() - 1;
+        if let Some(evaluation) = &mut self.activations[caller].evaluation {
+            evaluation.calling = instruction.node;
+        }
         let id = self.next_frame;
         self.next_frame += 1;
         self.activations.push(Activation {
@@ -204,34 +298,115 @@ impl Machine {
             pc: 0,
             scope: 0,
             operands: Vec::new(),
+            evaluation: None,
         });
-        for ((name, ty), value) in program.functions[function].parameters.iter().zip(arguments) {
-            self.allocate(name, *ty, 1, value)?;
+        let mut parameters = Vec::new();
+        for ((name, ty), value) in program.functions[function]
+            .parameters
+            .iter()
+            .zip(arguments.iter().cloned())
+        {
+            parameters.push(self.allocate(name, *ty, 1, value, true)?);
         }
-        self.state.event = text(format_args!("called {name}, frame {id}"));
-        Ok(())
+        Ok(self.called(
+            instruction.range,
+            name,
+            id,
+            recursive,
+            &arguments,
+            parameters,
+        ))
     }
 
-    fn return_from(&mut self, value: Value) -> Result<(), Diagnostic> {
+    fn return_from(
+        &mut self,
+        program: &Program,
+        range: super::SourceRange,
+        value: Value,
+        fallthrough: bool,
+    ) -> Result<Event, Diagnostic> {
         if !matches!(value, Value::Integer(_)) {
             return Err(self.error("int function returned a non-int value"));
         }
         let top = self.activations.len() - 1;
         let id = self.activations[top].id;
+        let function = program.functions[self.activations[top].function]
+            .name
+            .clone();
+        let mut ended = Vec::new();
         for object in &mut self.state.objects {
-            if object.frame_id == id {
+            if object.frame_id == id && object.lifetime == "alive" {
                 object.lifetime = "ended";
+                ended.push(object.id);
             }
         }
         let _frame = self.activations.pop();
-        self.state.event = text(format_args!("returned from frame {id}"));
-        if self.activations.is_empty() {
-            self.state.return_value = Some(value);
+        let call = if self.activations.is_empty() {
+            self.state.return_value = Some(value.clone());
             self.state.status = "finished";
+            None
         } else {
-            self.push(Operand::Value(value))?;
+            self.push(Operand::Value(value.clone()))?;
+            let caller = self.activations.len() - 1;
+            let node = self.activations[caller]
+                .evaluation
+                .as_mut()
+                .and_then(|evaluation| evaluation.calling.take());
+            if let Some(node) = node {
+                self.record(node, Operand::Value(value.clone()));
+            }
+            node.map(|node| {
+                let caller = &program.functions[self.activations[caller].function];
+                let range = caller.nodes[node].range;
+                &program.source[range.start..range.end]
+            })
+        };
+        Ok(self.returned(range, &function, id, value, ended, fallthrough, call))
+    }
+
+    /// Start tracking the full expression `instruction` belongs to in the
+    /// innermost activation; statement-level operations clear it.
+    fn track(&mut self, program: &Program, instruction: &Instruction) {
+        let top = self.activations.len() - 1;
+        let activation = &mut self.activations[top];
+        let Some(node) = instruction.node else {
+            if matches!(
+                instruction.op,
+                Op::Enter | Op::Leave | Op::Declare(..) | Op::Jump(_)
+            ) {
+                activation.evaluation = None;
+            } else if let Some(evaluation) = &mut activation.evaluation {
+                evaluation.last = None;
+            }
+            return;
+        };
+        let function = activation.function;
+        let root = program.functions[function].nodes[node].root;
+        if activation
+            .evaluation
+            .as_ref()
+            .is_none_or(|evaluation| evaluation.root != root)
+        {
+            activation.evaluation = Some(Evaluation {
+                function,
+                root,
+                values: Vec::new(),
+                last: None,
+                calling: None,
+            });
         }
-        Ok(())
+        if let Some(evaluation) = &mut activation.evaluation {
+            evaluation.last = Some(node);
+        }
+    }
+
+    /// Record `node`'s value in the innermost activation's full expression.
+    fn record(&mut self, node: usize, operand: Operand) {
+        let top = self.activations.len() - 1;
+        if let Some(evaluation) = &mut self.activations[top].evaluation {
+            evaluation.values.retain(|(entry, _)| *entry != node);
+            evaluation.values.push((node, operand));
+        }
     }
 
     pub fn refresh(&mut self, program: &Program) {
@@ -243,34 +418,39 @@ impl Machine {
                 depth,
             });
         }
+        self.state.evaluation = self
+            .activations
+            .last()
+            .and_then(|activation| activation.evaluation.clone());
         if self.state.terminal() {
             return;
         }
         let frame = &self.activations[self.activations.len() - 1];
         if let Some(next) = program.functions[frame.function].code.get(frame.pc) {
             self.state.source_range = next.range;
-            if matches!(next.op, Op::Store | Op::Increment(_)) {
-                self.state.pending_effects.push(String::from(
-                    "next operation commits a write to the selected object",
-                ));
+            if let Some(effect) = self.pending_effect(&next.op) {
+                self.state.pending_effects.push(effect);
             }
         }
     }
 
     pub fn new(program: &Program) -> Self {
         let activations = Vec::from([Activation {
-            id:       1,
-            function: program.entry,
-            pc:       0,
-            scope:    0,
-            operands: Vec::new(),
+            id:         1,
+            function:   program.entry,
+            pc:         0,
+            scope:      0,
+            operands:   Vec::new(),
+            evaluation: None,
         }]);
+        let first = program.functions[program.entry].code[0].range;
         let mut machine = Self {
             state: State {
                 step:            0,
                 status:          "ready",
-                source_range:    program.functions[program.entry].code[0].range,
-                event:           String::from("entered main; no operations executed"),
+                source_range:    first,
+                event:           narration::start(first),
+                evaluation:      None,
                 frames:          Vec::new(),
                 objects:         Vec::new(),
                 pending_effects: Vec::new(),
@@ -293,7 +473,7 @@ impl Machine {
             | _ => "error",
         };
         self.state.source_range = diagnostic.source_range;
-        self.state.event.clone_from(&diagnostic.message);
+        self.state.event = narration::fault(&diagnostic);
         self.state.pending_effects.clear();
         self.state.diagnostics.clear();
         self.state.diagnostics.push(diagnostic);
@@ -324,14 +504,14 @@ impl Machine {
     pub fn pop_value(&mut self) -> Result<Value, Diagnostic> {
         match self.pop()? {
             | Operand::Value(value) => Ok(value),
-            | _ => Err(self.error("expected an evaluated value")),
+            | Operand::Address { .. } => Err(self.error("expected an evaluated value")),
         }
     }
 
     pub fn pop_address(&mut self) -> Result<(usize, i32), Diagnostic> {
         match self.pop()? {
             | Operand::Address { target, offset } => Ok((target, offset)),
-            | _ => Err(self.error("expected a modifiable scalar lvalue")),
+            | Operand::Value(_) => Err(self.error("expected a modifiable scalar lvalue")),
         }
     }
 
@@ -344,8 +524,9 @@ impl Machine {
     }
 
     // Conservative heap-retention accounting includes capacity slack, nested
-    // array contents, names, activation operands and observation frames. A
-    // final terminal state can exceed the 8 MiB threshold by one bounded state.
+    // array contents, names, activation operands, expression progress and the
+    // event text. A final terminal state can exceed the 8 MiB threshold by one
+    // bounded state.
     pub fn retention_cost(&self) -> usize {
         let mut bytes = size_of::<Self>()
             + self.metadata.capacity() * size_of::<ObjectMetadata>()
@@ -360,11 +541,19 @@ impl Machine {
         }
         for frame in &self.activations {
             bytes += frame.operands.capacity() * size_of::<Operand>();
+            if let Some(evaluation) = &frame.evaluation {
+                bytes += 2 * evaluation.values.capacity() * size_of::<(usize, Operand)>();
+            }
         }
         for frame in &self.state.frames {
             bytes += frame.function.capacity();
         }
-        bytes += self.state.event.capacity()
+        let event = &self.state.event;
+        bytes += event.title.capacity()
+            + event.explanation.capacity()
+            + event.clauses.capacity() * size_of::<super::Clause>()
+            + event.operands.capacity() * size_of::<Operand>()
+            + event.objects.capacity() * size_of::<usize>()
             + self.state.pending_effects.capacity() * size_of::<String>();
         for effect in &self.state.pending_effects {
             bytes += effect.capacity();
@@ -375,49 +564,13 @@ impl Machine {
 
 #[derive(Debug, Clone)]
 pub(super) struct Activation {
-    pub id:       usize,
-    pub function: usize,
-    pub pc:       usize,
-    pub scope:    usize,
-    pub operands: Vec<Operand>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum Operand {
-    Value(Value),
-    Address { target: usize, offset: i32 },
-}
-
-pub(super) fn text(arguments: fmt::Arguments<'_>) -> String {
-    let mut output = String::new();
-    output
-        .write_fmt(arguments)
-        .expect("writing into a String is infallible");
-    output
-}
-
-fn operation_name(op: &Op) -> &'static str {
-    match op {
-        | Op::Enter => "entered block scope",
-        | Op::Leave => "ended block scope",
-        | Op::Declare(_, _) => "allocated indeterminate automatic storage",
-        | Op::Push(_) => "evaluated integer constant",
-        | Op::Address(_) => "selected an object",
-        | Op::Load => "read stored value",
-        | Op::Decay(_) => "array converted to pointer to first element",
-        | Op::AddressOf => "formed pointer to object",
-        | Op::Dereference => "selected pointer target",
-        | Op::Index => "selected array element",
-        | Op::Unary(_) => "evaluated unary operator",
-        | Op::Binary(_) => "evaluated binary operator",
-        | Op::Store => "committed store",
-        | Op::Increment(_) => "committed increment",
-        | Op::Pop => "completed expression statement",
-        | Op::Jump(_) => "continued control flow",
-        | Op::Branch(_) => "tested condition",
-        | Op::Call(_, _) => "entered function",
-        | Op::Return | Op::Fallthrough => "returned from function",
-    }
+    pub id:         usize,
+    pub function:   usize,
+    pub pc:         usize,
+    pub scope:      usize,
+    pub operands:   Vec<Operand>,
+    /// The full expression this activation is evaluating.
+    pub evaluation: Option<Evaluation>,
 }
 
 #[derive(Debug, Clone)]

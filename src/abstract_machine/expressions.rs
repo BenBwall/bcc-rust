@@ -76,6 +76,9 @@ impl Parser<'_> {
             if expression.call {
                 return Err(self.error("nested calls are outside this subset"));
             }
+            if operator == "&" && matches!(expression.kind, ExprKind::Name(_, Type::Char)) {
+                return Err(self.error("pointers to char are outside this subset"));
+            }
             let ty = match (operator, expression.ty) {
                 | ("+" | "-" | "!", Type::Int) | ("!" | "*", Type::Pointer) => Type::Int,
                 | ("&", Type::Int) => {
@@ -154,21 +157,23 @@ impl Parser<'_> {
                     range,
                     caller: self.function_index,
                 });
+                let closing = self.tokens[self.position - 1].range;
                 self.node(
                     ExprKind::Call(text, arguments),
                     Type::Int,
                     true,
-                    range,
+                    combined(range, closing),
                     height,
                 )?
             } else {
                 let Some(declared) = binding else {
                     return Err(self.error("use of an undeclared identifier"));
                 };
-                let ty = if matches!(declared, Type::Array(_)) {
-                    Type::Pointer
-                } else {
-                    declared
+                // Arrays decay to pointers; a char's value is promoted to int.
+                let ty = match declared {
+                    | Type::Array(_) => Type::Pointer,
+                    | Type::Char => Type::Int,
+                    | other => other,
                 };
                 self.node(ExprKind::Name(text, declared), ty, false, range, 1)?
             }
@@ -225,81 +230,111 @@ impl Parser<'_> {
         Ok(index)
     }
 
+    /// Emit `expression` (as an lvalue when `address` is set) and return its
+    /// expression-tree node.
     pub(super) fn emit_expression(
         &mut self,
         expression: usize,
         address: bool,
-    ) -> Result<(), Diagnostic> {
+    ) -> Result<usize, Diagnostic> {
         let node = self.expressions[expression].clone();
         if address {
             self.check_lvalue(expression)?;
         }
-        match node.kind {
+        let range = node.range;
+        let tree = match node.kind {
             | ExprKind::Number(integer) => {
-                self.emit(Op::Push(integer), node.range)?;
+                let tree = self.tree(&format!("{integer}"), range, Vec::new())?;
+                self.emit_node(Op::Push(integer), range, tree)?;
+                tree
             },
             | ExprKind::Name(name, Type::Array(_)) => {
-                self.emit(Op::Decay(name), node.range)?;
+                let tree = self.tree(&name, range, Vec::new())?;
+                self.emit_node(Op::Decay(name), range, tree)?;
+                tree
             },
-            | ExprKind::Name(name, _) => {
-                self.emit(Op::Address(name), node.range)?;
+            | ExprKind::Name(name, ty) => {
+                let tree = self.tree(&name, range, Vec::new())?;
+                self.emit_node(Op::Address(name), range, tree)?;
                 if !address {
-                    self.emit(Op::Load, node.range)?;
+                    self.emit_node(Op::Load, range, tree)?;
+                    if ty == Type::Char {
+                        self.emit_node(Op::Promote, range, tree)?;
+                    }
                 }
+                tree
             },
             | ExprKind::Unary("&", child) => {
                 // C99: §6.5.3.2 paragraph 3, pp. 78-79; PDF pp. 90-91.
                 // &*p and &a[n] cancel indirection.
                 match self.expressions[child].kind.clone() {
-                    | ExprKind::Unary("*", pointer) => self.emit_expression(pointer, false)?,
+                    | ExprKind::Unary("*", pointer) => {
+                        let operand = self.emit_expression(pointer, false)?;
+                        self.tree("&*", range, vec![operand])?
+                    },
                     | ExprKind::Index(base, index) => {
-                        self.emit_expression(base, false)?;
-                        self.emit_expression(index, false)?;
-                        self.emit(Op::Binary("+"), node.range)?;
+                        let base = self.emit_expression(base, false)?;
+                        let index = self.emit_expression(index, false)?;
+                        let tree = self.tree("&[]", range, vec![base, index])?;
+                        self.emit_node(Op::Binary("+"), range, tree)?;
+                        tree
                     },
                     | _ => {
-                        self.emit_expression(child, true)?;
-                        self.emit(Op::AddressOf, node.range)?;
+                        let operand = self.emit_expression(child, true)?;
+                        let tree = self.tree("&", range, vec![operand])?;
+                        self.emit_node(Op::AddressOf, range, tree)?;
+                        tree
                     },
                 }
             },
             | ExprKind::Unary("*", child) => {
-                self.emit_expression(child, false)?;
-                self.emit(Op::Dereference, node.range)?;
+                let operand = self.emit_expression(child, false)?;
+                let tree = self.tree("*", range, vec![operand])?;
+                self.emit_node(Op::Dereference, range, tree)?;
                 if !address {
-                    self.emit(Op::Load, node.range)?;
+                    self.emit_node(Op::Load, range, tree)?;
                 }
+                tree
             },
             | ExprKind::Unary(operator, child) => {
-                self.emit_expression(child, false)?;
-                self.emit(Op::Unary(operator), node.range)?;
+                let operand = self.emit_expression(child, false)?;
+                let tree = self.tree(operator, range, vec![operand])?;
+                self.emit_node(Op::Unary(operator), range, tree)?;
+                tree
             },
             | ExprKind::Binary(operator, left, right) => {
-                self.emit_expression(left, false)?;
-                self.emit_expression(right, false)?;
-                self.emit(Op::Binary(operator), node.range)?;
+                let left = self.emit_expression(left, false)?;
+                let right = self.emit_expression(right, false)?;
+                let tree = self.tree(operator, range, vec![left, right])?;
+                self.emit_node(Op::Binary(operator), range, tree)?;
+                tree
             },
             | ExprKind::Index(base, index) => {
-                self.emit_expression(base, false)?;
-                self.emit_expression(index, false)?;
-                self.emit(Op::Index, node.range)?;
+                let base = self.emit_expression(base, false)?;
+                let index = self.emit_expression(index, false)?;
+                let tree = self.tree("[]", range, vec![base, index])?;
+                self.emit_node(Op::Index, range, tree)?;
                 if !address {
-                    self.emit(Op::Load, node.range)?;
+                    self.emit_node(Op::Load, range, tree)?;
                 }
+                tree
             },
             | ExprKind::Call(name, arguments) => {
+                let mut children = Vec::new();
                 for &argument in &arguments {
-                    self.emit_expression(argument, false)?;
+                    children.push(self.emit_expression(argument, false)?);
                 }
-                self.emit(Op::Call(name, arguments.len()), node.range)?;
+                let tree = self.tree(&format!("{name}()"), range, children)?;
+                self.emit_node(Op::Call(name, arguments.len()), range, tree)?;
+                tree
             },
-        }
-        Ok(())
+        };
+        Ok(tree)
     }
 
     fn check_lvalue(&self, expression: usize) -> Result<(), Diagnostic> {
         match self.expressions[expression].kind {
-            | ExprKind::Name(_, Type::Int | Type::Pointer)
+            | ExprKind::Name(_, Type::Int | Type::Char | Type::Pointer)
             | ExprKind::Unary("*", _)
             | ExprKind::Index(_, _) => Ok(()),
             | _ => Err(Diagnostic::new(
@@ -360,7 +395,7 @@ fn unary(text: &str) -> Option<&'static str> {
     }
 }
 
-fn combined(left: SourceRange, right: SourceRange) -> SourceRange {
+pub(super) fn combined(left: SourceRange, right: SourceRange) -> SourceRange {
     SourceRange {
         end: right.end,
         end_line: right.end_line,
