@@ -192,9 +192,12 @@ bcc's command line can mimic another compiler's. `--gcc-mode`,
 or running bcc under the name `gcc`, `cc`, `clang`, `cl`, `clang-cl` or `tcc`
 (a symbolic link; also `bcc-gcc`, `gcc-14`, or a target prefix such as
 `x86_64-w64-mingw32-gcc`), select a personality. It reads that compiler's
-options, including `cl`'s `/c /Fo /Fe /link` and `tcc -run`, accepts and
-ignores the warning and tuning options the compiler knows but bcc does not
-implement, diagnoses unknown options as the compiler does, and claims the
+options, including `cl`'s `/c /Fo /Fe /link` and `tcc -run`. Of the options
+the compiler knows and bcc does not implement, it ignores those that cannot
+change the program (warnings, diagnostics, debug information, tuning), warns
+about hardening it does not apply (`-fstack-protector`, `/GS`), and refuses
+the rest (`-fshort-enums`, `-mno-sse`, `/Gv`) with the compiler's kind of
+error. It diagnoses unknown options as the compiler does, and claims the
 compiler: `__GNUC__` 14 for GCC, `_MSC_VER` 1933 with every Microsoft
 extension for `cl`, `__TINYC__` for TCC, and the compiler's diagnostic
 format, default target, system header directories, output names and version

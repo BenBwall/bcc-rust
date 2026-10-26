@@ -1,8 +1,8 @@
 //! The driver personalities: `--gcc-mode`, `--clang-mode`, `--msvc-mode`,
 //! `--clang-cl-mode`, `--tcc-mode` and the executable names that select
 //! them. Each reads its compiler's command line, claims its identity in the
-//! predefined macros, writes its diagnostic format, and answers its
-//! version queries.
+//! predefined macros, writes its diagnostic format, answers its version
+//! queries, and refuses the options bcc lacks that would change the program.
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
@@ -50,10 +50,10 @@ mod tests {
             self.0.join(name)
         }
 
-        /// Runs bcc in this directory with `mode` first.
+        /// Runs bcc in this directory with `mode` first, unless it is empty.
         fn bcc(&self, mode: &str, args: &[&str]) -> Output {
             Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
-                .arg(mode)
+                .args((!mode.is_empty()).then_some(mode))
                 .args(args)
                 .current_dir(&self.0)
                 .env("NO_COLOR", "1")
@@ -196,7 +196,7 @@ mod tests {
     fn unknown_options_are_diagnosed_as_each_compiler_does() {
         let directory = Directory::new();
         directory.write("x.c", "int x;\n");
-        // Options GCC knows and bcc does not implement are accepted.
+        // Options GCC knows that cannot change the program are accepted.
         succeeds(&directory.bcc(
             "--gcc-mode",
             &[
@@ -208,7 +208,7 @@ mod tests {
                 "-Wformat=2",
                 "-Wno-not-a-warning",
                 "-fstack-protector-strong",
-                "-march=native",
+                "-mtune=native",
                 "-pipe",
                 "-Wp,-D_FORTIFY_SOURCE=2",
                 "x.c",
@@ -384,5 +384,398 @@ mod tests {
         );
         let cpp = directory.bcc("--msvc-mode", &["/nologo", "/c", "/TP", "one.c"]);
         assert_eq!(cpp.status.code(), Some(2));
+    }
+
+    #[test]
+    fn options_that_change_the_program_are_refused() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        for (mode, option, message) in [
+            (
+                "--gcc-mode",
+                "-fshort-enums",
+                "gcc: error: '-fshort-enums' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-fpack-struct=3",
+                "gcc: error: '-fpack-struct=3' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-mno-sse",
+                "gcc: error: '-mno-sse' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-mavx2",
+                "gcc: error: '-mavx2' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-march=native",
+                "gcc: error: '-march=native' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-fno-builtin",
+                "gcc: error: '-fno-builtin' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-fcommon",
+                "gcc: error: '-fcommon' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-Ofast",
+                "gcc: error: '-Ofast' is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-fvisibility=hidden",
+                "gcc: error: '-fvisibility=hidden' is not supported",
+            ),
+            (
+                "--clang-mode",
+                "-fshort-enums",
+                "clang: error: '-fshort-enums' is not supported",
+            ),
+            (
+                "--clang-mode",
+                "-fno-delete-null-pointer-checks",
+                "clang: error: '-fno-delete-null-pointer-checks' is not supported",
+            ),
+            (
+                "--tcc-mode",
+                "-fshort-enums",
+                "tcc: error: '-fshort-enums' is not supported",
+            ),
+        ] {
+            let output = directory.bcc(mode, &["-c", option, "x.c"]);
+            assert_eq!(output.status.code(), Some(1), "{mode} {option}");
+            assert!(stderr(&output).contains(message), "{}", stderr(&output));
+        }
+        // Hardening warns; a distribution's flags otherwise pass.
+        let fedora = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-c",
+                "-O2",
+                "-flto=auto",
+                "-ffat-lto-objects",
+                "-g",
+                "-grecord-gcc-switches",
+                "-pipe",
+                "-Wall",
+                "-Werror=format-security",
+                "-fstack-protector-strong",
+                "-m64",
+                "-march=x86-64",
+                "-mtune=generic",
+                "-fasynchronous-unwind-tables",
+                "-fstack-clash-protection",
+                "-fcf-protection",
+                "-mtls-dialect=gnu2",
+                "-fno-omit-frame-pointer",
+                "-mno-omit-leaf-frame-pointer",
+                "x.c",
+            ],
+        );
+        succeeds(&fedora);
+        let warnings = stderr(&fedora);
+        for line in [
+            "gcc: warning: '-fstack-protector-strong' is ignored: bcc does not emit stack \
+             protectors",
+            "gcc: warning: '-fstack-clash-protection' is ignored",
+            "gcc: warning: '-fcf-protection' is ignored",
+        ] {
+            assert!(warnings.contains(line), "{warnings}");
+        }
+        assert_eq!(warnings.lines().count(), 3, "{warnings}");
+        let tcc = directory.bcc("--tcc-mode", &["-c", "-fstack-protector", "x.c"]);
+        succeeds(&tcc);
+        assert!(stderr(&tcc).contains("tcc: warning: '-fstack-protector' is ignored"));
+    }
+
+    #[test]
+    fn wrapv_makes_signed_overflow_wrap() {
+        let directory = Directory::new();
+        directory.write("w.c", "int f(int x) { return x + 1; }\n");
+        let ir = |options: &[&str]| {
+            let mut args = vec!["--emit=ir"];
+            args.extend(options);
+            args.push("w.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert!(ir(&[]).contains("iadd.i32 nsw"), "{}", ir(&[]));
+        let wrapping = ir(&["-fwrapv"]);
+        assert!(wrapping.contains("iadd.i32 v"), "{wrapping}");
+        assert!(!wrapping.contains("nsw"), "{wrapping}");
+        assert!(ir(&["-fwrapv", "-fno-wrapv"]).contains("nsw"));
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            directory.write(
+                "m.c",
+                "int f(int x) { return x + 1 < x; }\nint main(void) { return f(2147483647); }\n",
+            );
+            succeeds(&directory.bcc("--gcc-mode", &["-O2", "-fwrapv", "m.c", "-o", "m"]));
+            let run = Command::new(directory.path("m")).output().unwrap();
+            assert_eq!(run.status.code(), Some(1));
+        }
+    }
+
+    #[test]
+    fn packing_options_set_the_default_packing() {
+        let directory = Directory::new();
+        directory.write(
+            "p.c",
+            "struct s { char c; int i; };\n#pragma pack(push, 2)\nstruct t { char c; int i; \
+             };\n#pragma pack(pop)\n#pragma pack()\nstruct u { char c; int i; \
+             };\n_Static_assert(sizeof(struct s) == S, \"s\");\n_Static_assert(sizeof(struct t) \
+             == 6, \"t\");\n_Static_assert(sizeof(struct u) == S, \"u\");\n",
+        );
+        succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "-DS=8", "p.c"]));
+        succeeds(&directory.bcc(
+            "--gcc-mode",
+            &["-fsyntax-only", "-fpack-struct=1", "-DS=5", "p.c"],
+        ));
+        succeeds(&directory.bcc(
+            "--gcc-mode",
+            &["-fsyntax-only", "-fpack-struct", "-DS=5", "p.c"],
+        ));
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp1", "/DS=5", "p.c"]));
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp", "/DS=5", "p.c"]));
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp2", "/DS=6", "p.c"]));
+        let invalid = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp3", "p.c"]);
+        assert_eq!(invalid.status.code(), Some(2));
+        assert!(
+            stderr(&invalid)
+                .contains("cl : Command line error D8021 : invalid numeric argument '/Zp3'"),
+            "{}",
+            stderr(&invalid)
+        );
+    }
+
+    #[test]
+    fn cl_runtime_macros_follow_the_last_runtime_option() {
+        let probe = "_MT _DLL _DEBUG";
+        for (options, expected) in [
+            (&[][..], "1 _DLL _DEBUG"),
+            (&["/MD"], "1 1 _DEBUG"),
+            (&["/MD", "/MT"], "1 _DLL _DEBUG"),
+            (&["/MDd", "/MD"], "1 1 _DEBUG"),
+            (&["/MTd"], "1 _DLL 1"),
+            (&["/MDd"], "1 1 1"),
+            // `/LD` keeps the static runtime unless `/MD` selects another.
+            (&["/LD"], "1 _DLL _DEBUG"),
+            (&["/LDd"], "1 _DLL 1"),
+            (&["/LD", "/MD"], "1 1 _DEBUG"),
+        ] {
+            assert_eq!(
+                cl_expand("--msvc-mode", options, probe),
+                expected,
+                "{options:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cl_reads_a_command_line_of_only_file_names() {
+        let directory = Directory::new();
+        directory.write("bad.c", "int x = ;\n");
+        // `cl` alone compiles C17 with its column diagnostics.
+        let output = directory.bcc("--msvc-mode", &["bad.c"]);
+        assert_ne!(output.status.code(), Some(0));
+        assert!(
+            stderr(&output).contains("bad.c(1,9): error:"),
+            "{}",
+            stderr(&output)
+        );
+        directory.write("v.c", "long v = __STDC_VERSION__;\n");
+        let output = directory.bcc("--msvc-mode", &["v.c"]);
+        assert!(directory.path("v.obj").is_file(), "{}", stderr(&output));
+    }
+
+    #[test]
+    fn cl_syntax_checks_write_nothing() {
+        let directory = Directory::new();
+        directory.write("good.c", "int main(void) { return 0; }\n");
+        directory.write("bad.c", "int x = ;\n");
+        let good = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "good.c"]);
+        succeeds(&good);
+        assert_eq!(stdout(&good), "good.c\n");
+        assert!(!directory.path("good.obj").exists());
+        assert!(!directory.path("good.exe").exists());
+        let bad = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c"]);
+        assert_eq!(bad.status.code(), Some(1));
+        assert!(
+            stderr(&bad).contains("bad.c(1,9): error:"),
+            "{}",
+            stderr(&bad)
+        );
+    }
+
+    #[test]
+    fn cl_object_names_need_a_directory_for_several_sources() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        directory.write("b.c", "int b;\n");
+        let cl = directory.bcc(
+            "--msvc-mode",
+            &["/nologo", "/c", "a.c", "b.c", "/Foout.obj"],
+        );
+        assert_eq!(cl.status.code(), Some(2));
+        assert!(
+            stderr(&cl).contains(
+                "cl : Command line error D8036 : '/Foout.obj' not allowed with multiple source \
+                 files"
+            ),
+            "{}",
+            stderr(&cl)
+        );
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "a.c", "b.c", "/Foout.obj"]);
+        assert_eq!(clang_cl.status.code(), Some(2));
+        assert!(
+            stderr(&clang_cl).contains(
+                "clang-cl: error: cannot specify '/Foout.obj' when compiling multiple source files"
+            ),
+            "{}",
+            stderr(&clang_cl)
+        );
+        assert!(!directory.path("out.obj").exists());
+        assert!(!directory.path("a.obj").exists());
+        let listing = directory.bcc(
+            "--msvc-mode",
+            &["/nologo", "/c", "/Falist.asm", "a.c", "b.c"],
+        );
+        assert_eq!(listing.status.code(), Some(2));
+        std::fs::create_dir(directory.path("objs")).unwrap();
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/c", "a.c", "b.c", "/Foobjs/"]));
+        assert!(directory.path("objs/a.obj").is_file());
+        assert!(directory.path("objs/b.obj").is_file());
+    }
+
+    #[test]
+    fn cl_conformance_switches_change_the_language() {
+        // `/Za` drops `_MSC_EXTENSIONS` and Microsoft's anonymous tagged
+        // members; `/Ze` restores them.
+        assert_eq!(
+            cl_expand("--msvc-mode", &["/Za"], "_MSC_EXTENSIONS _MSC_VER"),
+            "_MSC_EXTENSIONS 1933"
+        );
+        assert_eq!(
+            cl_expand("--msvc-mode", &["/Za", "/Ze"], "_MSC_EXTENSIONS"),
+            "1"
+        );
+        let directory = Directory::new();
+        directory.write(
+            "anon.c",
+            "struct inner { int i; };\nstruct outer { struct inner; };\nint f(struct outer *o) { \
+             return o->i; }\n",
+        );
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "anon.c"]));
+        let strict = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Za", "anon.c"]);
+        assert_eq!(strict.status.code(), Some(1), "{}", stderr(&strict));
+        // `cl` replaces trigraphs only under `/Zc:trigraphs`.
+        assert_eq!(cl_expand("--msvc-mode", &[], "\"??=\""), "\"??=\"");
+        assert_eq!(
+            cl_expand("--msvc-mode", &["/Zc:trigraphs"], "\"??=\""),
+            "\"#\""
+        );
+        assert_eq!(cl_expand("--clang-cl-mode", &[], "\"??=\""), "\"??=\"");
+    }
+
+    #[test]
+    fn cl_options_that_change_the_program_are_refused() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        for (option, message) in [
+            ("/Gv", "cl : Command line error : '/Gv' is not supported"),
+            (
+                "/arch:AVX2",
+                "cl : Command line error : '/arch:AVX2' is not supported",
+            ),
+            (
+                "/fp:strict",
+                "cl : Command line error : '/fp:strict' is not supported",
+            ),
+            (
+                "/volatile:ms",
+                "cl : Command line error : '/volatile:ms' is not supported",
+            ),
+        ] {
+            let output = directory.bcc("--msvc-mode", &["/nologo", "/c", option, "x.c"]);
+            assert_eq!(output.status.code(), Some(2), "{option}");
+            assert!(stderr(&output).contains(message), "{}", stderr(&output));
+        }
+        let hardened = directory.bcc(
+            "--msvc-mode",
+            &[
+                "/nologo",
+                "/c",
+                "/GS",
+                "/RTC1",
+                "/guard:cf",
+                "/sdl-",
+                "/Zc:inline",
+                "/arch:SSE2",
+                "x.c",
+            ],
+        );
+        succeeds(&hardened);
+        let warnings = stderr(&hardened);
+        assert!(
+            warnings.contains("cl : Command line warning : '/GS' is ignored"),
+            "{warnings}"
+        );
+        assert!(warnings.contains("'/RTC1' is ignored"), "{warnings}");
+        assert!(warnings.contains("'/guard:cf' is ignored"), "{warnings}");
+        assert_eq!(warnings.lines().count(), 3, "{warnings}");
+        // `/external:I` is a system include directory, not a warning level.
+        std::fs::create_dir(directory.path("ext")).unwrap();
+        directory.write("ext/e.h", "#define E 1\n");
+        directory.write("e.c", "#include <e.h>\nint e = E;\n");
+        succeeds(&directory.bcc(
+            "--msvc-mode",
+            &["/nologo", "/c", "/external:I", "ext", "/external:W0", "e.c"],
+        ));
+    }
+
+    #[test]
+    fn sysroot_reaches_bcc_with_and_without_system_headers() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        for options in [
+            &["--sysroot=/opt/root"][..],
+            &["--sysroot", "/opt/root", "-nostdinc"],
+        ] {
+            let mut args = vec!["-###"];
+            args.extend(options);
+            args.extend(["-c", "x.c"]);
+            let output = directory.bcc("--gcc-mode", &args);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains("\"--sysroot=/opt/root\""),
+                "{}",
+                stderr(&output)
+            );
+        }
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            // The libraries come from the selected root too.
+            std::fs::create_dir(directory.path("empty-root")).unwrap();
+            directory.write("main.c", "int main(void) { return 0; }\n");
+            let output = directory.bcc(
+                "--gcc-mode",
+                &["--sysroot=empty-root", "-nostdinc", "main.c"],
+            );
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(
+                stderr(&output).contains("cannot build"),
+                "{}",
+                stderr(&output)
+            );
+        }
     }
 }

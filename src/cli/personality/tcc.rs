@@ -1,7 +1,9 @@
 //! The TCC personality. TCC takes GCC's short options (`-c`, `-o`, `-E`,
 //! `-I`, `-D`, `-U`, `-l`, `-L`, `-Wl,`, `-shared`, `-static`), compiles in
 //! C99 with GNU extensions by default, ignores the `-W`, `-f` and `-m`
-//! options it does not know, and rejects any other unknown option
+//! options it does not know (bcc refuses those GCC knows that would change
+//! the program, as the GCC personality does), and rejects any other unknown
+//! option
 //! (`invalid option`). `-run FILE ARGS...` compiles FILE and runs it with
 //! ARGS; bcc builds the program in a temporary directory and runs it there,
 //! exiting with its status. Bounds checking (`-b`) and backtraces (`-bt`)
@@ -19,7 +21,15 @@ use super::{
     Step,
     TemporaryDirectory,
     host_target,
+    known::{
+        Compiler,
+        knows,
+    },
     system_headers,
+    unimplemented::{
+        Treatment,
+        treatment,
+    },
     version,
 };
 use crate::{
@@ -167,9 +177,21 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                     }
                 } else if text.starts_with("-W") || text.starts_with("-f") || text.starts_with("-m")
                 {
-                    // TCC ignores what it does not know of these.
+                    // TCC ignores what it does not know of these. One GCC
+                    // knows is treated as the GCC personality treats it, so
+                    // none that bcc lacks silently changes the program.
                     if implements_language_option(text) {
                         out.push(text.into());
+                    } else if !text.starts_with("-W") && knows(Compiler::Gcc, text) {
+                        match treatment(text) {
+                            | Treatment::Ignore => {},
+                            | Treatment::Warn(why) =>
+                                invocation.warning(format_args!("'{text}' is ignored: {why}")),
+                            | Treatment::Reject(why) => {
+                                invocation.error(format_args!("'{text}' is not supported: {why}"));
+                                return Err(MainError::Reported(1));
+                            },
+                        }
                     }
                 } else {
                     invocation.error(format_args!("invalid option -- '{text}'"));
@@ -189,9 +211,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         format!("--target={}", target.triple()).into(),
         format!("-std={standard}").into(),
     ];
-    if !nostdinc {
-        system_headers(target, None, &mut bcc);
-    }
+    system_headers(target, None, nostdinc, &mut bcc);
     bcc.append(&mut out);
     let mut plan = Plan::default();
     if let Some(arguments) = run {

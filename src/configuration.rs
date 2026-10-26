@@ -85,6 +85,14 @@ pub(crate) struct CompilerConfiguration {
     hosted: bool,
     optimization: (bool, bool),
     gnu89_inline: Option<bool>,
+    /// `-ftrigraphs` or `-fno-trigraphs`, over the mode's default.
+    trigraphs: Option<bool>,
+    /// Signed integer overflow wraps (`-fwrapv`).
+    wrapv: bool,
+    /// The structure packing in effect before any `#pragma pack`, and that
+    /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
+    /// none.
+    default_pack: u32,
     suppress_warnings: bool,
     warnings_as_errors: bool,
     /// The compiler the identity macros claim.

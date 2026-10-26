@@ -45,12 +45,18 @@ pub(super) fn knows(compiler: Compiler, option: &str) -> bool {
                 let Some(entry) = line.strip_prefix(kind) else {
                     return false;
                 };
-                // `-Wformat=` takes a value; `-Wformat` may stand alone. A
-                // joined value such as `-mtune=native` matches its `-mtune=`
-                // entry.
-                match entry.strip_suffix('=') {
-                    | Some(entry) => entry == name,
-                    | None => entry == name && !value,
+                // `-Wformat=` and `-fexcess-precision=[fast|standard|16]`
+                // take a value; `-Wformat` may stand alone. A joined value
+                // such as `-mtune=native` matches its `-mtune=` entry.
+                // `-fbuiltin-`, `-fdump-` and `-fdisable-[tree|rtl|ipa]-`
+                // name a family by its prefix.
+                let entry = entry.split_once('[').map_or(entry, |(head, _)| head);
+                if let Some((entry, _)) = entry.split_once('=') {
+                    entry == name && value
+                } else if entry.ends_with('-') {
+                    rest.starts_with(entry)
+                } else {
+                    entry == name && !value
                 }
             })
     })
@@ -68,6 +74,10 @@ mod tests {
         assert!(knows(Compiler::Gcc, "-fstack-protector-strong"));
         assert!(knows(Compiler::Gcc, "-fno-strict-aliasing"));
         assert!(knows(Compiler::Gcc, "-march=native"));
+        assert!(knows(Compiler::Gcc, "-fcf-protection=full"));
+        assert!(knows(Compiler::Gcc, "-fexcess-precision=standard"));
+        assert!(knows(Compiler::Gcc, "-fno-builtin-memcpy"));
+        assert!(knows(Compiler::Gcc, "-fdump-tree-all"));
         assert!(!knows(Compiler::Gcc, "-Wnot-a-gcc-warning"));
         assert!(!knows(Compiler::Gcc, "-fnot-a-gcc-flag"));
         assert!(knows(Compiler::Clang, "-Wshadow"));

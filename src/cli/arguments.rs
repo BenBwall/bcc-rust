@@ -507,6 +507,12 @@ enum LanguageFlag {
     Hosted(bool),
     /// `-fgnu89-inline` or `-fno-gnu89-inline`.
     Gnu89Inline(bool),
+    /// `-trigraphs` or `-ftrigraphs` (true), or `-fno-trigraphs`.
+    Trigraphs(bool),
+    /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
+    Wrapv(bool),
+    /// `-fpack-struct[=N]`, or `-fno-pack-struct` (0).
+    PackStruct(u32),
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
 }
@@ -528,6 +534,21 @@ impl LanguageFlag {
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
+            | "-trigraphs" | "-ftrigraphs" => return Some(Self::Trigraphs(true)),
+            | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
+            | "-fwrapv" => return Some(Self::Wrapv(true)),
+            | "-fno-wrapv" | "-fstrict-overflow" => return Some(Self::Wrapv(false)),
+            | "-fpack-struct" => return Some(Self::PackStruct(1)),
+            | "-fno-pack-struct" => return Some(Self::PackStruct(0)),
+            | _ => {},
+        }
+        if let Some(value) = text.strip_prefix("-fpack-struct=") {
+            return match value {
+                | "1" | "2" | "4" | "8" | "16" => value.parse().ok().map(Self::PackStruct),
+                | _ => None,
+            };
+        }
+        match text {
             | _ => {},
         }
         if Relocation::parse(text).is_some() {
@@ -588,6 +609,9 @@ impl LanguageFlag {
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
+            | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
+            | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
+            | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),
         }
     }
 }

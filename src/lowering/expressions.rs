@@ -1262,7 +1262,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             });
         }
         let wrap = if signed {
-            InstFlags::NSW
+            self.signed_wrap()
         } else {
             InstFlags::empty()
         };
@@ -1348,7 +1348,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
                 let zero = self.iconst(ty, 0);
                 let flags = if self.repr(info.ty, source)?.signed() {
-                    InstFlags::NSW
+                    self.signed_wrap()
                 } else {
                     InstFlags::empty()
                 };
@@ -1468,7 +1468,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 // Types narrower than int are promoted (§6.3.1.1p2), so their
                 // arithmetic cannot overflow; the conversion back wraps.
                 let flags = if signed && ty.bits() >= self.int_bits() && !atomic {
-                    InstFlags::NSW
+                    self.signed_wrap()
                 } else {
                     InstFlags::empty()
                 };

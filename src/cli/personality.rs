@@ -28,7 +28,8 @@
 //!   (`cl.exe` and clang-cl), `personality/tcc.rs`.
 //! - Version banners and queries: `personality/version.rs`.
 //! - The option names each compiler knows: `personality/known.rs`, over the
-//!   lists in `personality/options/`.
+//!   lists in `personality/options/`; which of those bcc ignores, warns about
+//!   or refuses: `personality/unimplemented.rs`.
 //!
 //! Driver conventions are host CLI policy; the translated options select
 //! the language modes of C99 §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
@@ -48,6 +49,7 @@ mod tcc;
 
 // Shared tables and text
 mod known;
+mod unimplemented;
 mod version;
 
 use std::{
@@ -353,26 +355,48 @@ fn host_target(personality: Personality) -> Target {
     }
 }
 
-/// The C library's header directories a compiler for `target` searches on
-/// this host, when the host runs that target: `SYSROOT/usr/local/include`,
-/// the multiarch directory and `SYSROOT/usr/include`, as GCC and Clang
-/// search them on Debian-style systems. bcc's own mode searches none of them
-/// unless asked.
-fn system_headers(target: Target, sysroot: Option<&OsStr>, arguments: &mut Vec<OsString>) {
-    let host = matches!(target, Target::LinuxGnu | Target::LinuxMusl) && cfg!(target_os = "linux");
-    if !host && sysroot.is_none() {
+/// The C library a compiler for `target` uses on this host, when the host
+/// runs that target or `sysroot` names one: the header directories
+/// `/usr/local/include`, the multiarch directory and `/usr/include`, in
+/// GCC's order on Debian-style systems, unless `nostdinc`. A `sysroot` is
+/// passed on as bcc's `--sysroot`, even with `nostdinc`: bcc searches its
+/// `usr/local/include` and `usr/include` (the multiarch directory follows
+/// them) and links and assembles against it, so headers and libraries come
+/// from one root. bcc's own mode searches none of them unless asked.
+fn system_headers(
+    target: Target,
+    sysroot: Option<&OsStr>,
+    nostdinc: bool,
+    arguments: &mut Vec<OsString>,
+) {
+    if let Some(sysroot) = sysroot {
+        let mut sysroot_option = OsString::from("--sysroot=");
+        sysroot_option.push(sysroot);
+        arguments.push(sysroot_option);
+    }
+    let linux = matches!(target, Target::LinuxGnu | Target::LinuxMusl);
+    if nostdinc || !linux || (sysroot.is_none() && !cfg!(target_os = "linux")) {
         return;
     }
     let root = Path::new(sysroot.unwrap_or(OsStr::new("/")));
-    let mut sysroot_option = OsString::from("--sysroot=");
-    sysroot_option.push(root);
-    arguments.push(sysroot_option);
     let multiarch = match target {
         | Target::LinuxMusl => "x86_64-linux-musl",
         | _ => "x86_64-linux-gnu",
     };
-    let directory = root.join("usr").join("include").join(multiarch);
-    if directory.is_dir() {
+    let include = root.join("usr").join("include");
+    let directories = if sysroot.is_some() {
+        vec![include.join(multiarch)]
+    } else {
+        vec![
+            root.join("usr").join("local").join("include"),
+            include.join(multiarch),
+            include,
+        ]
+    };
+    for directory in directories
+        .into_iter()
+        .filter(|directory| directory.is_dir())
+    {
         arguments.push("--idirafter".into());
         arguments.push(directory.into_os_string());
     }

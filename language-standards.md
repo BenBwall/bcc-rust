@@ -124,6 +124,16 @@ and keeps Clang's. `tcc` removes the GNU and Clang macros and defines
 `__TINYC__` `927` (TCC 0.9.27). Every identity keeps `__bcc__`, the ISO
 macros and the target's definitions, as clang-cl keeps `__x86_64__`.
 
+Three options change rules the mode otherwise fixes. `-ftrigraphs` and
+`-fno-trigraphs` (also GCC's `-trigraphs`) turn phase 1 trigraph replacement
+on or off whatever the mode; the `cl` personality turns it off, as `cl`
+replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
+`+`, `-`, `*`, `<<`, negation and `++`/`--` wrap in two's complement, so
+lowering marks none of them `nsw`; pointer arithmetic is unaffected, as in
+GCC. `-fpack-struct=N` (1, 2, 4, 8 or 16; `-fpack-struct` alone is 1) sets
+the packing in effect before any `#pragma pack`, which `#pragma pack()`
+restores, as GCC documents and `cl /ZpN` does.
+
 Claiming Clang changes the paths the C libraries take. In glibc,
 `sys/cdefs.h` drops its pre-C11 `_Noreturn` and `_Static_assert` fallbacks
 (bcc accepts both keywords in every mode, as Clang does), marks socket

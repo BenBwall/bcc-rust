@@ -11,7 +11,11 @@
 //! C mode and its diagnostic format. Like `cl`, it prints its banner to
 //! stderr unless `/nologo` is given, the name of each source it compiles,
 //! and warns about an option it does not know (warning D9002) instead of
-//! failing.
+//! failing. Of the options `cl` knows that bcc does not implement, it
+//! ignores those that cannot change the program, warns about hardening, and
+//! refuses the rest with a `Command line error`; `/Zp`, `/Za`, the runtime
+//! options and `/Zc:trigraphs` map onto bcc's packing, Microsoft extension,
+//! macro and trigraph options.
 
 use std::{
     ffi::{
@@ -79,9 +83,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
     }
-    if state.errors != 0 {
-        return Err(MainError::Reported(2));
-    }
     if state.all_c {
         for source in &mut state.sources {
             let extension = Path::new(&source.path)
@@ -97,9 +98,19 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
     }
+    let c_count = state.sources.iter().filter(|source| source.is_c()).count();
+    state.check_output_names(invocation, c_count);
+    if state.errors != 0 {
+        return Err(MainError::Reported(2));
+    }
     let target = invocation
         .target
         .unwrap_or_else(|| host_target(invocation.personality));
+    let runtime = state.runtime.unwrap_or(if state.debug_dll {
+        Runtime::StaticDebug
+    } else {
+        Runtime::Static
+    });
     let mut common: Vec<OsString> = vec![
         invocation.program.clone(),
         if clang_cl {
@@ -114,7 +125,24 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         // MSVC's default C mode is close to C17 without its version macro;
         // clang-cl claims C17, and so does bcc.
         format!("-std={}", state.standard).into(),
+        // `cl` replaces trigraphs only under `/Zc:trigraphs`.
+        "-fno-trigraphs".into(),
     ];
+    if !state.extensions {
+        // `/Za`: ISO C without Microsoft's anonymous tagged members, and
+        // without `_MSC_EXTENSIONS`; the `__`-prefixed keywords stay.
+        common.push("-fno-ms-anonymous-structs".into());
+        common.push("-U_MSC_EXTENSIONS".into());
+    }
+    // The runtime library `/MD`, `/MT` and their debug forms select, the
+    // last one given winning: `_DLL` for the DLL runtime, `_DEBUG` for the
+    // debug one (`_MT` is always defined).
+    if matches!(runtime, Runtime::Dll | Runtime::DllDebug) {
+        common.push("-D_DLL".into());
+    }
+    if matches!(runtime, Runtime::StaticDebug | Runtime::DllDebug) {
+        common.push("-D_DEBUG".into());
+    }
     if !state.ignore_include_variable
         && let Some(include) = std::env::var_os("INCLUDE")
     {
@@ -168,15 +196,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
             if mode.to_file {
                 step.push("-o".into());
-                step.push(
-                    named(
-                        state.preprocessed.as_deref(),
-                        &source.path,
-                        "i",
-                        c_sources.len(),
-                    )
-                    .into(),
-                );
+                step.push(named(state.preprocessed.as_deref(), &source.path, "i").into());
             }
             step.extend(source.arguments());
             if !clang_cl {
@@ -189,15 +209,26 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         return Ok(plan);
     }
+    // `/Zs`: each source is only checked.
+    if state.syntax_only {
+        for source in &c_sources {
+            let mut step = common.clone();
+            step.push("--syntax-only".into());
+            step.extend(source.arguments());
+            if !clang_cl {
+                plan.steps.push(Step::Print {
+                    text:   format!("{}\n", Path::new(&source.path).display()),
+                    stderr: false,
+                });
+            }
+            plan.steps.push(Step::Bcc(step));
+        }
+        return Ok(plan);
+    }
     // Compiling: each source to its object, kept beside the executable.
     let mut objects = Vec::new();
     for source in &c_sources {
-        let object = named(
-            state.object.as_deref(),
-            &source.path,
-            "obj",
-            c_sources.len(),
-        );
+        let object = named(state.object.as_deref(), &source.path, "obj");
         let mut step = common.clone();
         step.push("-c".into());
         step.push("-o".into());
@@ -206,15 +237,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             let mut assembly = common.clone();
             assembly.push("-S".into());
             assembly.push("-o".into());
-            assembly.push(
-                named(
-                    state.listing_name.as_deref(),
-                    &source.path,
-                    "asm",
-                    c_sources.len(),
-                )
-                .into(),
-            );
+            assembly.push(named(state.listing_name.as_deref(), &source.path, "asm").into());
             assembly.extend(source.arguments());
             plan.steps.push(Step::Bcc(assembly));
         }
@@ -237,10 +260,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         .or_else(|| state.sources.first().map(|source| source.path.clone()))
         .expect("an input");
     let extension = if state.dll { "dll" } else { "exe" };
-    let executable = named(state.executable.as_deref(), &first, extension, 1);
+    let executable = named(state.executable.as_deref(), &first, extension);
     let mut link = common;
     if state.dll {
         link.push("-shared".into());
+    }
+    // Clang's driver links the static runtime, `libcmt`, by default.
+    if let Some(library) = runtime.library() {
+        link.push("-Wl,-nodefaultlib:libcmt".into());
+        link.push(format!("-Wl,-defaultlib:{library}").into());
     }
     link.extend(objects.into_iter().map(OsString::from));
     link.extend(
@@ -299,7 +327,6 @@ struct Preprocess {
 }
 
 /// The translation so far.
-#[derive(Default)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "The switches of a command line are independent."
@@ -314,6 +341,8 @@ struct State {
     /// `/TC`: every later source is C.
     all_c:                   bool,
     compile_only:            bool,
+    /// `/Zs`.
+    syntax_only:             bool,
     preprocess:              Option<Preprocess>,
     /// `/Fo`, `/Fe`, `/Fi`: a file, or a directory ending in a separator.
     object:                  Option<PathBuf>,
@@ -323,11 +352,71 @@ struct State {
     listing:                 bool,
     listing_name:            Option<PathBuf>,
     dll:                     bool,
+    /// `/LDd`, which selects the static debug runtime unless `/MD` or
+    /// `/MDd` names one.
+    debug_dll:               bool,
+    /// The last of `/MT`, `/MTd`, `/MD` and `/MDd`.
+    runtime:                 Option<Runtime>,
+    /// Microsoft extensions: `/Ze` (the default) or `/Za`, the last wins.
+    extensions:              bool,
     nologo:                  bool,
     ignore_include_variable: bool,
     standard:                &'static str,
     diagnostics:             &'static str,
     errors:                  usize,
+}
+
+impl Default for State {
+    /// `cl`'s defaults: C17 (as clang-cl maps its default C mode), column
+    /// diagnostics, Microsoft extensions, and the static runtime.
+    fn default() -> Self {
+        Self {
+            bcc:                     Vec::new(),
+            sources:                 Vec::new(),
+            link:                    Vec::new(),
+            linking:                 false,
+            all_c:                   false,
+            compile_only:            false,
+            syntax_only:             false,
+            preprocess:              None,
+            object:                  None,
+            executable:              None,
+            preprocessed:            None,
+            listing:                 false,
+            listing_name:            None,
+            dll:                     false,
+            debug_dll:               false,
+            runtime:                 None,
+            extensions:              true,
+            nologo:                  false,
+            ignore_include_variable: false,
+            standard:                "c17",
+            diagnostics:             "msvc",
+            errors:                  0,
+        }
+    }
+}
+
+/// The C runtime library `/MT`, `/MTd`, `/MD` and `/MDd` select.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Runtime {
+    Static,
+    StaticDebug,
+    Dll,
+    DllDebug,
+}
+
+impl Runtime {
+    /// The default library the link takes instead of `libcmt`, the static
+    /// runtime Clang's driver links.
+    const fn library(self) -> Option<&'static str> {
+        match self {
+            | Self::Static => None,
+            | Self::StaticDebug => Some("libcmtd"),
+            | Self::Dll => Some("msvcrt"),
+            | Self::DllDebug => Some("msvcrtd"),
+        }
+    }
 }
 
 impl State {
@@ -339,12 +428,14 @@ impl State {
         option: &'r str,
         rest: &mut impl Iterator<Item = &'r OsStr>,
     ) -> bool {
-        if self.standard.is_empty() {
-            self.standard = "c17";
-            self.diagnostics = "msvc";
-        }
         // The options whose operand may be the next argument.
-        for (name, bcc) in [("I", "-I"), ("D", "-D"), ("U", "-U"), ("FI", "-include")] {
+        for (name, bcc) in [
+            ("I", "-I"),
+            ("D", "-D"),
+            ("U", "-U"),
+            ("FI", "-include"),
+            ("external:I", "-isystem"),
+        ] {
             if let Some(value) = option.strip_prefix(name) {
                 let value = if value.is_empty() {
                     match rest.next() {
@@ -408,62 +499,122 @@ impl State {
             | "std:c11" => self.standard = "c11",
             | "std:c17" => self.standard = "c17",
             | "std:clatest" => self.standard = "c23",
-            | "MD" => self.bcc.push("-D_DLL".into()),
-            | "MDd" => {
-                self.bcc.push("-D_DLL".into());
-                self.bcc.push("-D_DEBUG".into());
-            },
-            | "MTd" => self.bcc.push("-D_DEBUG".into()),
+            | "MT" => self.runtime = Some(Runtime::Static),
+            | "MTd" => self.runtime = Some(Runtime::StaticDebug),
+            | "MD" => self.runtime = Some(Runtime::Dll),
+            | "MDd" => self.runtime = Some(Runtime::DllDebug),
+            // `/LD` builds a DLL; the runtime stays `/MT`'s unless `/MD`
+            // names another.
             | "LD" | "LDd" => {
                 self.dll = true;
-                self.bcc.push("-D_DLL".into());
-                if option == "LDd" {
-                    self.bcc.push("-D_DEBUG".into());
-                }
+                self.debug_dll = option == "LDd";
             },
+            | "Za" => self.extensions = false,
+            | "Ze" => self.extensions = true,
+            | "Zp" => self.bcc.push("-fpack-struct=1".into()),
+            | "Zp1" | "Zp2" | "Zp4" | "Zp8" | "Zp16" => self
+                .bcc
+                .push(format!("-fpack-struct={}", &option[2..]).into()),
+            | "Zc:trigraphs" => self.bcc.push("-ftrigraphs".into()),
+            | "Zc:trigraphs-" => self.bcc.push("-fno-trigraphs".into()),
             | "J" => self.unsupported(invocation, option, "plain char is always signed in bcc"),
-            | "Zs" => self.bcc.push("--syntax-only".into()),
+            | "Zs" => self.syntax_only = true,
             | "diagnostics:classic" => self.diagnostics = "msvc-classic",
             | "diagnostics:column" => self.diagnostics = "msvc",
             | "diagnostics:caret" => self.diagnostics = "msvc-caret",
             | "link" => self.linking = true,
             | "FA" | "FAs" | "FAc" | "FAcs" | "FAu" => self.listing = true,
+            | "showIncludes" => self.bcc.push("--show-includes".into()),
+            // Options that cannot change the program bcc builds: UTF-8
+            // source and execution character sets (bcc's only ones),
+            // calling conventions that x64 ignores, function-level linking,
+            // string pooling, whole-program optimization, frame pointers
+            // and intrinsics (optimizations bcc may or may not make), debug
+            // information and tool files, warning levels, and parallel
+            // builds.
             | "utf-8"
             | "source-charset:utf-8"
             | "execution-charset:utf-8"
+            | "validate-charset"
+            | "validate-charset-"
             | "Gd"
             | "Gz"
             | "Gr"
-            | "Gv"
-            | "GS"
             | "GS-"
             | "Gy"
             | "Gy-"
             | "GF"
+            | "GF-"
             | "GL"
+            | "GL-"
             | "Gw"
-            | "sdl"
+            | "Gw-"
             | "sdl-"
+            | "guard:cf-"
+            | "guard:ehcont-"
+            | "Qspectre-"
             | "FS"
             | "MP"
             | "Zi"
             | "Z7"
             | "ZI"
-            | "Za"
-            | "Ze"
+            | "Zf"
             | "Oi"
             | "Oi-"
             | "Oy"
             | "Oy-"
             | "Og"
+            | "Ob0"
+            | "Ob1"
+            | "Ob2"
+            | "Ob3"
             | "bigobj"
+            | "permissive"
             | "permissive-"
             | "Qpar"
+            | "Qpar-"
             | "W1"
             | "W2"
             | "W3"
-            | "MT" => {},
-            | "showIncludes" => self.bcc.push("--show-includes".into()),
+            | "arch:SSE2"
+            | "fp:precise"
+            | "fp:fast"
+            | "fp:contract"
+            | "fp:except-"
+            | "volatile:iso"
+            | "Zc:preprocessor"
+            | "Zc:__STDC__"
+            | "analyze-" => {},
+            // Hardening and run-time checks a correct program does not
+            // depend on.
+            | "GS" => ignored(
+                invocation,
+                option,
+                "bcc does not emit buffer security checks",
+            ),
+            | "sdl" => ignored(invocation, option, "bcc does not add SDL checks"),
+            | "guard:cf" | "guard:ehcont" =>
+                ignored(invocation, option, "bcc does not emit Control Flow Guard"),
+            | "Gv" => self.unsupported(
+                invocation,
+                option,
+                "bcc's default calling convention is the x64 one, not __vectorcall",
+            ),
+            | "fp:strict" | "fp:except" => self.unsupported(
+                invocation,
+                option,
+                "bcc does not preserve floating-point exception flags or rounding modes",
+            ),
+            | "volatile:ms" => self.unsupported(
+                invocation,
+                option,
+                "bcc gives volatile accesses ISO semantics, not acquire and release",
+            ),
+            | "Zc:preprocessor-" => self.unsupported(
+                invocation,
+                option,
+                "bcc has only the conforming preprocessor",
+            ),
             | _ =>
                 if let Some(value) = option.strip_prefix("Fe") {
                     self.executable = path(value);
@@ -487,6 +638,34 @@ impl State {
                     || option.starts_with("execution-charset:")
                 {
                     self.unsupported(invocation, option, "bcc reads and writes UTF-8 only");
+                } else if option.starts_with("Zp") {
+                    self.command_line_error(
+                        invocation,
+                        Some("D8021"),
+                        format_args!("invalid numeric argument '/{option}'"),
+                    );
+                } else if let Some(variable) = option.strip_prefix("external:env:") {
+                    // The directories in VARIABLE are system directories.
+                    for directory in std::env::var_os(variable)
+                        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+                        .unwrap_or_default()
+                    {
+                        if !directory.as_os_str().is_empty() {
+                            self.bcc.push("-isystem".into());
+                            self.bcc.push(directory.into_os_string());
+                        }
+                    }
+                } else if option.starts_with("RTC") && option != "RTC-" {
+                    ignored(invocation, option, "bcc does not emit run-time checks");
+                } else if option.starts_with("Qspectre") {
+                    ignored(invocation, option, "bcc does not emit Spectre mitigations");
+                } else if option.starts_with("arch:") {
+                    self.unsupported(
+                        invocation,
+                        option,
+                        "bcc generates baseline x86-64 (SSE2) code and does not define the \
+                         extension's macros",
+                    );
                 } else if [
                     "wd",
                     "we",
@@ -497,31 +676,32 @@ impl State {
                     "w4",
                     "Zc:",
                     "EH",
-                    "RTC",
-                    "Ob",
                     "Fd",
                     "Fp",
-                    "arch:",
                     "favor:",
-                    "guard:",
-                    "Qspectre",
                     "analyze",
                     "external:",
                     "experimental:",
-                    "fp:",
-                    "volatile:",
-                    "Zp",
-                    "Gs",
                     "errorReport:",
                     "constexpr:",
-                    "d1",
-                    "d2",
+                    "Gs",
+                    "RTC-",
                 ]
                 .iter()
                 .any(|prefix| option.starts_with(prefix))
                 {
-                    // Warning numbers, conformance switches, code generation
-                    // details and tool files with no effect in bcc.
+                    // Warning numbers and levels, the conformance switches
+                    // for C++ and for what bcc already does (`/Zc:inline`,
+                    // `/Zc:wchar_t`), C++ exception handling, tool files,
+                    // tuning, analysis, the stack-probe threshold, and the
+                    // `/external:` warning levels: none changes a C
+                    // program bcc builds.
+                } else if option.starts_with("d1") || option.starts_with("d2") {
+                    ignored(
+                        invocation,
+                        option,
+                        "bcc has no undocumented compiler switches",
+                    );
                 } else {
                     return false;
                 },
@@ -529,30 +709,111 @@ impl State {
         true
     }
 
+    /// Refuses `/Fo`, `/Fa` or `/Fi` naming a file for several sources, as
+    /// `cl` does (error D8036): only a directory, ending in a separator,
+    /// names several outputs.
+    fn check_output_names(&mut self, invocation: &Invocation, sources: usize) {
+        if sources < 2 {
+            return;
+        }
+        let compiling = self.preprocess.is_none() && !self.syntax_only;
+        let to_file = self.preprocess.is_some_and(|mode| mode.to_file);
+        let options = [
+            ("Fo", self.object.clone().filter(|_| compiling)),
+            ("Fa", self.listing_name.clone().filter(|_| compiling)),
+            ("Fi", self.preprocessed.clone().filter(|_| to_file)),
+        ];
+        for (name, path) in options {
+            if let Some(path) = path
+                && !is_directory(&path)
+            {
+                let option = format!("/{name}{}", path.display());
+                if invocation.personality == Personality::ClangCl {
+                    invocation.error(format_args!(
+                        "cannot specify '{option}' when compiling multiple source files"
+                    ));
+                    self.errors += 1;
+                } else {
+                    self.command_line_error(
+                        invocation,
+                        Some("D8036"),
+                        format_args!("'{option}' not allowed with multiple source files"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Refuses an option `cl` knows that bcc does not implement and that
+    /// would change the program.
     fn unsupported(&mut self, invocation: &Invocation, option: &str, why: &str) {
-        invocation.error(format_args!("'/{option}' is not supported: {why}"));
+        self.command_line_error(
+            invocation,
+            None,
+            format_args!("'/{option}' is not supported: {why}"),
+        );
+    }
+
+    /// Prints a command-line error as the compiler does: `cl : Command line
+    /// error D8036 : ...`, with Microsoft's code where it documents one and
+    /// none where bcc would have to invent it, or clang-cl's `clang-cl:
+    /// error: ...`.
+    fn command_line_error(
+        &mut self,
+        invocation: &Invocation,
+        code: Option<&str>,
+        message: std::fmt::Arguments<'_>,
+    ) {
         self.errors += 1;
+        if invocation.personality == Personality::ClangCl {
+            invocation.error(message);
+        } else {
+            super::print(
+                &format!(
+                    "{} : Command line error{} : {message}\n",
+                    invocation.name,
+                    code.map_or_else(String::new, |code| format!(" {code}"))
+                ),
+                true,
+            );
+        }
     }
 }
 
-/// The output name for `source`: the `/Fo`, `/Fe` or `/Fi` file, or the
-/// source's name with `extension` in the working directory or in the
-/// option's directory (a name ending in a path separator). A file name
-/// given for several sources names only a directory's worth of them, as
-/// `cl` rejects; bcc uses the source names then.
-fn named(option: Option<&Path>, source: &OsStr, extension: &str, sources: usize) -> PathBuf {
+/// Accepts hardening or a run-time check bcc does not implement, with a
+/// warning.
+fn ignored(invocation: &Invocation, option: &str, why: &str) {
+    if invocation.personality == Personality::ClangCl {
+        invocation.warning(format_args!("'/{option}' is ignored: {why}"));
+    } else {
+        super::print(
+            &format!(
+                "{} : Command line warning : '/{option}' is ignored: {why}\n",
+                invocation.name
+            ),
+            true,
+        );
+    }
+}
+
+/// The output name for `source`: the `/Fo`, `/Fe`, `/Fi` or `/Fa` file,
+/// or the source's name with `extension` in the working directory or in
+/// the option's directory (a name ending in a path separator). A file name
+/// names one output; [`State::check_output_names`] refuses it for several
+/// sources, as `cl` does.
+fn named(option: Option<&Path>, source: &OsStr, extension: &str) -> PathBuf {
     let stem = Path::new(Path::new(source).file_name().unwrap_or(source)).with_extension(extension);
     match option {
-        | Some(option) if option.as_os_str().to_string_lossy().ends_with(['/', '\\']) =>
-            option.join(stem),
-        | Some(option) if sources == 1 =>
-            if option.extension().is_none() {
-                option.with_extension(extension)
-            } else {
-                option.into()
-            },
-        | _ => stem,
+        | Some(option) if is_directory(option) => option.join(stem),
+        | Some(option) if option.extension().is_none() => option.with_extension(extension),
+        | Some(option) => option.into(),
+        | None => stem,
     }
+}
+
+/// Whether an output option names a directory: it ends in a separator.
+fn is_directory(option: &Path) -> bool {
+    option.as_os_str().to_string_lossy().ends_with(['/', '\\'])
 }
 
 /// A `/link` option as bcc's link option: a library or object file stays an
@@ -577,6 +838,7 @@ fn help(name: &str) -> String {
          /FI<file> /X   preprocessing\n  /O1 /O2 /Od /Ox /W0-/W4 /Wall /WX /w   optimization and \
          warnings\n  /std:c11 /std:c17 /std:clatest /TC /Tc<file>   language\n  /MD /MT /LD /link \
          ...   runtime and linking\n  /nologo /diagnostics:classic|column|caret\nOptions cl knows \
-         that bcc does not implement are accepted and ignored; see docs/design/driver-modes.md.\n"
+         that bcc does not implement are ignored when they cannot change the program and refused \
+         otherwise; see docs/design/driver-modes.md.\n"
     )
 }

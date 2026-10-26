@@ -51,8 +51,10 @@ What the steps rely on was added to bcc's own driver, so it is available
 without a personality as well:
 
 - several inputs per command, in order, with `-x LANGUAGE` and classification
-  by extension (`.c`, `.i`, `.h` are C; `.s`, `.S`, `.sx` assembly; anything
-  else goes to the linker);
+  by extension (`.c` and `.h` are C, `.i` preprocessed C; `.s`, `.S`, `.sx`
+  assembly, with `-x` and the preprocessor options passed to clang; anything
+  else goes to the linker), and the final output refused when it is one of
+  the inputs;
 - `-c` without `-o` (the object is named after the source in the working
   directory), `-S` (LLVM's or the native back end's assembly), `-E` (the
   preprocessed source, with GCC's line markers, or without them under `-P`),
@@ -60,11 +62,16 @@ without a personality as well:
 - linking several objects, archives and libraries with `-l`, `-L`, `-Wl,`,
   `-Xlinker`, `-static`, `-rdynamic`, `-pthread`, `-nostdlib` and their
   relatives, in command-line order;
-- `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` dependency rules;
+- `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` dependency rules,
+  named after the stage and output as GCC names them;
 - `-fsyntax-only` (`--syntax-only`), which, unlike bcc's inspection views,
   fails after an error;
 - GNU line markers (`# 12 "file.c" 1 3`) in input, so `.i` files from
   `-E` compile again with their original locations;
+- `--sysroot` for the libraries the bundled clang links against, not only the
+  headers;
+- `-fwrapv`, `-fpack-struct=N` and `-f[no-]trigraphs`, which the
+  personalities map `-fwrapv`, `cl /ZpN` and `cl /Zc:trigraphs` onto;
 - `--compiler-identity=clang|gcc|msvc|clang-cl|tcc` and
   `--diagnostic-format=bcc|clang|gcc|msvc|msvc-classic|msvc-caret|tcc`
   (also Clang's `-fdiagnostics-format=`).
@@ -88,6 +95,51 @@ Plain `char` is signed in every personality, as GCC, Clang, MSVC and TCC
 default to on x86-64. bcc has no unsigned-char mode, so `-funsigned-char`
 and `cl /J` are refused rather than ignored.
 
+## Options a compiler knows and bcc does not implement
+
+Each personality sorts these into three kinds (`personality/unimplemented.rs`
+for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
+
+- **Ignored**, when bcc's output already means what the option asks for:
+  warnings and diagnostics formatting, debug information (`-g*`,
+  `-fdebug-prefix-map=`), reports and dumps, build mechanics (`-pipe`,
+  `-save-temps`, `-flto`, `-ffunction-sections`, `-fuse-ld=`), optimizations
+  the compiler is permitted but not required to make (`-funroll-loops`,
+  `-fomit-frame-pointer`, `-fstrict-aliasing`, `-fno-math-errno`,
+  `-fassociative-math`), code generation tuning (`-mtune=`, `-falign-*`,
+  `-mtls-dialect=`), what bcc always does (`-fno-common`,
+  `-fno-strict-aliasing`: bcc emits no type-based alias information;
+  `-ffp-contract=off`: bcc forms no fused operations; `-fexcess-precision=`:
+  x86-64 has none; `-mno-avx`: bcc uses only the baseline instruction set;
+  `-fmath-errno`: the math functions set `errno`), options that only change
+  which programs are accepted (`-fpermissive`), and options for other
+  languages (C++'s `-fno-rtti`).
+- **Warned and ignored**, for hardening and instrumentation that a correct
+  program does not depend on: `-fstack-protector*`,
+  `-fstack-clash-protection`, `-fcf-protection`, `-ftrivial-auto-var-init=`,
+  `-fexceptions` (bcc emits no landing pads, so cleanups do not run while an
+  exception unwinds), Spectre mitigations, `-mfentry`, `-specs=`, `-B`, and
+  `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`. The build goes
+  on and says what it lacks.
+- **Refused**, with the compiler's kind of error, for everything else:
+  options that change layout or the ABI (`-fshort-enums`, `-fshort-wchar`,
+  `-fpack-struct=3`, `-mms-bitfields`, `-mregparm=`, `-mlong-double-64`,
+  `cl /Gv`), the instruction set (`-mavx2`, `-march=native`, `-mno-sse`,
+  `-mgeneral-regs-only`, `cl /arch:AVX2`), language rules bcc does not
+  follow (`-fcommon`, `-fno-builtin`, `-fno-delete-null-pointer-checks`,
+  `-fno-strict-overflow`, `-ffast-math`, `-frounding-math`,
+  `-fvisibility=hidden`, `cl /fp:strict`, `/volatile:ms`), and
+  instrumentation whose output a build expects (`-fsanitize=`,
+  `-fprofile-arcs`, `--coverage`, `-finstrument-functions`, `-fopenmp`).
+  An option the lists do not name is refused too, so a newly added option is
+  refused until someone audits it.
+
+Where bcc can do what the option asks cheaply, the personality maps it
+instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
+`-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
+`cl /Za` (no Microsoft anonymous members and no `_MSC_EXTENSIONS`), and
+`cl /Zc:trigraphs`.
+
 ## GCC
 
 **Command line.** Single-dash options; short options take their operand
@@ -106,19 +158,21 @@ options it implements, so the personality passes them through: `-c -S -E -o
 -pedantic* -l -L -Wl, -Xlinker -shared -static -pie -M* -fpic -fms-extensions
 -fgnu89-inline -ffreestanding -ftls-model=`. `-Wp,` is split and read as
 preprocessor options (Fedora's `-Wp,-D_FORTIFY_SOURCE=2`). `-s`, `-T`, `-u`,
-`-z` and `-e` become linker options. `-Ofast` is `-O3`. `-g*`, `-pipe`,
-`-save-temps`, `--param`, `-B`, `-specs=`, `-Wa,` and `-fdiagnostics-color`
-are accepted and have no effect.
+`-z` and `-e` become linker options. `-Wa,` and `-Xassembler` reach bcc's
+assembly inputs. `-g*`, `-pipe`, `-save-temps` and `--param` have no effect;
+`-B` and `-specs=` warn that they have none. `-Ofast` is refused: it implies
+`-ffast-math`, which defines `__FAST_MATH__` and links `crtfastmath`, which
+bcc does not do.
 
-Options GCC knows but bcc does not implement are accepted and ignored: every
-`-W`, `-f` and `-m` name GCC 15.2 lists in `--help=warnings,common,
-optimizers,c,target,undocumented`, frozen in
+The `-W`, `-f` and `-m` names GCC knows are those GCC 15.2 lists in
+`--help=warnings,common,optimizers,c,target,undocumented`, frozen in
 `src/cli/personality/options/gcc-*.list` by
-`scripts/update_driver_options.py`. They tune warnings, optimization and
-instruction selection, which never change what a correct program means.
-Options that would change the meaning of a program are refused with an
-error: `-funsigned-char`, `-m32`, `-mx32`, `-m16`, `-traditional`,
-`-imacros`.
+`scripts/update_driver_options.py`. Unknown warnings are ignored as GCC
+ignores them; the known `-f` and `-m` options bcc does not implement are
+treated as the section above describes. Many of them do change what a
+program means (`-fwrapv`, `-fshort-enums`, `-fpack-struct=1`, `-mno-sse`),
+so they are not all ignored. `-funsigned-char`, `-m32`, `-mx32`, `-m16`,
+`-traditional` and `-imacros` are refused as well.
 
 **Identity.** `__GNUC__` 14, `__GNUC_MINOR__` 2, `__GNUC_PATCHLEVEL__` 0,
 `__VERSION__ "14.2.0"`, `__GNUC_EXECUTION_CHARSET_NAME`, and no Clang macro.
@@ -152,7 +206,8 @@ about an unknown warning option (`warning: unknown warning option '-Wfoo'
 **Mapping.** As for GCC, with the option names the pinned Clang lists for
 `--autocomplete=-W`, `-f` and `-m` (`options/clang-*.list`). An unknown
 warning option is passed to bcc, which warns as Clang does. `-Xclang OPTION`
-is ignored with a warning: bcc has no Clang frontend options.
+is refused: bcc has no Clang frontend options, and Clang's can change the
+program.
 
 **Identity.** bcc's default: the pinned Clang 23.1.1 and the GCC 4.2.1 Clang
 claims. `--version` prints `clang version 23.1.1 (bcc 0.1.0, ...)` with the
@@ -175,7 +230,7 @@ warning D9002 : ignoring unknown option '/foo'` and is ignored.
 
 | `cl` | bcc |
 | --- | --- |
-| `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...` |
+| `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...`; `/Fo`, `/Fa` or `/Fi` naming a file for several sources is error D8036, as in `cl` |
 | `/E`, `/EP`, `/P`, `/Fi` | `-E`, `-E -P`, `-E -o NAME.i` |
 | `/FA`, `/Fa` | `-S -o NAME.asm` beside the object |
 | `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
@@ -183,12 +238,17 @@ warning D9002 : ignoring unknown option '/foo'` and is ignored.
 | `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror` |
 | `/std:c11`, `/std:c17`, `/std:clatest` | `-std=c11`, `-std=c17`, `-std=c23` |
 | `/TC`, `/Tc FILE` | the inputs (or FILE) are C |
-| `/MD`, `/MDd`, `/MT`, `/MTd`, `/LD` | `_DLL`, `_DEBUG` as `cl` defines them; `/LD` links a DLL |
-| `/Zs` | `--syntax-only` |
+| `/MD`, `/MDd`, `/MT`, `/MTd`, `/LD`, `/LDd` | the last runtime option wins: `_DLL` for `/MD*`, `_DEBUG` for `/M*d` and `/LDd`, and the link takes `msvcrt`, `msvcrtd` or `libcmtd` instead of `libcmt`; `/LD` links a DLL with `/MT`'s runtime unless `/MD` names another |
+| `/Zs` | `--syntax-only` for each source, with no object and no link |
+| `/Zp`, `/ZpN` | `-fpack-struct=1`, `-fpack-struct=N`; another N is error D8021 |
+| `/Za`, `/Ze` | the last wins: `/Za` turns off Microsoft's anonymous tagged members and `_MSC_EXTENSIONS` |
+| `/Zc:trigraphs`, `/Zc:trigraphs-` | `-ftrigraphs`, `-fno-trigraphs` (the default, as in `cl`) |
+| `/external:I DIR`, `/external:env:VAR` | `-isystem` |
 | `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stderr |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
-| `/nologo`, `/Zi`, `/Z7`, `/Zc:*`, `/utf-8`, `/GS`, `/EH*`, `/RTC*`, `/wd####`, `/sdl`, `/MP`, `/FS`, `/Fd` ... | accepted, no effect |
-| `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/J`, non-UTF-8 charsets | refused |
+| `/nologo`, `/Zi`, `/Z7`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/wd####`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
+| `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/d1*`, `/d2*` | accepted with a warning |
+| `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/J`, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
 **Defaults.** The `x86_64-pc-windows-msvc` target with every Microsoft
 extension bcc implements (`-fms-extensions`), which on that target also
@@ -238,7 +298,10 @@ not know, and rejects any other unknown option (`invalid option -- '-q'`).
 **Mapping.** `-run` builds the program in a temporary directory, runs it with
 the remaining arguments and exits with its status (the signal number plus 128
 when it is killed). `-b` and `-bt` are accepted with a warning; bcc has no
-bounds checker. `-B` is ignored. `-std=c11` and `gnu11` select `gnu11`, any
+bounds checker. `-B` is ignored. Of the `-f` and `-m` options TCC ignores,
+those GCC knows are treated as the GCC personality treats them, so one that
+would change the program (`-fshort-enums`) is refused rather than silently
+dropped. `-std=c11` and `gnu11` select `gnu11`, any
 other value `gnu99`, as TCC sets `__STDC_VERSION__`.
 
 **Identity.** `__TINYC__ 927` (TCC 0.9.27), no GNU or Clang macro, and
@@ -251,11 +314,14 @@ paths. TCC's diagnostics are `file:line: error: message`.
   so the semantics of each option live in one place, and the personalities
   stay small tables of spellings. The few driver features they need (several
   inputs, `-c` naming, `-E`, `-M`) became bcc features.
-- **Accept what the compiler knows.** Real build flags contain dozens of
-  warning and tuning options. Refusing the ones bcc does not implement would
-  make every real build fail, while GCC would accept them. The lists are
-  frozen from the compilers themselves, so "known" means what the compiler
-  accepts, and unknown spellings still fail as they would there.
+- **Ignore only what cannot change the program.** Real build flags contain
+  dozens of warning and tuning options, and refusing them would make every
+  real build fail, so those are ignored. But an option that changes layout,
+  the ABI, the instruction set or a language rule is refused: ignoring it
+  would build a different program than the one asked for, without saying
+  so. Hardening warns. The lists are frozen from the compilers themselves,
+  so "known" means what the compiler accepts, and unknown spellings still
+  fail as they would there.
 - **Claim the compiler mimicked.** The GCC and TCC personalities claim GCC and
   TCC in the predefined macros rather than Clang, because build systems and
   headers choose their paths from them (CMake reads `__GNUC__` and
@@ -293,6 +359,14 @@ Besides those above:
   implemented.
 - TCC's `#!` script line (`#!/usr/bin/tcc -run`) is not skipped.
 - The GCC lists come from GCC 15.2, which knows a few options GCC 14 did not.
+- `/Za` turns off only what bcc implements of Microsoft's extensions to C:
+  the anonymous tagged members and `_MSC_EXTENSIONS`. The `__`-prefixed
+  keywords stay, and `cl`'s other `/Za` changes concern extensions bcc never
+  accepted.
+- The MSVC runtime libraries are chosen at link time with
+  `-nodefaultlib:libcmt` and `-defaultlib:`; bcc's objects carry no
+  `/DEFAULTLIB` directives as `cl`'s do, so objects compiled with different
+  runtime options do not conflict at link time.
 
 ## Gaps in the compiler these modes expose
 

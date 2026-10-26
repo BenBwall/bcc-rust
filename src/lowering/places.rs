@@ -453,6 +453,17 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             .expect("a constant has a result")
     }
 
+    /// The flags of signed integer `+`, `-`, `*` and `<<`: `nsw`, because
+    /// signed overflow is undefined (C99 §6.5p5, p. 67; PDF p. 79), unless
+    /// `-fwrapv` makes it wrap, an extension.
+    pub(super) fn signed_wrap(&self) -> InstFlags {
+        if self.unit.context.configuration.wrapv() {
+            InstFlags::empty()
+        } else {
+            InstFlags::NSW
+        }
+    }
+
     pub(super) fn binary_inst(
         &mut self,
         opcode: Opcode,

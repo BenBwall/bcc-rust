@@ -26,16 +26,22 @@ use crate::{
 };
 
 /// Build searchable states without source-location joins or a syntax walk.
-/// C99: §6.10.6p1, p. 159; PDF p. 171. GCC/MSVC stack extension.
+/// The packing before any pragma, which `#pragma pack()` restores, is the
+/// configured default (`-fpack-struct=N`, `cl /ZpN`), as GCC and MSVC
+/// document. C99: §6.10.6p1, p. 159; PDF p. 171. GCC/MSVC stack extension.
 pub(super) fn states<'s>(context: &mut Context<'_>, scratch: &'s Bump) -> &'s [(usize, u32)] {
     let mut stack = ArenaVec::new_in(scratch);
     let mut states = ArenaVec::new_in(scratch);
-    let mut current = 0;
+    let default = context.configuration.default_pack();
+    let mut current = default;
+    if default != 0 {
+        states.push((0, default));
+    }
     for index in 0..context.pack_pragmas.len() {
         let pragma = context.pack_pragmas[index];
         let warning = match parse(context, pragma.operands) {
             | Some(Action::Set(value)) => {
-                current = value;
+                current = if value == 0 { default } else { value };
                 None
             },
             | Some(Action::Push(name, value)) => {

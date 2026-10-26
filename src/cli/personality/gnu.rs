@@ -1,7 +1,8 @@
 //! The GCC and Clang personalities. bcc's own command line already takes
 //! most GCC options in GCC's spelling, so these pass those through, answer
-//! the driver queries, drop the options the compiler knows and bcc does not
-//! implement, diagnose the rest as the compiler does, and add the
+//! the driver queries, drop the options the compiler knows that cannot
+//! change the program, refuse those that would (`unimplemented.rs`),
+//! diagnose unknown ones as the compiler does, and add the
 //! compiler's defaults: its identity and diagnostic format, the host's
 //! target and system headers, and `-o a.out` when the command links.
 
@@ -26,6 +27,10 @@ use super::{
     },
     system_headers,
     target_named,
+    unimplemented::{
+        Treatment,
+        treatment,
+    },
     version,
 };
 use crate::{
@@ -86,9 +91,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     } else if invocation.name.ends_with("c99") {
         bcc.push("-std=c99".into());
     }
-    if !state.nostdinc {
-        system_headers(target, state.sysroot.as_deref(), &mut bcc);
-    }
+    system_headers(target, state.sysroot.as_deref(), state.nostdinc, &mut bcc);
     let links = state.stage.is_none();
     if !links {
         // GCC ignores what links when it stops before linking.
@@ -212,9 +215,11 @@ const PLAIN_OPTIONS: [&str; 27] = [
     "-fms-extensions",
 ];
 
-/// GCC options that need no translation and have no effect in bcc: debug
-/// information, which bcc does not emit, and driver conveniences.
-const IGNORED_OPTIONS: [&str; 10] = [
+/// GCC options that need no translation and cannot change the program bcc
+/// builds: driver conveniences and reports, and what bcc always does.
+/// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
+/// options in `unimplemented.rs` are ignored too.
+const IGNORED_OPTIONS: [&str; 7] = [
     "-pipe",
     "-save-temps",
     "-Q",
@@ -222,9 +227,6 @@ const IGNORED_OPTIONS: [&str; 10] = [
     "-time",
     "-fsigned-char",
     "-fno-unsigned-char",
-    "-m64",
-    "-fcolor-diagnostics",
-    "-fno-color-diagnostics",
 ];
 
 impl State<'_> {
@@ -309,7 +311,11 @@ impl State<'_> {
                 self.out.push("--nostdinc".into());
             },
             | "-s" => self.out.push("-Wl,-s".into()),
-            | "-Ofast" => self.out.push("-O3".into()),
+            | "-Ofast" => self.unsupported(
+                text,
+                "it implies -ffast-math; bcc keeps IEEE semantics and does not define \
+                 __FAST_MATH__",
+            ),
             | "-C" | "-CC" => self.invocation.warning(format_args!(
                 "'{text}' is not supported: bcc does not keep comments in preprocessed output"
             )),
@@ -408,10 +414,19 @@ impl State<'_> {
                 drop(self.argument(operand, &mut none));
             },
             | "-Xbcc" => self.out.push(operand.into()),
-            | "-Xassembler" | "--param" | "-B" => {},
-            | "-Xclang" => self.invocation.warning(format_args!(
-                "argument unused: '-Xclang {lossy}': bcc has no Clang frontend options"
+            | "-Xassembler" => {
+                self.out.push("-Xassembler".into());
+                self.out.push(operand.into());
+            },
+            // Tuning parameters of GCC's optimizers.
+            | "--param" => {},
+            | "-B" => self.invocation.warning(format_args!(
+                "'-B {lossy}' is ignored: bcc uses its bundled assembler and linker"
             )),
+            | "-Xclang" => self.unsupported(
+                &format!("-Xclang {lossy}"),
+                "bcc has no Clang frontend options",
+            ),
             | "-imacros" => self.unsupported(option, "bcc does not implement -imacros"),
             | "-T" | "-u" | "-z" | "-e" | "--entry" => self.out.push(
                 format!(
@@ -448,10 +463,18 @@ impl State<'_> {
         if IGNORED_OPTIONS.contains(&text)
             || text.starts_with("-g")
             || text.starts_with("-save-temps")
-            || text.starts_with("-specs=")
-            || text.starts_with("-Wa,")
-            || text.starts_with("-fdiagnostics-color")
         {
+            return;
+        }
+        if text.starts_with("-Wa,") {
+            // bcc passes assembler options to its assembly inputs.
+            self.out.push(text.into());
+            return;
+        }
+        if text.starts_with("-specs=") {
+            self.invocation.warning(format_args!(
+                "'{text}' is ignored: bcc does not read GCC spec files"
+            ));
             return;
         }
         if let Some(options) = text.strip_prefix("-Wp,") {
@@ -477,6 +500,13 @@ impl State<'_> {
                 return;
             }
         } else if known && (text.starts_with("-f") || text.starts_with("-m")) {
+            match treatment(text) {
+                | Treatment::Ignore => {},
+                | Treatment::Warn(why) => self
+                    .invocation
+                    .warning(format_args!("'{text}' is ignored: {why}")),
+                | Treatment::Reject(why) => self.unsupported(text, why),
+            }
             return;
         }
         match self.compiler {
@@ -512,7 +542,7 @@ fn help(personality: Personality, name: &str) -> String {
          -std=STD, -ansi, -pedantic, -O*, -W*, -w, -f*   language, optimization and warnings\n  \
          -l, -L, -Wl, -Xlinker, -shared, -static, -pie   linking\n  -M, -MM, -MD, -MMD, -MF, -MT, \
          -MQ, -MP   dependencies\n  -Xbcc OPTION   pass OPTION to bcc itself\nOptions {compiler} \
-         knows that bcc does not implement are accepted and ignored; see \
-         docs/design/driver-modes.md.\n"
+         knows that bcc does not implement are ignored when they cannot change the program and \
+         refused otherwise; see docs/design/driver-modes.md.\n"
     )
 }
