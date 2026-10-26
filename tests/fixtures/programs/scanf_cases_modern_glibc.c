@@ -12,12 +12,12 @@ int main(void) {
     {"-nan(1234567)", "%f%n"},
     /* 2.42, BZ #12701: an integer prefix without digits (e78cb4f6bd) and an
        exponent without digits (0a8e7ac95c) are matching failures; before,
-       they matched as zero or as the significand alone. */
+       they matched as zero or as the significand alone (also when a field
+       width cuts the exponent's digits off). */
     {"0x", "%x%n"}, {"0x", "%i%n"}, {"0xg", "%i%n"}, {"1e", "%lf%n"}, {"1e+", "%lf%n"},
-    {"0x1p", "%lf%n"},
-    /* 2.43: %f stops at its field width (b692181703), and %Nc fails without
-       N characters (BZ #12701, 2b16c76609). */
-    {"1e5", "%2lf%n%d"}, {"1", "%2c"},
+    {"0x1p", "%lf%n"}, {"1e5", "%2lf%n%d"},
+    /* 2.43: %Nc fails without N characters (BZ #12701, 2b16c76609). */
+    {"1", "%2c"},
   };
   for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) show(cases[i][0], cases[i][1]);
   return 0;
