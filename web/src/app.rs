@@ -32,6 +32,7 @@ use crate::{
     engine::Engine,
     palette,
     panels::{
+        LiveCompile,
         Memory,
         Narration,
         PipelineView,
@@ -88,8 +89,7 @@ pub fn App() -> impl IntoView {
                                 <PipelineView
                                     stage=state.stage
                                     compilation=state.compilation
-                                    edited=state.edited
-                                    live_error=state.live_error.read_only()
+                                    live=state.live_status.into()
                                     theme=state.theme_name
                                     hover_source=state.hover_source.read_only()
                                     hover_output=state.hover_output
@@ -165,7 +165,11 @@ struct State {
     theme_name:      Signal<&'static str>,
     /// The compiler's output for the editor's text, when known.
     live:            RwSignal<Option<(String, Compilation)>>,
-    live_error:      RwSignal<Option<String>>,
+    /// The source the Worker is compiling.
+    compiling:       RwSignal<Option<String>>,
+    /// The Worker's error for a source it could not compile.
+    live_error:      RwSignal<Option<(String, String)>>,
+    live_status:     Memo<LiveCompile>,
     hover_source:    RwSignal<usize>,
     hover_output:    RwSignal<usize>,
     reveal:          RwSignal<Option<usize>>,
@@ -185,6 +189,8 @@ impl State {
         let editor_text = RwSignal::new(tour.source.to_owned());
         let error = RwSignal::new(None::<Diagnostic>);
         let live = RwSignal::new(None::<(String, Compilation)>);
+        let compiling = RwSignal::new(None::<String>);
+        let live_error = RwSignal::new(None::<(String, String)>);
         let theme = RwSignal::new("dark");
         let current = Memo::new(move |_| {
             cursor
@@ -234,7 +240,21 @@ impl State {
             theme,
             theme_name: Signal::derive(move || theme.get()),
             live,
-            live_error: RwSignal::new(None),
+            compiling,
+            live_error,
+            live_status: Memo::new(move |_| {
+                editor_text.with(|text| {
+                    if let Some((_, error)) =
+                        live_error.with(|error| error.clone().filter(|(source, _)| source == text))
+                    {
+                        LiveCompile::Failed(error)
+                    } else if compiling.with(|source| source.as_ref() == Some(text)) {
+                        LiveCompile::Compiling
+                    } else {
+                        LiveCompile::Idle
+                    }
+                })
+            }),
             hover_source: RwSignal::new(0),
             hover_output: RwSignal::new(0),
             reveal: RwSignal::new(None),
@@ -271,6 +291,8 @@ impl State {
                     self.engine.set_value(Some(Rc::new(engine)));
                     self.has_engine.set(true);
                     self.unavailable.set(None);
+                    // An error from the previous engine no longer applies.
+                    self.live_error.set(None);
                     let text = self.source.get_untracked();
                     if let Err(error) = self.load_program(text, self.filename.get_untracked()).await
                     {
@@ -315,6 +337,7 @@ impl State {
         self.clear_history();
         self.failed.set(false);
         self.error.set(None);
+        self.compile_if_shown();
         let snapshot = self.engine()?.load(&text).await?;
         self.history.set(vec![snapshot]);
         self.cursor.set(Some(0));
@@ -332,6 +355,7 @@ impl State {
             self.editor_text.set(text);
             self.filename.set(name);
             self.clear_history();
+            self.compile_if_shown();
             Ok(())
         } else {
             Ok(())
@@ -484,31 +508,45 @@ impl State {
 
     fn set_mode(self, mode: Mode) {
         self.mode.set(mode);
-        if mode == Mode::Pipeline {
-            self.request_compilation();
-        }
+        self.compile_if_shown();
     }
 
-    /// Ask the Worker to compile edited source for the pipeline view.
-    fn request_compilation(self) {
+    /// Ask the Worker to compile the editor's text when the pipeline view
+    /// shows it and it is not a bundled lesson, whose outputs are precomputed.
+    fn compile_if_shown(self) {
         let text = self.editor_text.get_untracked();
-        if demos::matching(&text).is_some()
+        if self.mode.get_untracked() != Mode::Pipeline
+            || demos::matching(&text).is_some()
             || self
                 .live
                 .with_untracked(|live| live.as_ref().is_some_and(|(source, _)| *source == text))
+            || self
+                .live_error
+                .with_untracked(|error| error.as_ref().is_some_and(|(source, _)| *source == text))
+            || self
+                .compiling
+                .with_untracked(|source| source.as_ref() == Some(&text))
         {
             return;
         }
-        let Ok(engine) = self.engine() else {
-            return;
+        let engine = match self.engine() {
+            | Ok(engine) => engine,
+            | Err(error) => {
+                self.live_error.set(Some((text, error)));
+                return;
+            },
         };
+        self.compiling.set(Some(text.clone()));
         spawn_local(async move {
-            match engine.compile(&text).await {
-                | Ok(compilation) => {
-                    self.live_error.set(None);
-                    self.live.set(Some((text, compilation)));
-                },
-                | Err(error) => self.live_error.set(Some(error)),
+            let result = engine.compile(&text).await;
+            self.compiling.update(|source| {
+                if source.as_ref() == Some(&text) {
+                    *source = None;
+                }
+            });
+            match result {
+                | Ok(compilation) => self.live.set(Some((text, compilation))),
+                | Err(error) => self.live_error.set(Some((text, error))),
             }
         });
     }

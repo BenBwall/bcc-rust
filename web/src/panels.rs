@@ -11,7 +11,10 @@ mod tree;
 use leptos::prelude::*;
 pub use memory::Memory;
 pub use narration::Narration;
-pub use pipeline::PipelineView;
+pub use pipeline::{
+    LiveCompile,
+    PipelineView,
+};
 pub use tree::TreeView;
 
 /// `text` with each `` `code` `` span rendered as `<code>`.

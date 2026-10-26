@@ -6,6 +6,7 @@
 use leptos::prelude::*;
 
 use crate::{
+    demos,
     editor::{
         CodeEditor,
         Decoration,
@@ -24,8 +25,8 @@ use crate::{
 pub fn PipelineView(
     stage: RwSignal<Stage>,
     compilation: Memo<Option<Compilation>>,
-    edited: Memo<bool>,
-    live_error: ReadSignal<Option<String>>,
+    /// The in-browser compiler's progress on `source`.
+    live: Signal<LiveCompile>,
     theme: Signal<&'static str>,
     hover_source: ReadSignal<usize>,
     hover_output: RwSignal<usize>,
@@ -43,6 +44,7 @@ pub fn PipelineView(
         })
     });
     let text = Signal::derive(move || output.get().unwrap_or_default());
+    let lesson = Memo::new(move |_| source.with(|source| demos::matching(source).is_some()));
     let language = Signal::derive(move || stage.get().language());
     let links = Memo::new(move |_| {
         output.with(|output| {
@@ -110,7 +112,7 @@ pub fn PipelineView(
                     />
                 </div>
                 <div class="stage-missing" hidden=move || output.with(Option::is_some)>
-                    {move || missing(stage.get(), edited.get(), compilation.with(Option::is_some), live_error.get())}
+                    {move || missing(stage.get(), lesson.get(), compilation.with(Option::is_some), live.get())}
                 </div>
             </article>
             <Diagnostics compilation />
@@ -179,20 +181,69 @@ fn Diagnostics(compilation: Memo<Option<Compilation>>) -> impl IntoView {
     }
 }
 
-/// Why a stage has no output to show.
-fn missing(stage: Stage, edited: bool, compiled: bool, live_error: Option<String>) -> String {
-    if stage == Stage::Llvm && edited && compiled {
-        return "LLVM IR is precomputed for the bundled lessons only: the in-browser build of bcc \
-                has no LLVM. Every other stage is compiled live from your edits."
-            .to_owned();
+/// What the page knows about compiling the editor's text in the browser.
+/// Bundled lessons never need it: their outputs are precomputed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LiveCompile {
+    /// No compilation of this text has been requested.
+    Idle,
+    Compiling,
+    /// The Worker could not compile this text.
+    Failed(String),
+}
+
+/// Why a stage has no output to show for a bundled lesson (`lesson`) or other
+/// source, given whether a compilation exists.
+fn missing(stage: Stage, lesson: bool, compiled: bool, live: LiveCompile) -> String {
+    const LESSONS: &str =
+        "Compiler outputs are precomputed for the bundled lessons: pick one to see every stage.";
+    if compiled || lesson {
+        return if stage == Stage::Llvm && !lesson {
+            "LLVM IR is precomputed for the bundled lessons only: the in-browser build of bcc has \
+             no LLVM. Every other stage was compiled in your browser."
+                .to_owned()
+        } else {
+            "bcc produced no output for this stage.".to_owned()
+        };
     }
-    if edited && !compiled {
-        let reason = live_error.unwrap_or_else(|| "Compiling your edits…".to_owned());
-        return format!(
-            "{reason} The compiler views are available for the bundled lessons; pick one, or undo \
-             your edits to see its output again. LLVM IR is only ever precomputed, because the \
-             browser build of bcc has no LLVM."
+    match live {
+        | LiveCompile::Failed(error) => format!("{error} {LESSONS}"),
+        | LiveCompile::Compiling => "Compiling this program in your browser…".to_owned(),
+        | LiveCompile::Idle => format!(
+            "This version of the program has not been compiled. Choose Run edited code to compile \
+             it. {LESSONS}"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LiveCompile,
+        Stage,
+        missing,
+    };
+    use crate::explorer::UNAVAILABLE;
+
+    #[test]
+    fn missing_output_explains_custom_source_by_its_compilation() {
+        // After Run edited code the source is no longer edited, but it is still
+        // not a lesson: the Worker's error must stay visible.
+        let failed = missing(
+            Stage::Ir,
+            false,
+            false,
+            LiveCompile::Failed(UNAVAILABLE.to_owned()),
+        );
+        assert!(failed.starts_with(UNAVAILABLE), "{failed}");
+        assert!(!failed.contains("produced no output"), "{failed}");
+        assert!(missing(Stage::Ir, false, false, LiveCompile::Compiling).starts_with("Compiling"));
+        assert!(missing(Stage::Ir, false, false, LiveCompile::Idle).contains("Run edited code"));
+        // A live compilation has no LLVM IR; a lesson's empty stage is bcc's.
+        assert!(missing(Stage::Llvm, false, true, LiveCompile::Idle).contains("no LLVM"));
+        assert_eq!(
+            missing(Stage::Llvm, true, true, LiveCompile::Idle),
+            "bcc produced no output for this stage."
         );
     }
-    "bcc produced no output for this stage.".to_owned()
 }
