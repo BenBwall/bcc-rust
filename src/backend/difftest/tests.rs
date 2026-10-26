@@ -67,6 +67,10 @@ fn generation_is_deterministic() {
         .filter(|&seed| generate(seed, false).contains(".f80 "))
         .count();
     assert!(extended >= 10, "only {extended} of 50 programs use f80");
+    let wide = (0..50)
+        .filter(|&seed| generate(seed, false).contains(".i128 "))
+        .count();
+    assert!(wide >= 5, "only {wide} of 50 programs convert i128");
 }
 
 #[test]

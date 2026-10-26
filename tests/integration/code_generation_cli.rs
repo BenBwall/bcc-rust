@@ -252,6 +252,82 @@ int main(void) {
         }
     }
 
+    /// `tests/fixtures/programs/long_double_encodings.c` builds every x87
+    /// encoding class from raw bytes, including unnormals, pseudo-denormals,
+    /// pseudo-infinities and pseudo-NaNs, and prints the bits the `long
+    /// double` libm functions give: the interpreter must print glibc's.
+    #[test]
+    fn long_double_encodings_match_glibc_bit_for_bit() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs/long_double_encodings.c");
+        let source = source.to_str().unwrap();
+        let reference = temporary("long-double-encodings.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .args([source, "-std=c99", "-O0", "-fno-builtin", "-lm", "-o"])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(expected.status.code(), Some(0));
+        std::fs::remove_file(reference).unwrap();
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.args([source, "--interpret", optimize]);
+            let output = run_native(&mut command).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{optimize}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), text(&expected.stdout), "{optimize}");
+        }
+    }
+
+    /// `%Lf` reads the target's `long double` from a `va_list` after ABI
+    /// lowering: an x87 value in the System V overflow area, a reference to
+    /// one in a MinGW slot, and an inline binary64 in an MSVC slot.
+    #[test]
+    fn long_double_printf_reads_each_targets_variadic_representation() {
+        let source = "typedef __builtin_va_list va_list;
+int printf(const char *, ...);
+int __vsprintf_chk(char *, int, unsigned long long, const char *, va_list);
+static void show(const char *format, ...) {
+  va_list list; char text[64];
+  __builtin_va_start(list, format);
+  __vsprintf_chk(text, 1, sizeof text, format, list);
+  __builtin_va_end(list);
+  printf(\"%s\", text);
+}
+int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
+  show(\"%Lf %d %Lg %Le\\n\", x, 8, x * 2, x / 4); return 0; }
+";
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            for optimize in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(source, &["--interpret", target, optimize]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{target} {optimize}: {}",
+                    text(&output.stderr)
+                );
+                assert_eq!(
+                    text(&output.stdout),
+                    "1.500000 7 1.500000 8 3 3.750000e-01\n",
+                    "{target} {optimize}"
+                );
+            }
+        }
+    }
+
     /// The interpreter computes the exact x87 `long double` functions and
     /// refuses the transcendental ones, whose glibc results it cannot
     /// reproduce bit for bit.

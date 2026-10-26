@@ -372,12 +372,19 @@ impl FunctionGen<'_> {
             },
             | 3 => {
                 let a = self.float_operand(ty);
-                let to = self.int_type();
                 let op = if self.rng.chance(50) {
                     "fptosi"
                 } else {
                     "fptoui"
                 };
+                if self.rng.chance(25) {
+                    // An i128 result is folded to i64 through its halves.
+                    let wide = self.fresh();
+                    self.line(format_args!("v{wide} = {op}.i128 v{}", a.id));
+                    let _ = self.fold_wide(wide);
+                    return;
+                }
+                let to = self.int_type();
                 let _ = self.def(to, Range::full(to), format_args!("{op}.{to} v{}", a.id));
             },
             | 4 => {
@@ -395,16 +402,52 @@ impl FunctionGen<'_> {
                 let _ = self.def(ty, range, format_args!("{op}.{ty} v{}", a.id));
             },
             | _ => {
-                let from = self.rng.pick(&[Ty::I1, Ty::I8, Ty::I32, Ty::I64]);
-                let a = self.operand(from);
                 let op = if self.rng.chance(50) {
                     "sitofp"
                 } else {
                     "uitofp"
                 };
+                if self.rng.chance(25) {
+                    let wide = self.wide_operand();
+                    let _ = self.def(ty, range, format_args!("{op}.{ty} v{wide}"));
+                    return;
+                }
+                let from = self.rng.pick(&[Ty::I1, Ty::I8, Ty::I32, Ty::I64]);
+                let a = self.operand(from);
                 let _ = self.def(ty, range, format_args!("{op}.{ty} v{}", a.id));
             },
         }
+    }
+
+    /// An `i128` value outside the scope, whose type the range tracking does
+    /// not model: a boundary or rounding-tie constant, or an `i64` operand
+    /// widened with or without its sign.
+    fn wide_operand(&mut self) -> u32 {
+        let id = self.fresh();
+        if self.rng.chance(50) {
+            let bits = self.rng.pick(&WIDE_CONSTANTS);
+            self.line(format_args!("v{id} = iconst.i128 {}", bits.cast_signed()));
+        } else {
+            let a = self.operand(Ty::I64);
+            let op = if self.rng.chance(50) { "sext" } else { "zext" };
+            self.line(format_args!("v{id} = {op}.i128 v{}", a.id));
+        }
+        id
+    }
+
+    /// The `i64` exclusive or of the halves of the `i128` value `wide`.
+    fn fold_wide(&mut self, wide: u32) -> Val {
+        let shift = self.fresh();
+        self.line(format_args!("v{shift} = iconst.i128 64"));
+        let high = self.fresh();
+        self.line(format_args!("v{high} = lshr.i128 v{wide}, v{shift}"));
+        let mixed = self.fresh();
+        self.line(format_args!("v{mixed} = xor.i128 v{wide}, v{high}"));
+        self.def(
+            Ty::I64,
+            Range::full(Ty::I64),
+            format_args!("trunc.i64 v{mixed}"),
+        )
     }
 
     /// A floating operand: a value in scope, or a constant.
@@ -1834,6 +1877,24 @@ const EXTENDED_CONSTANTS: [u128; 8] = [
     0x403E_FFFF_FFFF_FFFF_FFFF,
     0x3FFF_8000_0000_0000_0001,
     0xC03D_FFFF_FFFF_FFFF_FFFF,
+];
+
+/// `i128` operands for conversions: the signed and unsigned extremes, and
+/// values halfway between neighbouring x87, binary64 and binary32 values,
+/// whose rounding must go to even.
+const WIDE_CONSTANTS: [u128; 12] = [
+    1 << 127,
+    (1 << 127) - 1,
+    u128::MAX,
+    (1 << 64) + 1,
+    (1 << 65) + 2,
+    (1 << 65) + 6,
+    (1 << 127) + (1 << 63),
+    (1 << 127) + (3 << 63),
+    (1 << 53) + 1,
+    (1 << 24) + 1,
+    u128::MAX - (1 << 63),
+    0xFFFF_FFFF_FFFF_FFFF_8000_0000_0000_0000,
 ];
 
 const CONDITIONS: [&str; 10] = [

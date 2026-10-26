@@ -152,6 +152,103 @@ fn converts_to_and_from_binary_formats_and_integers() {
     assert_eq!(QUIET_NAN.to_integer(true, 32), None);
 }
 
+/// A direct conversion rounds once: going through binary64 first would
+/// round 1 + 2^-24 + 2^-63 down to 1 + 2^-24, a binary32 tie, then to 1.
+#[test]
+fn narrowing_rounds_once() {
+    let value = X87::from_bits(0x3FFF_8000_0080_0000_0001);
+    assert_eq!(value.to_f32().to_bits(), 0x3F80_0001);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "The double rounding being ruled out is the point."
+    )]
+    let twice = value.to_f64() as f32;
+    assert_eq!(twice.to_bits(), 0x3F80_0000);
+    // The same holds at binary64's own precision.
+    let value = X87::from_bits(0x3FFF_8000_0000_0000_0401);
+    assert_eq!(value.to_f64().to_bits(), 0x3FF0_0000_0000_0001);
+}
+
+/// Truncation to every integer width keeps the extremes, drops fractions
+/// toward zero, and fails just outside the range.
+#[test]
+fn integer_conversions_hold_at_every_width() {
+    let half = X87::from_f64(0.5);
+    for bits in [8, 16, 32, 64, 128] {
+        let maximum = (1_u128 << (bits - 1)) - 1;
+        let minimum = 1_u128 << (bits - 1);
+        let mask = u128::MAX >> (128 - bits);
+        let positive = |magnitude: u128| X87::from_integer(false, magnitude);
+        let negative = |magnitude: u128| X87::from_integer(true, magnitude);
+        let signed = |value: X87| value.to_integer(true, bits);
+        let unsigned = |value: X87| value.to_integer(false, bits);
+        // 2^127 - 1 rounds to 2^127 in 64 bits, so the 128-bit maximum is
+        // the largest representable value below it.
+        let largest = if bits == 128 {
+            maximum - ((1 << 63) - 1)
+        } else {
+            maximum
+        };
+        assert_eq!(signed(positive(largest)), Some(largest), "{bits}");
+        assert_eq!(signed(positive(minimum)), None, "{bits}");
+        assert_eq!(signed(negative(minimum)), Some(minimum), "{bits}");
+        // The next value below the minimum: one unit, or 2^64 at 2^127.
+        let below = negative(minimum + if bits == 128 { 1 << 64 } else { 1 });
+        assert_eq!(signed(below), None, "{bits}");
+        if bits < 64 {
+            assert_eq!(signed(positive(maximum).add(half)), Some(maximum), "{bits}");
+            assert_eq!(signed(negative(minimum).sub(half)), Some(minimum), "{bits}");
+            assert_eq!(unsigned(positive(mask).add(half)), Some(mask), "{bits}");
+        }
+        let unsigned_largest = if bits == 128 {
+            mask - ((1 << 64) - 1)
+        } else {
+            mask
+        };
+        assert_eq!(
+            unsigned(positive(unsigned_largest)),
+            Some(unsigned_largest),
+            "{bits}"
+        );
+        assert_eq!(unsigned(positive(mask).add(positive(1))), None, "{bits}");
+        assert_eq!(unsigned(half.negate()), Some(0), "{bits}");
+        assert_eq!(unsigned(negative(1)), None, "{bits}");
+        assert_eq!(signed(negative(1)), Some(mask), "{bits}");
+        assert_eq!(
+            signed(positive(7).add(half).negate()),
+            Some(7_u128.wrapping_neg() & mask),
+            "{bits}"
+        );
+    }
+    // Integers wider than 64 bits round to nearest, ties to even.
+    for (integer, rounded) in [
+        ((1_u128 << 64) + 1, 1_u128 << 64),
+        ((1 << 64) + 3, (1 << 64) + 4),
+        ((1 << 65) + 2, 1 << 65),
+        ((1 << 65) + 6, (1 << 65) + 8),
+        ((1 << 127) + (1 << 63), 1 << 127),
+        ((1 << 127) + (3 << 63), (1 << 127) + (1 << 65)),
+        ((1 << 127) - 1, 1 << 127),
+    ] {
+        let value = X87::from_integer(false, integer);
+        assert_eq!(value.to_integer(false, 128), Some(rounded), "{integer:#x}");
+        let value = X87::from_integer(true, integer);
+        assert_eq!(
+            value.negate().to_integer(false, 128),
+            Some(rounded),
+            "-{integer:#x}"
+        );
+    }
+    assert_eq!(
+        X87::from_integer(false, u128::MAX).to_integer(false, 128),
+        None
+    );
+    assert_eq!(
+        X87::from_integer(true, 1 << 127).to_integer(true, 128),
+        Some(1 << 127)
+    );
+}
+
 /// Compares every operation against the processor's own x87 unit on
 /// random encodings of every class, near and far apart.
 #[cfg(target_arch = "x86_64")]
