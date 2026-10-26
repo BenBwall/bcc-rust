@@ -2,6 +2,7 @@
 //! poison: wrapping at every width, signed and unsigned forms.
 
 use super::*;
+use crate::x87::X87;
 
 /// The result of `opcode.ty flags v0, v1` on `a` and `b`.
 pub(super) fn binary(opcode: &str, ty: &str, a: u128, b: u128) -> RuntimeValue {
@@ -213,13 +214,71 @@ fn float_comparisons_handle_nan() {
     }
 }
 
+/// x87 `f80` values compute as the processor does: 1/3 rounds up in its
+/// last of 64 bits, stores keep all ten bytes, and conversions round to
+/// the narrower formats.
 #[test]
-fn wide_floats_are_unsupported() {
+fn extended_floats_compute_as_the_x87_unit_does() {
     let text = "\
-function @f() -> i32 external {
+function @f(ptr) -> f80 external {
+block0(v0: ptr):
+    v1 = fconst.f80 0x3FFF8000000000000000
+    v2 = iconst.i32 3
+    v3 = sitofp.f80 v2
+    v4 = fdiv.f80 v1, v3
+    store.f80 v4, v0, align 16
+    v5 = load.f80 v0, align 16
+    return v5
+}
+function @g() -> f80 external {
+    slot0 = stack_slot 16, align 16
 block0:
-    v0 = fconst.f80 0x3FFF8000000000000000
-    v1 = iconst.i32 0
+    v0 = stack_addr slot0
+    v1 = call @f(v0)
+    return v1
+}
+";
+    assert_eq!(
+        returned(text, "g"),
+        RuntimeValue::F80(X87::from_bits(0x3FFD_AAAA_AAAA_AAAA_AAAB))
+    );
+    let text = "\
+function @f() -> i64 external {
+block0:
+    v0 = fconst.f80 0x403EFFFFFFFFFFFFFFFF
+    v1 = fptoui.i64 v0
+    return v1
+}
+";
+    assert_eq!(returned(text, "f"), int(u128::from(u64::MAX)));
+    let text = "\
+function @f() -> f64 external {
+block0:
+    v0 = fconst.f80 0x3FFDAAAAAAAAAAAAAAAB
+    v1 = fptrunc.f64 v0
+    return v1
+}
+";
+    assert_eq!(returned(text, "f"), RuntimeValue::F64(1.0 / 3.0));
+    // An unnormal is an invalid operand: unordered with itself.
+    let text = "\
+function @f() -> i1 external {
+block0:
+    v0 = fconst.f80 0x3FFF4000000000000000
+    v1 = fcmp.f80 uno v0, v0
+    return v1
+}
+";
+    assert_eq!(returned(text, "f"), int(1));
+}
+
+#[test]
+fn binary128_arithmetic_is_unsupported() {
+    let text = "\
+function @f() -> f128 external {
+block0:
+    v0 = fconst.f128 0x3FFF0000000000000000000000000000
+    v1 = fadd.f128 v0, v0
     return v1
 }
 ";

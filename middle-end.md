@@ -770,9 +770,9 @@ for buffer, 128-bit or under-aligned atomic operations. Objects using those path
 require the same runtime at final link. Windows native execution of these paths
 requires a compatible libatomic installation; interpreter coverage of the
 Windows data model does not verify that runtime. The interpreter executes each
-operation as one indivisible step in its single-threaded model. Existing
-extended-float interpreter limits still apply; LLVM supports the x87 object
-representation through padded memory.
+operation as one indivisible step in its single-threaded model, including
+x87 `f80` operands; LLVM supports the x87 object representation through padded
+memory.
 The native backend explicitly refuses atomic instructions before emission.
 
 ### Algorithm
@@ -863,8 +863,9 @@ immediate return `noundef` contract.
 The default interpreter host bridges F32/F64 arithmetic helpers through real
 scalar inputs and host output temporaries and implements `crealf`/`creal` and
 `cimagf`/`cimag` extraction, including target ABI coercions. LLVM supports x87
-complex arithmetic and transport; the native backend and interpreter retain
-their existing explicit F80 arithmetic limitation. This does not implement the
+complex arithmetic and transport; the interpreter extracts x87 parts with
+`creall`/`cimagl` but refuses the `__mulxc3`/`__divxc3` helpers, and the native
+backend retains its existing explicit F80 arithmetic limitation. This does not implement the
 complete complex math library, binary128 C lowering, or GNU complex conjugation
 and increment/decrement extensions. Atomic complex object operations retain an
 explicit unsupported diagnostic.
@@ -1124,8 +1125,8 @@ prebuilt installations can supply both directly.
 The interpreter executes a module directly: one frame per call with a value
 array, a byte-addressed memory with provenance (object, offset) for pointers, and
 exact poison tracking. It calls a small set of host functions (`putchar`,
-`printf` with integer formats, `malloc`, `free`, `exit`, `abort`) so test
-programs can report results. It is the oracle for differential tests: a program
+`printf`, `malloc`, `free`, `exit`, `abort`) so test programs can report
+results. It is the oracle for differential tests: a program
 must print the same output when interpreted before optimization, interpreted
 after optimization, and compiled through each LLVM arm.
 
@@ -1133,9 +1134,20 @@ The default host also implements the C99 real `<math.h>` function families in
 float, double and long double spellings, including pointer outputs, integer
 results and NaN constructors. Native libm evaluates float and double in their
 own precision; guest pointers stay in interpreter memory. Long double follows
-the target representation: binary64 on MSVC is supported, while GNU `f80`
-execution retains the existing unsupported-operation trap. `%f` output uses
-the default six fractional digits. Guest errno and floating-environment APIs
+the target representation: binary64 on MSVC, and x87 `f80` on the GNU targets.
+
+x87 values compute in `src/x87.rs`, a software model of the processor's x87
+unit under the default control word (64-bit precision, round to nearest even,
+exceptions masked): exact integer arithmetic rounded once, pseudo-denormals
+as valid operands, unnormals and pseudo-NaNs as invalid operands that give the
+negative "real indefinite" NaN, and the processor's NaN propagation. A test
+compares it with the host's x87 unit on random encodings of every class. The
+host computes the `long double` functions whose glibc results are exact or
+correctly rounded (rounding to integers, `sqrtl`, `fmodl`, `remainderl`,
+glibc's `remquol` algorithm, scaling, decomposition, neighbours, `nanl`)
+and refuses the transcendental ones and `fmal`. `printf` formats every
+conversion of `double` and `long double` exactly, digit for digit as glibc
+does, with halfway cases to even. Guest errno and floating-environment APIs
 remain outside the host implementation.
 
 The interpreter runs one translation unit and links nothing else. A call
