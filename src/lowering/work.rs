@@ -52,6 +52,8 @@ pub(super) enum Task<'tu> {
         crate::translation_phases::SourceVectors,
     ),
     CleanupNormal(&'tu Statement<'tu>),
+    /// Emit a GNU `asm` statement whose operands are on the stack.
+    Assembly(&'tu Statement<'tu>),
 
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {

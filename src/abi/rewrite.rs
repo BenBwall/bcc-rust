@@ -327,6 +327,10 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 }
                 _ = self.builder.insert_with_result(data, result);
             },
+            | InstData::InlineAsm { asm, args } => {
+                let args = self.builder.value_list(old.value_list(args));
+                _ = self.builder.insert(InstData::InlineAsm { asm, args });
+            },
             | InstData::Call { func, args } => {
                 let sig = self.old_signatures[func.index()];
                 self.call(

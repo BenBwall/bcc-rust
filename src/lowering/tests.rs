@@ -4,6 +4,7 @@
 //! the constant conversions (`floats.rs`), and the constructs
 //! lowering refuses (`refusals.rs`).
 
+mod assembly;
 mod call_diagnostics;
 mod complex;
 mod correspondence;

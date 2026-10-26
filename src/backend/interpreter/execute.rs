@@ -365,6 +365,9 @@ impl Machine<'_, '_, '_> {
                     host,
                     self.module.function_signature(func),
                 ),
+            // The machine code of inline assembly is outside the IR's
+            // semantics; skipping it could silently change the program.
+            | InstData::InlineAsm { .. } => return Err(Fault::Unsupported(Unsupported::InlineAsm)),
             | InstData::CallIndirect { sig, args } => {
                 let (&callee, args) = body
                     .value_list(args)

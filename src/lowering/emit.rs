@@ -132,6 +132,11 @@ pub(super) fn emit<'s>(
                     }
                     builder.inst_result(inst)
                 },
+                | Op::InlineAsm(asm, args) => {
+                    let args = map_list(args, &values, &map, scratch)?;
+                    _ = builder.inline_asm(asm, &args);
+                    None
+                },
                 | Op::CallIndirect(sig, callee, args) => {
                     let callee = map(callee, &values)?;
                     let args = map_list(args, &values, &map, scratch)?;
@@ -235,7 +240,7 @@ fn used_poison<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, bool> {
                     });
                 },
                 | Op::Iconst(..) | Op::Fconst(..) | Op::Diagnostic(_) => {},
-                | Op::Atomic(_, args) | Op::Call(_, args) =>
+                | Op::Atomic(_, args) | Op::Call(_, args) | Op::InlineAsm(_, args) =>
                     for &arg in args {
                         mark(arg);
                     },
