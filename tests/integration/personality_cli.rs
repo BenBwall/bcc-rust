@@ -1239,6 +1239,59 @@ mod tests {
             "{}",
             stderr(&output)
         );
+        // The callee is found through parentheses, `*` and `&`, which call
+        // the same function (GCC calls __sprintf_chk for each), and by entity:
+        // a parameter or local named like a wrapper is another function,
+        // while a block-scope extern declaration is the same one.
+        directory.write(
+            "forms.c",
+            "#include <stdio.h>\nint a(char *b, const char *s) { return (*sprintf)(b, \"%s\", s); \
+             }\nint c(char *b, const char *s) { return (&sprintf)(b, \"%s\", s); }\nint d(char \
+             *b, const char *s) { return ((sprintf))(b, \"%s\", s); }\nint m(char *b) { extern \
+             int sprintf(char *, const char *, ...); return sprintf(b, \"x\"); }\n",
+        );
+        let forms = [
+            "-O2",
+            "-D_FORTIFY_SOURCE=2",
+            "-c",
+            "forms.c",
+            "-o",
+            "forms.o",
+        ];
+        let output = directory.bcc("--gcc-mode", &forms);
+        succeeds(&output);
+        let warnings = stderr(&output);
+        for place in ["2:42", "3:42", "4:42", "5:72"] {
+            assert!(
+                warnings.contains(&format!(
+                    "forms.c:{place}: warning: _FORTIFY_SOURCE checks for `sprintf`"
+                )),
+                "{place}: {warnings}"
+            );
+        }
+        assert_eq!(warnings.matches(": warning:").count(), 4, "{warnings}");
+        let mut strict = vec!["-Werror"];
+        strict.extend(forms);
+        assert_eq!(directory.bcc("--gcc-mode", &strict).status.code(), Some(1));
+        directory.write(
+            "shadow.c",
+            "#include <stdio.h>\nint h(int (*sprintf)(int)) { return sprintf(7); }\nint k(void) { \
+             int (*printf)(int) = 0; return printf ? printf(1) : 0; }\n",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-Werror",
+                "-O2",
+                "-D_FORTIFY_SOURCE=2",
+                "-c",
+                "shadow.c",
+                "-o",
+                "shadow.o",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
         // glibc's Clang wrappers need no variadic pack.
         let output = directory.bcc("--clang-mode", &flags);
         succeeds(&output);

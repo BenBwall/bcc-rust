@@ -55,6 +55,7 @@ use super::{
     Analyzer,
     BindingKind,
     Duration,
+    Linkage,
     SemanticErrorKind,
     constants::Floating,
     integer::Integer,
@@ -73,10 +74,43 @@ use crate::{
         Constant,
         Expression,
         ExpressionType,
+        Identifier,
     },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// The name a call's callee designates when it is a fortify wrapper bcc
+    /// bypasses ([`FunctionRecord::forwards_variadic`]): the function
+    /// designator through parentheses, `&` and `*` (`(*sprintf)(...)`
+    /// calls `sprintf`, C99 §6.5.3.2p4, p. 79; PDF p. 91), resolved to a
+    /// function with external linkage, which denotes the wrapper's function
+    /// (§6.2.2p2, p. 30; PDF p. 42). A parameter or local of the same name
+    /// is another entity.
+    ///
+    /// [`FunctionRecord::forwards_variadic`]: super::FunctionRecord::forwards_variadic
+    fn unchecked_wrapper_callee(&self, callee: &'tu Expression<'tu>) -> Option<Identifier> {
+        use crate::translation_phases::parsing::syntax::UnaryOperator;
+        let mut designator = callee;
+        loop {
+            designator = match designator.kind {
+                | ExpressionType::Parenthesized { expression } => expression,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::AddressOf | UnaryOperator::Indirection,
+                    operand_expression,
+                } => operand_expression,
+                | _ => break,
+            };
+        }
+        let ExpressionType::Identifier(name) = designator.kind else {
+            return None;
+        };
+        let binding = &self.bindings[self.expression_info(designator).binding?];
+        (binding.kind == BindingKind::Function
+            && binding.linkage == Linkage::External
+            && self.unchecked_wrappers.contains_key(&name.name))
+        .then_some(name)
+    }
+
     /// Postorder reduction never evaluates an operand through Rust recursion.
     /// C99: §6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106.
     pub(super) fn expression_done(&mut self, e: &'tu Expression<'tu>) {
@@ -419,9 +453,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 // A call to a fortify wrapper bcc cannot expand reaches the
                 // library function without the wrapper's checks.
-                if let ExpressionType::Identifier(name) = vector_callee.kind
-                    && self.unchecked_wrappers.contains_key(&name.name)
-                {
+                if let Some(name) = self.unchecked_wrapper_callee(function_expression) {
                     self.error(
                         SemanticErrorKind::UncheckedFortifyWrapper,
                         name.source_vectors,

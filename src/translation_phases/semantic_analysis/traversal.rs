@@ -55,7 +55,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ) && let Some(function) = self.functions.current
             {
                 self.function_records[function.id].forwards_variadic = true;
-                if let Some(binding) = function.binding {
+                if let Some(binding) = function.binding
+                    && self.bindings[binding].linkage == super::Linkage::External
+                {
                     _ = self
                         .unchecked_wrappers
                         .insert(self.bindings[binding].name.name, ());
