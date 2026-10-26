@@ -46,8 +46,10 @@ pub(crate) use features::{
 pub(crate) use language::{
     CStandard,
     CompilerIdentity,
+    DefaultVisibility,
     ExtensionPolicy,
     LanguageMode,
+    LibraryBuiltins,
     MsvcFeature,
     PreprocessingOption,
 };
@@ -89,6 +91,11 @@ pub(crate) struct CompilerConfiguration {
     trigraphs: Option<bool>,
     /// Signed integer overflow wraps (`-fwrapv`).
     wrapv: bool,
+    /// Every structure is packed and `#pragma pack` ignored (`-fpack-struct`
+    /// without a value).
+    pack_structures: bool,
+    /// The visibility of definitions that name none (`-fvisibility=`).
+    default_visibility: DefaultVisibility,
     /// The structure packing in effect before any `#pragma pack`, and that
     /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
     /// none.

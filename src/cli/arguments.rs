@@ -402,6 +402,38 @@ impl Cli {
             .map(String::as_str)
     }
 
+    /// The library functions code generation may treat as builtins, from
+    /// `-fbuiltin`, `-fno-builtin` and `-fno-builtin-NAME` in order, as
+    /// GCC reads them. `-ffreestanding` allows none, which lowering applies.
+    pub(super) fn library_builtins<'tu>(
+        &self,
+        arena: &'tu crate::util::bump::Bump,
+    ) -> crate::configuration::LibraryBuiltins<'tu> {
+        use crate::configuration::LibraryBuiltins;
+        let mut none = false;
+        let mut excluded = crate::util::bump::ArenaVec::new_in(arena);
+        for option in &self.language_option {
+            match option.as_str() {
+                | "-fbuiltin" => {
+                    none = false;
+                    excluded.clear();
+                },
+                | "-fno-builtin" => none = true,
+                | _ =>
+                    if let Some(name) = option.strip_prefix("-fno-builtin-") {
+                        excluded.push(&*arena.alloc_str(name));
+                    },
+            }
+        }
+        if none {
+            LibraryBuiltins::None
+        } else if excluded.is_empty() {
+            LibraryBuiltins::All
+        } else {
+            LibraryBuiltins::Except(excluded.leak())
+        }
+    }
+
     pub(super) fn configure_preprocessing(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
         context.preprocessing_options =
@@ -511,8 +543,15 @@ enum LanguageFlag {
     Trigraphs(bool),
     /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
     Wrapv(bool),
-    /// `-fpack-struct[=N]`, or `-fno-pack-struct` (0).
+    /// `-fpack-struct=N`.
     PackStruct(u32),
+    /// `-fpack-struct` (true) or `-fno-pack-struct`, which also clears N.
+    PackAll(bool),
+    /// `-fvisibility=default|hidden|protected|internal`.
+    Visibility(crate::configuration::DefaultVisibility),
+    /// `-fbuiltin`, `-fno-builtin` or `-fno-builtin-NAME`, which
+    /// [`Cli::library_builtins`] reads in order.
+    Builtins,
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
 }
@@ -538,9 +577,25 @@ impl LanguageFlag {
             | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
             | "-fwrapv" => return Some(Self::Wrapv(true)),
             | "-fno-wrapv" | "-fstrict-overflow" => return Some(Self::Wrapv(false)),
-            | "-fpack-struct" => return Some(Self::PackStruct(1)),
-            | "-fno-pack-struct" => return Some(Self::PackStruct(0)),
+            | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
+            | "-fpack-struct" => return Some(Self::PackAll(true)),
+            | "-fno-pack-struct" => return Some(Self::PackAll(false)),
             | _ => {},
+        }
+        if text
+            .strip_prefix("-fno-builtin-")
+            .is_some_and(|name| !name.is_empty())
+        {
+            return Some(Self::Builtins);
+        }
+        if let Some(value) = text.strip_prefix("-fvisibility=") {
+            use crate::configuration::DefaultVisibility as V;
+            return match value {
+                | "default" => Some(Self::Visibility(V::Default)),
+                | "hidden" | "internal" => Some(Self::Visibility(V::Hidden)),
+                | "protected" => Some(Self::Visibility(V::Protected)),
+                | _ => None,
+            };
         }
         if let Some(value) = text.strip_prefix("-fpack-struct=") {
             return match value {
@@ -583,7 +638,8 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
-            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation => configuration,
+            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation | Self::Builtins =>
+                configuration,
             | Self::AllWarnings(enabled) => configuration.with_warning_option(
                 DiagnosticGroup::UnusedFunction,
                 WarningOption::Enable(enabled),
@@ -612,6 +668,11 @@ impl LanguageFlag {
             | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
             | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
             | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),
+            | Self::PackAll(true) => configuration.with_pack_structures(true),
+            | Self::PackAll(false) => configuration
+                .with_pack_structures(false)
+                .with_default_pack(0),
+            | Self::Visibility(visibility) => configuration.with_default_visibility(visibility),
         }
     }
 }

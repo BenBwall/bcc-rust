@@ -19,6 +19,7 @@ use super::{
     },
 };
 use crate::{
+    configuration::DefaultVisibility,
     ir::{
         Align,
         DllStorage as IrDllStorage,
@@ -113,6 +114,26 @@ impl Unit<'_, '_, '_> {
                 attributes.dll = IrDllStorage::Default;
                 self.module.set_symbol_attributes(symbol, attributes);
             }
+            // `-fvisibility=` gives a definition with linkage the
+            // visibility its entity does not name; declarations keep the
+            // default, as in GCC.
+            let linkage = match symbol {
+                | Symbol::Function(func) => self.module.function(func).linkage,
+                | Symbol::Global(global) => self.module.global(global).linkage,
+            };
+            if defined
+                && linkage != IrLinkage::Internal
+                && attributes.visibility == IrVisibility::Default
+                && !self.explicit_visibility.contains(&symbol)
+            {
+                let visibility = match self.context.configuration.default_visibility() {
+                    | DefaultVisibility::Default => continue,
+                    | DefaultVisibility::Hidden => IrVisibility::Hidden,
+                    | DefaultVisibility::Protected => IrVisibility::Protected,
+                };
+                attributes.visibility = visibility;
+                self.module.set_symbol_attributes(symbol, attributes);
+            }
         }
     }
 
@@ -130,6 +151,9 @@ impl Unit<'_, '_, '_> {
         let Some(&attributes) = self.sema.entity_attributes(binding) else {
             return;
         };
+        if attributes.visibility.is_some() {
+            _ = self.explicit_visibility.insert(symbol);
+        }
         let visibility = match attributes.visibility {
             | None | Some(Visibility::Default) => IrVisibility::Default,
             | Some(Visibility::Hidden) => IrVisibility::Hidden,

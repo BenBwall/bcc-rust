@@ -19,6 +19,8 @@ use super::{
     global,
 };
 use crate::{
+    configuration::LibraryBuiltins,
+    diagnostics::format_in,
     ir::{
         DllStorage,
         Entity,
@@ -79,6 +81,9 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         if let Some(align) = function.align {
             api.alignment(value, align.bytes());
+        }
+        if function.body.is_some() {
+            library_builtins(api, value, module.library_builtins(), arena);
         }
         sections(api, value, function.attributes);
         functions.push(value);
@@ -303,5 +308,25 @@ pub(super) fn special_arrays<'id>(
         api.linkage(array, Linkage::Appending);
         api.initializer(array, api.const_array(ptr, &used));
         api.section(array, "llvm.metadata");
+    }
+}
+
+/// Marks a function in which LLVM must not treat library functions as
+/// builtins, as Clang marks every function under `-fno-builtin`
+/// (`no-builtins`) and `-fno-builtin-NAME` (`no-builtin-NAME`); LLVM's
+/// library-call simplification and loop-idiom recognition read them.
+fn library_builtins<'id>(
+    api: &Session<'id>,
+    function: Val<'id>,
+    builtins: LibraryBuiltins<'_>,
+    arena: &Bump,
+) {
+    match builtins {
+        | LibraryBuiltins::All => {},
+        | LibraryBuiltins::None => api.string_attribute(function, "no-builtins", ""),
+        | LibraryBuiltins::Except(names) =>
+            for name in names {
+                api.string_attribute(function, format_in!(arena, "no-builtin-{name}"), "");
+            },
     }
 }

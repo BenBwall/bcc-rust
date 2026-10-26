@@ -24,10 +24,13 @@ use super::{
     types::Type,
     verifier::Profile,
 };
-use crate::util::bump::{
-    ArenaMap,
-    ArenaVec,
-    Bump,
+use crate::{
+    configuration::LibraryBuiltins,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'ir> Module<'ir> {
@@ -262,6 +265,24 @@ impl<'ir> Module<'ir> {
         &self.asm_blocks
     }
 
+    /// Restricts the library functions a back end may treat as builtins,
+    /// copying the names into the module's arena.
+    pub(crate) fn set_library_builtins(&mut self, builtins: LibraryBuiltins<'_>) {
+        let arena = self.arena;
+        self.library_builtins = match builtins {
+            | LibraryBuiltins::All => LibraryBuiltins::All,
+            | LibraryBuiltins::None => LibraryBuiltins::None,
+            | LibraryBuiltins::Except(names) => LibraryBuiltins::Except(
+                arena.alloc_slice_fill_iter(names.iter().map(|name| &*arena.alloc_str(name))),
+            ),
+        };
+    }
+
+    /// The library functions a back end may treat as builtins.
+    pub(crate) const fn library_builtins(&self) -> LibraryBuiltins<'ir> {
+        self.library_builtins
+    }
+
     /// Gives a global its initializer, copying the bytes and relocations
     /// into the module's arena.
     pub(crate) fn define_global(&mut self, global: GlobalId, init: GlobalInit<'_>) {
@@ -309,6 +330,7 @@ impl<'ir> Module<'ir> {
             symbols: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             init_functions: ArenaVec::new_in(arena),
             asm_blocks: ArenaVec::new_in(arena),
+            library_builtins: LibraryBuiltins::All,
         }
     }
 

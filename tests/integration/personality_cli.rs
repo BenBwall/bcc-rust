@@ -439,33 +439,8 @@ mod tests {
             ),
             (
                 "--gcc-mode",
-                "-mavx2",
-                "gcc: error: '-mavx2' is not supported",
-            ),
-            (
-                "--gcc-mode",
-                "-march=native",
-                "gcc: error: '-march=native' is not supported",
-            ),
-            (
-                "--gcc-mode",
-                "-fno-builtin",
-                "gcc: error: '-fno-builtin' is not supported",
-            ),
-            (
-                "--gcc-mode",
-                "-fcommon",
-                "gcc: error: '-fcommon' is not supported",
-            ),
-            (
-                "--gcc-mode",
                 "-Ofast",
                 "gcc: error: '-Ofast' is not supported",
-            ),
-            (
-                "--gcc-mode",
-                "-fvisibility=hidden",
-                "gcc: error: '-fvisibility=hidden' is not supported",
             ),
             (
                 "--clang-mode",
@@ -572,13 +547,59 @@ mod tests {
             "--gcc-mode",
             &["-fsyntax-only", "-fpack-struct=1", "-DS=5", "p.c"],
         ));
-        succeeds(&directory.bcc(
-            "--gcc-mode",
-            &["-fsyntax-only", "-fpack-struct", "-DS=5", "p.c"],
-        ));
         succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp1", "/DS=5", "p.c"]));
         succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp", "/DS=5", "p.c"]));
         succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp2", "/DS=6", "p.c"]));
+        // GCC's `-fpack-struct` without a value packs every structure as
+        // the `packed` attribute does and ignores the pragmas (probed with
+        // GCC 15.2), unlike `-fpack-struct=N`.
+        directory.write(
+            "all.c",
+            "struct s { char c; int i; };\n#pragma pack(push, 4)\nstruct t { char c; double d; \
+             };\n#pragma pack(pop)\nstruct x { char c; int i __attribute__((aligned(8))); \
+             };\n_Static_assert(sizeof(struct s) == S, \"s\");\n_Static_assert(sizeof(struct t) \
+             == T, \"t\");\n_Static_assert(sizeof(struct x) == X, \"x\");\n",
+        );
+        let all = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-fsyntax-only",
+                "-fpack-struct",
+                "-DS=5",
+                "-DT=9",
+                "-DX=16",
+                "all.c",
+            ],
+        );
+        succeeds(&all);
+        assert!(
+            stderr(&all).contains("'#pragma pack' has no effect with '-fpack-struct' - ignored"),
+            "{}",
+            stderr(&all)
+        );
+        succeeds(&directory.bcc(
+            "--gcc-mode",
+            &[
+                "-fsyntax-only",
+                "-fpack-struct=1",
+                "-DS=5",
+                "-DT=12",
+                "-DX=5",
+                "all.c",
+            ],
+        ));
+        succeeds(&directory.bcc(
+            "--gcc-mode",
+            &[
+                "-fsyntax-only",
+                "-fpack-struct",
+                "-fno-pack-struct",
+                "-DS=8",
+                "-DT=12",
+                "-DX=16",
+                "all.c",
+            ],
+        ));
         let invalid = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Zp3", "p.c"]);
         assert_eq!(invalid.status.code(), Some(2));
         assert!(
@@ -863,6 +884,262 @@ mod tests {
                 Some(0),
                 "{mode}"
             );
+        }
+    }
+
+    #[test]
+    fn cl_outputs_never_replace_an_input() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a(void) { return 1; }\n");
+        directory.write("b.c", "int b(void) { return 2; }\n");
+        directory.write("o.obj", "not an object\n");
+        let refused = |mode: &str, args: &[&str], message: &str| {
+            let output = directory.bcc(mode, args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            assert!(
+                stderr(&output).contains(message),
+                "{args:?}: {}",
+                stderr(&output)
+            );
+        };
+        // cl's steps check their own outputs only; the executable, or an
+        // object that lands on another input, is checked across them.
+        refused(
+            "--msvc-mode",
+            &["/nologo", "a.c", "b.c", "/Feb.c"],
+            "cl : Command line error : output file 'b.c' is the same as input file 'b.c'",
+        );
+        refused(
+            "--msvc-mode",
+            &["/nologo", "/c", "a.c", "o.obj", "/Foo.obj"],
+            "output file 'o.obj' is the same as input file 'o.obj'",
+        );
+        refused(
+            "--msvc-mode",
+            &["/nologo", "/c", "/FA", "a.c", "/Faa.c"],
+            "output file 'a.c' is the same as input file 'a.c'",
+        );
+        refused(
+            "--msvc-mode",
+            &["/nologo", "/P", "/Tc", "a.c", "/Fia.c"],
+            "output file 'a.c' is the same as input file 'a.c'",
+        );
+        refused(
+            "--clang-cl-mode",
+            &["a.c", "b.c", "/Feb.c"],
+            "clang-cl: error: output file 'b.c' is the same as input file 'b.c'",
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("b.c", directory.path("alias.c")).unwrap();
+            refused(
+                "--msvc-mode",
+                &["/nologo", "a.c", "b.c", "/Fealias.c"],
+                "output file 'alias.c' is the same as input file 'b.c'",
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(directory.path("a.c")).unwrap(),
+            "int a(void) { return 1; }\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path("b.c")).unwrap(),
+            "int b(void) { return 2; }\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path("o.obj")).unwrap(),
+            "not an object\n"
+        );
+    }
+
+    #[test]
+    fn machine_options_follow_the_target_abi() {
+        let directory = Directory::new();
+        directory.write("x.c", "struct s { char c; int i : 3; } v;\n");
+        let gcc = |args: &[&str]| directory.bcc("--gcc-mode", args);
+        let refused = gcc(&["-c", "-mms-bitfields", "x.c", "-o", "x.o"]);
+        assert_eq!(refused.status.code(), Some(1));
+        assert!(
+            stderr(&refused).contains("'-mms-bitfields' is not supported"),
+            "{}",
+            stderr(&refused)
+        );
+        // `--target` may come after the option.
+        succeeds(&gcc(&[
+            "-c",
+            "-mms-bitfields",
+            "--target=x86_64-w64-mingw32",
+            "x.c",
+            "-o",
+            "w.o",
+        ]));
+        let windows = gcc(&[
+            "-c",
+            "--target=x86_64-w64-mingw32",
+            "-mno-ms-bitfields",
+            "x.c",
+            "-o",
+            "w.o",
+        ]);
+        assert_eq!(windows.status.code(), Some(1), "{}", stderr(&windows));
+        succeeds(&gcc(&[
+            "-c",
+            "-mno-ms-bitfields",
+            "-mlong-double-80",
+            "x.c",
+            "-o",
+            "x.o",
+        ]));
+        // A newer processor warns: baseline code runs on it.
+        for option in ["-march=native", "-march=x86-64-v3", "-mavx2"] {
+            let output = gcc(&["-c", option, "x.c", "-o", "x.o"]);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains(&format!("'{option}' is ignored: bcc generates baseline")),
+                "{}",
+                stderr(&output)
+            );
+        }
+        succeeds(&gcc(&[
+            "-c",
+            "-march=x86-64",
+            "-mtune=native",
+            "x.c",
+            "-o",
+            "x.o",
+        ]));
+    }
+
+    #[test]
+    fn no_builtin_keeps_library_calls_as_written() {
+        let directory = Directory::new();
+        directory.write(
+            "b.c",
+            "double sqrt(double);\nvoid zero(char *p, unsigned long n) { for (unsigned long i = \
+             0; i < n; i++) p[i] = 0; }\ndouble root(double x) { return sqrt(x); }\n",
+        );
+        let assembly = |options: &[&str]| {
+            let mut args = vec!["-O2", "-S", "-o", "-"];
+            args.extend(options);
+            args.push("b.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        // LLVM recognizes library functions by name unless told otherwise.
+        let builtin = assembly(&[]);
+        assert!(builtin.contains("memset"), "{builtin}");
+        assert!(builtin.contains("sqrtsd"), "{builtin}");
+        for options in [&["-fno-builtin"][..], &["-ffreestanding"]] {
+            let plain = assembly(options);
+            assert!(!plain.contains("memset"), "{options:?}: {plain}");
+            assert!(!plain.contains("sqrtsd"), "{options:?}: {plain}");
+        }
+        let memset_only = assembly(&["-fno-builtin-memset"]);
+        assert!(!memset_only.contains("memset"), "{memset_only}");
+        assert!(memset_only.contains("sqrtsd"), "{memset_only}");
+        assert!(assembly(&["-fno-builtin", "-fbuiltin"]).contains("memset"));
+        let ir = directory.bcc("", &["--emit=llvm", "-fno-builtin-sqrt", "b.c"]);
+        assert!(
+            stdout(&ir).contains("\"no-builtin-sqrt\""),
+            "{}",
+            stdout(&ir)
+        );
+        // GCC's loop-distribution switch maps onto the same attributes.
+        let gcc = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-O2",
+                "-S",
+                "-o",
+                "-",
+                "-fno-tree-loop-distribute-patterns",
+                "b.c",
+            ],
+        );
+        succeeds(&gcc);
+        assert!(!stdout(&gcc).contains("memset"), "{}", stdout(&gcc));
+    }
+
+    #[test]
+    fn visibility_applies_to_definitions_without_one() {
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "extern int ext;\nint def = 1;\nstatic int priv = \
+             2;\n__attribute__((visibility(\"default\"))) int exported(void) { return ext + priv; \
+             }\nint helper(void) { return def; }\nint outside(void);\nint use(void) { return \
+             outside(); }\n",
+        );
+        let ir = |options: &[&str]| {
+            let mut args = vec!["--emit=llvm"];
+            args.extend(options);
+            args.push("v.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let hidden = ir(&["-fvisibility=hidden"]);
+        for line in [
+            "@def = hidden global",
+            "@priv = internal global",
+            "@ext = external global",
+            "define i32 @exported()",
+            "define hidden i32 @helper()",
+            "declare i32 @outside()",
+        ] {
+            assert!(hidden.contains(line), "{line}\n{hidden}");
+        }
+        assert!(ir(&["-fvisibility=protected"]).contains("define protected i32 @helper()"));
+        assert!(!ir(&["-fvisibility=hidden", "-fvisibility=default"]).contains("hidden"));
+    }
+
+    #[test]
+    fn typical_build_flags_build_and_run() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            eprintln!("skipping: the test links with the Linux GNU host's C library");
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "app.c",
+            "#include <stdio.h>\n#include <string.h>\n#include <pthread.h>\nstatic void *run(void \
+             *p) { char b[16]; snprintf(b, sizeof b, \"%s\", (char *)p); printf(\"%s %zu\\n\", b, \
+             strlen(b)); return 0; }\nint main(void) { pthread_t t; pthread_create(&t, 0, run, \
+             \"hello\"); return pthread_join(t, 0); }\n",
+        );
+        // A CMake release build with distribution hardening, as GCC.
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(
+                mode,
+                &[
+                    "-O2",
+                    "-g",
+                    "-DNDEBUG",
+                    "-std=gnu11",
+                    "-Wall",
+                    "-Wextra",
+                    "-fPIC",
+                    "-fvisibility=hidden",
+                    "-ffunction-sections",
+                    "-fdata-sections",
+                    "-fno-strict-aliasing",
+                    "-fno-common",
+                    "-fno-omit-frame-pointer",
+                    "-fstack-protector-strong",
+                    "-D_FORTIFY_SOURCE=2",
+                    "-march=native",
+                    "-mtune=native",
+                    "-pthread",
+                    "app.c",
+                    "-o",
+                    "app",
+                ],
+            );
+            succeeds(&output);
+            let run = Command::new(directory.path("app")).output().unwrap();
+            assert_eq!(stdout(&run), "hello 5\n", "{mode}");
+            assert_eq!(run.status.code(), Some(0), "{mode}");
         }
     }
 }

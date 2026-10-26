@@ -188,7 +188,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // Preprocessing: `/E` and `/EP` write every source to stdout, `/P` each
     // to its `.i` file.
     if let Some(mode) = state.preprocess {
-        for source in &c_sources {
+        let outputs: Vec<PathBuf> = c_sources
+            .iter()
+            .filter(|_| mode.to_file)
+            .map(|source| named(state.preprocessed.as_deref(), &source.path, "i"))
+            .collect();
+        check_outputs(invocation, &state, &outputs)?;
+        for (index, source) in c_sources.iter().enumerate() {
             let mut step = common.clone();
             step.push("-E".into());
             if mode.no_line_markers {
@@ -196,7 +202,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
             if mode.to_file {
                 step.push("-o".into());
-                step.push(named(state.preprocessed.as_deref(), &source.path, "i").into());
+                step.push(outputs[index].clone().into());
             }
             step.extend(source.arguments());
             if !clang_cl {
@@ -226,6 +232,24 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         return Ok(plan);
     }
     // Compiling: each source to its object, kept beside the executable.
+    let first = c_sources
+        .first()
+        .map(|source| source.path.clone())
+        .or_else(|| state.sources.first().map(|source| source.path.clone()))
+        .expect("an input");
+    let extension = if state.dll { "dll" } else { "exe" };
+    let executable = named(state.executable.as_deref(), &first, extension);
+    let mut outputs = Vec::new();
+    for source in &c_sources {
+        outputs.push(named(state.object.as_deref(), &source.path, "obj"));
+        if state.listing {
+            outputs.push(named(state.listing_name.as_deref(), &source.path, "asm"));
+        }
+    }
+    if !state.compile_only {
+        outputs.push(executable.clone());
+    }
+    check_outputs(invocation, &state, &outputs)?;
     let mut objects = Vec::new();
     for source in &c_sources {
         let object = named(state.object.as_deref(), &source.path, "obj");
@@ -254,13 +278,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if state.compile_only {
         return Ok(plan);
     }
-    let first = c_sources
-        .first()
-        .map(|source| source.path.clone())
-        .or_else(|| state.sources.first().map(|source| source.path.clone()))
-        .expect("an input");
-    let extension = if state.dll { "dll" } else { "exe" };
-    let executable = named(state.executable.as_deref(), &first, extension);
     let mut link = common;
     if state.dll {
         link.push("-shared".into());
@@ -283,6 +300,55 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     link.push(executable.into());
     plan.steps.push(Step::Bcc(link));
     Ok(plan)
+}
+
+/// Refuses an output of any step that is one of the command line's input
+/// files, by file identity (device and inode on Unix), so a symbolic or hard
+/// link counts: each step checks only its own `-o` against its own inputs,
+/// and `/Fe`, or an object that lands on another input, would otherwise
+/// replace a source. An input that cannot be read is left for its step to
+/// report.
+fn check_outputs(
+    invocation: &Invocation,
+    state: &State,
+    outputs: &[PathBuf],
+) -> Result<(), MainError> {
+    let inputs = state
+        .sources
+        .iter()
+        .map(|source| source.path.as_os_str())
+        .chain(
+            state
+                .link
+                .iter()
+                .map(OsString::as_os_str)
+                .filter(|argument| !argument.to_string_lossy().starts_with("-Wl,")),
+        );
+    for input in inputs {
+        let input = Path::new(input);
+        if std::fs::metadata(input).is_err() {
+            continue;
+        }
+        for output in outputs {
+            if crate::cli::output_file::is_input(input, output).unwrap_or(false) {
+                let message = format_args!(
+                    "output file '{}' is the same as input file '{}'",
+                    output.display(),
+                    input.display()
+                );
+                if invocation.personality == Personality::ClangCl {
+                    invocation.error(message);
+                } else {
+                    super::print(
+                        &format!("{} : Command line error : {message}\n", invocation.name),
+                        true,
+                    );
+                }
+                return Err(MainError::Reported(2));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A `cl` input.

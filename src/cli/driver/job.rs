@@ -108,6 +108,7 @@ pub(super) fn compile(
         after:    tu.alloc_slice_fill_iter(directories.after.iter().map(AsRef::as_ref)),
     };
     let mut context = Context::with_configuration(&tu, args.configuration());
+    context.library_builtins = args.library_builtins(&tu);
     // GCC passes no preprocessing options to `-fpreprocessed` input.
     if matches!(source, Source::Preprocessed(_)) {
         context.preprocessed_input = true;

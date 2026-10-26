@@ -103,7 +103,7 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
 - **Ignored**, when bcc's output already means what the option asks for:
   warnings and diagnostics formatting, debug information (`-g*`,
   `-fdebug-prefix-map=`), reports and dumps, build mechanics (`-pipe`,
-  `-save-temps`, `-flto`, `-ffunction-sections`, `-fuse-ld=`), optimizations
+  `-save-temps`, `-flto`, `-fuse-ld=`), optimizations
   the compiler is permitted but not required to make (`-funroll-loops`,
   `-fomit-frame-pointer`, `-fstrict-aliasing`, `-fno-math-errno`,
   `-fassociative-math`), code generation tuning (`-mtune=`, `-falign-*`,
@@ -111,7 +111,10 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
   `-fno-strict-aliasing`: bcc emits no type-based alias information;
   `-ffp-contract=off`: bcc forms no fused operations; `-fexcess-precision=`:
   x86-64 has none; `-mno-avx`: bcc uses only the baseline instruction set;
-  `-fmath-errno`: the math functions set `errno`), options that only change
+  `-fmath-errno`: the math functions set `errno`; `-march=x86-64`), the
+  target's own ABI choices (`-mms-bitfields` for a Windows target,
+  `-mlong-double-80` for Linux; `-m` options are judged for the target,
+  after the whole command line is read), options that only change
   which programs are accepted (`-fpermissive`), and options for other
   languages (C++'s `-fno-rtti`).
 - **Warned and ignored**, for hardening and instrumentation that a correct
@@ -119,16 +122,22 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
   `-fstack-clash-protection`, `-fcf-protection`, `-ftrivial-auto-var-init=`,
   `-fexceptions` (bcc emits no landing pads, so cleanups do not run while an
   exception unwinds), Spectre mitigations, `-mfentry`, `-specs=`, `-B`, and
-  `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`. The build goes
-  on and says what it lacks.
+  `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`; and requests
+  bcc's output satisfies less fully but correctly: a newer processor
+  (`-march=native`, `-march=x86-64-v3`, `-mavx2`; baseline x86-64 code runs
+  on it, but its macros such as `__AVX2__` stay undefined), `-fcommon` (two
+  units' identical tentative definitions then fail to link, as with
+  `-fno-common`), and `-ffunction-sections`/`-fdata-sections` (the linker's
+  `--gc-sections` removes less). The build goes on and says what it lacks.
 - **Refused**, with the compiler's kind of error, for everything else:
-  options that change layout or the ABI (`-fshort-enums`, `-fshort-wchar`,
-  `-fpack-struct=3`, `-mms-bitfields`, `-mregparm=`, `-mlong-double-64`,
-  `cl /Gv`), the instruction set (`-mavx2`, `-march=native`, `-mno-sse`,
-  `-mgeneral-regs-only`, `cl /arch:AVX2`), language rules bcc does not
-  follow (`-fcommon`, `-fno-builtin`, `-fno-delete-null-pointer-checks`,
-  `-fno-strict-overflow`, `-ffast-math`, `-frounding-math`,
-  `-fvisibility=hidden`, `cl /fp:strict`, `/volatile:ms`), and
+  options that change layout or the ABI away from the target's
+  (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
+  Linux, `-mno-ms-bitfields` on Windows, `-mregparm=`, `-mlong-double-64`
+  outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
+  `-mgeneral-regs-only`; `cl /arch:AVX2`, which also changes macros),
+  language rules bcc does not follow (`-fno-delete-null-pointer-checks`,
+  `-fno-strict-overflow`, `-ffast-math`, `-frounding-math`, `cl /fp:strict`,
+  `/volatile:ms`), and
   instrumentation whose output a build expects (`-fsanitize=`,
   `-fprofile-arcs`, `--coverage`, `-finstrument-functions`, `-fopenmp`).
   An option the lists do not name is refused too, so a newly added option is
@@ -137,8 +146,15 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
 Where bcc can do what the option asks cheaply, the personality maps it
 instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
-`cl /Za` (no Microsoft anonymous members and no `_MSC_EXTENSIONS`), and
-`cl /Zc:trigraphs`.
+`-fpack-struct` alone (every structure packed, the pragmas ignored with
+GCC's warning), `-fno-builtin` and `-fno-builtin-NAME` (the LLVM functions
+carry `no-builtins` or `no-builtin-NAME`, so LLVM neither replaces library
+calls nor forms them from loops; `-ffreestanding` implies it, and GCC's
+`-fno-tree-loop-distribute-patterns` maps onto `memset`, `memcpy` and
+`memmove`), `-fvisibility=` (definitions with linkage and no visibility
+attribute get it; declarations keep the default, as in GCC), `-mwindows`
+on MinGW-w64 (`-Wl,--subsystem,windows`), `cl /Za` (no Microsoft anonymous
+members and no `_MSC_EXTENSIONS`), and `cl /Zc:trigraphs`.
 
 ## GCC
 
@@ -170,7 +186,7 @@ The `-W`, `-f` and `-m` names GCC knows are those GCC 15.2 lists in
 `scripts/update_driver_options.py`. Unknown warnings are ignored as GCC
 ignores them; the known `-f` and `-m` options bcc does not implement are
 treated as the section above describes. Many of them do change what a
-program means (`-fwrapv`, `-fshort-enums`, `-fpack-struct=1`, `-mno-sse`),
+program means (`-fwrapv`, `-fshort-enums`, `-fpack-struct`, `-mno-sse`),
 so they are not all ignored. `-funsigned-char`, `-m32`, `-mx32`, `-m16`,
 `-traditional` and `-imacros` are refused as well.
 
@@ -185,10 +201,13 @@ bcc lacks:
   them as macros for `float`, `double`, `double`, `long double` and
   `__float128`, which have the same representations. They are not distinct
   types, so `_Generic` cannot tell `_Float64` from `double`.
-- With `_FORTIFY_SOURCE` and optimization, glibc's GCC fortify wrappers
-  forward variadic arguments with `__builtin_va_arg_pack`, which bcc does not
-  implement; compiling a call to `printf` then fails. The Clang personality
-  (or bcc's own mode) takes glibc's Clang wrappers, which bcc supports.
+- With `_FORTIFY_SOURCE` and optimization, glibc's GCC fortify wrappers for
+  `printf`-like functions forward variadic arguments with
+  `__builtin_va_arg_pack`, which only an inlined call can do and bcc does
+  not implement. bcc compiles a call to such a wrapper as a call to the
+  library function, as for a wrapper with inline assembly, so the program
+  builds and runs, without those wrappers' checks; the other fortify
+  wrappers (`memcpy`, `strcpy`, `read`, ...) are inlined.
 
 **Banner.** `gcc (bcc 0.1.0) 14.2.0`, then a line that says bcc is not GCC
 and is not affiliated with the GNU Project or the Free Software Foundation.
@@ -230,7 +249,7 @@ warning D9002 : ignoring unknown option '/foo'` and is ignored.
 
 | `cl` | bcc |
 | --- | --- |
-| `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...`; `/Fo`, `/Fa` or `/Fi` naming a file for several sources is error D8036, as in `cl` |
+| `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...`; `/Fo`, `/Fa` or `/Fi` naming a file for several sources is error D8036, as in `cl`; an output of any step that is an input of the command line (by device and inode) is refused before any step runs |
 | `/E`, `/EP`, `/P`, `/Fi` | `-E`, `-E -P`, `-E -o NAME.i` |
 | `/FA`, `/Fa` | `-S -o NAME.asm` beside the object |
 | `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
@@ -378,7 +397,10 @@ These are compiler features, outside the driver, that the personalities
 would use:
 
 - `__builtin_va_arg_pack` and `__builtin_va_arg_pack_len` (glibc's GCC
-  fortify wrappers).
+  fortify wrappers for `printf`-like functions, which now call the library
+  function unchecked).
+- `-fsemantic-interposition`, `-fwrapv-pointer`,
+  `-fno-delete-null-pointer-checks` and common symbols (`-fcommon`).
 - `_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as distinct
   keyword types, and their `f32`/`f64`/`f128` constant suffixes.
 - An unsigned plain `char` (`-funsigned-char`, `cl /J`).

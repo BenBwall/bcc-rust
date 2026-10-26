@@ -92,6 +92,7 @@ use llvm_sys::{
         LLVMCreateEnumAttribute,
         LLVMCreateMemoryBufferWithMemoryRange,
         LLVMCreateMessage,
+        LLVMCreateStringAttribute,
         LLVMCreateTypeAttribute,
         LLVMDisposeBuilder,
         LLVMDisposeMemoryBuffer,
@@ -1419,6 +1420,28 @@ impl<'id> Session<'id> {
             unsafe {
                 LLVMAddAttributeAtIndex(value.0, index, attribute);
             }
+        }
+    }
+
+    /// Adds the string attribute `key`=`value` to the function `function`.
+    pub(super) fn string_attribute(&self, function: Val<'id>, key: &str, value: &str) {
+        let key_length = u32::try_from(key.len()).expect("attribute key fits in u32");
+        let value_length = u32::try_from(value.len()).expect("attribute value fits in u32");
+        // SAFETY: The counted key and value are valid while LLVM copies them
+        // into the context.
+        let attribute = unsafe {
+            LLVMCreateStringAttribute(
+                self.context,
+                key.as_ptr().cast(),
+                key_length,
+                value.as_ptr().cast(),
+                value_length,
+            )
+        };
+        // SAFETY: The type system ties the function to this live session;
+        // the function index addresses its function attributes.
+        unsafe {
+            LLVMAddAttributeAtIndex(function.0, u32::MAX, attribute);
         }
     }
 

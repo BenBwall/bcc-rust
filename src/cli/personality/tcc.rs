@@ -178,7 +178,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                     if implements_language_option(text) {
                         out.push(text.into());
                     } else if !text.starts_with("-W") && knows(Compiler::Gcc, text) {
-                        match treatment(text) {
+                        match treatment(text, target) {
                             | Treatment::Ignore => {},
                             | Treatment::Warn(why) =>
                                 invocation.warning(format_args!("'{text}' is ignored: {why}")),

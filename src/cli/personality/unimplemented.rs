@@ -8,13 +8,18 @@
 //! only to another language. Hardening and instrumentation that a correct
 //! program does not depend on are ignored with a warning, so the build goes
 //! on and says what it lacks. Every other known option is refused, so that
-//! no layout, ABI, instruction set or language rule silently differs from
-//! what the command line asked for.
+//! no layout, ABI or language rule silently differs from what the command
+//! line asked for. A `-m` option is judged for the target: `-mms-bitfields`
+//! is what a Windows target does and a layout change on Linux. Asking for a
+//! newer processor (`-march=native`, `-mavx2`) warns, since baseline x86-64
+//! code is correct on it.
 //!
 //! The lists name patterns: `*` ends a prefix, a trailing `=` takes any
 //! value, and `-f[no-]name` stands for both `-fname` and `-fno-name`. The
 //! refusals are matched first, so a narrower refusal can sit inside a
 //! broader ignored prefix.
+
+use crate::target::Target;
 
 /// How a personality treats a known option bcc does not implement.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,8 +32,9 @@ pub(super) enum Treatment {
     Reject(&'static str),
 }
 
-/// The treatment of `option`, a `-f` or `-m` option its compiler knows.
-pub(super) fn treatment(option: &str) -> Treatment {
+/// The treatment of `option`, a `-f` or `-m` option its compiler knows,
+/// for `target`.
+pub(super) fn treatment(option: &str, target: Target) -> Treatment {
     // bcc reads and writes UTF-8.
     if let Some(charset) = option
         .strip_prefix("-finput-charset=")
@@ -41,7 +47,7 @@ pub(super) fn treatment(option: &str) -> Treatment {
         return Treatment::Reject(why);
     }
     if option.starts_with("-m") {
-        return machine(option);
+        return machine(option, target);
     }
     if IGNORED.iter().any(|pattern| matches(pattern, option)) {
         return Treatment::Ignore;
@@ -73,14 +79,6 @@ fn matches(pattern: &str, option: &str) -> bool {
 /// before the broader lists below.
 const REFUSED: &[(&str, &str)] = &[
     (
-        "-fno-tree-loop-distribute-patterns",
-        "bcc may turn a loop into a call to memset or memcpy",
-    ),
-    (
-        "-fno-builtin*",
-        "bcc may replace calls to standard library functions",
-    ),
-    (
         "-fno-delete-null-pointer-checks",
         "bcc assumes a dereferenced pointer is not null",
     ),
@@ -99,10 +97,6 @@ const REFUSED: &[(&str, &str)] = &[
     (
         "-fwrapv-pointer",
         "bcc assumes that pointer arithmetic does not wrap",
-    ),
-    (
-        "-fcommon",
-        "bcc defines each tentative definition in its own unit, as -fno-common does",
     ),
     (
         "-fshort-enums",
@@ -143,7 +137,6 @@ const REFUSED: &[(&str, &str)] = &[
         "bcc does not preserve floating-point exception flags",
     ),
     ("-ftrapv*", "bcc does not trap on signed overflow"),
-    ("-fvisibility=", "bcc gives symbols default visibility"),
     (
         "-fsemantic-interposition",
         "bcc does not promise interposable calls",
@@ -355,8 +348,8 @@ const IGNORED: &[&str] = &[
     "-f[no-]force-addr",
     "-f[no-]forward-propagate",
     "-f[no-]function-cse",
-    "-f[no-]function-sections",
-    "-f[no-]data-sections",
+    "-fno-function-sections",
+    "-fno-data-sections",
     "-f[no-]gcse*",
     "-f[no-]graphite*",
     "-f[no-]guess-branch-probability",
@@ -709,12 +702,29 @@ const WARNED: &[(&str, &str)] = &[
         "-fhandle-exceptions",
         "bcc emits no landing pads, so cleanups do not run while an exception unwinds",
     ),
+    (
+        "-fcommon",
+        "bcc defines each tentative definition in its unit, as -fno-common does, so the same one \
+         in two units fails to link",
+    ),
+    (
+        "-ffunction-sections",
+        "bcc places functions in one section, so the linker's --gc-sections removes less",
+    ),
+    (
+        "-fdata-sections",
+        "bcc places data in one section, so the linker's --gc-sections removes less",
+    ),
 ];
 
-/// The treatment of a `-m` option. bcc generates baseline x86-64 code
-/// (with x87, MMX, SSE and SSE2), tuned for no processor, with the target's
-/// ABI and the small code model.
-fn machine(option: &str) -> Treatment {
+/// The treatment of a `-m` option for `target`. bcc generates baseline
+/// x86-64 code (with x87, MMX, SSE and SSE2), tuned for no processor, with
+/// the target's ABI and the small code model. Asking for a newer processor
+/// warns rather than fails: baseline code is correct on it.
+fn machine(option: &str, target: Target) -> Treatment {
+    if let Some(treatment) = abi(option, target) {
+        return treatment;
+    }
     let name = &option[2..];
     let (negative, feature) = match name.strip_prefix("no-") {
         | Some(feature) => (true, feature),
@@ -731,18 +741,24 @@ fn machine(option: &str) -> Treatment {
         return if negative {
             Treatment::Ignore
         } else {
-            Treatment::Reject(
+            Treatment::Warn(
                 "bcc generates baseline x86-64 code and does not define the extension's macros",
             )
         };
     }
-    if let Some(architecture) = option.strip_prefix("-march=")
-        && architecture != "x86-64"
-    {
-        return Treatment::Reject(
-            "bcc generates baseline x86-64 code (-march=x86-64) and does not define the \
-             architecture's macros",
-        );
+    if let Some(architecture) = option.strip_prefix("-march=") {
+        // The baseline under its names; a newer processor runs its code.
+        return if matches!(
+            architecture,
+            "x86-64" | "x86-64-v1" | "k8" | "opteron" | "athlon64"
+        ) {
+            Treatment::Ignore
+        } else {
+            Treatment::Warn(
+                "bcc generates baseline x86-64 code (-march=x86-64) and does not define the \
+                 architecture's macros",
+            )
+        };
     }
     if MACHINE_IGNORED
         .iter()
@@ -757,6 +773,57 @@ fn machine(option: &str) -> Treatment {
         return Treatment::Warn(why);
     }
     Treatment::Reject(UNSUPPORTED)
+}
+
+/// The treatment of a `-m` option whose meaning depends on the target's
+/// ABI: one that asks for what the target already does is ignored, one
+/// that asks for another target's layout or calling convention is refused.
+fn abi(option: &str, target: Target) -> Option<Treatment> {
+    let windows = matches!(target, Target::WindowsGnu | Target::WindowsMsvc);
+    let msvc = target == Target::WindowsMsvc;
+    let follows = |matches: bool, why: &'static str| {
+        Some(if matches {
+            Treatment::Ignore
+        } else {
+            Treatment::Reject(why)
+        })
+    };
+    match option {
+        | "-mms-bitfields" => follows(
+            windows,
+            "bit-fields follow the System V layout on this target",
+        ),
+        | "-mno-ms-bitfields" => follows(
+            !windows,
+            "bit-fields follow the Microsoft layout on this target",
+        ),
+        | "-mlong-double-80" | "-m128bit-long-double" =>
+            follows(!msvc, "long double is 64 bits wide on the MSVC target"),
+        | "-mlong-double-64" => follows(msvc, "long double is the 80-bit x87 type on this target"),
+        | "-mno-red-zone" => follows(
+            windows,
+            "System V code may use the red zone below the stack pointer",
+        ),
+        // Windows code uses no red zone, which is always safe.
+        | "-mred-zone" => Some(Treatment::Ignore),
+        | "-mabi=sysv" => follows(!windows, "the target's calling convention is Microsoft's"),
+        | "-mabi=ms" => follows(windows, "the target's calling convention is System V's"),
+        | "-mstack-arg-probe" => follows(windows, "bcc probes no stack frames on this target"),
+        | "-mno-stack-arg-probe" => follows(!windows, "Windows code probes large stack frames"),
+        | "-mglibc" => follows(
+            target == Target::LinuxGnu,
+            "the target's C library is not glibc",
+        ),
+        | "-mmusl" => follows(
+            target == Target::LinuxMusl,
+            "the target's C library is not musl",
+        ),
+        | "-mconsole" | "-mthreads" => follows(
+            target == Target::WindowsGnu,
+            "it is a MinGW-w64 option, and the target is not MinGW-w64",
+        ),
+        | _ => None,
+    }
 }
 
 /// The instruction set every x86-64 processor has, which bcc uses.
@@ -848,23 +915,18 @@ const EXTENSIONS: &[&str] = &[
 /// `-m` options with no effect on what bcc's output means.
 const MACHINE_IGNORED: &[&str] = &[
     "-m64",
-    "-m128bit-long-double",
-    "-mlong-double-80",
     "-mfancy-math-387",
     "-mno-fancy-math-387",
     "-mieee-fp",
     "-mhard-float",
     "-mno-soft-float",
     "-mfp-ret-in-387",
-    "-mred-zone",
     "-mfpmath=sse",
     "-mpc80",
     "-mtune=",
     "-mtune-ctrl=",
     "-mcpu=",
-    "-march=x86-64",
     "-mcmodel=small",
-    "-mabi=sysv",
     "-mtls-dialect=",
     "-m[no-]tls-direct-seg-refs",
     "-maccumulate-outgoing-args",
@@ -904,7 +966,6 @@ const MACHINE_IGNORED: &[&str] = &[
     "-mrecip=",
     "-m[no-]fused-madd",
     "-mneeded",
-    "-mglibc",
     "-mdump-tune-features",
     "-m[no-]call-ms2sysv-xlogues",
     "-m[no-]noreturn-no-callee-saved-registers",
@@ -918,7 +979,6 @@ const MACHINE_IGNORED: &[&str] = &[
     "-mno-iamcu",
     "-mno-stackrealign",
     "-mno-skip-rax-setup",
-    "-mno-ms-bitfields",
     "-mno-retpoline*",
     "-mindirect-branch=keep",
     "-mfunction-return=keep",
@@ -972,35 +1032,26 @@ mod tests {
 
     #[test]
     fn semantic_options_are_refused_and_harmless_ones_ignored() {
+        let linux = |option| treatment(option, Target::LinuxGnu);
         for refused in [
             "-fshort-enums",
             "-fexec-charset=latin1",
-            "-fno-builtin",
-            "-fno-builtin-memcpy",
-            "-fcommon",
             "-ffast-math",
-            "-fvisibility=hidden",
             "-fno-strict-overflow",
-            "-fno-tree-loop-distribute-patterns",
             "-fsanitize=address",
             "-fprofile-arcs",
             "-fopenmp",
             "-mno-sse",
             "-mno-sse2",
             "-mgeneral-regs-only",
-            "-mavx2",
-            "-msse4.2",
-            "-march=native",
             "-mno-red-zone",
             "-mcmodel=kernel",
             "-mlong-double-64",
             "-mregparm=3",
             "-mms-bitfields",
+            "-mabi=ms",
         ] {
-            assert!(
-                matches!(treatment(refused), Treatment::Reject(_)),
-                "{refused}"
-            );
+            assert!(matches!(linux(refused), Treatment::Reject(_)), "{refused}");
         }
         for ignored in [
             "-fdiagnostics-color=always",
@@ -1012,7 +1063,6 @@ mod tests {
             "-fstrict-aliasing",
             "-fno-common",
             "-fno-math-errno",
-            "-ffunction-sections",
             "-fvisibility-inlines-hidden",
             "-flto=auto",
             "-ffat-lto-objects",
@@ -1027,6 +1077,7 @@ mod tests {
             "-finput-charset=UTF-8",
             "-mtune=generic",
             "-march=x86-64",
+            "-march=x86-64-v1",
             "-m64",
             "-msse2",
             "-mno-avx",
@@ -1034,8 +1085,11 @@ mod tests {
             "-mno-sse4.2",
             "-mtls-dialect=gnu2",
             "-mno-omit-leaf-frame-pointer",
+            "-mlong-double-80",
+            "-mno-ms-bitfields",
+            "-mabi=sysv",
         ] {
-            assert_eq!(treatment(ignored), Treatment::Ignore, "{ignored}");
+            assert_eq!(linux(ignored), Treatment::Ignore, "{ignored}");
         }
         for warned in [
             "-fstack-protector-strong",
@@ -1044,10 +1098,51 @@ mod tests {
             "-fcf-protection=full",
             "-fexceptions",
             "-ftrivial-auto-var-init=zero",
+            "-fcommon",
+            "-ffunction-sections",
+            "-fdata-sections",
+            "-march=native",
+            "-march=x86-64-v3",
+            "-mavx2",
+            "-msse4.2",
             "-mindirect-branch=thunk",
             "-mfentry",
         ] {
-            assert!(matches!(treatment(warned), Treatment::Warn(_)), "{warned}");
+            assert!(matches!(linux(warned), Treatment::Warn(_)), "{warned}");
+        }
+    }
+
+    #[test]
+    fn machine_options_follow_the_target() {
+        for (option, linux, mingw, msvc) in [
+            ("-mms-bitfields", false, true, true),
+            ("-mno-ms-bitfields", true, false, false),
+            ("-mlong-double-80", true, true, false),
+            ("-mlong-double-64", false, false, true),
+            ("-mno-red-zone", false, true, true),
+            ("-mabi=ms", false, true, true),
+            ("-mabi=sysv", true, false, false),
+            ("-mno-stack-arg-probe", true, false, false),
+            ("-mconsole", false, true, false),
+        ] {
+            for (target, ignored) in [
+                (Target::LinuxGnu, linux),
+                (Target::WindowsGnu, mingw),
+                (Target::WindowsMsvc, msvc),
+            ] {
+                let treatment = treatment(option, target);
+                assert_eq!(
+                    treatment == Treatment::Ignore,
+                    ignored,
+                    "{option} {target:?}: {treatment:?}"
+                );
+                if !ignored {
+                    assert!(
+                        matches!(treatment, Treatment::Reject(_)),
+                        "{option} {target:?}"
+                    );
+                }
+            }
         }
     }
 }

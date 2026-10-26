@@ -134,6 +134,38 @@ pub(crate) enum PreprocessingOption<'a> {
     Include(&'a str),
 }
 
+/// The ELF visibility a definition with external linkage gets when it
+/// names none, as GCC's `-fvisibility=` sets it. GNU extension: GCC manual,
+/// "Code Gen Options", `-fvisibility`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DefaultVisibility {
+    #[default]
+    Default,
+    /// `hidden`, and `internal`, which bcc emits as hidden.
+    Hidden,
+    Protected,
+}
+
+/// Which standard library functions the compiler may treat as builtins:
+/// recognize a call by its name and replace or transform it (`sqrt` as an
+/// instruction, a copying loop as `memcpy`). GCC's `-fno-builtin` and
+/// `-ffreestanding` allow none, and `-fno-builtin-NAME` excludes NAME.
+/// Separate from the scalar configuration because it borrows names.
+/// C99: §7.1.4 paragraph 1, pp. 166-167; PDF pp. 178-179 (a library
+/// function may also be implemented as a builtin); §5.1.2.1, p. 11; PDF
+/// p. 23 (a freestanding program defines its own). GNU extension: GCC
+/// manual, "Other Builtins" and "C Dialect Options".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum LibraryBuiltins<'a> {
+    /// Every library function.
+    #[default]
+    All,
+    /// None (`-fno-builtin`, `-ffreestanding`).
+    None,
+    /// Every library function but these (`-fno-builtin-NAME`).
+    Except(&'a [&'a str]),
+}
+
 /// The compiler the predefined identity macros claim, which
 /// `--compiler-identity` and the driver personalities select. Clang is the
 /// default: bcc claims the pinned Clang, and the GCC 4.2.1 that Clang claims.

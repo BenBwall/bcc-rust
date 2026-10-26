@@ -28,7 +28,8 @@ use crate::{
 /// Build searchable states without source-location joins or a syntax walk.
 /// The packing before any pragma, which `#pragma pack()` restores, is the
 /// configured default (`-fpack-struct=N`, `cl /ZpN`), as GCC and MSVC
-/// document. C99: §6.10.6p1, p. 159; PDF p. 171. GCC/MSVC stack extension.
+/// document; under `-fpack-struct` alone the pragmas are ignored. C99:
+/// §6.10.6p1, p. 159; PDF p. 171. GCC/MSVC stack extension.
 pub(super) fn states<'s>(context: &mut Context<'_>, scratch: &'s Bump) -> &'s [(usize, u32)] {
     let mut stack = ArenaVec::new_in(scratch);
     let mut states = ArenaVec::new_in(scratch);
@@ -39,6 +40,12 @@ pub(super) fn states<'s>(context: &mut Context<'_>, scratch: &'s Bump) -> &'s [(
     }
     for index in 0..context.pack_pragmas.len() {
         let pragma = context.pack_pragmas[index];
+        // GCC's `-fpack-struct` without a value packs every structure and
+        // ignores the pragmas, which `-fpack-struct=N` lets override it.
+        if context.configuration.pack_structures() {
+            warn(context, SemanticErrorKind::PragmaPackIgnored, pragma.source);
+            continue;
+        }
         let warning = match parse(context, pragma.operands) {
             | Some(Action::Set(value)) => {
                 current = if value == 0 { default } else { value };

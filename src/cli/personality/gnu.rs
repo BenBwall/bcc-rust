@@ -57,6 +57,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         inputs: 0,
         verbose: false,
         dry_run: false,
+        machine: Vec::new(),
     };
     let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
@@ -64,10 +65,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             return Ok(query);
         }
     }
+    let target = state.target.unwrap_or_else(|| host_target(personality));
+    state.machine_options(target);
     if state.errors != 0 {
         return Err(MainError::Reported(1));
     }
-    let target = state.target.unwrap_or_else(|| host_target(personality));
     let mut bcc = vec![invocation.program.clone()];
     bcc.push(
         match personality {
@@ -162,6 +164,9 @@ struct State<'a> {
     inputs:     usize,
     verbose:    bool,
     dry_run:    bool,
+    /// The known `-m` options bcc does not implement, judged once the
+    /// target is known, since `--target` may come after them.
+    machine:    Vec<String>,
 }
 
 /// Options bcc reads in GCC's spelling, which take their operand as the next
@@ -485,6 +490,23 @@ impl State<'_> {
             }
             return;
         }
+        // GCC's loop distribution into library calls, which LLVM's loop
+        // idioms are; bcc stops them by not treating those functions as
+        // builtins.
+        if text == "-fno-tree-loop-distribute-patterns" {
+            for name in ["memset", "memcpy", "memmove"] {
+                self.out.push(format!("-fno-builtin-{name}").into());
+            }
+            return;
+        }
+        // MinGW-w64's driver options, which the lists of a Linux GCC lack.
+        if matches!(
+            text,
+            "-mwindows" | "-mconsole" | "-mthreads" | "-municode" | "-mdll"
+        ) {
+            self.machine.push(text.into());
+            return;
+        }
         let known = knows(self.compiler, text);
         if text.starts_with("-W") {
             // GCC ignores an unknown `-Wno-` option; Clang warns about an
@@ -496,20 +518,44 @@ impl State<'_> {
                 self.out.push(text.into());
                 return;
             }
-        } else if known && (text.starts_with("-f") || text.starts_with("-m")) {
-            match treatment(text) {
-                | Treatment::Ignore => {},
-                | Treatment::Warn(why) => self
-                    .invocation
-                    .warning(format_args!("'{text}' is ignored: {why}")),
-                | Treatment::Reject(why) => self.unsupported(text, why),
-            }
+        } else if known && text.starts_with("-m") {
+            self.machine.push(text.into());
+            return;
+        } else if known && text.starts_with("-f") {
+            let target = self
+                .target
+                .unwrap_or_else(|| host_target(self.invocation.personality));
+            self.treat(text, target);
             return;
         }
         match self.compiler {
             | Compiler::Gcc =>
                 self.error(format_args!("unrecognized command-line option '{text}'")),
             | Compiler::Clang => self.error(format_args!("unknown argument: '{text}'")),
+        }
+    }
+
+    /// Applies [`treatment`] to the deferred `-m` options for `target`.
+    /// `-mwindows` on MinGW-w64 links a GUI program, as GCC's driver does.
+    fn machine_options(&mut self, target: Target) {
+        for option in std::mem::take(&mut self.machine) {
+            if option == "-mwindows" && target == Target::WindowsGnu {
+                self.out.push("-Wl,--subsystem,windows".into());
+            } else {
+                self.treat(&option, target);
+            }
+        }
+    }
+
+    /// Ignores, warns about or refuses a known option bcc does not
+    /// implement, as [`treatment`] decides.
+    fn treat(&mut self, option: &str, target: Target) {
+        match treatment(option, target) {
+            | Treatment::Ignore => {},
+            | Treatment::Warn(why) => self
+                .invocation
+                .warning(format_args!("'{option}' is ignored: {why}")),
+            | Treatment::Reject(why) => self.unsupported(option, why),
         }
     }
 

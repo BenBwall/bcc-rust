@@ -173,7 +173,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.values.push(ty);
                 if define {
                     let attributes = self.layout_attribute_chain(s.attributes);
-                    self.types.tags[tag].packed.set(attributes.packed);
+                    // GCC's `-fpack-struct` packs every structure and union
+                    // as the `packed` attribute does.
+                    self.types.tags[tag]
+                        .packed
+                        .set(attributes.packed || self.context.configuration.pack_structures());
                     self.types.tags[tag].alignment.set(attributes.alignment);
                     let before = self
                         .pack_alignments
