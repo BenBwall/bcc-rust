@@ -252,21 +252,89 @@ int main(void) {
         }
     }
 
+    /// The interpreter computes the exact x87 `long double` functions and
+    /// refuses the transcendental ones, whose glibc results it cannot
+    /// reproduce bit for bit.
     #[test]
-    fn host_math_preserves_the_existing_gnu_long_double_execution_limit() {
-        for source in [
-            "long double fabsl(long double); int main(void) { return fabsl(-1.5L)!=1.5L; }",
-            "float nexttowardf(float,long double); int main(void) { return \
-             nexttowardf(1.0f,2.0L)>1.0f; }",
+    fn host_math_runs_exact_x87_functions_and_refuses_transcendentals() {
+        for target in [
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-unknown-linux-gnu",
         ] {
-            let output = bcc(source, &["--interpret", "--target=x86_64-w64-windows-gnu"]);
+            for source in [
+                "long double fabsl(long double); int main(void) { return fabsl(-1.5L)!=1.5L; }",
+                "float nexttowardf(float,long double); int main(void) { return \
+                 nexttowardf(1.0f,2.0L)<=1.0f; }",
+            ] {
+                let output = bcc(source, &["--interpret", target]);
+                assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+            }
+            let output = bcc(
+                "long double sinl(long double); int main(void) { return sinl(1.0L) > 0; }",
+                &["--interpret", target],
+            );
             assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));
             assert!(
-                text(&output.stderr).contains("f80"),
+                text(&output.stderr).contains("f80 library function"),
                 "{}",
                 text(&output.stderr)
             );
         }
+    }
+
+    /// `tests/fixtures/programs/long_double.c` prints x87 arithmetic,
+    /// conversions, comparisons, the exact `<math.h>` functions, `va_arg` and
+    /// every `printf` conversion of `long double`: the interpreter, bcc
+    /// through LLVM and bcc's native back end must print what the program
+    /// built by clang prints, digit for digit. glibc's formatting is the
+    /// reference, so this runs on GNU/Linux hosts.
+    #[test]
+    fn long_double_programs_match_native_output_on_every_arm() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/long_double.c");
+        let source = source.to_str().unwrap();
+        let reference = temporary("long-double-reference.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .args([source, "-std=c99", "-O0", "-fno-builtin", "-lm", "-o"])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(expected.status.code(), Some(0));
+        let expected = text(&expected.stdout);
+        std::fs::remove_file(reference).unwrap();
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.args([source, "--interpret", optimize]);
+            let output = run_native(&mut command).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{optimize}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), expected, "interpreter {optimize}");
+        }
+        let executable = temporary("long-double.exe");
+        for arm in [
+            &["--llvm-opt=O0"][..],
+            &["--opt=bcc", "--llvm-opt=O2"],
+            &["--backend=native"],
+            &["--opt=bcc", "--backend=native"],
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.arg(source).args(arm).arg("-o").arg(&executable);
+            let built = command.output().unwrap();
+            assert!(built.status.success(), "{arm:?}: {}", text(&built.stderr));
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(0), "{arm:?}");
+            assert_eq!(text(&output.stdout), expected, "{arm:?}");
+        }
+        std::fs::remove_file(executable).unwrap();
     }
 
     #[test]
@@ -326,8 +394,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
 
     /// glibc's Clang path implements `fpclassify`, `isfinite`, `isnormal`,
     /// `isnan` and `isinf` with these builtins; MinGW's passes the frame
-    /// address to `_setjmp`. The interpreter has no x87 values, so `long
-    /// double` runs natively only.
+    /// address to `_setjmp`.
     #[test]
     fn classification_and_frame_address_builtins_run_in_both_back_ends() {
         let Some(target) = host() else {
@@ -363,7 +430,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             source
         };
         for opt in ["--opt=none", "--opt=bcc"] {
-            let output = bcc(&program(false), &[&target, opt, "--interpret"]);
+            let output = bcc(
+                &program(!target.ends_with("msvc")),
+                &[&target, opt, "--interpret"],
+            );
             assert!(output.status.success(), "{opt}: {}", text(&output.stderr));
         }
         let executable = temporary("classify.exe");

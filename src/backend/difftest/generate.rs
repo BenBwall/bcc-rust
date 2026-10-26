@@ -337,15 +337,13 @@ impl FunctionGen<'_> {
     }
 
     /// A floating operation: arithmetic, a comparison, or a conversion to or
-    /// from an integer or the other floating type. Floating values reach
+    /// from an integer or another floating type. Floating values reach
     /// the checksum only through comparisons and conversions to integers,
-    /// so NaN payloads, which LLVM does not fix, are never observed.
+    /// so NaN payloads, which LLVM does not fix, are never observed. A third
+    /// of the operations are x87 `f80`, so the interpreter's software x87
+    /// unit is checked against the processor's.
     fn float(&mut self) {
-        let ty = if self.rng.chance(50) {
-            Ty::F32
-        } else {
-            Ty::F64
-        };
+        let ty = self.rng.pick(&[Ty::F32, Ty::F64, Ty::F80]);
         let range = Range::FULL_PTR;
         match self.rng.below(6) {
             | 0 => {
@@ -383,10 +381,15 @@ impl FunctionGen<'_> {
                 let _ = self.def(to, Range::full(to), format_args!("{op}.{to} v{}", a.id));
             },
             | 4 => {
-                let (from, op) = if ty == Ty::F32 {
-                    (Ty::F64, "fptrunc")
+                let from = match ty {
+                    | Ty::F32 => self.rng.pick(&[Ty::F64, Ty::F80]),
+                    | Ty::F64 => self.rng.pick(&[Ty::F32, Ty::F80]),
+                    | _ => self.rng.pick(&[Ty::F32, Ty::F64]),
+                };
+                let op = if from.bits() > ty.bits() {
+                    "fptrunc"
                 } else {
-                    (Ty::F32, "fpext")
+                    "fpext"
                 };
                 let a = self.float_operand(from);
                 let _ = self.def(ty, range, format_args!("{op}.{ty} v{}", a.id));
@@ -417,10 +420,12 @@ impl FunctionGen<'_> {
             reason = "Rounding to the nearest `f32` is the intent."
         )]
         let single = value as f32;
-        let bits = if ty == Ty::F32 {
-            format!("0x{:08X}", single.to_bits())
-        } else {
-            format!("0x{:016X}", value.to_bits())
+        let bits = match ty {
+            | Ty::F32 => format!("0x{:08X}", single.to_bits()),
+            | Ty::F64 => format!("0x{:016X}", value.to_bits()),
+            // Half the x87 constants carry digits beyond binary64.
+            | _ if self.rng.chance(50) => format!("0x{:020X}", self.rng.pick(&EXTENDED_CONSTANTS)),
+            | _ => format!("0x{:020X}", crate::x87::X87::from_f64(value).to_bits()),
         };
         self.def(ty, Range::FULL_PTR, format_args!("fconst.{ty} {bits}"))
     }
@@ -1817,6 +1822,20 @@ const FLOAT_CONSTANTS: [f64; 14] = [
     f64::NAN,
 ];
 
+/// x87 constants that no binary64 value equals: a third, the largest and
+/// smallest finite values, a denormal, `2^64 - 1` at the edge of `fptoui`,
+/// and values one unit away from integers and from each other.
+const EXTENDED_CONSTANTS: [u128; 8] = [
+    0x3FFD_AAAA_AAAA_AAAA_AAAB,
+    0xBFFD_AAAA_AAAA_AAAA_AAAB,
+    0x7FFE_FFFF_FFFF_FFFF_FFFF,
+    0x0001_8000_0000_0000_0000,
+    0x0000_0000_0000_0000_0001,
+    0x403E_FFFF_FFFF_FFFF_FFFF,
+    0x3FFF_8000_0000_0000_0001,
+    0xC03D_FFFF_FFFF_FFFF_FFFF,
+];
+
 const CONDITIONS: [&str; 10] = [
     "eq", "ne", "slt", "sle", "sgt", "sge", "ult", "ule", "ugt", "uge",
 ];
@@ -1972,6 +1991,7 @@ enum Ty {
     I64,
     F32,
     F64,
+    F80,
     Ptr,
 }
 
@@ -1984,6 +2004,7 @@ impl Ty {
             | Self::I64 => "i64",
             | Self::F32 => "f32",
             | Self::F64 => "f64",
+            | Self::F80 => "f80",
             | Self::Ptr => "ptr",
         }
     }
@@ -1994,6 +2015,7 @@ impl Ty {
             | Self::I8 => 8,
             | Self::I32 | Self::F32 => 32,
             | Self::I64 | Self::F64 | Self::Ptr => 64,
+            | Self::F80 => 80,
         }
     }
 
