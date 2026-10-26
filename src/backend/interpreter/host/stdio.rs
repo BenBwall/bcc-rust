@@ -124,12 +124,30 @@ const MAX_STREAMS: usize = 64;
 /// command line shows it.
 pub(super) struct Console<'a> {
     /// Everything written to `stderr`.
-    pub(super) errors:  super::ArenaVec<'a, u8>,
+    pub(super) errors:        super::ArenaVec<'a, u8>,
     /// For each write to `stderr`: how much of the host's output buffer had
     /// been flushed before it, and the end of its bytes in `errors`.
-    pub(super) marks:   super::ArenaVec<'a, (usize, usize)>,
+    pub(super) marks:         super::ArenaVec<'a, (usize, usize)>,
     /// How much of the output buffer `fflush` has released.
-    pub(super) flushed: usize,
+    pub(super) flushed:       usize,
+    /// Whether standard output is a terminal, which glibc line-buffers: each
+    /// newline releases what precedes it, and reading `stdin` releases all.
+    pub(super) line_buffered: bool,
+}
+
+impl Console<'_> {
+    /// How much of `output` has reached the terminal or pipe by now.
+    fn released(&self, output: &[u8]) -> usize {
+        let line = if self.line_buffered {
+            output
+                .iter()
+                .rposition(|&byte| byte == b'\n')
+                .map_or(0, |at| at + 1)
+        } else {
+            0
+        };
+        self.flushed.max(line).min(output.len())
+    }
 }
 
 /// The host's stream table.
@@ -215,6 +233,7 @@ impl DefaultHost<'_> {
             },
             | "fclose" => {
                 let stream = self.stream(arg(0), memory)?;
+                self.flush_before_closing(stream);
                 let entry = &mut self.streams.entries[stream];
                 entry.target = Target::Closed;
                 entry.pushed = None;
@@ -377,18 +396,24 @@ impl DefaultHost<'_> {
             | "fseek" | "rewind" => {
                 let stream = self.stream(arg(0), memory)?;
                 let position = if call.name == "rewind" {
-                    SeekFrom::Start(0)
+                    Some(SeekFrom::Start(0))
                 } else {
                     let offset = sext(call.arg_types[1], integer(arg(1))?);
                     let offset = i64::try_from(offset).map_err(|_| UbKind::SignatureMismatch)?;
                     // A byte `ungetc` pushed back stands before the file
-                    // position, so the current position is one less.
+                    // position, so the current position is one less. A
+                    // negative start, an offset past the range and an
+                    // unknown `whence` fail, as `lseek` does (EINVAL).
                     let pushed = i64::from(self.streams.entries[stream].pushed.is_some());
                     match int(arg(2))? {
-                        | 0 => SeekFrom::Start(offset.cast_unsigned()),
-                        | 1 => SeekFrom::Current(offset - pushed),
-                        | _ => SeekFrom::End(offset),
+                        | 0 => u64::try_from(offset).ok().map(SeekFrom::Start),
+                        | 1 => offset.checked_sub(pushed).map(SeekFrom::Current),
+                        | 2 => Some(SeekFrom::End(offset)),
+                        | _ => None,
                     }
+                };
+                let Some(position) = position else {
+                    return Ok(HostReturn::Value(Some(RuntimeValue::int(Type::I32, EOF))));
                 };
                 let entry = &mut self.streams.entries[stream];
                 entry.pushed = None;
@@ -410,7 +435,11 @@ impl DefaultHost<'_> {
                 let entry = &mut self.streams.entries[stream];
                 let pushed = u64::from(entry.pushed.is_some());
                 let position = match &mut entry.target {
-                    | Target::File(file) => file.stream_position().ok().map(|at| at - pushed),
+                    // A byte pushed back at the start has no position.
+                    | Target::File(file) => file
+                        .stream_position()
+                        .ok()
+                        .and_then(|at| at.checked_sub(pushed)),
                     | _ => None,
                 };
                 position.map_or(RuntimeValue::Int(u128::MAX), |at| {
@@ -502,6 +531,15 @@ impl DefaultHost<'_> {
         Ok(index)
     }
 
+    /// Releases the buffered standard output before `stream` closes or is
+    /// reopened, as glibc flushes a stream it closes.
+    /// C99: §7.19.5.1 paragraph 2, p. 270; PDF p. 282.
+    fn flush_before_closing(&mut self, stream: usize) {
+        if matches!(self.streams.entries[stream].target, Target::Output) {
+            self.console.flushed = self.output.len();
+        }
+    }
+
     /// Counts a refused file-system access and keeps the first path, for the
     /// command line's note.
     fn deny_file_access(&mut self) {
@@ -540,7 +578,8 @@ impl DefaultHost<'_> {
                     .errors
                     .extend_from_slice(&self.output[before..]);
                 let end = self.console.errors.len();
-                self.console.marks.push((self.console.flushed, end));
+                let released = self.console.released(&self.output[..before]);
+                self.console.marks.push((released, end));
                 true
             },
             | Target::File(file) => file.write_all(&self.output[before..]).is_ok(),
@@ -569,7 +608,13 @@ impl DefaultHost<'_> {
         let mut byte = [0];
         let read = match &mut entry.target {
             | Target::File(file) => file.read(&mut byte),
-            | Target::Input => std::io::stdin().lock().read(&mut byte),
+            | Target::Input => {
+                // glibc flushes line-buffered output before reading input.
+                if self.console.line_buffered {
+                    self.console.flushed = self.output.len();
+                }
+                std::io::stdin().lock().read(&mut byte)
+            },
             | _ => {
                 entry.error = true;
                 return None;
@@ -632,8 +677,10 @@ impl DefaultHost<'_> {
             self.deny_file_access();
         }
         if let Some((stream, pointer)) = reopen {
-            // C99 §7.19.5.4p3: the original stream is closed even when the
-            // new file cannot be opened, so its `FILE *` dies with it.
+            // C99 §7.19.5.4p3: the original stream is flushed and closed
+            // even when the new file cannot be opened, so its `FILE *` dies
+            // with it.
+            self.flush_before_closing(stream);
             let entry = &mut self.streams.entries[stream];
             let object = entry.object;
             *entry = Stream::default();
@@ -760,7 +807,8 @@ fn write_to(
         },
         | Target::Errors => {
             console.errors.extend_from_slice(bytes);
-            console.marks.push((console.flushed, console.errors.len()));
+            let released = console.released(output);
+            console.marks.push((released, console.errors.len()));
             true
         },
         | Target::File(file) => file.write_all(bytes).is_ok(),

@@ -86,7 +86,7 @@ impl DefaultHost<'_> {
     ) -> Result<i32, Fault> {
         let mut directives = super::ArenaVec::new_in(self.allocator);
         memory.read_c_string(format, &mut directives)?;
-        let mut assigned = 0;
+        let mut assigned: i32 = 0;
         let mut consumed: u64 = 0;
         let mut position = 0;
         let failure = loop {
@@ -254,7 +254,7 @@ impl DefaultHost<'_> {
                     break Some(Failure::Matching);
                 }
             }
-            assigned += i32::from(!suppress);
+            assigned = assigned.saturating_add(i32::from(!suppress));
         };
         Ok(match failure {
             | Some(Failure::Input) if assigned == 0 => -1,
@@ -295,7 +295,8 @@ impl DefaultHost<'_> {
             },
             | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' => match length {
                 | Length::None => 4,
-                | Length::Long | Length::LongLong => 8,
+                | Length::Long => 8,
+                // glibc reads `ll` and `q` with a floating conversion as `L`.
                 | _ => return unsupported,
             },
             | b'c' | b's' | b'[' if length == Length::None => 1,
@@ -354,32 +355,33 @@ impl DefaultHost<'_> {
     }
 
     /// The bytes a `[` conversion accepts, and whether it is negated, after
-    /// which `position` is past its closing `]`. A `]` first is a member;
-    /// `a-z` is a range when it ascends, and three members (`z`, `-`, `a`)
-    /// when it does not, as glibc reads it.
+    /// which `position` is past its closing `]`. glibc's reading: a `]` or
+    /// `-` first is a member; a later `-` between two characters adds the
+    /// characters from the one before it up to the one after it when they
+    /// ascend, so `a-b-d` is `a` to `d` without `-`, and is a member itself
+    /// otherwise, so `z-a` is `z`, `-` and `a`.
     fn scanset(directives: &[u8], position: &mut usize) -> ([bool; 256], bool) {
         let mut set = [false; 256];
         let negated = directives.get(*position) == Some(&b'^');
         *position += usize::from(negated);
-        let mut first = true;
+        if let Some(&first @ (b']' | b'-')) = directives.get(*position) {
+            set[usize::from(first)] = true;
+            *position += 1;
+        }
         while let Some(&byte) = directives.get(*position) {
-            if byte == b']' && !first {
-                *position += 1;
+            *position += 1;
+            if byte == b']' {
                 break;
             }
-            match (directives.get(*position + 1), directives.get(*position + 2)) {
-                | (Some(b'-'), Some(&end)) if end != b']' && end >= byte => {
-                    for member in byte..=end {
+            // The character before this one; a `-` is never first here.
+            let previous = directives[*position - 2];
+            match directives.get(*position) {
+                | Some(&next) if byte == b'-' && next != b']' && previous <= next =>
+                    for member in previous..next {
                         set[usize::from(member)] = true;
-                    }
-                    *position += 3;
-                },
-                | _ => {
-                    set[usize::from(byte)] = true;
-                    *position += 1;
-                },
+                    },
+                | _ => set[usize::from(byte)] = true,
             }
-            first = false;
         }
         (set, negated)
     }
@@ -445,7 +447,7 @@ impl DefaultHost<'_> {
         let negative =
             self.take(input, field, memory, |byte| byte == b'+' || byte == b'-')? == Some(b'-');
         let mut base = base;
-        let mut digits = 0;
+        let mut digits = 0_u64;
         if matches!(base, 0 | 16)
             && self
                 .take(input, field, memory, |byte| byte == b'0')?
@@ -474,7 +476,7 @@ impl DefaultHost<'_> {
             value = value
                 .wrapping_mul(u128::from(base))
                 .wrapping_add(u128::from(digit));
-            digits += 1;
+            digits = digits.saturating_add(1);
         }
         Ok((digits > 0).then(|| {
             if negative {
@@ -548,7 +550,7 @@ impl DefaultHost<'_> {
                         .is_some()
                     {}
                     let sequence = std::str::from_utf8(&field.text[open..]).unwrap_or("");
-                    payload = parse_payload(sequence);
+                    payload = super::nan_payload(sequence);
                     if self
                         .take(input, field, memory, |byte| byte == b')')?
                         .is_none()
@@ -577,7 +579,7 @@ impl DefaultHost<'_> {
                 byte.is_ascii_digit() || (!point && byte == b'.')
             })? {
                 | Some(b'.') => point = true,
-                | Some(_) => digits += 1,
+                | Some(_) => digits = digits.saturating_add(1),
                 | None => break,
             }
         }
@@ -607,12 +609,12 @@ impl DefaultHost<'_> {
         memory: &Memory<'_>,
     ) -> Result<bool, Fault> {
         let _ = self.take(input, field, memory, |byte| byte == b'+' || byte == b'-')?;
-        let mut digits = 0;
+        let mut digits = 0_u64;
         while self
             .take(input, field, memory, |byte| byte.is_ascii_digit())?
             .is_some()
         {
-            digits += 1;
+            digits = digits.saturating_add(1);
         }
         Ok(digits > 0)
     }
@@ -642,10 +644,10 @@ impl DefaultHost<'_> {
             // sticky bit.
             if magnitude >> 120 == 0 {
                 magnitude = magnitude << 4 | digit;
-                exponent -= if point { 4 } else { 0 };
+                exponent = exponent.saturating_sub(if point { 4 } else { 0 });
             } else {
                 sticky |= digit != 0;
-                exponent += if point { 0 } else { 4 };
+                exponent = exponent.saturating_add(if point { 0 } else { 4 });
             }
         }
         if digits == 0 {
@@ -660,11 +662,14 @@ impl DefaultHost<'_> {
                 return Ok(None);
             }
             let text = std::str::from_utf8(&field.text[start..]).expect("ASCII digits");
-            exponent += text.parse::<i64>().unwrap_or(if text.starts_with('-') {
-                -1 << 40
+            // An exponent past i64 saturates; any that large already
+            // overflows or underflows, as the clamp below keeps it.
+            let written = text.parse::<i64>().unwrap_or(if text.starts_with('-') {
+                i64::MIN
             } else {
-                1 << 40
+                i64::MAX
             });
+            exponent = exponent.saturating_add(written);
         }
         let exponent = i32::try_from(exponent.clamp(-0x10_0000, 0x10_0000)).expect("clamped");
         let magnitude = (magnitude << 1) | u128::from(sticky);
@@ -698,22 +703,6 @@ fn store_integer(
         | _ => Type::I32,
     };
     memory.store(ty, RuntimeValue::int(ty, value), destination, Align::BYTE)
-}
-
-/// The payload glibc gives `nan(n-char-sequence)`: the sequence read as
-/// `strtoull` reads it in base 0, or zero when it is not such a number.
-fn parse_payload(sequence: &str) -> u64 {
-    let (digits, radix) = if let Some(hex) = sequence
-        .strip_prefix("0x")
-        .or_else(|| sequence.strip_prefix("0X"))
-    {
-        (hex, 16)
-    } else if sequence.len() > 1 && sequence.starts_with('0') {
-        (&sequence[1..], 8)
-    } else {
-        (sequence, 10)
-    };
-    u64::from_str_radix(digits, radix).unwrap_or(0)
 }
 
 #[expect(clippy::cast_possible_truncation, reason = "Truncation is the intent.")]

@@ -432,33 +432,60 @@ int main(void) {{ const char *name = \"{path_text}\";
         assert!(!path.exists());
     }
 
-    /// stdout and stderr keep their order when both go to one file, as with
-    /// a pipe under glibc: stderr is unbuffered, and stdout bytes appear at
-    /// `fflush` and at exit.
+    /// stdout and stderr keep glibc's order when both go to one file. stderr
+    /// is unbuffered. stdout to a pipe or file appears at `fflush`, when it
+    /// is closed or reopened (even by a failed `freopen`), and at exit; a
+    /// terminal's stdout, which glibc line-buffers, also at each newline.
+    /// The expected text is what glibc programs print, through a pipe and
+    /// through a pseudo-terminal.
     #[test]
-    fn interpreter_interleaves_stdout_and_stderr_at_flushes() {
-        let source = "typedef struct _IO_FILE FILE; extern FILE *stdout, *stderr;
+    fn interpreter_interleaves_stdout_and_stderr_as_glibc_buffers() {
+        let prelude = "typedef struct _IO_FILE FILE; extern FILE *stdout, *stderr;
 int fputs(const char *, FILE *); int fflush(FILE *); int puts(const char *);
-int main(void) { fputs(\"A\", stdout); fflush(stdout); fputs(\"B\", stderr);
-  puts(\"C\"); fputs(\"D\", stderr); fflush(0); fputs(\"E\", stderr); fputs(\"F\", stdout);
-  return 0; }
+int fclose(FILE *); FILE *freopen(const char *, const char *, FILE *);
 ";
-        let merged = temporary("merged-output.txt");
-        let file = std::fs::File::create(&merged).unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
-            .args([
-                "--interpret",
-                "--target=x86_64-unknown-linux-gnu",
-                "--input",
-                source,
-            ])
-            .stdout(file.try_clone().unwrap())
-            .stderr(file)
-            .status()
-            .unwrap();
-        assert_eq!(output.code(), Some(0));
-        assert_eq!(std::fs::read_to_string(&merged).unwrap(), "ABDC\nEF");
-        std::fs::remove_file(merged).unwrap();
+        let lines = "fputs(\"A\\n\", stdout); fputs(\"B\", stderr); fputs(\"C\", stdout);
+  fputs(\"D\", stderr); fputs(\"E\\n\", stdout);";
+        for (body, flags, expected) in [
+            (
+                "fputs(\"A\", stdout); fflush(stdout); fputs(\"B\", stderr); puts(\"C\");
+  fputs(\"D\", stderr); fflush(0); fputs(\"E\", stderr); fputs(\"F\", stdout);",
+                &[][..],
+                "ABDC\nEF",
+            ),
+            (lines, &[][..], "BDA\nCE\n"),
+            (lines, &["--interpret-terminal-stdout"][..], "A\nBDCE\n"),
+            (
+                "fputs(\"A\", stdout); fclose(stdout); fputs(\"B\", stderr);",
+                &[][..],
+                "AB",
+            ),
+            (
+                "fputs(\"A\", stdout); FILE *f = freopen(\"/nonexistent-bcc/x\", \"w\", stdout);
+  fputs(f ? \"F\" : \"B\", stderr);",
+                &["--interpret-allow-fs"][..],
+                "AB",
+            ),
+        ] {
+            let source = format!("{prelude}int main(void) {{ {body} return 0; }}\n");
+            let merged = temporary("merged-output.txt");
+            let file = std::fs::File::create(&merged).unwrap();
+            let status = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
+                .args(flags)
+                .args(["--input", &source])
+                .stdout(file.try_clone().unwrap())
+                .stderr(file)
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(0), "{body}");
+            assert_eq!(
+                std::fs::read_to_string(&merged).unwrap(),
+                expected,
+                "{body} {flags:?}"
+            );
+            std::fs::remove_file(merged).unwrap();
+        }
     }
 
     /// Using a closed stream is undefined: after `fclose(stdin)` or
@@ -495,9 +522,10 @@ FILE *fopen(const char *, const char *); FILE *freopen(const char *, const char 
     }
 
     /// `%lf` stores a `double` on every target, Win64's 32-bit `long`
-    /// notwithstanding; the wide conversions are refused rather than run as
-    /// byte conversions; and a wide-string length whose byte size overflows
-    /// is out of bounds rather than a short copy.
+    /// notwithstanding; the wide conversions and `long double` input (`%Lf`,
+    /// and `%llf` and `%qf`, which glibc reads alike) are refused rather than
+    /// run as byte or `double` conversions; and a wide-string length whose byte
+    /// size overflows is out of bounds rather than a short copy.
     #[test]
     fn scanf_lengths_and_wide_sizes_follow_the_conversion() {
         let source = "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
@@ -520,7 +548,7 @@ int main(void) { double d = 0; long l = 0; float f = 0;
             );
             assert_eq!(text(&output.stdout), "3 2.5 -7 0.25\n", "{target}");
         }
-        for conversion in ["%lc", "%ls", "%l[a]", "%Lf"] {
+        for conversion in ["%lc", "%ls", "%l[a]", "%Lf", "%llf", "%qf"] {
             let source = format!(
                 "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
 int main(void) {{ long double buffer[4]; return sscanf(\"a\", \"{conversion}\", buffer); }}
@@ -534,6 +562,24 @@ int main(void) {{ long double buffer[4]; return sscanf(\"a\", \"{conversion}\", 
                 "{stderr}"
             );
         }
+        // Guest-controlled exponents, payloads and offsets saturate or fail;
+        // they never overflow the interpreter's own arithmetic.
+        let source = "typedef struct _IO_FILE FILE; extern FILE *stdin;
+int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
+int printf(const char *, ...); int ungetc(int, FILE *); int fseek(FILE *, long, int);
+void *memcpy(void *, const void *, unsigned long);
+int main(void) { double d = 1, e = 1; unsigned long long bits;
+  int n = sscanf(\"0x0.0p-9223372036854775808 nan(18446744073709551616)\", \"%lf %lf\", &d, &e);
+  memcpy(&bits, &e, 8); ungetc('x', stdin);
+  printf(\"%d %a %llx %d\\n\", n, d, bits, fseek(stdin, -9223372036854775807L - 1, 1));
+  return 0; }
+";
+        let output = bcc(
+            source,
+            &["--interpret", "--target=x86_64-unknown-linux-gnu"],
+        );
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "2 0x0p+0 7fffffffffffffff -1\n");
         let source = "typedef int wchar_t; wchar_t *wmemcpy(wchar_t *, const wchar_t *, unsigned \
                       long);
 int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return b[0]; }

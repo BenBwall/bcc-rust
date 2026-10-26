@@ -22,6 +22,7 @@ use std::{
     fmt,
     io::{
         self,
+        IsTerminal as _,
         Write,
     },
     path::Path,
@@ -183,6 +184,7 @@ pub(super) fn generate_code<'tu>(
             target,
             options.interpret_step_limit,
             options.interpret_allow_fs,
+            options.interpret_terminal_stdout || io::stdout().is_terminal(),
         ),
     }
 }
@@ -220,12 +222,12 @@ pub(super) struct CodeGeneration {
     /// lowering for `ir`, after it for `ir-abi`) or the LLVM IR to stdout.
     #[arg(long, value_enum, value_name = "IR", group = "back_end",
         conflicts_with_all = ["tokens", "semantic_types", "syntax_tree", "raw_syntax"])]
-    pub(super) emit:                 Option<Emit>,
+    pub(super) emit: Option<Emit>,
     /// Run `main` in the IR interpreter, print what it writes to stdout, and
     /// exit with its status (70 if the interpreter traps, 134 on `abort`).
     #[arg(long, group = "back_end",
         conflicts_with_all = ["tokens", "semantic_types", "syntax_tree", "raw_syntax"])]
-    pub(super) interpret:            bool,
+    pub(super) interpret: bool,
     /// Maximum interpreter instructions (default 100000000); 0 is unlimited.
     #[arg(long, value_name = "N", requires = "interpret")]
     pub(super) interpret_step_limit: Option<u64>,
@@ -233,71 +235,75 @@ pub(super) struct CodeGeneration {
     /// (`fopen`, `freopen`, `remove`); without it they fail as for a
     /// permission error.
     #[arg(long, requires = "interpret")]
-    pub(super) interpret_allow_fs:   bool,
+    pub(super) interpret_allow_fs: bool,
+    /// Buffer the interpreted program's stdout by lines, as for a terminal,
+    /// even when it is not one (for tests).
+    #[arg(long, hide = true, requires = "interpret")]
+    pub(super) interpret_terminal_stdout: bool,
     /// Build an executable at PATH through the bundled clang (an object with
     /// -c).
     #[arg(short = 'o', long = "output", value_name = "PATH", group = "back_end",
         conflicts_with_all = ["tokens", "semantic_types", "syntax_tree", "raw_syntax"])]
-    pub(super) output_path:          Option<PathBuf>,
+    pub(super) output_path: Option<PathBuf>,
     /// With -o, compile to an object file instead of linking an executable.
     #[arg(short = 'c', requires = "output_path")]
-    pub(super) object:               bool,
+    pub(super) object: bool,
     /// With -o, link a shared library (also accepts GCC -shared); its code
     /// needs -fpic or -fPIC.
     #[arg(long, requires = "output_path", conflicts_with_all = ["object", "pie", "no_pie"])]
-    pub(super) shared:               bool,
+    pub(super) shared: bool,
     /// With -o, link a position-independent executable, the default on
     /// Linux (also accepts GCC -pie).
     #[arg(long, requires = "output_path", overrides_with = "no_pie")]
-    pub(super) pie:                  bool,
+    pub(super) pie: bool,
     /// With -o, link an executable at a fixed address (also accepts GCC
     /// -no-pie), as code compiled with -fno-pic needs.
     #[arg(long, requires = "output_path", overrides_with = "pie")]
-    pub(super) no_pie:               bool,
+    pub(super) no_pie: bool,
     /// GCC optimization level (also accepts -O0, -O1, -O2, -O3, -Os, -Oz, -Og).
     #[arg(long, value_enum, overrides_with = "optimization")]
-    pub(super) optimization:         Option<LlvmOpt>,
+    pub(super) optimization: Option<LlvmOpt>,
     /// Select the middle-end optimizer: none, or bcc's pass pipeline.
     #[arg(long, value_enum, overrides_with = "opt")]
-    pub(super) opt:                  Option<MiddleEnd>,
+    pub(super) opt: Option<MiddleEnd>,
     /// Run these bcc passes once each, in order, instead of the default
     /// pipeline (implies --opt=bcc), such as fold,simplify-cfg,dce.
     #[arg(long, value_name = "LIST", value_parser = pass_list, requires = "back_end")]
-    pub(super) passes:               Option<PassList>,
+    pub(super) passes: Option<PassList>,
     /// Apply only the first N rewrites of the bcc optimizer, to bisect a
     /// miscompile (implies --opt=bcc).
     #[arg(long, value_name = "N", requires = "back_end")]
-    pub(super) opt_bisect_limit:     Option<u64>,
+    pub(super) opt_bisect_limit: Option<u64>,
     /// Print each function to stderr after every bcc pass (implies
     /// --opt=bcc).
     #[arg(long, requires = "back_end")]
-    pub(super) print_after_all:      bool,
+    pub(super) print_after_all: bool,
     /// Print the bcc optimizer's per-pass runs, rewrites and times to
     /// stderr when it finishes (implies --opt=bcc).
     #[arg(long, requires = "back_end")]
-    pub(super) time_passes:          bool,
+    pub(super) time_passes: bool,
     /// Select the LLVM IR pipeline and code generation level; none means O0.
     #[arg(long, value_enum, overrides_with = "llvm_opt")]
-    pub(super) llvm_opt:             Option<LlvmOpt>,
+    pub(super) llvm_opt: Option<LlvmOpt>,
     /// Run no LLVM IR pass, only the code generator at the --llvm-opt
     /// level.
     #[arg(long, requires = "back_end")]
-    pub(super) llvm_codegen_only:    bool,
+    pub(super) llvm_codegen_only: bool,
     /// Select the code generator for -o and --emit=asm: LLVM through its C
     /// API, or bcc's own x86-64 back end, which refuses what it does not
     /// support yet.
     #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
-    pub(super) backend:              BackEnd,
+    pub(super) backend: BackEnd,
     /// Encode the native back end's ELF or COFF objects in process, the
     /// default for Windows targets, where a listing the encoder refuses is
     /// assembled unless this flag is given; a module with file-scope assembly
     /// is refused.
     #[arg(long, requires = "back_end", overrides_with = "no_native_object")]
-    pub(super) native_object:        bool,
+    pub(super) native_object: bool,
     /// Assemble the native back end's listing with the bundled clang, the
     /// default for Linux targets and for a module with file-scope assembly.
     #[arg(long, requires = "back_end", overrides_with = "native_object")]
-    pub(super) no_native_object:     bool,
+    pub(super) no_native_object: bool,
 }
 
 /// What `--emit` prints.
@@ -512,12 +518,20 @@ impl CodeGeneration {
 /// Runs `main` and returns its status, after forwarding what the program
 /// wrote to stdout and stderr in the order it wrote them. A trap is reported
 /// like a diagnostic, and refused file access as a note.
-fn interpret(module: &Module<'_>, target: Target, steps: Option<u64>, allow_fs: bool) -> i32 {
+fn interpret(
+    module: &Module<'_>,
+    target: Target,
+    steps: Option<u64>,
+    allow_fs: bool,
+    terminal: bool,
+) -> i32 {
     let arena = Bump::new();
     let mut host = DefaultHost::for_target(&arena, target);
     if allow_fs {
         host.allow_file_access();
     }
+    // glibc line-buffers a terminal's stdout and fully buffers a pipe's.
+    host.set_terminal_output(terminal);
     let mut limits = interpreter::Limits::default();
     if let Some(steps) = steps {
         limits.steps = steps;

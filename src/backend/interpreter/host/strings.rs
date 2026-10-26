@@ -444,7 +444,9 @@ impl DefaultHost<'_> {
                 } else {
                     0
                 };
-                let source = length(memory, arg(1), u64::MAX)? + 1;
+                let source = length(memory, arg(1), u64::MAX)?
+                    .checked_add(1)
+                    .ok_or(UbKind::OutOfBounds)?;
                 memory.copy(
                     at(memory, arg(0), end),
                     arg(1),

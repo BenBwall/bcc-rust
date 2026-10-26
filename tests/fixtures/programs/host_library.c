@@ -248,6 +248,17 @@ int main(void)
   char untouched[4] = "abc";
   printf("%d %d %s ", fgets(untouched, 0, file) == 0, fgets(untouched, -1, file) == 0, untouched);
   printf("%d [%s]\n", fgets(untouched, 1, file) == untouched, untouched);
+  /* Seeks out of range or with an unknown origin fail; a byte pushed back
+     at the start has no position. */
+  rewind(file);
+  ungetc(fgetc(file), file);
+  printf("ftell %ld ", ftell(file));
+  printf("%d ", fseek(file, -9223372036854775807L - 1, 1));
+  printf("%d %d ", fseek(file, -1, 0), fseek(file, 0, 7));
+  printf("%c ", fgetc(file));
+  rewind(file);
+  ungetc('Z', file);
+  printf("%ld %c\n", ftell(file), fgetc(file));
   fclose(file);
   /* "x" refuses an existing file instead of truncating it. */
   FILE *exclusive = fopen(name, "wx");

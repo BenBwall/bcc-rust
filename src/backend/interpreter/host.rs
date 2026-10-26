@@ -544,6 +544,12 @@ impl DefaultHost<'_> {
         self.file_access = true;
     }
 
+    /// Treats standard output as a terminal, which glibc line-buffers rather
+    /// than fully buffering as for a pipe or file.
+    pub(crate) fn set_terminal_output(&mut self, terminal: bool) {
+        self.console.line_buffered = terminal;
+    }
+
     /// How many file-system accesses were refused, with the first path, if
     /// any were.
     pub(crate) fn denied_file_access(&self) -> Option<(u32, &[u8])> {
@@ -592,6 +598,37 @@ fn implicit_stream(name: &str) -> Option<usize> {
     }
 }
 
+/// The payload glibc gives `nan("sequence")` and `nan(sequence)` input: an
+/// n-char-sequence (letters, digits and `_`) that `strtoull` reads whole in
+/// base 0, with a `0x` or `0` prefix, saturating at `ULLONG_MAX` when it
+/// overflows; zero for anything else, a sign or white space included.
+/// C99: §7.12.11.2 paragraph 2, p. 237; PDF p. 249; §7.20.1.3 paragraph 3,
+/// p. 308; PDF p. 320.
+fn nan_payload(text: &str) -> u64 {
+    if !text
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return 0;
+    }
+    let (digits, radix) =
+        if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (hex, 16)
+        } else if text.len() > 1 && text.starts_with('0') {
+            (&text[1..], 8)
+        } else {
+            (text, 10)
+        };
+    if digits.is_empty() || !digits.chars().all(|character| character.is_digit(radix)) {
+        return 0;
+    }
+    let value = digits.chars().try_fold(0_u64, |value, character| {
+        let digit = u64::from(character.to_digit(radix).expect("a checked digit"));
+        value.checked_mul(u64::from(radix))?.checked_add(digit)
+    });
+    value.unwrap_or(u64::MAX)
+}
+
 /// An integer argument, which must not be poison.
 fn integer(value: RuntimeValue) -> Result<u128, Fault> {
     value.as_int().ok_or(UbKind::PoisonInHostCall.into())
@@ -636,9 +673,10 @@ impl<'a> DefaultHost<'a> {
             allocator:     arena,
             output:        ArenaVec::new_in(arena),
             console:       stdio::Console {
-                errors:  ArenaVec::new_in(arena),
-                marks:   ArenaVec::new_in(arena),
-                flushed: 0,
+                errors:        ArenaVec::new_in(arena),
+                marks:         ArenaVec::new_in(arena),
+                flushed:       0,
+                line_buffered: false,
             },
             file_access:   false,
             denied_files:  0,

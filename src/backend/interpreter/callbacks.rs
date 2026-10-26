@@ -115,6 +115,13 @@ impl Machine<'_, '_, '_> {
         }
         let (key, base, size) = (args[0], args[1], integer(args[3])?);
         let (mut low, mut high) = (0, integer(args[2])?);
+        // An array past the address space would wrap element offsets.
+        if high
+            .checked_mul(size)
+            .is_none_or(|total| total > u128::from(u64::MAX))
+        {
+            return Err(UbKind::OutOfBounds.into());
+        }
         while low < high {
             let middle = u128::midpoint(low, high);
             let element = self
@@ -193,7 +200,11 @@ impl Machine<'_, '_, '_> {
             let element =
                 self.memory
                     .load(Type::Ptr, at(self, pointers, index * 8), Align::BYTE)?;
-            let offset = element.as_pointer().map_or(0, |pointer| pointer.address) - base_address;
+            // The pointers are the sort's own, each into the array.
+            let offset = element
+                .as_pointer()
+                .and_then(|pointer| pointer.address.checked_sub(base_address))
+                .ok_or(UbKind::OutOfBounds)?;
             let source = at(self, copy, u128::from(offset));
             let destination = at(self, base, index * size);
             self.memory.copy(

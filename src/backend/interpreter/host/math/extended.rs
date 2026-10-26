@@ -363,7 +363,7 @@ fn round(x: X87) -> X87 {
             }
             let (sum, carry) = high.overflowing_add(0x4000_0000 >> exponent);
             if carry {
-                sign_exponent += 1;
+                sign_exponent = sign_exponent.wrapping_add(1);
             }
             high = (sum & !fraction) | 0x8000_0000;
             low = 0;
@@ -379,7 +379,7 @@ fn round(x: X87) -> X87 {
         if carry {
             let (next, overflow) = high.overflowing_add(1);
             high = if overflow {
-                sign_exponent += 1;
+                sign_exponent = sign_exponent.wrapping_add(1);
                 next | 0x8000_0000
             } else {
                 next
@@ -466,7 +466,7 @@ fn next_after(x: X87, y: X87) -> X87 {
                 if biased(exponent.cast_unsigned()) == 0 {
                     high = high.wrapping_sub(1);
                 } else {
-                    exponent -= 1;
+                    exponent = exponent.wrapping_sub(1);
                     high = high.wrapping_sub(1);
                     if biased(exponent.cast_unsigned()) > 0 {
                         high |= 0x8000_0000;
@@ -482,7 +482,7 @@ fn next_after(x: X87, y: X87) -> X87 {
         if low == 0 {
             high = high.wrapping_add(1);
             if high == 0 || (biased(exponent.cast_unsigned()) == 0 && high == 0x8000_0000) {
-                exponent += 1;
+                exponent = exponent.wrapping_add(1);
                 high |= 0x8000_0000;
             }
         }
@@ -533,15 +533,6 @@ fn modf(x: X87) -> (X87, X87) {
 /// p. 308; PDF p. 320.
 fn quiet_nan(text: &[u8]) -> X87 {
     let text = text.strip_suffix(&[0]).unwrap_or(text);
-    let text = std::str::from_utf8(text).unwrap_or("");
-    let (digits, radix) =
-        if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-            (hex, 16)
-        } else if text.len() > 1 && text.starts_with('0') {
-            (&text[1..], 8)
-        } else {
-            (text, 10)
-        };
-    let payload = u64::from_str_radix(digits, radix).unwrap_or(0);
+    let payload = super::super::nan_payload(std::str::from_utf8(text).unwrap_or(""));
     X87::from_bits((0x7FFF << 64) | 0xC000_0000_0000_0000 | u128::from(payload & ((1 << 62) - 1)))
 }
