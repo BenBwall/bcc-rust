@@ -420,6 +420,16 @@ impl PRegSet {
         Self(self.0 | 1 << register as u32)
     }
 
+    #[must_use]
+    pub(crate) const fn without(self, register: PReg) -> Self {
+        Self(self.0 & !(1 << register as u32))
+    }
+
+    #[must_use]
+    pub(crate) const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
     pub(crate) const fn contains(self, register: PReg) -> bool {
         self.0 & (1 << register as u32) != 0
     }

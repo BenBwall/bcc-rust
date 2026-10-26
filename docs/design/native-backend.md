@@ -930,8 +930,10 @@ with the following decisions recorded for review:
   object, as Clang places module assembly; `.att_syntax` follows them.
 - Inline assembly (`isel/asm.rs`) never reaches the allocator as an operand
   form. Selection fixes every register operand to a physical register
-  first: the one its constraint names, or the first free one of its class
-  in the allocation order. Every operand gets its own register, except that
+  first: the one its constraint names, or a free one of its class in the
+  allocation order, assigned most constrained operand first with
+  backtracking, so an unrestricted output never takes the one register a
+  `Q` input could use. Every operand gets its own register, except that
   an output that is not early-clobber may share an input's fixed register
   (`"=a"(eax) : "a"(leaf)`) and a tied input shares its output's. `%rsp`,
   `%rbp` and the spill scratch registers (`%r10`, `%r11`, `%xmm14`, `%xmm15`)

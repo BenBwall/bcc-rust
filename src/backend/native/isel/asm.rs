@@ -2,8 +2,9 @@
 //! location before selection emits it, so the allocator sees only
 //! physical registers at the statement, as at a call.
 //!
-//! Register operands take the register their constraint names, or the
-//! first free one of their class; every operand gets its own register,
+//! Register operands take the register their constraint names, or a free
+//! one of their class, chosen most constrained operand first with
+//! backtracking (`choose_registers`); every operand gets its own register,
 //! except that an output may share an input's fixed register when it is not
 //! early-clobber (GCC's `cpuid` idiom, `"=a"(eax) : "a"(leaf)`) and a tied
 //! input shares its output's. `%rsp`, `%rbp` (the frame pointer) and the
@@ -65,7 +66,10 @@ use crate::{
         Value,
         asm_template_pieces as template_pieces,
     },
-    util::bump::ArenaVec,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl Selector<'_, '_, '_> {
@@ -124,57 +128,68 @@ impl Selector<'_, '_, '_> {
                 inputs = inputs.with(register);
             }
         }
+        // The operands that take a free register of their class, with the
+        // registers each may take, most constrained first.
+        let taken = outputs.union(inputs);
+        let mut pending = ArenaVec::new_in(self.arena);
         for (index, (operand, &value)) in operands.iter().zip(values).enumerate() {
             if registers[index].is_some() {
                 continue;
             }
-            let class = match operand.constraint {
-                | AsmConstraint::General(mask) => Some((RegClass::Gpr, mask)),
-                | AsmConstraint::Sse => Some((RegClass::Xmm, u16::MAX)),
-                // A frame object or a defined symbol is addressed directly.
-                | AsmConstraint::Memory if self.direct_memory(value).is_some() => None,
-                // Operands at one address (a `+m` output and its read)
+            let (class, mask) = match operand.constraint {
+                | AsmConstraint::General(mask) => (RegClass::Gpr, mask),
+                | AsmConstraint::Sse => (RegClass::Xmm, u16::MAX),
+                // A frame object or a defined symbol is addressed directly,
+                // and operands at one address (a `+m` output and its read)
                 // share the register that holds it.
                 | AsmConstraint::Memory
-                    if let Some(earlier) = shared_address(operands, values, index) =>
-                {
-                    registers[index] = registers[earlier];
-                    continue;
-                },
+                    if self.direct_memory(value).is_some()
+                        || shared_address(operands, values, index).is_some() =>
+                    continue,
                 // The address of a memory operand.
-                | AsmConstraint::Memory => Some((RegClass::Gpr, AsmConstraint::ANY_GENERAL)),
+                | AsmConstraint::Memory => (RegClass::Gpr, AsmConstraint::ANY_GENERAL),
+                | AsmConstraint::Tied(_) | AsmConstraint::Immediate | AsmConstraint::Flag(_) =>
+                    continue,
+            };
+            let order = match class {
+                | RegClass::Gpr => self.conv.allocation,
+                | RegClass::Xmm => self.conv.float_allocation,
+            };
+            let mut candidates = ArenaVec::new_in(self.arena);
+            candidates.extend(order.iter().copied().filter(|&register| {
+                (class == RegClass::Xmm || mask & (1 << register.index()) != 0)
+                    && !reserved.contains(register)
+                    && !taken.contains(register)
+            }));
+            pending.push((index, candidates));
+        }
+        pending.sort_by_key(|(_, candidates)| candidates.len());
+        let chosen = choose_registers(&pending, taken, self.arena).ok_or(Construct::InlineAsm(
+            "more register operands than free registers",
+        ))?;
+        for (&(index, _), &register) in pending.iter().zip(&chosen) {
+            registers[index] = Some(register);
+            let operand = operands[index];
+            if operand.output && operand.constraint != AsmConstraint::Memory {
+                outputs = outputs.with(register);
+            } else {
+                inputs = inputs.with(register);
+            }
+        }
+        // Tied inputs and shared addresses take their operand's register.
+        for (index, operand) in operands.iter().enumerate() {
+            match operand.constraint {
                 | AsmConstraint::Tied(output) => {
                     let register = registers[output as usize]
                         .ok_or(Construct::InlineAsm("a tied input without a register"))?;
                     inputs = inputs.with(register);
                     registers[index] = Some(register);
-                    continue;
                 },
-                | AsmConstraint::Immediate | AsmConstraint::Flag(_) => None,
-            };
-            let Some((class, mask)) = class else { continue };
-            let order = match class {
-                | RegClass::Gpr => self.conv.allocation,
-                | RegClass::Xmm => self.conv.float_allocation,
-            };
-            let free = |register: &&PReg| {
-                let bit = if class == RegClass::Gpr {
-                    mask & (1 << register.index()) != 0
-                } else {
-                    true
-                };
-                bit && !reserved.contains(**register)
-                    && !outputs.contains(**register)
-                    && !inputs.contains(**register)
-            };
-            let register = *order.iter().find(free).ok_or(Construct::InlineAsm(
-                "more register operands than free registers",
-            ))?;
-            registers[index] = Some(register);
-            if operand.output && operand.constraint != AsmConstraint::Memory {
-                outputs = outputs.with(register);
-            } else {
-                inputs = inputs.with(register);
+                | AsmConstraint::Memory if registers[index].is_none() =>
+                    if let Some(earlier) = shared_address(operands, values, index) {
+                        registers[index] = registers[earlier];
+                    },
+                | _ => {},
             }
         }
         // Inputs and addresses are materialized before any register is set.
@@ -326,6 +341,53 @@ impl Selector<'_, '_, '_> {
             )),
         }
     }
+}
+
+/// Gives each pending operand a distinct register from its candidates,
+/// none in `taken`: a depth-first search over the operands, most
+/// constrained first, that backtracks when one has no register left, as
+/// GCC's allocator finds an assignment a greedy choice in operand order can
+/// miss (an unrestricted output taking the one register a `Q` input
+/// could use). `None` when there is no assignment, or after a bounded
+/// number of steps.
+fn choose_registers<'a>(
+    pending: &[(usize, ArenaVec<'_, PReg>)],
+    taken: PRegSet,
+    arena: &'a Bump,
+) -> Option<ArenaVec<'a, PReg>> {
+    const MAX_STEPS: u32 = 1 << 16;
+    let mut chosen = ArenaVec::with_capacity_in(pending.len(), arena);
+    let mut next = ArenaVec::with_capacity_in(pending.len(), arena);
+    next.resize(pending.len(), 0_usize);
+    let mut used = taken;
+    let mut steps = 0;
+    while chosen.len() < pending.len() {
+        steps += 1;
+        if steps > MAX_STEPS {
+            return None;
+        }
+        let depth = chosen.len();
+        let candidates = &pending[depth].1;
+        let found = candidates[next[depth]..]
+            .iter()
+            .position(|&register| !used.contains(register));
+        match found {
+            | Some(offset) => {
+                let register = candidates[next[depth] + offset];
+                next[depth] += offset + 1;
+                used = used.with(register);
+                chosen.push(register);
+                if let Some(slot) = next.get_mut(depth + 1) {
+                    *slot = 0;
+                }
+            },
+            | None => {
+                let register = chosen.pop()?;
+                used = used.without(register);
+            },
+        }
+    }
+    Some(chosen)
 }
 
 /// The largest displacement a direct memory operand folds, leaving room

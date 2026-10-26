@@ -1879,8 +1879,8 @@ that never reaches its assembly still runs. Differential tests do not
 generate assembly.
 
 **Native back end** (`backend/native/isel/asm.rs`). Selection fixes each
-register operand to a physical register (the constraint's, or the first
-free one of its class; never `%rsp`, `%rbp` or the spill scratch registers
+register operand to a physical register (the constraint's, or a free one
+of its class, most constrained operand first with backtracking; never `%rsp`, `%rbp` or the spill scratch registers
 `%r10`, `%r11`, `%xmm14` and `%xmm15`; a memory operand in a frame object or
 at a defined symbol needs none), copies the inputs in, and emits one
 `MInst::InlineAsm` that reads the input registers and writes the outputs

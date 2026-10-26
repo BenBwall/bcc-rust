@@ -354,6 +354,37 @@ int main(void) {
         }
     }
 
+    /// The native back end assigns the most constrained operand first: the
+    /// `Q` input takes `%rax`, which the unrestricted early-clobber output
+    /// leaves to it, as GCC does. LLVM's fast register allocator, which
+    /// Clang uses at O0 too, reports "inline assembly requires more
+    /// registers than available" for this statement, so LLVM runs it at O2.
+    #[test]
+    fn constrained_operands_find_registers() {
+        let source = "__attribute__((noinline)) int constrained(int x) { int out; __asm__(\"movl \
+                      %1, %0\" : \"=&r\"(out) : \"Q\"(x) : \"rcx\", \"rdx\", \"rbx\"); return \
+                      out; }\nint main(void) { return constrained(7) != 7; }\n";
+        let Some(target) = host() else {
+            eprintln!("skipping: the host is not an x86-64 target bcc supports");
+            return;
+        };
+        for flags in [
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+            &["--backend=llvm", "-O2"][..],
+        ] {
+            let executable = temporary("inline-asm-constrained.exe");
+            let built = bcc(
+                source,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{flags:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
     #[test]
     fn the_interpreter_refuses_inline_assembly() {
         let output = bcc(

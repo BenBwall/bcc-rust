@@ -252,3 +252,36 @@ block0(v0: i32, v1: i8):
     );
     assert_eq!(statements(&text), ["\tmovq %rax, %r11 # rbx %eax %bl"]);
 }
+
+/// The most constrained operand chooses first: with `%rcx`-`%rbx`
+/// clobbered, the `Q` input takes `%rax` and the unrestricted early-clobber
+/// output another register, as GCC assigns
+/// `asm ("movl %1,%0" : "=&r"(out) : "Q"(x) : "rcx", "rdx", "rbx")`.
+#[test]
+fn constrained_operands_choose_registers_first() {
+    let text = listing(
+        "abi lowered
+function @f(i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0(v0: i32):
+    v1 = stack_addr slot0
+    asm \"movl $1, $0\" (out \"&r\" i32 v1, in \"{rax,rcx,rdx,rbx}\" i32 v0) clobber(rcx, rdx, rbx)
+    v2 = load.i32 v1, align 4
+    return v2
+}
+",
+        Target::LinuxGnu,
+    );
+    let [statement] = statements(&text)[..] else {
+        panic!("{text}");
+    };
+    let (input, output) = statement
+        .strip_prefix("\tmovl %")
+        .and_then(|rest| rest.split_once(", %"))
+        .unwrap_or_else(|| panic!("{statement}"));
+    assert_eq!(input, "eax", "{statement}");
+    assert!(
+        !["eax", "ecx", "edx", "ebx"].contains(&output),
+        "{statement}"
+    );
+}
