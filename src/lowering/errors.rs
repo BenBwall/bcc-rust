@@ -86,6 +86,9 @@ pub(crate) enum Construct {
     SelectionDeclaration,
     Extension,
     CompoundLiteralStorage,
+    /// An automatic object or compound literal of 4 GiB or more, beyond the
+    /// IR's 32-bit stack slot sizes.
+    LargeAutomaticObject,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -147,6 +150,7 @@ impl Construct {
             | Self::Initializer => "this initializer",
             | Self::SelectionDeclaration => "declarations in selection statements",
             | Self::Extension => "this extension",
+            | Self::LargeAutomaticObject => "automatic objects of 4 GiB or more",
             | Self::CompoundLiteralStorage =>
                 "compound literals with static or thread storage duration",
         }

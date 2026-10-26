@@ -303,3 +303,23 @@ fn invalid_file_scope_asm_does_not_claim_to_be_valid_c() {
     let rendered = format!("{diagnostic:?}");
     assert!(!rendered.contains("valid C"), "{rendered}");
 }
+
+#[test]
+fn objects_of_four_gib_or_more_are_refused_rather_than_missing_facts() {
+    // C99 §6.2.4p5 permits any complete automatic object; the IR's stack
+    // slots and dense static images hold less than 4 GiB.
+    for source in [
+        "int f(void) { char s[0x100000000]; s[0] = 1; return s[0]; }",
+        "int f(void) { return ((char[0x100000000]){0})[0]; }",
+    ] {
+        assert_eq!(
+            refusal(source),
+            "not yet supported by lowering: automatic objects of 4 GiB or more",
+            "{source}"
+        );
+    }
+    assert_eq!(
+        refusal("struct s { char a[__PTRDIFF_MAX__ - 3], tail[]; }; struct s object = { { 0 } };"),
+        "not yet supported by lowering: this static initializer"
+    );
+}

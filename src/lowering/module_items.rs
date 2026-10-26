@@ -975,6 +975,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     types::target_type(types, data.ty).and_then(|element| types.layout(element));
                 match element {
                     | Some(_) => (0, align?),
+                    // An object declared with a structure, union, enumeration
+                    // or void type that this translation unit never
+                    // completes is only referenced, never defined, so its
+                    // address is all lowering needs.
+                    // C99 §6.2.5p22, p. 36; PDF p. 48.
+                    | None if !matches!(types.kind(data.ty), TypeKind::Array(..)) =>
+                        (0, Align::BYTE),
                     | None =>
                         return Err(types::layout(types, data.ty).err().unwrap_or(
                             LoweringErrorKind::MissingFact("an object type has no layout"),
@@ -1284,6 +1291,14 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 usize::try_from(member.offset.checked_add(array.size)?).ok()
             })
             .map_or(length, |written| written.max(length));
+        // The initializer's bytes are held as one dense image, so an object
+        // of 4 GiB or more is refused rather than exhausting memory.
+        if u32::try_from(written).is_err() {
+            return Err(LoweringError::unsupported(
+                Construct::StaticInitializer,
+                initializer.source_vectors,
+            ));
+        }
         let mut bytes = ArenaVec::with_capacity_in(written, tables);
         bytes.resize(written, 0_u8);
         let mut relocations = ArenaVec::new_in(tables);
