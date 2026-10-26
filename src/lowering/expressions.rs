@@ -1734,14 +1734,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .alloc_slice_fill_iter(items.iter().map(|item| item.ty));
                 let func = self
                     .unit
-                    .pack_copy(
-                        binding,
-                        record,
-                        types,
-                        fixed,
-                        result_type,
-                        (self.pack_depth + 1, source),
-                    )
+                    .pack_copy(binding, record, types, fixed, result_type, source)
                     .map_err(|kind| at(kind, source))?;
                 self.draft.push(Op::Call(func, args), result)
             },

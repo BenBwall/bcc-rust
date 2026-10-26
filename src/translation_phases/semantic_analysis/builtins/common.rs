@@ -283,11 +283,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             // Lowering substitutes the pack in a copy of this function per
-            // call, so it must know which bodies use it.
-            | CommonBuiltin::ArgumentPack(_) =>
-                if let Some(function) = self.functions.current {
-                    self.function_records[function.id].va_arg_pack = true;
-                },
+            // call, so it must know which bodies evaluate it.
+            | CommonBuiltin::ArgumentPack(_) => self.argument_pack_use(),
             | CommonBuiltin::Atomic(_)
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::Bswap(_)

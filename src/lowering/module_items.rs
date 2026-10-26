@@ -163,7 +163,10 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// of the copies a lowered body calls that are still to be lowered.
     pub(super) pack_copies: ArenaVec<'a, super::argument_pack::PackCopy<'a, 'tu>>,
     pub(super) pack_copy_index: ArenaMap<'a, FuncId, usize>,
-    pub(super) pending_pack_copies: ArenaVec<'a, usize>,
+    /// The declarations of internal functions using the pack whose address
+    /// is taken, with their definitions, whose bodies
+    /// `argument_pack::lower_live_copies` lowers if the address is live.
+    pub(super) pack_addresses: ArenaMap<'a, FuncId, &'tu FunctionRecord<'tu>>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -647,15 +650,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         let data = self.sema.bindings[binding];
-        // Only calls reach the copies of an internal function using the
-        // argument pack; it has no body for its address to designate.
-        if data.linkage == Linkage::Internal
-            && self
-                .pack_function(binding)
-                .is_some_and(|record| self.copies_only(record))
-        {
-            return Err(LoweringErrorKind::InvalidArgumentPack(false));
-        }
         if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
             return Err(LoweringErrorKind::MissingFact(
                 "lowering referenced an omitted internal function",
@@ -700,6 +694,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .module
             .declare_function(name, signature, self.ir_linkage(binding));
         self.symbol_attributes(binding, Symbol::Function(func));
+        // Only calls reach the copies of an internal function using the
+        // argument pack; its address designates its own body, lowered only if
+        // live code takes it (`argument_pack::lower_live_copies`).
+        if data.linkage == Linkage::Internal
+            && let Some(record) = self.pack_function(binding)
+            && self.copies_only(record)
+        {
+            _ = self.pack_addresses.insert(func, record);
+        }
         Ok(func)
     }
 
@@ -1991,7 +1994,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             pack_functions,
             pack_copies: ArenaVec::new_in(tables),
             pack_copy_index: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
-            pending_pack_copies: ArenaVec::new_in(tables),
+            pack_addresses: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
         })
     }
 }

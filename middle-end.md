@@ -609,12 +609,23 @@ anonymous argument types, which it takes as extra parameters. In the copy the
 pack expands to those parameters at a call whose last argument it is, the
 length is an `iconst`, and `fold`, `simplify-cfg` and `dce` run on it right
 after lowering, at every optimization level, so a guarded call of an `error`
-function disappears as GCC folds it when it inlines; a copy is lowered only
-when a lowered (and, for a copy, folded) body still calls it, so one
-requested from a folded branch stays a bodiless declaration that nothing
-names. The function's own body
-is lowered only when it is an external definition, where any use of the pack
-is an error, as in GCC. Functions carry
+function disappears as GCC folds it when it inlines. Copies are lowered on
+demand by a liveness walk once every definition is lowered
+(`lowering/argument_pack.rs`): it starts at externally visible, `used`,
+inline-copy, constructor and initializer-addressed functions and follows
+calls and addresses through lowered (and, for copies, folded) bodies,
+shallowest nesting first, so a copy that only a folded branch or an
+unreached internal helper requests stays a bodiless declaration that nothing
+names, the 64-copy nesting limit counts only live paths, and internal
+bodies left unreached are dropped, as GCC drops them at -O2. The function's
+own body is lowered when it is an external definition, or internal with an
+address live code takes; in either a pack it evaluates is an error, as in
+GCC. Known deviations from GCC, which finds the pack after constant folding:
+bcc sees through parentheses, `__extension__`, casts and unary `+` that keep
+the type, generic selections, and `*`, `&` or a same-type cast on the
+callee, but not arithmetic (`0 + pack`) or a comma before the pack; and the
+liveness walk runs at every optimization level, so dead code GCC keeps at
+-O0 (and then fails to link or diagnoses) is dropped. Functions carry
 their inline control in IR (`noinline` for GNU `noinline`/`noipa`,
 `alwaysinline`), which the inliner and the LLVM back end honor. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
 The interpreter and LLVM therefore share the same decision. Internal functions

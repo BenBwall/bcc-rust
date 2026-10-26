@@ -270,57 +270,13 @@ fn lower_unit<'tu, 'ir>(
             }
         }
     }
-    // The copies for calls passing on an argument pack that lowered bodies
-    // call, including those the copies themselves call. Their branches on
-    // the pack's length are folded at once, as GCC folds them when it
-    // inlines, at every optimization level, before their own calls are
-    // queued. GNU extension: GCC manual, "Constructing Calls".
-    if !unit.pack_copies.is_empty() {
-        let lowered = tables.alloc_slice_fill_iter(
-            unit.module
-                .functions()
-                .filter(|(_, function)| function.body.is_some())
-                .map(|(func, _)| func),
-        );
-        for &func in &*lowered {
-            unit.queue_called_copies(func);
-        }
-    }
-    while let Some(copy) = unit.next_pack_copy() {
-        let copy = match copy {
-            | Ok(copy) => copy,
-            | Err(error) => {
-                if !errors.contains(&error) {
-                    errors.push(error);
-                }
-                continue;
-            },
-        };
-        scratch.reset();
-        if let Some(binding) = copy.record.binding {
-            function_sources.push((
-                unit.module.function(copy.func).name,
-                sema.bindings[binding].name.source_vectors,
-            ));
-        }
-        match FunctionLowerer::lower(
-            &mut unit,
-            copy.record,
-            copy.func,
-            Some(copy),
-            scratch,
-            options,
-        ) {
-            | Ok(()) => {
-                crate::optimizer::fold_constant_branches(&mut unit.module, copy.func, scratch);
-                unit.queue_called_copies(copy.func);
-            },
-            | Err(error) =>
-                if !errors.contains(&error) {
-                    errors.push(error);
-                },
-        }
-    }
+    argument_pack::lower_live_copies(
+        &mut unit,
+        scratch,
+        options,
+        &mut errors,
+        &mut function_sources,
+    );
     let result = if errors.is_empty() {
         let call_diagnostics = arena.alloc_slice_copy(&unit.call_diagnostics);
         Ok(LoweredUnit {
@@ -600,9 +556,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// The block computed gotos branch through, once one exists.
     indirect:           Option<Block>,
     /// In a copy made for a call (`argument_pack.rs`), the anonymous
-    /// arguments it received, and how many copies that call is nested in.
+    /// arguments it received.
     pack:               Option<&'s [Item]>,
-    pack_depth:         u32,
 }
 
 /// Traversal controls kept outside the AST and retained IR.
