@@ -102,6 +102,40 @@ int f(void) { return selected(1)+selected(2.0)+plain(1); }
     }
 }
 
+/// glibc's `open` wrapper guards an `error` function with the argument
+/// pack's length, which is a constant in each call's copy: the guarded call
+/// is gone, without the optimizer too, unless the call passes too many.
+/// GNU extension: GCC manual, "Constructing Calls".
+#[test]
+fn argument_pack_length_guards_fold_before_call_diagnostics() {
+    for optimized in [false, true] {
+        let (errors, calls) = diagnostics_with_optimizer(
+            r#"
+extern void too_many(void) __attribute__((error("too many arguments")));
+extern int __open_2(const char *, int);
+extern int __open_alias(const char *, int, ...) __asm__("open");
+extern __inline __attribute__((always_inline, gnu_inline)) int
+open(const char *path, int flags, ...) {
+    if (__builtin_va_arg_pack_len() > 1) too_many();
+    if (__builtin_va_arg_pack_len() < 1) return __open_2(path, flags);
+    return __open_alias(path, flags, __builtin_va_arg_pack());
+}
+int f(void) { return open("a", 0) + open("a", 0101, 0600); }
+int g(void) { return open("a", 0101, 0600, 1); }
+"#,
+            optimized,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            matches!(
+                &calls[..],
+                [(false, message)] if message.ends_with("too many arguments")
+            ),
+            "optimized: {optimized}: {calls:?}"
+        );
+    }
+}
+
 #[test]
 fn diagnostic_attributes_only_diagnose_emitted_direct_calls() {
     let (errors, calls) = diagnostics(

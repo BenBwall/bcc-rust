@@ -39,7 +39,7 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             .unwrap();
         }
     }
-    assert_eq!(ids.len(), 775);
+    assert_eq!(ids.len(), 777);
     source.push_str("int following;\n");
     for target in [
         Target::LinuxGnu,

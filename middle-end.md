@@ -601,7 +601,17 @@ as Clang's does and drops it at O0, while the other back ends drop it.
 Lowering refuses nothing for these bodies: if the unit does not lower with
 them it is lowered again without. A GNU `weak` inline definition is a weak
 definition, emitted where it is referenced, as Clang gives it weak linkage
-before inline-only emission. Functions carry
+before inline-only emission. A function whose body uses GNU
+`__builtin_va_arg_pack ()` or `__builtin_va_arg_pack_len ()` (glibc's GCC
+fortify wrappers) is not lowered once: each direct call calls an internal
+`alwaysinline` copy, `name.va_arg_pack`, specialized for the call's promoted
+anonymous argument types, which it takes as extra parameters. In the copy the
+pack expands to those parameters at a call whose last argument it is, the
+length is an `iconst`, and `fold`, `simplify-cfg` and `dce` run on it right
+after lowering, at every optimization level, so a guarded call of an `error`
+function disappears as GCC folds it when it inlines. The function's own body
+is lowered only when it is an external definition, where any use of the pack
+is an error, as in GCC. Functions carry
 their inline control in IR (`noinline` for GNU `noinline`/`noipa`,
 `alwaysinline`), which the inliner and the LLVM back end honor. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
 The interpreter and LLVM therefore share the same decision. Internal functions

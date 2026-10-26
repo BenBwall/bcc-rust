@@ -286,6 +286,13 @@ pub(crate) enum BuiltinOperation {
     /// with no effect on execution. MSVC extension: Microsoft Learn,
     /// "__annotation". <https://learn.microsoft.com/en-us/cpp/intrinsics/annotation>
     Annotation,
+    /// GNU `__builtin_va_arg_pack` (`false`) and `__builtin_va_arg_pack_len`
+    /// (`true`): the anonymous arguments of the enclosing variadic function,
+    /// or their number, at a call that inlines it. Lowering substitutes them
+    /// in a specialized copy of that function for each call; anywhere else
+    /// they are invalid. GNU extension: GCC manual, "Constructing Calls".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Constructing-Calls.html>
+    ArgumentPack(bool),
     /// Checked and folded or selected by semantic analysis; lowering reads
     /// the retained constant or selected operand and otherwise refuses.
     Semantic(SemanticOperation),

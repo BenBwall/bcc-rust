@@ -155,6 +155,13 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// that the LLVM back end emits as `available_externally` bodies
     /// ([`Unit::lower_plain_inline_bodies`]).
     plain_inline: ArenaSet<'a, usize>,
+    /// The definitions whose bodies use `__builtin_va_arg_pack ()` or its
+    /// length, by entity identity, as for `private_bodies`.
+    pub(super) pack_functions: ArenaMap<'a, StringCacheId, &'tu FunctionRecord<'tu>>,
+    /// Their copies specialized for calls, in declaration order
+    /// (`argument_pack.rs`), and how many of them have been lowered.
+    pub(super) pack_copies: ArenaVec<'a, super::argument_pack::PackCopy<'a, 'tu>>,
+    pub(super) lowered_pack_copies: usize,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -483,6 +490,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 source,
             ));
         }
+        // GNU extension: GCC manual, "Constructing Calls". Each direct call
+        // gets its own copy of a body that uses the argument pack.
+        if self.copies_only(record) {
+            return Ok(None);
+        }
         if self.sema.function_policy(binding).is_some_and(|policy| {
             matches!(
                 policy.body,
@@ -633,6 +645,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         let data = self.sema.bindings[binding];
+        // Only calls reach the copies of an internal function using the
+        // argument pack; it has no body for its address to designate.
+        if data.linkage == Linkage::Internal
+            && self
+                .pack_function(binding)
+                .is_some_and(|record| self.copies_only(record))
+        {
+            return Err(LoweringErrorKind::InvalidArgumentPack(false));
+        }
         if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
             return Err(LoweringErrorKind::MissingFact(
                 "lowering referenced an omitted internal function",
@@ -1178,7 +1199,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
 
     /// `base`, or the next unoccupied `base.N`, probing each suffix once.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (distinct unlinked objects).
-    fn unique_name(&mut self, base: &'a str) -> &'a str {
+    pub(super) fn unique_name(&mut self, base: &'a str) -> &'a str {
         if self.name_available(base) {
             return base;
         }
@@ -1930,6 +1951,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
         }
         let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+        let mut pack_functions = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+        for function in sema.functions {
+            if function.va_arg_pack
+                && let Some(entity) = function.binding.and_then(|binding| sema.entity(binding))
+            {
+                _ = pack_functions.insert(entity.identity, function);
+            }
+        }
         Ok(Self {
             retain_local_statics: true,
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
@@ -1954,6 +1983,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             private_bodies: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             plain_inline: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            pack_functions,
+            pack_copies: ArenaVec::new_in(tables),
+            lowered_pack_copies: 0,
         })
     }
 }

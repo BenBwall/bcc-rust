@@ -124,6 +124,13 @@ runtime member and nested-array offsets in subobject modes 1 and 3. Unsupported
 predicate shapes diagnose rather than being discarded. These contracts cover
 the exercised glibc level-2/3 fortify wrappers and Clang C arithmetic,
 real/complex, pointer-qualification and variadic-fallback overload selection.
+Code that presents as GCC (GCC's version macros without Clang's) gets glibc's
+GCC wrappers instead, which forward their anonymous arguments with
+`__builtin_va_arg_pack ()` and count them with `__builtin_va_arg_pack_len ()`.
+Lowering gives each direct call of a function using them a copy specialized for
+the call's promoted anonymous argument types, folds the copy's branches on the
+length at every optimization level, and refuses any use no call resolves
+(`lowering/argument_pack.rs`).
 Overload symbols use Clang's Itanium ABI on ELF and MinGW and its Microsoft ABI
 on MSVC, including written nested-function qualifiers and shared argument/name
 backreferences. Anonymous and repeated local tags receive ABI ordinals as

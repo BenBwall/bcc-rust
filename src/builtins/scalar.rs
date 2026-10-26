@@ -1521,6 +1521,35 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             0,
         )
     },
+    // GCC's `int __builtin_va_arg_pack(void)` and
+    // `int __builtin_va_arg_pack_len(void)`: the anonymous arguments of the
+    // variadic function they appear in, at a call that inlines it.
+    descriptor(
+        Id::VaArgPack,
+        "__builtin_va_arg_pack",
+        B::ArgumentPack(false),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::VaArgPackLen,
+        "__builtin_va_arg_pack_len",
+        B::ArgumentPack(true),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
 ];
 
 const fn descriptor(
@@ -1566,7 +1595,7 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
-        | B::Constant | B::ObjectSize(_) | B::Address(_) => (
+        | B::Constant | B::ObjectSize(_) | B::Address(_) | B::ArgumentPack(_) => (
             TypeRule::Fixed,
             BuiltinEffectClass::Query,
             Some(crate::configuration::Feature::GnuBuiltins),

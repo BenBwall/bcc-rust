@@ -58,6 +58,12 @@ pub(crate) enum LoweringErrorKind {
     /// A fact lowering relies on is missing from the semantic results: a
     /// compiler bug, reported rather than turned into wrong code.
     MissingFact(&'static str),
+    /// `__builtin_va_arg_pack ()` (`false`) or `__builtin_va_arg_pack_len ()`
+    /// (`true`) where no call supplies the arguments: outside a copy of its
+    /// function expanded for a call, or the pack not as the last argument
+    /// after a callee's named parameters. GCC reports the same error.
+    /// GNU extension: GCC manual, "Constructing Calls".
+    InvalidArgumentPack(bool),
 }
 
 /// A construct outside the prototype subset of `middle-end.md`.
@@ -196,6 +202,8 @@ impl LoweringErrorKind {
                  does not model",
             | Self::MissingFact(_) => "internal error: lowering is missing a semantic fact",
             | Self::InvalidFileScopeAsm(fault) => fault.message(),
+            | Self::InvalidArgumentPack(false) => "invalid use of '__builtin_va_arg_pack ()'",
+            | Self::InvalidArgumentPack(true) => "invalid use of '__builtin_va_arg_pack_len ()'",
         }
     }
 }
@@ -238,6 +246,12 @@ impl ToDiagnostic for LoweringError {
             | LoweringErrorKind::InvalidFileScopeAsm(_) => explanation
                 .label("invalid file-scope asm")
                 .note("asm outside a function takes exactly one narrow string literal"),
+            | LoweringErrorKind::InvalidArgumentPack(_) => explanation
+                .label("no call supplies the anonymous arguments here")
+                .note(
+                    "only a direct call of the variadic function using it, which is then always \
+                     inlined, can forward its anonymous arguments, as the last argument of a call",
+                ),
             | _ => explanation,
         };
         explanation.at(ErrorSeverity::Error, source)

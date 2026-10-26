@@ -244,6 +244,10 @@ pub(crate) struct FunctionRecord<'tu> {
     /// translate: an `always_inline` GNU inline body then keeps calling the
     /// external definition rather than a private copy.
     pub(crate) assembly:          bool,
+    /// The body calls `__builtin_va_arg_pack` or `__builtin_va_arg_pack_len`,
+    /// so lowering expands a copy of it at each direct call instead of
+    /// lowering it once. GNU extension: GCC manual, "Constructing Calls".
+    pub(crate) va_arg_pack:       bool,
 }
 
 /// A lexical scope and its enclosing scope.

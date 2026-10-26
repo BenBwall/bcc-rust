@@ -322,6 +322,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     "family builtins retain no checked instance",
                     source,
                 )),
+            // A pack that no call passes on, or its length outside a copy.
+            // GNU extension: GCC manual, "Constructing Calls".
+            | CommonBuiltin::ArgumentPack(false) =>
+                return Err(super::module_items::at(
+                    super::LoweringErrorKind::InvalidArgumentPack(false),
+                    source,
+                )),
+            | CommonBuiltin::ArgumentPack(true) => self.pack_length(source)?,
             | CommonBuiltin::Complex => {
                 let pair = [self.value(items[0], source)?, self.value(items[1], source)?];
                 self.complex_pair(pair)
