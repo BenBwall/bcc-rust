@@ -1137,8 +1137,12 @@ fn live_status(
     match lookup(compiled, text, level) {
         | Some(Ok(_)) => LiveCompile::Compiled,
         | Some(Err(error)) => LiveCompile::Failed(error.clone()),
-        | None if pending => LiveCompile::Compiling,
-        | None => LiveCompile::Idle,
+        | None => match failure(compiled, text) {
+            | Some(error) => LiveCompile::Failed(error.to_owned()),
+            // Anything else in flight finishes (or is dropped) first.
+            | None if pending || in_flight.is_some() => busy,
+            | None => LiveCompile::Idle,
+        },
     }
 }
 

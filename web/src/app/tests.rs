@@ -117,3 +117,54 @@ fn a_bundled_lesson_compiles_only_in_the_pipeline_view() {
         Some(key(lesson, false))
     );
 }
+
+#[test]
+fn a_crash_at_either_level_stops_and_shows_for_both() {
+    let crash = "bcc's in-browser compiler crashed (trap).".to_owned();
+    let cache = vec![(key("x", false), Err(crash.clone()))];
+    assert_eq!(wanted(&cache, "x", true, true), None);
+    assert_eq!(wanted(&cache, "x", false, true), None);
+    for level in [false, true] {
+        assert_eq!(
+            live_status(&cache, "x", level, None, false, false),
+            LiveCompile::Failed(crash.clone()),
+            "-O{}",
+            u8::from(level) * 2
+        );
+    }
+    // A level compiled before the crash still shows its result.
+    let cache = vec![
+        (key("x", true), Ok(compiled("", 1))),
+        (key("x", false), Err(crash.clone())),
+    ];
+    assert_eq!(
+        live_status(&cache, "x", true, None, false, false),
+        LiveCompile::Compiled
+    );
+    assert_eq!(
+        live_status(&cache, "y", true, None, false, false),
+        LiveCompile::Idle
+    );
+}
+
+#[test]
+fn the_selected_level_waits_on_whatever_runs_first() {
+    let cache = Compiled::new();
+    let other = key("x", false);
+    assert_eq!(
+        live_status(&cache, "x", true, Some(&other), false, true),
+        LiveCompile::Loading
+    );
+    assert_eq!(
+        live_status(&cache, "x", true, Some(&other), false, false),
+        LiveCompile::Compiling
+    );
+    assert_eq!(
+        live_status(&cache, "x", true, None, true, false),
+        LiveCompile::Compiling
+    );
+    assert_eq!(
+        live_status(&cache, "x", true, None, false, false),
+        LiveCompile::Idle
+    );
+}
