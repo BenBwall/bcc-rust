@@ -496,8 +496,19 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             ));
         }
         // GNU extension: GCC manual, "Constructing Calls". Each direct call
-        // gets its own copy of a body that uses the argument pack.
+        // gets its own copy of a body that uses the argument pack. A `used`
+        // one is declared now: it is emitted whatever calls it, so the walk
+        // over live code (`argument_pack::lower_live_copies`) lowers its own
+        // body, as for a live address.
         if self.copies_only(record) {
+            if self.sema.bindings[binding].linkage == Linkage::Internal
+                && self
+                    .sema
+                    .entity_attributes(binding)
+                    .is_some_and(|attributes| attributes.used)
+            {
+                _ = self.function(binding).map_err(|kind| at(kind, source))?;
+            }
             return Ok(None);
         }
         if self.sema.function_policy(binding).is_some_and(|policy| {

@@ -97,7 +97,8 @@ const MAX_DEPTH: u32 = 64;
 /// lowered. Liveness starts where the program can enter: functions other
 /// modules can name, `used` ones, inline copies (the LLVM back end emits
 /// their bodies), constructors and destructors, and functions static
-/// initializers address; it follows the calls and addresses of each body
+/// initializers address, and the targets of aliases; it follows the calls
+/// and addresses of each body
 /// it reaches. A copy is lowered when it is reached, and its branches on
 /// its pack's length are folded at once, as GCC folds them when it
 /// inlines, at every optimization level, before its own calls are
@@ -109,9 +110,12 @@ const MAX_DEPTH: u32 = 64;
 /// functions left unreached are dropped for the same reason, as GCC drops
 /// unused static functions when it optimizes.
 ///
-/// Functions are reached shallowest first: an ordinary function is at depth
-/// 0, and a copy one deeper than the shallowest live body calling it, so a
-/// copy is checked against [`MAX_DEPTH`] on its shallowest live path. An
+/// Depths are relaxed to a fixed point: an ordinary function is at depth 0,
+/// and a copy one deeper than the shallowest live body calling it. A
+/// function's calls are followed again whenever a shallower path to it is
+/// found (each copy is lowered once), and a copy is checked against
+/// [`MAX_DEPTH`] only on its final, shallowest live depth, whatever order
+/// the walk found its callers in. An
 /// internal function using the pack whose address live code takes gets its
 /// own body, as GCC emits it then: one that evaluates no pack (it only
 /// names one in `sizeof` or an unselected generic association) lowers, and
@@ -133,7 +137,7 @@ pub(super) fn lower_live_copies<'ir>(
     let mut depths = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
     let mut buckets = ArenaVec::new_in(tables);
     buckets.resize_with(MAX_DEPTH as usize + 2, || ArenaVec::new_in(tables));
-    // Each function joins the bucket of the smallest depth found for it.
+    // A function joins the bucket of each smaller depth found for it.
     let reach = |func: FuncId,
                  depth: u32,
                  depths: &mut ArenaMap<'_, FuncId, u32>,
@@ -145,8 +149,10 @@ pub(super) fn lower_live_copies<'ir>(
     };
     let mut roots = ArenaVec::new_in(tables);
     for (func, function) in module.functions() {
+        // An alias, even an internal one, is emitted and needs its target.
         if function.linkage != IrLinkage::Internal
             || function.attributes.used
+            || function.attributes.alias.is_some()
             || function.inline_copy_of.is_some()
         {
             roots.push(module.function_definition(func));
@@ -171,51 +177,58 @@ pub(super) fn lower_live_copies<'ir>(
     for &func in &roots {
         reach(func, 0, &mut depths, &mut buckets);
     }
-    let mut visited = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+    // The depth each function's calls were last followed at, and the
+    // functions lowered here.
+    let mut followed = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+    let mut lowered = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
     let mut edges = ArenaVec::new_in(tables);
     while let Some(depth) = buckets.iter().position(|bucket| !bucket.is_empty()) {
         let func = buckets[depth].pop().expect("the bucket is not empty");
-        if !visited.insert(func) {
+        let depth = u32::try_from(depth).expect("depths are bounded");
+        if depths.get(&func).is_some_and(|&known| known < depth)
+            || followed.get(&func).is_some_and(|&done| done <= depth)
+        {
             continue;
         }
-        let depth = u32::try_from(depth).expect("depths are bounded");
         if let Some(&index) = unit.pack_copy_index.get(&func) {
-            let copy = unit.pack_copies[index];
+            // Too deep for now; a shallower live call may still reach it,
+            // and the limit is checked on its final depth below.
             if depth > MAX_DEPTH {
-                let error = at(LoweringErrorKind::InvalidArgumentPack(false), copy.source);
-                if !errors.contains(&error) {
-                    errors.push(error);
-                }
                 continue;
             }
-            scratch.reset();
-            if let Some(binding) = copy.record.binding {
-                sources.push((
-                    unit.module.function(func).name,
-                    unit.sema.bindings[binding].name.source_vectors,
-                ));
-            }
-            match FunctionLowerer::lower(unit, copy.record, func, Some(copy), scratch, options) {
-                | Ok(()) =>
-                    crate::optimizer::fold_constant_branches(&mut unit.module, func, scratch),
-                | Err(error) => {
-                    if !errors.contains(&error) {
-                        errors.push(error);
-                    }
-                    continue;
-                },
-            }
-        } else if let Some(&record) = unit.pack_addresses.get(&func) {
-            // Its address is live, so its own body is emitted, as GCC
-            // emits it: a pack it evaluates is then refused where it is.
-            scratch.reset();
-            if let Err(error) = FunctionLowerer::lower(unit, record, func, None, scratch, options) {
-                if !errors.contains(&error) {
-                    errors.push(error);
+            if lowered.insert(func) {
+                let copy = unit.pack_copies[index];
+                scratch.reset();
+                if let Some(binding) = copy.record.binding {
+                    sources.push((
+                        unit.module.function(func).name,
+                        unit.sema.bindings[binding].name.source_vectors,
+                    ));
                 }
-                continue;
+                match FunctionLowerer::lower(unit, copy.record, func, Some(copy), scratch, options)
+                {
+                    | Ok(()) =>
+                        crate::optimizer::fold_constant_branches(&mut unit.module, func, scratch),
+                    | Err(error) =>
+                        if !errors.contains(&error) {
+                            errors.push(error);
+                        },
+                }
+            }
+        } else if let Some(&record) = unit.pack_addresses.get(&func)
+            && lowered.insert(func)
+        {
+            // Its address is live, or it is `used`, so its own body is
+            // emitted, as GCC emits it: a pack it evaluates is then refused
+            // where it is.
+            scratch.reset();
+            if let Err(error) = FunctionLowerer::lower(unit, record, func, None, scratch, options)
+                && !errors.contains(&error)
+            {
+                errors.push(error);
             }
         }
+        _ = followed.insert(func, depth);
         let module = &unit.module;
         edges.clear();
         if let Some(body) = &module.function(func).body {
@@ -238,13 +251,25 @@ pub(super) fn lower_live_copies<'ir>(
             reach(callee, next, &mut depths, &mut buckets);
         }
     }
+    // A live copy no live path reaches within the limit.
+    for copy in &unit.pack_copies {
+        if depths
+            .get(&copy.func)
+            .is_some_and(|&depth| depth > MAX_DEPTH)
+        {
+            let error = at(LoweringErrorKind::InvalidArgumentPack(false), copy.source);
+            if !errors.contains(&error) {
+                errors.push(error);
+            }
+        }
+    }
     let unreached = tables.alloc_slice_fill_iter(
         unit.module
             .functions()
             .filter(|&(func, function)| {
                 function.linkage == IrLinkage::Internal
                     && function.body.is_some()
-                    && !visited.contains(&func)
+                    && !followed.contains_key(&func)
             })
             .map(|(func, _)| func),
     );

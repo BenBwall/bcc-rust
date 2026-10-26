@@ -291,6 +291,63 @@ A c64(int n, ...) { if (__builtin_va_arg_pack_len() < 1) return g(n, __builtin_v
     }
 }
 
+/// Liveness roots every emitted symbol: an internal alias keeps its target's
+/// body, and a `used` function that names the pack only in an unselected
+/// generic association gets its own body. Depths relax to a fixed point,
+/// so a copy reached first through a deep path and later through a
+/// shallow one (via an ordinary helper) is checked on the shallow one.
+#[test]
+fn liveness_roots_aliases_and_used_functions_and_relaxes_depths() {
+    let text = returns(
+        "static int f(void) { return 42; }
+static int a(void) __attribute__((alias(\"f\")));
+static inline __attribute__((always_inline)) int p(int n, ...) { return \
+         __builtin_va_arg_pack_len(); }
+int main(void) { return p(0, 1); }",
+        1,
+    );
+    assert!(
+        text.contains("iconst.i32 42"),
+        "the alias target keeps its body:\n{text}"
+    );
+    for selection in [
+        "_Generic(1.0, int: __builtin_va_arg_pack_len(), default: 42)",
+        "__builtin_choose_expr(0, __builtin_va_arg_pack_len(), 42)",
+    ] {
+        let text = lowered(&format!(
+            "static __attribute__((used)) int f(void) {{ return {selection}; }}
+int main(void) {{ return 0; }}"
+        ));
+        let used = body(&text, "f");
+        assert!(used.contains("iconst.i32 42"), "{selection}:\n{text}");
+    }
+    let attribute = "static inline __attribute__((always_inline)) int";
+    for c63 in [
+        "c64(n, __builtin_va_arg_pack()) + g(n, __builtin_va_arg_pack())",
+        "g(n, __builtin_va_arg_pack()) + c64(n, __builtin_va_arg_pack())",
+    ] {
+        let mut source = format!(
+            "{attribute} h(int n, ...) {{ return __builtin_va_arg_pack_len(); }}
+{attribute} g(int n, ...) {{ return h(n, __builtin_va_arg_pack()); }}
+static int helper(void) {{ return g(0, 1); }}
+{attribute} c64(int n, ...) {{ return helper() + __builtin_va_arg_pack_len(); }}
+{attribute} c63(int n, ...) {{ return {c63}; }}
+"
+        );
+        for i in (1..63).rev() {
+            writeln!(
+                source,
+                "{attribute} c{i}(int n, ...) {{ return c{}(n, __builtin_va_arg_pack()); }}",
+                i + 1
+            )
+            .unwrap();
+        }
+        source.push_str("int main(void) { return c1(0, 1); }");
+        let text = returns(&source, 3);
+        assert!(text.contains("call @h.va_arg_pack("), "{c63}:\n{text}");
+    }
+}
+
 /// A function that names the pack only where it is not evaluated (`sizeof`,
 /// unselected generic associations) is ordinary, and its address may be
 /// taken. One whose address live code takes gets its own body, as in GCC,

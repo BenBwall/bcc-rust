@@ -612,15 +612,16 @@ after lowering, at every optimization level, so a guarded call of an `error`
 function disappears as GCC folds it when it inlines. Copies are lowered on
 demand by a liveness walk once every definition is lowered
 (`lowering/argument_pack.rs`): it starts at externally visible, `used`,
-inline-copy, constructor and initializer-addressed functions and follows
-calls and addresses through lowered (and, for copies, folded) bodies,
-shallowest nesting first, so a copy that only a folded branch or an
-unreached internal helper requests stays a bodiless declaration that nothing
-names, the 64-copy nesting limit counts only live paths, and internal
+alias-target, inline-copy, constructor and initializer-addressed functions
+and follows calls and addresses through lowered (and, for copies, folded)
+bodies, relaxing each copy's nesting depth to the shallowest live path at a
+fixed point, so a copy that only a folded branch or an unreached internal
+helper requests stays a bodiless declaration that nothing names, the
+64-copy nesting limit counts only the shallowest live path, and internal
 bodies left unreached are dropped, as GCC drops them at -O2. The function's
-own body is lowered when it is an external definition, or internal with an
-address live code takes; in either a pack it evaluates is an error, as in
-GCC. Known deviations from GCC, which finds the pack after constant folding:
+own body is lowered when it is an external definition, or internal and
+`used` or with an address live code takes; in any of these a pack it
+evaluates is an error, as in GCC. Known deviations from GCC, which finds the pack after constant folding:
 bcc sees through parentheses, `__extension__`, casts and unary `+` that keep
 the type, generic selections, and `*`, `&` or a same-type cast on the
 callee, but not arithmetic (`0 + pack`) or a comma before the pack; and the
