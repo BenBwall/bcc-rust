@@ -4,10 +4,7 @@
 //! neighbouring values. Each follows glibc's x86-64 `long double` version.
 
 use super::{
-    BIAS,
     Class,
-    INTEGER_BIT,
-    MAX_BIASED,
     X87,
 };
 
@@ -20,8 +17,6 @@ pub(crate) enum Integral {
     Floor,
     /// Toward positive infinity (`ceil`).
     Ceil,
-    /// To nearest, halfway cases away from zero (`round`).
-    HalfAway,
     /// To nearest, halfway cases to even (`rint` and `nearbyint` in the
     /// default rounding mode).
     HalfEven,
@@ -64,7 +59,6 @@ impl X87 {
             | Integral::Truncate => false,
             | Integral::Floor => negative && fraction != 0,
             | Integral::Ceil => !negative && fraction != 0,
-            | Integral::HalfAway => above || at,
             | Integral::HalfEven => above || (at && integer & 1 != 0),
         };
         Self::from_integer(negative, integer + u128::from(up))
@@ -80,28 +74,8 @@ impl X87 {
             .unwrap_or(1 << (bits - 1))
     }
 
-    /// `frexpl`: a fraction in [0.5, 1) with the sign of the value, and the
-    /// power of two that scales it back. Zeros, infinities and NaNs are
-    /// returned with exponent 0.
-    /// C99: §7.12.6.4, p. 225; PDF p. 237.
-    pub(crate) fn frexp(self) -> (Self, i32) {
-        match self.class() {
-            | Class::Finite {
-                exponent,
-                significand,
-            } => {
-                let shift = significand.leading_zeros();
-                let exponent = exponent - shift as i32 + 64;
-                let biased = u16::try_from(BIAS - 1).expect("the bias fits 15 bits");
-                let fraction = Self::from_parts(self.is_negative(), biased, significand << shift);
-                (fraction, exponent)
-            },
-            | Class::Nan { .. } => (self.quieted(), 0),
-            | _ => (self, 0),
-        }
-    }
-
-    /// `scalbnl`: the value times 2^`power`, rounded once.
+    /// `fscale`, and so `scalbnl`: the value times 2^`power`, rounded once.
+    /// An invalid encoding gives the real indefinite, as `fscale` does.
     /// C99: §7.12.6.13, p. 228; PDF p. 240.
     pub(crate) fn scale(self, power: i64) -> Self {
         match self.class() {
@@ -119,7 +93,8 @@ impl X87 {
                 )
             },
             | Class::Nan { .. } => self.quieted(),
-            | _ => self,
+            | Class::Unsupported => Self::INDEFINITE,
+            | Class::Zero | Class::Infinite => self,
         }
     }
 
@@ -164,66 +139,9 @@ impl X87 {
         }
     }
 
-    /// The next representable value after `self` in the direction of
-    /// `toward`; `toward` itself when they are equal, and a NaN when either
-    /// is.
-    /// C99: §7.12.11.3-§7.12.11.4, pp. 237-238; PDF pp. 249-250.
-    pub(crate) fn next_toward(self, toward: Self) -> Self {
-        let Some(order) = self.compare(toward) else {
-            return self.add(toward);
-        };
-        if order.is_eq() {
-            return toward;
-        }
-        let up = order.is_lt();
-        let value = self.normalized();
-        if value.class() == Class::Zero {
-            return Self::from_parts(!up, 0, 1);
-        }
-        // Away from zero when moving up from a positive value or down from a
-        // negative one.
-        let away = up != value.is_negative();
-        let (mut biased, mut significand) = (value.biased_exponent(), value.significand);
-        if away {
-            if significand == u64::MAX {
-                significand = INTEGER_BIT;
-                biased += 1;
-            } else {
-                significand += 1;
-                if biased == 0 && significand == INTEGER_BIT {
-                    biased = 1;
-                }
-            }
-            if biased == MAX_BIASED {
-                return Self::infinity(value.is_negative());
-            }
-        } else if significand == INTEGER_BIT && biased > 1 {
-            significand = u64::MAX;
-            biased -= 1;
-        } else {
-            significand -= 1;
-            if biased == 1 && significand < INTEGER_BIT {
-                biased = 0;
-            }
-        }
-        Self::from_parts(value.is_negative(), biased, significand)
-    }
-
     /// The biased exponent and the significand, without the sign.
     pub(crate) const fn magnitude_parts(self) -> (u16, u64) {
         (self.biased_exponent(), self.significand)
-    }
-
-    /// The canonical encoding of a finite value (a pseudo-denormal becomes
-    /// normal); other values are returned unchanged.
-    pub(crate) fn normalized(self) -> Self {
-        match self.class() {
-            | Class::Finite {
-                exponent,
-                significand,
-            } => Self::rounded(self.is_negative(), exponent, u128::from(significand)),
-            | _ => self,
-        }
     }
 }
 
