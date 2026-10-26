@@ -670,7 +670,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// digits and must not name a surrogate or a character below U+00A0 other
     /// than `$`, `@`, and `` ` `` (§6.4.3 paragraphs 1-2, p. 53; PDF p. 65).
     /// Any other character after `\` requires a diagnostic (footnote 65,
-    /// p. 60; PDF p. 72).
+    /// p. 60; PDF p. 72), except GNU `\e` and `\E` for ESC, an extension
+    /// (GCC manual, "The Character ESC in Constants").
     fn eval_escape_sequences(
         context: &mut Context<'_>,
         token: PreprocessorToken,
@@ -699,6 +700,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             string.len()
         };
         let mut failed = false;
+        let mut escape_character = false;
         while index < end {
             let c = string[index..].chars().next().unwrap();
             index += c.len_utf8();
@@ -722,6 +724,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     | 't' => Some(LiteralUnit::Character('\t')),
                     | 'v' => Some(LiteralUnit::Character('\x0b')),
                     | '\'' | '"' | '?' | '\\' => Some(LiteralUnit::Character(c)),
+                    | 'e' | 'E' => {
+                        escape_character = true;
+                        Some(LiteralUnit::Character('\x1b'))
+                    },
                     | 'x' | 'o'
                         if string.as_bytes().get(index) == Some(&b'{')
                             && context.configuration.accepts(Feature::DelimitedEscapes) =>
@@ -851,6 +857,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     },
                 );
             }
+        }
+        if escape_character {
+            context.report_extension(
+                Feature::EscapeCharacter,
+                "\\e escape sequence",
+                token.source_vectors,
+            );
         }
         failed
     }
