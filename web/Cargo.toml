@@ -3,7 +3,7 @@ name = "bcc-web"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99.0"
-description = "Static Leptos site for the bcc C abstract machine"
+description = "Static Leptos site for the bcc C abstract machine and compiler pipeline"
 license-file = "../LICENSE"
 publish = false
 
@@ -50,9 +50,9 @@ serde-wasm-bindgen = "0.6"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
-    "Blob", "DedicatedWorkerGlobalScope", "Document", "Element", "ErrorEvent", "File", "FileList", "HtmlElement", "HtmlInputElement",
-    "HtmlTextAreaElement", "MessageEvent", "ScrollIntoViewOptions", "ScrollLogicalPosition",
-    "Window", "Worker", "WorkerOptions", "WorkerType",
+    "Blob", "console", "DedicatedWorkerGlobalScope", "Document", "DomRect", "Element", "ErrorEvent", "File", "FileList",
+    "HtmlDivElement", "HtmlElement", "HtmlInputElement", "KeyboardEvent", "MediaQueryList", "MessageEvent", "NodeList",
+    "Storage", "Url", "Window", "Worker", "WorkerOptions", "WorkerType",
 ] }
 
 [profile.release]

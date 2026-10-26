@@ -33,7 +33,9 @@ use web_sys::{
 };
 
 use crate::{
+    pipeline::Compilation,
     protocol::{
+        Answer,
         Command,
         Reply,
         Request,
@@ -82,11 +84,25 @@ impl Engine {
     }
 
     pub async fn load(&self, source: &str) -> Result<Snapshot, String> {
-        self.request(Command::Load(source.to_owned())).await
+        match self.request(Command::Load(source.to_owned())).await? {
+            | Answer::Snapshot(snapshot) => Ok(*snapshot),
+            | Answer::Compiled(_) => Err(UNEXPECTED.into()),
+        }
     }
 
     pub async fn step(&self) -> Result<Snapshot, String> {
-        self.request(Command::Step).await
+        match self.request(Command::Step).await? {
+            | Answer::Snapshot(snapshot) => Ok(*snapshot),
+            | Answer::Compiled(_) => Err(UNEXPECTED.into()),
+        }
+    }
+
+    /// Run bcc's compiler over `source` in the Worker.
+    pub async fn compile(&self, source: &str) -> Result<Compilation, String> {
+        match self.request(Command::Compile(source.to_owned())).await? {
+            | Answer::Compiled(compilation) => Ok(*compilation),
+            | Answer::Snapshot(_) => Err(UNEXPECTED.into()),
+        }
     }
 
     pub fn connected(&self) -> bool {
@@ -98,11 +114,11 @@ impl Engine {
         self.inner.dispose(reason);
     }
 
-    async fn request(&self, command: Command) -> Result<Snapshot, String> {
+    async fn request(&self, command: Command) -> Result<Answer, String> {
         let receiver = self.inner.send(command)?;
         Inner::answer(receiver)
             .await?
-            .ok_or_else(|| "The Rust engine sent no snapshot.".into())
+            .ok_or_else(|| "The Rust engine sent no answer.".into())
     }
 }
 
@@ -127,19 +143,20 @@ fn worker_url() -> String {
         .unwrap_or_else(|| "./engine-worker_loader.js".into())
 }
 
+const UNEXPECTED: &str = "The Rust engine sent an answer of the wrong kind.";
 const CONNECT_TIMEOUT_MS: u32 = 20_000;
 const CALL_TIMEOUT_MS: u32 = 10_000;
 /// The pending-request slot for the Worker's [`Reply::Ready`]; requests count
 /// from 1.
 const READY: u32 = 0;
 
-/// A request's outcome: a snapshot, or nothing for [`Reply::Ready`].
-type Answer = Result<Option<Snapshot>, String>;
+/// A request's outcome: an answer, or nothing for [`Reply::Ready`].
+type Outcome = Result<Option<Answer>, String>;
 type MessageHandler = Closure<dyn FnMut(MessageEvent)>;
 type FailureHandler = Closure<dyn FnMut(JsValue)>;
 
 struct Pending {
-    reply:  oneshot::Sender<Answer>,
+    reply:  oneshot::Sender<Outcome>,
     _timer: Timeout,
 }
 
@@ -154,7 +171,7 @@ struct Inner {
 }
 
 impl Inner {
-    fn send(self: &Rc<Self>, command: Command) -> Result<oneshot::Receiver<Answer>, String> {
+    fn send(self: &Rc<Self>, command: Command) -> Result<oneshot::Receiver<Outcome>, String> {
         if !self.connected.get() {
             return Err("Rust engine disconnected. Retry engine to start a fresh instance.".into());
         }
@@ -178,7 +195,7 @@ impl Inner {
 
     /// Register a pending answer for `id`; the Worker is terminated if none
     /// arrives within `timeout` milliseconds.
-    fn expect(self: &Rc<Self>, id: u32, timeout: u32) -> oneshot::Receiver<Answer> {
+    fn expect(self: &Rc<Self>, id: u32, timeout: u32) -> oneshot::Receiver<Outcome> {
         let weak = Rc::downgrade(self);
         let timer = Timeout::new(timeout, move || {
             if let Some(inner) = weak.upgrade() {
@@ -199,7 +216,7 @@ impl Inner {
         receiver
     }
 
-    async fn answer(receiver: oneshot::Receiver<Answer>) -> Answer {
+    async fn answer(receiver: oneshot::Receiver<Outcome>) -> Outcome {
         receiver
             .await
             .unwrap_or_else(|_| Err("Rust engine stopped.".into()))
@@ -249,7 +266,7 @@ impl Inner {
     fn receive(&self, data: JsValue) {
         let (id, answer) = match serde_wasm_bindgen::from_value(data) {
             | Ok(Reply::Ready) => (READY, Ok(None)),
-            | Ok(Reply::Done { id, result }) => (id, result.map(|snapshot| Some(*snapshot))),
+            | Ok(Reply::Done { id, result }) => (id, result.map(Some)),
             | Err(error) => {
                 self.dispose(&format!(
                     "The Rust Worker sent an unreadable reply ({error}). Reload the page."
