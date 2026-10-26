@@ -359,6 +359,18 @@ int main(void) { return i + (int)(d * 2) + ch + braces + *p + b + local(); }",
         expected: 75,
     },
     Program {
+        // A scalar compound literal of a static bit-field's type converts to
+        // that type and then truncates to the field's width.
+        name:     "scalar_compound_literal_bit_fields",
+        source:   "static struct S { unsigned x:4; int y:3; _Bool b:1; unsigned z:5; } s =
+  {(unsigned){3}, (int){-2}, (_Bool){5}, ((unsigned){0x2b})};
+static struct S t = {.z = (unsigned){{7}}};
+int main(void) {
+  return s.x + (s.y == -2) * 4 + s.b * 8 + (s.z == 11) * 16 + (t.z == 7) * 32;
+}",
+        expected: 63,
+    },
+    Program {
         name:     "old_style_definition",
         source:   "int scale(x, k) char x; int k; { return x * k; }
 int main(void) { return scale(7, 6); }",

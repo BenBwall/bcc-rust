@@ -1407,6 +1407,52 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         Ok(())
     }
 
+    /// The initializer and type of `expression` when it is a parenthesized
+    /// compound literal.
+    fn whole_compound_literal(
+        &self,
+        mut expression: &'tu Expression<'tu>,
+    ) -> Option<(&'tu Initializer<'tu>, TypeId)> {
+        loop {
+            match expression.kind {
+                | ExpressionType::Parenthesized { expression: inner } => expression = inner,
+                | ExpressionType::CompoundLiteral { initializer, .. } =>
+                    return Some((initializer, self.sema.expression_info(expression)?.ty)),
+                | _ => return None,
+            }
+        }
+    }
+
+    /// Merges into a static bit-field the value a scalar compound literal
+    /// of its type gives it: the literal's own initializer, converted to
+    /// its type, lowered as a static object and read back. Semantic analysis
+    /// accepts the literal only when it is of the field's declared type.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.7.2.1
+    /// paragraph 9, p. 102; PDF p. 114 (bit-field values); §6.6p10, p. 96;
+    /// PDF p. 108.
+    fn static_bit_field_literal(
+        &mut self,
+        bytes: &mut [u8],
+        start: usize,
+        field: BitFieldBits,
+        literal: &'tu Initializer<'tu>,
+        literal_ty: TypeId,
+    ) -> Result<(), LoweringError> {
+        let source = literal.source_vectors;
+        let unsupported = || LoweringError::unsupported(Construct::StaticInitializer, source);
+        let size = types::layout(&self.sema.types, literal_ty)
+            .map_err(|kind| at(kind, source))?
+            .size;
+        let (literal_bytes, literal_relocations) =
+            self.static_bytes(literal_ty, size, literal, None)?;
+        if !literal_relocations.is_empty() || literal_bytes.len() > 16 {
+            return Err(unsupported());
+        }
+        let mut value = [0; 16];
+        value[..literal_bytes.len()].copy_from_slice(&literal_bytes);
+        merge_bit_field(bytes, start, field, i128::from_le_bytes(value)).ok_or_else(unsupported)
+    }
+
     /// Writes one scalar leaf: an integer or floating constant converted to
     /// the leaf's type, or an address constant as a relocation. A bit-field
     /// leaf merges the low bits of its value into the bytes it occupies.
@@ -1439,6 +1485,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // C99 §6.7.8p19: a later write replaces overlapping addresses,
         // including a scalar member that overwrites only part of a pointer.
         discard(relocations, offset, offset + written);
+        if let Some(field) = bit_field
+            && let Some((literal, literal_ty)) = self.whole_compound_literal(expression)
+        {
+            return self.static_bit_field_literal(bytes, start, field, literal, literal_ty);
+        }
         let integer = info.integer.filter(|_| {
             representation == Repr::Pointer
                 || !matches!(
