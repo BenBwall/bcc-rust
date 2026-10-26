@@ -337,10 +337,16 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     // As in GCC, a header found through a system directory
                     // is a system header, and so is one found beside a
                     // system header.
+                    // A line marker with flag 3 makes its region a system
+                    // header, so the directive's own position decides.
                     let system = if let Some(search_index) = search_index {
                         self.context.is_system_include_directory(search_index)
                     } else {
                         self.context.has_system_header_part(including_file)
+                            || (operand.length() != 0
+                                && self
+                                    .context
+                                    .in_system_header(self.context.expansion_location(operand)))
                     };
                     if system {
                         self.context.mark_system_header(index, 0);

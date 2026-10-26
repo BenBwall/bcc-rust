@@ -37,7 +37,11 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError<'tu>) {
-        if self.withholds(
+        // GCC and Clang emit a `#warning` message even in a system header.
+        if !matches!(
+            error.error_type,
+            super::super::preprocessing::PreprocessorErrorType::WarningDirective(_)
+        ) && self.withholds(
             error.severity(),
             error.error_type.is_extension(),
             error.source_vectors,

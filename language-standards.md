@@ -966,7 +966,11 @@ the form `-E` writes, is read as `#line 12 "file.c"`. Flag 3 makes the
 following lines a system header until the next line marker in the same
 physical file, which ends the region unless it has flag 3 too, as GCC and
 Clang read preprocessed output; the other flags are ignored, and a `#line`
-directive does not end the region. A header that is a system header by its
+directive does not end the region. The flags must come in GCC's order, one of
+`1` or `2`, then `3`, then `4` (only after `3`): the first token out of that
+order is an error ("invalid flag"), and it and the flags after it are ignored,
+so `1 2 3` or `1 wat 3` makes no system header. A `"…"` include from a marked
+region is a system header too, as in GCC. A header that is a system header by its
 directory or pragma stays one. So `-E` output compiled again withholds its
 system headers' warnings, also from ordinary source. Already
 preprocessed input (`.i`, `-x cpp-output`) is read as GCC's
@@ -981,7 +985,9 @@ any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
 reaches as Clang does, uses the warning form for deprecated macros.
 
 Inside a system header, warnings, extension diagnostics and warning-group
-diagnostics are withheld, the latter two at every severity: under
+diagnostics are withheld, the latter two at every severity, except the
+message of a `#warning` directive, which GCC and Clang also emit there
+(`#pragma GCC warning` stays withheld, as in GCC): under
 `-pedantic-errors` an extension in a system header is not reported, and
 neither is an `-Wincompatible-pointer-types`, `-Wint-conversion` or
 `-Wincompatible-function-pointer-types` error, matching Clang, where such

@@ -442,6 +442,10 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingNumberInLineDirective(PreprocessorTokenType),
     MissingNewlineAfterLineDirective(PreprocessorTokenType),
     LineDirectiveIsNotASimpleDigitSequence,
+    /// A line-marker flag out of GCC's order `[1|2] [3 [4]]`, or not a
+    /// flag at all; the flags after it are ignored, as in GCC.
+    /// GNU extension: GCC preprocessor manual, "Preprocessor Output".
+    InvalidLineMarkerFlag(&'tu str),
     /// A `#line` number above 2147483647. As in Clang, a number up to
     /// 4294967295 is applied and reported only under -pedantic; a larger one
     /// is an error and is ignored.
@@ -1214,6 +1218,13 @@ impl PreprocessorErrorType<'_> {
                 kind.found(spelling)
             ))
             .label("`#line` takes a number and an optional file name"),
+            | Self::InvalidLineMarkerFlag(flag) =>
+                new(format_in!(arena, "invalid flag `{flag}` in line marker"))
+                    .label("not a flag here")
+                    .note(
+                        "GCC line markers take the flags 1 or 2, then 3, then 4, each at most \
+                         once and in increasing order; 4 only after 3",
+                    ),
             | Self::LineDirectiveIsNotASimpleDigitSequence =>
                 new("`#line` needs a plain decimal line number")
                     .label("not a digit sequence")
@@ -1477,6 +1488,7 @@ impl GetSeverity for PreprocessorError<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
             | PreprocessorErrorType::UnexpectedEndOfInput(_)
+            | PreprocessorErrorType::InvalidLineMarkerFlag(_)
             | PreprocessorErrorType::InvalidHexadecimalFloatLiteral
             | PreprocessorErrorType::InvalidDecimalFloatLiteral
             | PreprocessorErrorType::InvalidHexadecimalIntegerLiteral

@@ -243,6 +243,104 @@ mod tests {
         .unwrap();
         let marked = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "m.c"]);
         assert_eq!(warnings(&marked), ["m.c:9"], "{}", stderr(&marked));
+        // A quoted include from a marked region is a system header too, as
+        // in GCC and Clang, and one after the region is not.
+        std::fs::write(
+            project.path("q.h"),
+            "static int q(void) { return ({ 1; }); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path("r.h"),
+            "static int r(void) { return ({ 2; }); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path("inc.c"),
+            "# 1 \"h.h\" 1 3\n#include \"q.h\"\n# 5 \"inc.c\" 2\n#include \"r.h\"\n",
+        )
+        .unwrap();
+        let included = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "inc.c"]);
+        assert_eq!(warnings(&included), ["r.h:1"], "{}", stderr(&included));
+        // `#warning` is still emitted inside the region, as GCC and Clang do.
+        std::fs::write(
+            project.path("warn.c"),
+            "# 1 \"h.h\" 1 3\n#warning still shown\n# 3 \"warn.c\" 2\nint x;\n",
+        )
+        .unwrap();
+        // The resource `<x86intrin.h>` does not reach the deprecated
+        // `<mm3dnow.h>`, whose `#warning` would now show, as in Clang.
+        std::fs::write(project.path("intrin.c"), "#include <x86intrin.h>\nint x;\n").unwrap();
+        let intrin = project.bcc(&["-fsyntax-only", "-ffreestanding", "intrin.c"]);
+        succeeds(&intrin);
+        assert!(!stderr(&intrin).contains("warning"), "{}", stderr(&intrin));
+        std::fs::write(project.path("dnow.c"), "#include <mm3dnow.h>\nint x;\n").unwrap();
+        let dnow = project.bcc(&["-fsyntax-only", "-ffreestanding", "dnow.c"]);
+        assert!(
+            stderr(&dnow).contains("header is deprecated"),
+            "{}",
+            stderr(&dnow)
+        );
+        let warned = project.bcc(&["-fsyntax-only", "warn.c"]);
+        succeeds(&warned);
+        assert!(
+            stderr(&warned).contains("still shown"),
+            "{}",
+            stderr(&warned)
+        );
+    }
+
+    /// Line-marker flags follow GCC's order `[1|2] [3 [4]]`: anything else
+    /// is an error that stops reading them, so a malformed marker makes no
+    /// system header.
+    #[test]
+    fn line_marker_flags_must_follow_gcc_order() {
+        let project = Project::new();
+        let body = "static int f(void) { return ({ 1; }); }\n";
+        for (flags, system) in [
+            ("3", true),
+            ("1 3", true),
+            ("2 3 4", true),
+            ("3 4", true),
+            ("1", false),
+        ] {
+            std::fs::write(project.path("ok.c"), format!("# 1 \"h.h\" {flags}\n{body}")).unwrap();
+            let output = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "ok.c"]);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output).contains("warning:"),
+                !system,
+                "{flags}: {}",
+                stderr(&output)
+            );
+        }
+        for (flags, bad) in [
+            ("1 2 3", "2"),
+            ("1 wat 3", "wat"),
+            ("3 1", "1"),
+            ("4", "4"),
+            ("1 4", "4"),
+            ("3 3", "3"),
+        ] {
+            std::fs::write(
+                project.path("bad.c"),
+                format!("# 1 \"h.h\" {flags}\n{body}"),
+            )
+            .unwrap();
+            let output = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "bad.c"]);
+            let text = stderr(&output);
+            assert_eq!(output.status.code(), Some(1), "{flags}: {text}");
+            assert!(
+                text.contains(&format!("error: invalid flag `{bad}` in line marker")),
+                "{flags}: {text}"
+            );
+            // A 3 read before the bad flag still applies, as in GCC.
+            assert_eq!(
+                text.contains("warning:"),
+                !flags.starts_with('3'),
+                "{flags}: {text}"
+            );
+        }
     }
 
     #[test]
