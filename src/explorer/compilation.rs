@@ -70,6 +70,7 @@ use crate::{
     translation_phases::{
         Context,
         ErrorSeverity,
+        FileSystem,
         parsing::{
             InspectionOptions,
             ParsedTranslationUnit,
@@ -177,19 +178,21 @@ fn configure(options: &ExplorerOptions) -> Result<CompilerConfiguration, String>
     )
 }
 
-/// A context holding the explorer's in-memory headers.
+/// A context that finds only the explorer's in-memory headers and the
+/// embedded resource headers, never a host file.
 fn new_context<'tu>(
     tu: &'tu Bump,
     configuration: CompilerConfiguration,
     options: &ExplorerOptions,
 ) -> Context<'tu> {
     let mut context = Context::with_configuration(tu, configuration);
-    context.virtual_files = tu.alloc_slice_fill_iter(options.files.iter().map(|file| {
-        (
-            Path::new(tu.alloc_str(&file.name)),
-            &*tu.alloc_str(&file.contents),
-        )
-    }));
+    context.file_system =
+        FileSystem::InMemory(tu.alloc_slice_fill_iter(options.files.iter().map(|file| {
+            (
+                Path::new(tu.alloc_str(&file.name)),
+                &*tu.alloc_str(&file.contents),
+            )
+        })));
     context
 }
 
@@ -291,6 +294,7 @@ impl<'tu> Stages<'_, '_, 'tu> {
         }
         self.output.line_map = line_map::map(
             &unit,
+            &sema,
             self.context,
             INPUT,
             [Some(ir.as_str()), Some(ir_abi.as_str()), asm.as_deref()],
@@ -501,7 +505,8 @@ fn verify(module: &Module<'_>) -> Result<(), Failure<'static>> {
 }
 
 /// A diagnostic the reporter rendered, with the place its primary range
-/// starts and ends.
+/// starts and ends in the physical file, as an editor shows it. `#line`
+/// changes only the presumed place in the rendered text.
 fn record(
     diagnostic: &Diagnostic<'_>,
     rendered: &str,
@@ -510,24 +515,17 @@ fn record(
 ) -> ExplorerDiagnostic {
     let segments = diagnostic.primary_segments(context);
     let first = segments.first();
+    let physical = first.map(|first| context.physical_source_file(first.source_file_index));
     let last = segments
         .iter()
         .rev()
-        .find(|segment| Some(segment.source_file_index) == first.map(|f| f.source_file_index));
-    let end = last.and_then(|last| {
-        let text = context.source_text(last.source_file_index)?;
-        let starts = context.source_line_starts(last.source_file_index)?;
-        let end = last.end().min(text.len());
-        let line = starts.partition_point(|&start| start <= end).max(1);
-        let start = starts[line - 1];
-        let column = text
-            .get(start..end)
-            .map_or(0, |prefix| prefix.chars().count());
-        Some((
-            u32::try_from(line).unwrap_or(u32::MAX),
-            u32::try_from(column + 1).unwrap_or(u32::MAX),
-        ))
+        .find(|segment| Some(context.physical_source_file(segment.source_file_index)) == physical);
+    let start = first.map(|first| {
+        context
+            .physical_position(first.source_file_index, first.index as usize)
+            .unwrap_or((first.line, first.column))
     });
+    let end = last.and_then(|last| context.physical_position(last.source_file_index, last.end()));
     ExplorerDiagnostic {
         severity:   match diagnostic.severity {
             | ErrorSeverity::Error => "error",
@@ -536,14 +534,9 @@ fn record(
         .to_owned(),
         stage:      stage.to_owned(),
         message:    diagnostic.message.to_owned(),
-        file:       first.map(|first| {
-            context
-                .get_source_file(first.source_file_index)
-                .display()
-                .to_string()
-        }),
-        line:       first.map(|first| first.line),
-        column:     first.map(|first| first.column),
+        file:       physical.map(|file| context.get_source_file(file).display().to_string()),
+        line:       start.map(|(line, _)| line),
+        column:     start.map(|(_, column)| column),
         end_line:   end.map(|(line, _)| line),
         end_column: end.map(|(_, column)| column),
         rendered:   rendered.to_owned(),

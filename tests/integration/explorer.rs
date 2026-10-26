@@ -339,6 +339,140 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_places_are_physical_despite_line_directives() {
+        for (source, presumed) in [
+            ("#line 100\nint x = y;\n", "<input>:100:9"),
+            (
+                "#line 100 \"generated.c\"\nint x = y;\n",
+                "generated.c:100:9",
+            ),
+        ] {
+            let output = compile(source, &ExplorerOptions::default());
+            let [diagnostic] = &*output.diagnostics else {
+                panic!("{:#?}", output.diagnostics);
+            };
+            assert_eq!(
+                (
+                    diagnostic.file.as_deref(),
+                    diagnostic.line,
+                    diagnostic.column,
+                    diagnostic.end_line,
+                    diagnostic.end_column
+                ),
+                (Some("<input>"), Some(2), Some(9), Some(2), Some(10)),
+                "{diagnostic:#?}"
+            );
+            assert!(diagnostic.rendered.contains(presumed), "{diagnostic:#?}");
+        }
+    }
+
+    #[test]
+    fn line_maps_use_physical_lines_of_the_input() {
+        for source in [
+            "#line 100\nint f(void) {\n    return 0;\n}\n",
+            "#line 100 \"generated.c\"\nint f(void) {\n    return 0;\n}\n",
+        ] {
+            let output = compile(source, &ExplorerOptions::default());
+            assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+            let [mapping] = &*output.line_map else {
+                panic!("{source:?}: {:#?}", output.line_map);
+            };
+            assert_eq!(
+                (mapping.source.start, mapping.source.end),
+                (2, 4),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_maps_find_functions_by_their_assembler_names() {
+        let output = compile(
+            "int f(void) __asm__(\"g\");\nint f(void) {\n    return 0;\n}\n",
+            &ExplorerOptions::default(),
+        );
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        let [mapping] = &*output.line_map else {
+            panic!("{:#?}", output.line_map);
+        };
+        assert_eq!(mapping.function, "f");
+        assert_eq!((mapping.source.start, mapping.source.end), (2, 4));
+        for (text, range, header) in [
+            (&output.ir, mapping.ir, "function @g("),
+            (&output.ir_abi, mapping.ir_abi, "function @g("),
+            (&output.asm, mapping.asm, "g:"),
+        ] {
+            let range = range.unwrap_or_else(|| panic!("{mapping:#?}"));
+            let first = text
+                .as_deref()
+                .unwrap()
+                .lines()
+                .nth(range.start as usize - 1);
+            assert!(
+                first.is_some_and(|line| line.trim_start().starts_with(header)),
+                "{first:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_files_are_never_found_or_read() {
+        let host = temporary("host.h");
+        std::fs::write(&host, "int host_header;\n").unwrap();
+        let absolute = host.display();
+        // Relative names would be found beside `<input>`, in the working
+        // directory, which holds `Cargo.toml` while tests run.
+        let source = format!(
+            "#if __has_include(\"{absolute}\") || __has_include(\"Cargo.toml\") || \
+             __has_include(<Cargo.toml>) || __has_embed(\"Cargo.toml\")\n#error host file \
+             found\n#endif\n#if __has_embed(\"data.bin\") != 1 || __has_embed(\"empty.bin\") != \
+             2\n#error in-memory resource not found\n#endif\nconst unsigned char data[] = \
+             {{\n#embed \"data.bin\"\n}};\n#include <stdint.h>\n#include \"{absolute}\"\n#embed \
+             \"Cargo.toml\"\n"
+        );
+        let output = compile(
+            &source,
+            &ExplorerOptions {
+                std: "c23".into(),
+                files: vec![
+                    ExplorerFile {
+                        name:     "data.bin".into(),
+                        contents: "AB".into(),
+                    },
+                    ExplorerFile {
+                        name:     "empty.bin".into(),
+                        contents: String::new(),
+                    },
+                ],
+                ..ExplorerOptions::default()
+            },
+        );
+        std::fs::remove_file(&host).unwrap();
+        let lines: Vec<_> = output
+            .diagnostics
+            .iter()
+            .map(|d| (d.severity.as_str(), d.line))
+            .collect();
+        // Only the host header's `#include` and the host resource's `#embed`
+        // fail, each because nothing is found.
+        assert_eq!(
+            lines,
+            [("error", Some(11)), ("error", Some(12))],
+            "{:#?}",
+            output.diagnostics
+        );
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .all(|d| d.message.starts_with("cannot find")),
+            "{:#?}",
+            output.diagnostics
+        );
+        assert!(!output.tokens.unwrap().contains("host_header"));
+    }
+
+    #[test]
     fn in_memory_headers_are_included_and_deep_nesting_is_a_diagnostic() {
         let options = ExplorerOptions {
             files: vec![ExplorerFile {

@@ -93,7 +93,8 @@ pub struct ExplorerDiagnostic {
     pub message:    String,
     /// The file of the range the diagnostic is about: `<input>` for the
     /// source, or a header's name. `None` with the other location fields
-    /// when the diagnostic has no place.
+    /// when the diagnostic has no place. This and the lines and columns
+    /// are physical: `#line` changes only the place `rendered` names.
     pub file:       Option<String>,
     /// The 1-based line where the range starts.
     pub line:       Option<u32>,
@@ -138,9 +139,11 @@ pub struct ExplorerInstruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExplorerLineMapping {
-    /// The function's name.
+    /// The function's name in C. Each output names it by the symbol it is
+    /// emitted as, which an `__asm__` label can change.
     pub function: String,
-    /// The definition's lines in the source.
+    /// The definition's physical lines in the source, which `#line` does
+    /// not change.
     pub source:   ExplorerLineRange,
     /// Its lines in [`ExplorerOutput::ir`], from its header to its closing
     /// brace.

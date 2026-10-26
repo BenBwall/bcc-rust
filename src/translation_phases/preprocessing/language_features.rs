@@ -186,8 +186,10 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                     if let Some(path) = self.find_resource(name, system, embed, start) {
                         if embed
                             && (params.limit == Some(0)
-                                || std::fs::metadata(self.context.get_source_file(path))
-                                    .is_ok_and(|m| m.len() == 0))
+                                || self
+                                    .context
+                                    .resource_length(self.context.get_source_file(path))
+                                    == Some(0))
                         {
                             2
                         } else {
@@ -299,10 +301,9 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             );
             return;
         };
-        let read = std::fs::File::open(self.context.get_source_file(path)).and_then(|file| {
-            let length = file.metadata()?.len();
-            Ok((file, length))
-        });
+        let read = self
+            .context
+            .open_resource(self.context.get_source_file(path));
         let (mut file, length) = match read {
             | Ok(opened) => opened,
             | Err(error) => {
@@ -683,8 +684,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     ) -> Option<u32> {
         let path = Path::new(name);
         if path.is_absolute() {
-            return path
-                .is_file()
+            return self
+                .context
+                .file_exists(path)
                 .then(|| self.context.intern_source_file(path));
         }
         let places = self.header_search_places(self.physical_source_file_index(), system, start);

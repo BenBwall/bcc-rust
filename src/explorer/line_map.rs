@@ -2,6 +2,9 @@
 //! became in the IR before and after ABI lowering and in the assembly. The
 //! IR keeps no source locations, so this is the granularity the outputs
 //! support: a function's header through its closing line in each text.
+//! Source lines are the editor's, physical lines of the input that `#line`
+//! does not change, and a function is found in each output under the
+//! assembler name it is emitted with, which `__asm__("name")` can change.
 
 #![expect(
     clippy::disallowed_types,
@@ -19,14 +22,16 @@ use crate::translation_phases::{
         ExternalDeclaration,
         ParsedTranslationUnit,
     },
+    semantic_analysis::SemanticTranslationUnit,
 };
 
 /// The mapping for every function defined in `input`, the source file, in
 /// source order. `outputs` are the IR before and after ABI lowering and the
 /// assembly, each possibly missing.
-pub(super) fn map(
-    unit: &ParsedTranslationUnit<'_>,
-    context: &Context<'_>,
+pub(super) fn map<'tu>(
+    unit: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    context: &Context<'tu>,
     input: &str,
     [ir, ir_abi, asm]: [Option<&str>; 3],
 ) -> Vec<ExplorerLineMapping> {
@@ -44,16 +49,23 @@ pub(super) fn map(
             .string_cache
             .at(identifier.name)
             .trim_end_matches('\0');
+        let symbol = sema
+            .functions
+            .iter()
+            .find(|record| std::ptr::eq(record.syntax, *definition))
+            .and_then(|record| sema.symbol_name(record.binding?, context))
+            .unwrap_or(name);
         let mut lines = context
             .get_source_vectors(definition.source_vectors)
             .iter()
             .filter(|vector| {
-                context
-                    .get_source_file(vector.source_file_index)
-                    .as_os_str()
-                    == input
+                let physical = context.physical_source_file(vector.source_file_index);
+                context.get_source_file(physical).as_os_str() == input
             })
-            .map(|vector| vector.line);
+            .filter_map(|vector| {
+                context.physical_position(vector.source_file_index, vector.index as usize)
+            })
+            .map(|(line, _)| line);
         let Some(first) = lines.next() else {
             continue;
         };
@@ -63,9 +75,9 @@ pub(super) fn map(
         mappings.push(ExplorerLineMapping {
             function: name.to_owned(),
             source:   ExplorerLineRange { start, end },
-            ir:       ir.and_then(|text| ir_function(text, name)),
-            ir_abi:   ir_abi.and_then(|text| ir_function(text, name)),
-            asm:      asm.and_then(|text| asm_function(text, name)),
+            ir:       ir.and_then(|text| ir_function(text, symbol)),
+            ir_abi:   ir_abi.and_then(|text| ir_function(text, symbol)),
+            asm:      asm.and_then(|text| asm_function(text, symbol)),
         });
     }
     mappings

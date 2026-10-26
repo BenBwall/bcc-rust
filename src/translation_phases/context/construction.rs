@@ -9,6 +9,7 @@ use rustc_hash::FxBuildHasher;
 
 use super::{
     Context,
+    FileSystem,
     expansion_sites::ExpansionSites,
 };
 use crate::{
@@ -48,7 +49,7 @@ impl<'tu> Context<'tu> {
             tu,
             configuration,
             preprocessing_options: &[],
-            virtual_files: &[],
+            file_system: FileSystem::Host,
             preprocessed_tokens: 0,
             pack_pragmas: ArenaVec::new_in(tu),
             weak_pragmas: ArenaVec::new_in(tu),

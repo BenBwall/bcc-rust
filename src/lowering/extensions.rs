@@ -61,10 +61,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     }
 
     pub(super) fn symbol_name(&self, binding: usize) -> &'a str {
-        let entity = self.sema.entity(binding).expect(ENTITY_FACTS);
-        entity.symbol.map_or_else(
-            || self.context.string_cache.at(entity.abi_name),
-            |request| request.name,
-        )
+        self.sema
+            .symbol_name(binding, self.context)
+            .expect(ENTITY_FACTS)
     }
 }
