@@ -1496,7 +1496,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.integer_type(ty).is_some()
             || matches!(
                 self.types.nodes[ty.index],
-                TypeKind::Scalar(s) if s.floating_rank() != 0 && !s.complex()
+                TypeKind::Scalar(s) if s.floating() && !s.complex()
             )
     }
 
@@ -1802,7 +1802,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         // C23 §H.4.3p1: within one precision, an interchange type is
         // chosen over a standard type, and that over an extended type.
-        let float_rank = Scalar::floating_rank;
+        let long_double_is_double = self.types.target.long_double_is_double();
+        let float_rank = |s: Scalar| s.floating_rank(long_double_is_double);
         let rank = float_rank(ls).max(float_rank(rs));
         let complex = ls.complex() || rs.complex();
         let scalar = if rank != 0 {

@@ -274,7 +274,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// GCC/glibc numeric NaN tags accept an unsigned integer in base 0. An empty
 /// or unrecognized n-char sequence selects the implementation's default NaN.
 /// C99: §7.12.11.2p2, p. 237; PDF p. 249 (implementation-defined payload).
-fn nan_payload(tag: &[u8]) -> u64 {
+pub(in crate::translation_phases::semantic_analysis) fn nan_payload(tag: &[u8]) -> u64 {
     let tag = tag.split(|&byte| byte == 0).next().unwrap_or_default();
     let (radix, digits) = if tag.starts_with(b"0x") || tag.starts_with(b"0X") {
         (16, &tag[2..])

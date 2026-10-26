@@ -154,6 +154,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.types.intern(TypeKind::Pointer(character))
         });
         let mut constant = true;
+        let mut tag = None;
         for &argument in arguments {
             let info = self.expression_info(argument);
             let ty = self.converted(info);
@@ -175,6 +176,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if let Some(target) = tag_type {
                 constant &= matches!(literal.kind, E::StringLiteral(_));
+                if let E::StringLiteral(
+                    crate::translation_phases::preprocessing::StringTokenType::String(id),
+                ) = literal.kind
+                {
+                    tag = self.context.literal_text_in(self.scratch, id, false);
+                }
                 self.convert(argument, target, super::ConversionKind::Assignment);
             }
         }
@@ -183,12 +190,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result.constant = ConstantClass::Arithmetic;
             if scalar == Scalar::Float128 {
                 result.unfolded_binary128 = true;
+            } else if nan {
+                // GCC's `__builtin_nans` family: a signaling NaN of the
+                // result's format whose payload the tag names.
+                let payload = super::builtins::nan_payload(tag.unwrap_or("").as_bytes());
+                let precision = self.floating_precision(scalar).unwrap_or(3);
+                result.floating = Some(Floating::real(LongDouble::signaling_nan(
+                    payload, precision,
+                )));
             } else {
-                result.floating = Some(Floating::real(LongDouble::from_double(if nan {
-                    f64::NAN
-                } else {
-                    f64::INFINITY
-                })));
+                result.floating = Some(Floating::real(LongDouble::from_double(f64::INFINITY)));
             }
         }
         result

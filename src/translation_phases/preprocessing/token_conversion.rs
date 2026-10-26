@@ -1577,7 +1577,8 @@ fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
 
 /// The interchange or extended format a floating constant's suffix names,
 /// and the suffix's length: `f` or `F` followed by `32`, `64` or `128`, or by
-/// `32` or `64` and then `x` or `X`. `contents` ends with a NUL.
+/// `32` or `64` and then a lowercase `x` (`fNx`, `FNx`; GCC rejects `f32X`).
+/// `contents` ends with a NUL.
 /// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573. `f16` and `f128x` name
 /// types bcc does not provide.
 fn interchange_suffix(contents: &str) -> Option<(InterchangeFloat, usize)> {
@@ -1590,9 +1591,7 @@ fn interchange_suffix(contents: &str) -> Option<(InterchangeFloat, usize)> {
         ("64", InterchangeFloat::Float64),
         ("128", InterchangeFloat::Float128),
         ("32x", InterchangeFloat::Float32x),
-        ("32X", InterchangeFloat::Float32x),
         ("64x", InterchangeFloat::Float64x),
-        ("64X", InterchangeFloat::Float64x),
     ]
     .into_iter()
     .find_map(|(digits, format)| {

@@ -1316,7 +1316,8 @@ for verification and limits.
 `-ffloatn-types` (and `-fno-floatn-types`; the last wins) makes `_Float32`,
 `_Float64`, `_Float128`, `_Float32x` and `_Float64x` keywords, as GCC 7 and
 later have them in every C mode, with the C23 Annex H constant suffixes
-`f32`, `f64`, `f128`, `f32x` and `f64x` in either case (§H.5.1-H.5.2). It is
+`f32`, `f64`, `f128`, `f32x` and `f64x`, with `f` or `F` but only a lowercase
+`x`, as GCC requires (§H.5.1-H.5.2). It is
 off by default because glibc's `bits/floatn.h` declares these names as
 typedefs for the Clang identity bcc claims; a GCC identity, which makes
 glibc expect the keywords, should turn it on. The `Feature` row is
@@ -1330,9 +1331,12 @@ type bcc already lowers: binary32 (`float`), binary64 (`double`, for
 binary128 for `_Float128`, which is the same type as `__float128`, as in GCC.
 `_Generic`, `__builtin_types_compatible_p` and the usual arithmetic
 conversions see the distinct types: within one precision an interchange type
-is chosen over the standard type, and that over the extended type
+is chosen over `long double`, then `double`, then the extended type
 (§H.4.3p1), so `_Float32 + float` is `_Float32` and `_Float32x + double` is
-`double`. Default argument promotions apply only to `float`, as in GCC.
+`double`. The classes follow the target's formats: on the MSVC target, where
+`long double` is binary64, `_Float64 + long double` is `_Float64` and
+`_Float32x + long double` is `long double`, as GCC gives with
+`-mlong-double-64`. Default argument promotions apply only to `float`, as in GCC.
 `_Complex` combines with each in either order. On the MSVC target, whose
 `long double` is binary64 and which has no binary128 type, `_Float64x` and
 `_Float128` are refused as unsupported.
@@ -1343,7 +1347,9 @@ with GCC 15's x86-64 values (`target/interchange_floats.rs`), omitting the
 types the target lacks, and the constant builtins glibc's GCC paths call
 exist: `__builtin_huge_valfN`, `__builtin_inffN`, `__builtin_nanfN` and
 `__builtin_nansfN` for `f32`, `f64`, `f32x` and `f64x` (the `f128` ones
-already exist). Without the switch these builtins are unknown to calls and
+already exist). The `nans` family, `__builtin_nans` included, gives a
+signaling NaN of the result's format with the tag's payload, bit for bit as
+GCC does; a conversion that cannot keep a NaN's payload makes it quiet. Without the switch these builtins are unknown to calls and
 `__has_builtin`.
 
 Verified against real glibc 2.43 headers (`<math.h>`, `<complex.h>`,

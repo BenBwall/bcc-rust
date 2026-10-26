@@ -290,27 +290,29 @@ impl Scalar {
     /// Whether this is a real or complex floating type.
     /// C99: §6.2.5 paragraphs 10-11, p. 34; PDF p. 46.
     pub(crate) const fn floating(self) -> bool {
-        self.floating_rank() != 0
+        self.floating_rank(false) != 0
     }
 
     /// Orders the floating types for the usual arithmetic conversions; 0 for
-    /// every other type. The precision class comes first: `float`, then
-    /// `double`, then `long double`, then binary128, each class holding the
-    /// types with that representation (and `long double` above `double`
-    /// even where both are binary64). Within a class an interchange type
-    /// ranks above the standard type, which ranks above the extended type.
+    /// every other type. The set of values comes first: binary32, binary64,
+    /// the x87 format, then binary128, each class holding the types with
+    /// that representation, so `long double` joins the binary64 class
+    /// where `long_double_is_double` (the MSVC target). Within a class of
+    /// equal sets of values an interchange type is chosen, then
+    /// `long double`, then `double` or `float`, then an extended type.
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57. C23: §H.4.3
     /// paragraph 1, pp. 558-559; PDF pp. 571-572.
-    pub(crate) const fn floating_rank(self) -> u8 {
+    pub(crate) const fn floating_rank(self, long_double_is_double: bool) -> u8 {
         let (class, preference) = match self.real_type() {
             | Self::Float => (1, 1),
-            | Self::Float32 => (1, 2),
+            | Self::Float32 => (1, 3),
             | Self::Double => (2, 1),
-            | Self::Float64 => (2, 2),
+            | Self::Float64 => (2, 3),
             | Self::Float32x => (2, 0),
-            | Self::LongDouble => (3, 1),
+            | Self::LongDouble if long_double_is_double => (2, 2),
+            | Self::LongDouble => (3, 2),
             | Self::Float64x => (3, 0),
-            | Self::Float128 => (4, 2),
+            | Self::Float128 => (4, 3),
             | _ => return 0,
         };
         class * 4 + preference

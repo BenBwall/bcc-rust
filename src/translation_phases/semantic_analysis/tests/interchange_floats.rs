@@ -40,7 +40,7 @@ _Static_assert(T(f64 + d) == 5 && T(f32x + d) == 2, "standard over extended");
 _Static_assert(T(f64x + ld) == 3 && T(f32 + f32x) == 6, "precision first");
 _Static_assert(T(f32x + f64) == 5 && T(f64x + f64) == 7 && T(f64x + f128) == 8, "rank");
 _Static_assert(T(+f32) == 4 && T(f32 * 2) == 4, "no promotion");
-_Static_assert(T(1.0f32) == 4 && T(1.0F64) == 5 && T(1.0f32x) == 6 && T(1.0F64X) == 7, "suffixes");
+_Static_assert(T(1.0f32) == 4 && T(1.0F64) == 5 && T(1.0f32x) == 6 && T(1.0F64x) == 7, "suffixes");
 _Static_assert(T(1.0f128) == 8 && T(0x1p3f32) == 4, "binary128 and hexadecimal constants");
 _Static_assert(__builtin_types_compatible_p(_Float128, __float128), "one binary128 type");
 _Static_assert(!__builtin_types_compatible_p(_Float32, float), "distinct from float");
@@ -182,6 +182,82 @@ fn msvc_target_lacks_the_wide_types() {
         interchange(CStandard::C17, ExtensionPolicy::Allow).with_target(Target::WindowsMsvc),
         |context, _| {
             assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context));
+        },
+    );
+}
+
+/// C23 §H.4.3p1 compares sets of values: where `long double` is binary64
+/// (the MSVC target), `_Float64` is chosen over it and it over `_Float32x`,
+/// as GCC chooses with `-mlong-double-64`.
+#[test]
+fn conversions_follow_the_target_formats() {
+    let source = r#"
+#define T(x) _Generic((x), double: 2, long double: 3, _Float64: 5, _Float32x: 6, default: 0)
+_Float64 f64; long double ld; _Float32x f32x; double d;
+_Static_assert(T(f64 + ld) == 5 && T(ld + f64) == 5, "interchange over long double");
+_Static_assert(T(f32x + ld) == 3 && T(d + ld) == 3 && T(f32x + d) == 2, "standard over extended");
+"#;
+    with_configuration(
+        source,
+        interchange(CStandard::C17, ExtensionPolicy::Allow).with_target(Target::WindowsMsvc),
+        |context, _| assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context)),
+    );
+    // With the x87 `long double` it is the wider type.
+    with_configuration(
+        "_Static_assert(_Generic((_Float64)0 + (long double)0, long double: 1, default: 0), \
+         \"x87\");",
+        interchange(CStandard::C17, ExtensionPolicy::Allow),
+        |context, _| assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context)),
+    );
+}
+
+/// Only a lowercase `x` ends an extended suffix: GCC rejects `f32X`.
+#[test]
+fn extended_suffixes_take_a_lowercase_x() {
+    for source in ["double a = 1.0f32X;", "double a = 1.0F64X;"] {
+        with_configuration(
+            source,
+            interchange(CStandard::C23, ExtensionPolicy::Allow),
+            |context, _| {
+                let errors = messages(context);
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains("InvalidDecimalFloatLiteral")),
+                    "{source}: {errors:?}"
+                );
+            },
+        );
+    }
+}
+
+/// The `nans` builtins give signaling NaNs of their own format with the
+/// tag's payload, as GCC does.
+#[test]
+fn signaling_nan_builtins_keep_their_payload() {
+    with_configuration(
+        "_Float32 f = __builtin_nansf32(\"0x7\"); _Float64 g = __builtin_nansf64(\"\"); double h \
+         = __builtin_nans(\"5\");",
+        interchange(CStandard::C17, ExtensionPolicy::Allow),
+        |context, unit| {
+            assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context));
+            let bits: Vec<_> = unit
+                .expressions
+                .iter()
+                .filter(|info| matches!(info.expression.kind, ExpressionType::Call { .. }))
+                .map(|info| {
+                    let ty = match unit.types.nodes[info.ty.index] {
+                        | TypeKind::Scalar(Scalar::Float32) => crate::ir::Type::F32,
+                        | _ => crate::ir::Type::F64,
+                    };
+                    crate::float_parsing::bits::constant_bits(&info.floating.unwrap().real, ty)
+                        .unwrap()
+                })
+                .collect();
+            assert_eq!(
+                bits,
+                [0x7F80_0007, 0x7FF4_0000_0000_0000, 0x7FF0_0000_0000_0005]
+            );
         },
     );
 }
