@@ -122,10 +122,9 @@ mod sroa;
 )]
 mod tests;
 
-use std::{
-    fmt,
-    time::Instant,
-};
+use std::fmt;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Instant;
 
 pub(crate) use always_inline::resolve_inline_copies;
 use draft::Draft;
@@ -333,4 +332,24 @@ fn assert_verified(module: &Module<'_>, func: FuncId, when: fmt::Arguments<'_>, 
         fmt::from_fn(|f| errors.iter().try_for_each(|error| writeln!(f, "  {error}"))),
         module.display_function(func),
     );
+}
+
+/// WebAssembly has no clock (std's `Instant::now` panics there), so
+/// `--time-passes`' times are zero there.
+#[cfg(target_family = "wasm")]
+struct Instant;
+
+#[cfg(target_family = "wasm")]
+impl Instant {
+    fn now() -> Self {
+        Self
+    }
+
+    #[expect(
+        clippy::unused_self,
+        reason = "The stand-in keeps `Instant`'s interface."
+    )]
+    fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
 }

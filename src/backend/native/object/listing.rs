@@ -362,7 +362,7 @@ pub(super) fn expression(text: &str) -> Result<Expression<'_>> {
     })
 }
 
-fn assignment(line: &str) -> Option<(&str, &str)> {
+pub(super) fn assignment(line: &str) -> Option<(&str, &str)> {
     let mut quoted = false;
     for (at, ch) in line.char_indices() {
         if ch == '"' {

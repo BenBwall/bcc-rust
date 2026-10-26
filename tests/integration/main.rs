@@ -23,6 +23,7 @@ mod cli;
 mod code_generation_cli;
 mod diagnostic_parity;
 mod diagnostics_golden;
+mod explorer;
 mod file_scope_asm;
 mod freestanding_cli;
 mod hosted_cli;

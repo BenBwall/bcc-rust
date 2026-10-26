@@ -82,6 +82,9 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
+    /// In-memory files by path, found before the file system: the
+    /// explorer's headers. Empty for the command line.
+    pub(crate) virtual_files: &'tu [(&'tu Path, &'tu str)],
     /// Output-token ordinals preserve directive order across includes/macros.
     pub(crate) preprocessed_tokens: usize,
     pub(crate) pack_pragmas: ArenaVec<'tu, super::pragma_pack::PackPragma<'tu>>,

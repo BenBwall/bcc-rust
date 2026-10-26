@@ -2018,6 +2018,13 @@ enum Step<'tu> {
 /// What the last operation of an initializer plan covering a subobject
 /// put there, in [`Analyzer::object_value`].
 #[derive(Clone, Copy)]
+#[cfg_attr(
+    target_pointer_width = "32",
+    expect(
+        variant_size_differences,
+        reason = "A string element's value is wide; with 32-bit pointers the others are small."
+    )
+)]
 enum Read<'tu> {
     Zero,
     Value(&'tu Expression<'tu>),

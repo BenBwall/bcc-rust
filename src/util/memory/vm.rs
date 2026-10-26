@@ -17,6 +17,13 @@
 //! start uninitialized rather than zeroed, so Miri also reports any read of
 //! memory nothing has written: arena memory is reused after a reset, and its
 //! users must not count on fresh pages reading as zero.
+//!
+//! WebAssembly has no virtual-memory interface and at most 4 GiB of linear
+//! memory, so there a reservation is the same single allocation, of a much
+//! smaller fixed size ([`REGION_BYTES`]), and committing is free. Browsers
+//! back linear memory lazily, so the untouched part of each region costs
+//! address space rather than memory. A region that fills fails its
+//! allocation, which aborts (a WebAssembly trap) rather than overrunning.
 
 use std::{
     io,
@@ -163,7 +170,7 @@ pub(crate) struct Region {
     base:     NonNull<u8>,
     reserved: usize,
     page:     usize,
-    #[cfg(miri)]
+    #[cfg(any(miri, target_family = "wasm"))]
     layout:   std::alloc::Layout,
 }
 
@@ -213,7 +220,7 @@ impl Region {
             base,
             reserved,
             page,
-            #[cfg(miri)]
+            #[cfg(any(miri, target_family = "wasm"))]
             layout: std::alloc::Layout::from_size_align(reserved, page)
                 .expect("valid mock region layout"),
         })
@@ -301,17 +308,32 @@ fn committed_view(base: NonNull<u8>, committed: usize) -> NonNull<u8> {
 /// arena (20 bytes times `u32::MAX`, just under 80 GiB), while a few dozen
 /// regions still fit easily in a 64-bit address space. Miri models a
 /// reservation as one real allocation, so it gets a small one.
-#[cfg(all(not(miri), not(feature = "parser-study-small-regions")))]
+#[cfg(all(
+    not(miri),
+    not(target_family = "wasm"),
+    not(feature = "parser-study-small-regions")
+))]
 pub(crate) const REGION_BYTES: usize = 100 * 1024 * 1024 * 1024;
 
 // Valgrind rejects individual 100 GiB mappings with EINVAL. The isolated study
 // profile uses a smaller reservation, keeping commit policy and allocation
 // algorithms unchanged. Native timing and memory runs use production capacity.
-#[cfg(all(not(miri), feature = "parser-study-small-regions"))]
+#[cfg(all(
+    not(miri),
+    not(target_family = "wasm"),
+    feature = "parser-study-small-regions"
+))]
 pub(crate) const REGION_BYTES: usize = 1024 * 1024 * 1024;
 
 #[cfg(miri)]
 pub(crate) const REGION_BYTES: usize = 16 * 1024 * 1024;
+
+/// WebAssembly's reservation, a real allocation from linear memory. A
+/// compilation the explorer accepts (`explorer::MAX_SOURCE_BYTES`) holds
+/// at most a few dozen regions at once, so they fit in linear memory with
+/// room to spare, and each fits the explorer's largest inputs many times.
+#[cfg(all(not(miri), target_family = "wasm"))]
+pub(crate) const REGION_BYTES: usize = 32 * 1024 * 1024;
 
 /// The first commit step: small, so a compilation touching a dozen regions
 /// commits under a mebibyte. Steps double from here up to
@@ -502,7 +524,14 @@ fn round_up(bytes: usize, page: usize) -> Option<usize> {
     bytes.checked_add(page - 1).map(|value| value / page * page)
 }
 
-#[cfg(miri)]
+#[cfg(any(miri, target_family = "wasm"))]
+#[cfg_attr(
+    target_family = "wasm",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "The stand-in keeps the OS functions' fallible interface."
+    )
+)]
 fn page_size() -> io::Result<usize> {
     Ok(4096)
 }
@@ -537,7 +566,7 @@ fn page_size() -> io::Result<usize> {
         .ok_or_else(io::Error::last_os_error)
 }
 
-#[cfg(miri)]
+#[cfg(any(miri, target_family = "wasm"))]
 fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
     let layout = std::alloc::Layout::from_size_align(bytes, page_size()?)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid mock region layout"))?;
@@ -669,7 +698,14 @@ fn mapping_base(ptr: *mut u8, release: impl FnOnce()) -> io::Result<NonNull<u8>>
     }
 }
 
-#[cfg(miri)]
+#[cfg(any(miri, target_family = "wasm"))]
+#[cfg_attr(
+    target_family = "wasm",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "The stand-in keeps the OS functions' fallible interface."
+    )
+)]
 fn os_commit(_: *mut u8, _: usize) -> io::Result<()> {
     Ok(())
 }
@@ -703,12 +739,21 @@ fn os_commit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
-#[cfg(miri)]
+#[cfg(any(miri, target_family = "wasm"))]
+#[cfg_attr(
+    target_family = "wasm",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "The stand-in keeps the OS functions' fallible interface."
+    )
+)]
 fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     // SAFETY: `checked_range` kept the range inside the writable mock
     // reservation, and the caller has ended all allocations in it. The mock
     // zeroes it to model decommit/recommit without changing pointer identity.
-    unsafe { ptr.write_bytes(0, bytes) };
+    unsafe {
+        ptr.write_bytes(0, bytes);
+    }
     Ok(())
 }
 
@@ -827,9 +872,9 @@ impl Drop for Region {
         // callers must not use those pointers again, regardless of whether
         // they still exist (raw pointers carry no borrow).
         unsafe {
-            #[cfg(not(miri))]
+            #[cfg(not(any(miri, target_family = "wasm")))]
             os_release(self.base, self.reserved);
-            #[cfg(miri)]
+            #[cfg(any(miri, target_family = "wasm"))]
             std::alloc::dealloc(self.base.as_ptr(), self.layout);
         }
     }

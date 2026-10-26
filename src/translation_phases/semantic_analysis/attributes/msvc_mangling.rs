@@ -452,9 +452,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[expect(
-    variant_size_differences,
-    reason = "Vendor names require canonical type keys; source names use compact interned IDs."
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        variant_size_differences,
+        reason = "Vendor names require canonical type keys; source names use compact interned IDs."
+    )
 )]
 enum Name {
     Source(StringCacheId),

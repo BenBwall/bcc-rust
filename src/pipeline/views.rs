@@ -1,5 +1,5 @@
 //! Describes a preprocessing token with its source spelling and converted
-//! literal value for CLI output and test snapshots.
+//! literal value for the CLI's `--tokens`, the explorer, and test snapshots.
 
 use std::fmt::Write as _;
 

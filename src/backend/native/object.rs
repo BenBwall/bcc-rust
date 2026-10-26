@@ -12,13 +12,21 @@
 //! call-frame instructions (LSB 5.0 §10.6); `elf` implements the ELF gABI and
 //! AMD64 psABI §4.4 relocations. For Windows, read `coff::encode`, then its
 //! listing, unwind and writer modules (Microsoft PE format and x64 EH).
+//! `inspection` lays out the ELF text without writing an object, for the
+//! explorer's per-instruction machine-code view.
 
 mod coff;
 mod elf;
 mod encoder;
+mod inspection;
 mod layout;
 mod listing;
 mod unwind;
+
+pub(crate) use inspection::{
+    FunctionCode,
+    functions,
+};
 
 use crate::util::bump::{
     ArenaMap,

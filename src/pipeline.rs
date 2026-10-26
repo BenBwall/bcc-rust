@@ -19,6 +19,7 @@
 //! - Stage drivers: `stages.rs` scopes the preprocessing and parser arenas to
 //!   their stages and collects the preprocessed tokens.
 //! - Middle-end handoff: `middle_end.rs`.
+//! - Token descriptions for `--tokens` and the explorer: `views.rs`.
 //! - End-to-end fixtures: `tests.rs` and `tests/`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
@@ -29,6 +30,10 @@ mod stages;
 
 // Middle end
 mod middle_end;
+
+// Views
+mod views;
+
 use std::path::Path;
 
 #[cfg(test)]
@@ -48,6 +53,7 @@ pub(crate) use stages::{
     preprocess_with_diagnostics,
     with_preprocessor,
 };
+pub(crate) use views::describe_token;
 
 use crate::{
     headers::HeaderSearch,

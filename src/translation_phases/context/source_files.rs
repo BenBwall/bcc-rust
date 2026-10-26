@@ -59,9 +59,20 @@ impl<'tu> Context<'tu> {
             self.record_arena_source_text(index, text);
             return Ok(text);
         }
-        let text = self.tu.read_to_str_lossy(self.get_source_file(index))?;
+        let text = match self.virtual_file(self.get_source_file(index)) {
+            | Some(text) => text,
+            | None => self.tu.read_to_str_lossy(self.get_source_file(index))?,
+        };
         self.record_arena_source_text(index, text);
         Ok(text)
+    }
+
+    /// The text of the in-memory file at `path`, if there is one.
+    pub(crate) fn virtual_file(&self, path: &Path) -> Option<&'tu str> {
+        self.virtual_files
+            .iter()
+            .find(|&&(name, _)| name == path)
+            .map(|&(_, text)| text)
     }
 
     pub(crate) fn intern_source_file(&mut self, path: &Path) -> u32 {
