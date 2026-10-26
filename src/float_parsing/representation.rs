@@ -41,12 +41,11 @@ impl LongDouble {
             let exponent = (bits >> 52) & 0x7FF;
             let fraction = bits & ((1 << 52) - 1);
             let (exponent, significand) = if exponent == 0x7FF {
-                // Preserve the payload and quiet NaNs, as the native widening
-                // conversion does. Infinity has only the explicit integer bit.
-                (
-                    0x7FFF,
-                    (1 << 63) | (fraction << 11) | if fraction == 0 { 0 } else { 1 << 62 },
-                )
+                // Preserve the payload and the quiet bit, which lands on the
+                // x87 quiet bit, so a signaling NaN stays one; a NaN's
+                // fraction is nonzero, so it stays a NaN. Infinity has only
+                // the explicit integer bit.
+                (0x7FFF, (1 << 63) | (fraction << 11))
             } else if exponent == 0 && fraction == 0 {
                 (0, 0)
             } else {
