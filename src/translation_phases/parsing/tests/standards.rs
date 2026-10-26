@@ -1248,6 +1248,10 @@ fn alignof_expression_is_accepted_as_a_gnu_extension() {
                 "_Alignof",
             ),
             ("int x; int a = alignof x;", "alignof"),
+            // A compound literal is an expression operand, though a type
+            // name follows its `(` (GCC rejects it under -pedantic-errors).
+            ("int a = _Alignof (int){0};", "_Alignof"),
+            ("int a = alignof (struct { int i; }){1}.i;", "alignof"),
         ] {
             let standard = if keyword == "alignof" {
                 CStandard::C23

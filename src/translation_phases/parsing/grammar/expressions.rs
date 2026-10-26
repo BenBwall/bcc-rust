@@ -247,10 +247,16 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         {
             if keyword == KeywordTokenType::Alignof {
                 // GCC takes the operand of every spelling as `__alignof__`'s:
-                // a parenthesized type name or a unary expression.
-                report_alignof_expression(self, token);
+                // a parenthesized type name or a unary expression. The
+                // parsed operand, a compound literal included, decides
+                // whether an ISO spelling took an expression.
                 self.consume_token();
                 self.parse_countof_or_alignof(e, KeywordTokenType::Alignof, token.source_vectors)?;
+                if e.operands.last().is_some_and(|operand| {
+                    matches!(operand.expression.kind, ExpressionType::AlignofExpr(_))
+                }) {
+                    report_alignof_expression(self, token);
+                }
                 return Some(false);
             }
             let kind = if keyword == KeywordTokenType::Generic {
@@ -1807,8 +1813,9 @@ impl<'p> CallState<'_, 'p> {
 
 /// Diagnoses `_Alignof` or `alignof` applied to an expression, which GCC
 /// and Clang accept from `__alignof__`, parenthesized or not (GCC also
-/// without parentheses after the standard spellings). The standard
-/// spellings take only a parenthesized type name.
+/// without parentheses after the standard spellings), a compound literal
+/// included. The standard spellings take only a parenthesized type name.
+/// The caller reports once the operand is parsed.
 /// C11: §6.5.3 paragraph 1, p. 88; PDF p. 106. Extension: GNU, GCC manual,
 /// "Determining the Alignment of Functions, Types or Variables",
 /// <https://gcc.gnu.org/onlinedocs/gcc/Alignment.html>.
@@ -1818,18 +1825,7 @@ pub(in crate::translation_phases::parsing) fn report_alignof_expression(
 ) {
     let gnu_spelling = KeywordTokenType::classify(keyword.contents, parser.context.configuration)
         .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu));
-    let parenthesized = parser.cursor.following().is_some_and(|x| {
-        matches!(
-            x.kind,
-            TokenType::Operator(OperatorTokenType::OpeningParenthesis)
-        )
-    });
-    let expression = !parenthesized
-        || parser
-            .cursor
-            .lookahead(1)
-            .is_some_and(|x| !parser.type_name_starter(x));
-    if gnu_spelling || !expression || parser.pedantic_suppression != 0 {
+    if gnu_spelling || parser.pedantic_suppression != 0 {
         return;
     }
     let spelling = if parser
