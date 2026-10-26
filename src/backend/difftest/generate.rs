@@ -2,7 +2,8 @@
 //!
 //! [`generate`] writes textual IR directly. Each function is built from
 //! structured statements (integer and floating arithmetic, comparisons,
-//! `select`, `freeze`, conversions, loads, stores and copies, accesses,
+//! `select`, `freeze`, conversions, loads, stores, atomic operations and
+//! fences, and copies, accesses,
 //! copies and fills of structure-like *record* slots, range checks and
 //! lowered `&&`
 //! and `||` conditions, direct and indirect calls,
@@ -280,8 +281,9 @@ impl FunctionGen<'_> {
                 | 38..44 => return self.select(),
                 | 44..47 => return self.freeze(),
                 | 47..53 => return self.convert(),
-                | 53..61 => return self.store(),
-                | 61..69 => return self.load(),
+                | 53..59 => return self.store(),
+                | 59..65 => return self.load(),
+                | 65..69 => return self.atomic(),
                 | 69..70 => return self.copy(),
                 | 70..78 if self.index > 0 =>
                     if self.call() {
@@ -712,6 +714,100 @@ impl FunctionGen<'_> {
             Range::full(ty),
             format_args!("load.{ty} v{}, align {}", address.id, ty.bytes()),
         );
+    }
+
+    /// An atomic operation on an aligned element of an object, or a fence,
+    /// with a memory order the operation allows. The single-threaded
+    /// program sees each as the plain access or read-modify-write it
+    /// performs. C11: §7.17.7, pp. 282-285; PDF pp. 300-303.
+    fn atomic(&mut self) {
+        const ORDERS: [&str; 5] = ["relaxed", "acquire", "release", "acq_rel", "seq_cst"];
+        if self.rng.chance(10) {
+            let fence = self.rng.pick(&["thread_fence", "signal_fence"]);
+            let order = self.rng.pick(&ORDERS[1..]);
+            self.line(format_args!("atomic.i8 {fence} {order} relaxed align 1 ()"));
+            return;
+        }
+        let ty = self.rng.pick(&[Ty::I8, Ty::I32, Ty::I64]);
+        let address = self.address(ty);
+        let align = ty.bytes();
+        let op = self.rng.pick(&[
+            "load",
+            "store",
+            "exchange",
+            "compare_exchange",
+            "add",
+            "sub",
+            "and",
+            "or",
+            "xor",
+            "nand",
+            "min",
+            "max",
+            "umin",
+            "umax",
+        ]);
+        match op {
+            | "load" => {
+                let order = self.rng.pick(&["relaxed", "acquire", "seq_cst"]);
+                let _ = self.def(
+                    ty,
+                    Range::full(ty),
+                    format_args!(
+                        "atomic.{ty} load {order} relaxed align {align} (v{})",
+                        address.id
+                    ),
+                );
+            },
+            | "store" => {
+                let value = self.operand(ty);
+                let order = self.rng.pick(&["relaxed", "release", "seq_cst"]);
+                self.line(format_args!(
+                    "atomic.{ty} store {order} relaxed align {align} (v{}, v{})",
+                    address.id, value.id
+                ));
+            },
+            | "compare_exchange" => {
+                let desired = self.operand(ty);
+                // Often the value the object holds, so the exchange succeeds.
+                let expected = if self.rng.chance(50) {
+                    self.def(
+                        ty,
+                        Range::full(ty),
+                        format_args!("load.{ty} v{}, align {align}", address.id),
+                    )
+                } else {
+                    self.operand(ty)
+                };
+                let order = self.rng.pick(&ORDERS);
+                let failure = if order == "seq_cst" && self.rng.chance(50) {
+                    "seq_cst"
+                } else {
+                    "relaxed"
+                };
+                let _ = self.def(
+                    ty,
+                    Range::full(ty),
+                    format_args!(
+                        "atomic.{ty} compare_exchange {order} {failure} align {align} (v{}, v{}, \
+                         v{})",
+                        address.id, desired.id, expected.id
+                    ),
+                );
+            },
+            | _ => {
+                let value = self.operand(ty);
+                let order = self.rng.pick(&ORDERS);
+                let _ = self.def(
+                    ty,
+                    Range::full(ty),
+                    format_args!(
+                        "atomic.{ty} {op} {order} relaxed align {align} (v{}, v{})",
+                        address.id, value.id
+                    ),
+                );
+            },
+        }
     }
 
     /// A `copy` of 8 or 16 bytes between two different objects.

@@ -885,6 +885,107 @@ int main(void) {
     return (int)(h & 0x7f);
 }"#,
     },
+    // C11 §7.17 and the GNU builtins: loads and stores in every order,
+    // exchange, strong and weak compare-exchange that succeed and fail,
+    // every fetch operation at every width with its old value used and
+    // unused, `_Atomic` operators, fences, `atomic_flag`, floating fetch-add,
+    // and the `i128` and structure operations that call libatomic.
+    Program {
+        name:   "atomics",
+        source: r#"#include <stdatomic.h>
+int printf(const char *, ...);
+static unsigned char u8;
+static signed char s8;
+static short s16;
+static unsigned short u16;
+static int s32;
+static long long s64;
+static unsigned long long u64;
+static _Atomic int counter;
+static _Atomic double real;
+static double plain_real;
+static atomic_flag flag = ATOMIC_FLAG_INIT;
+static __int128 big;
+struct block { long long a, b, c; };
+static _Atomic struct block blocks;
+#define FETCH(x, v) do { \
+    __atomic_fetch_add(&x, v, __ATOMIC_RELAXED); \
+    __atomic_fetch_sub(&x, 1, __ATOMIC_RELEASE); \
+    __atomic_fetch_and(&x, ~2, __ATOMIC_SEQ_CST); \
+    __atomic_fetch_or(&x, 64, __ATOMIC_ACQ_REL); \
+    __atomic_fetch_xor(&x, 5, __ATOMIC_ACQUIRE); \
+    unsigned long long r = __atomic_fetch_add(&x, v, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_fetch_sub(&x, 3, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_fetch_and(&x, 0x5d, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_fetch_or(&x, 0x30, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_fetch_xor(&x, 0x11, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_fetch_nand(&x, 0x7c, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_fetch_min(&x, -3, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_fetch_max(&x, 100, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_add_fetch(&x, 9, __ATOMIC_SEQ_CST); \
+    r = r * 7 + __atomic_exchange_n(&x, 42, __ATOMIC_SEQ_CST); \
+    printf("%s %llu %lld\n", #x, r, (long long)__atomic_load_n(&x, __ATOMIC_SEQ_CST)); \
+} while (0)
+int main(void) {
+    __atomic_store_n(&s64, 5, __ATOMIC_RELAXED);
+    __atomic_store_n(&s64, 6, __ATOMIC_RELEASE);
+    __atomic_store_n(&s64, 7, __ATOMIC_SEQ_CST);
+    long long loads = __atomic_load_n(&s64, __ATOMIC_RELAXED) + __atomic_load_n(&s64, __ATOMIC_ACQUIRE)
+        + __atomic_load_n(&s64, __ATOMIC_CONSUME) + __atomic_load_n(&s64, __ATOMIC_SEQ_CST);
+    long long expected = 9;
+    int failed = __atomic_compare_exchange_n(&s64, &expected, 11, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    int strong = __atomic_compare_exchange_n(&s64, &expected, 11, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    long long weak_expected = 11;
+    int tries = 0;
+    while (!__atomic_compare_exchange_n(&s64, &weak_expected, 12, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED))
+        tries++;
+    printf("%lld %d %d %lld %lld %d\n", loads, failed, strong, expected, s64, tries < 2);
+    FETCH(u8, 200);
+    FETCH(s8, -100);
+    FETCH(s16, -30000);
+    FETCH(u16, 65000);
+    FETCH(s32, 2000000000);
+    FETCH(s64, 9000000000000000000LL);
+    FETCH(u64, 18000000000000000000ULL);
+    int c = atomic_fetch_add(&counter, 4);
+    counter += 5;
+    counter++;
+    counter *= 3;
+    int seen = 30;
+    atomic_compare_exchange_strong(&counter, &seen, -1);
+    static int legacy = 30;
+    printf("%d %d %d %d\n", c, atomic_load_explicit(&counter, memory_order_relaxed), seen,
+           __sync_val_compare_and_swap(&legacy, 30, 31));
+    printf("%d %d %d\n", __sync_fetch_and_add(&legacy, 2), __sync_bool_compare_and_swap(&legacy, 33, 1),
+           __sync_lock_test_and_set(&legacy, 8));
+    __sync_lock_release(&legacy);
+    __sync_synchronize();
+    atomic_thread_fence(memory_order_seq_cst);
+    atomic_thread_fence(memory_order_acquire);
+    atomic_signal_fence(memory_order_seq_cst);
+    int first = atomic_flag_test_and_set(&flag), second = atomic_flag_test_and_set(&flag);
+    atomic_flag_clear(&flag);
+    int third = atomic_flag_test_and_set_explicit(&flag, memory_order_acquire);
+    printf("%d %d %d %d %d\n", counter, legacy, first, second, third);
+    real += 1.5;
+    real -= 0.25;
+    double before = __atomic_fetch_add(&plain_real, 2.5, __ATOMIC_SEQ_CST);
+    before += __atomic_fetch_sub(&plain_real, 0.5, __ATOMIC_SEQ_CST);
+    printf("%d %d %d\n", (int)(atomic_load(&real) * 100), (int)(before * 100), (int)(plain_real * 100));
+    __atomic_store_n(&big, (__int128)1 << 100, __ATOMIC_SEQ_CST);
+    __int128 old = __atomic_fetch_add(&big, 3, __ATOMIC_SEQ_CST);
+    __int128 want = old;
+    int swapped = __atomic_compare_exchange_n(&big, &want, -5, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    __int128 now = __atomic_load_n(&big, __ATOMIC_ACQUIRE);
+    printf("%d %d %lld %lld\n", (int)(old >> 100), swapped, (long long)want, (long long)now);
+    struct block b = {1, 2, 3}, n = {4, 5, 6};
+    atomic_store(&blocks, b);
+    struct block e = atomic_exchange(&blocks, n);
+    struct block l = atomic_load(&blocks);
+    printf("%lld %lld\n", e.a + e.b + e.c, l.a * 100 + l.b * 10 + l.c);
+    return 0;
+}"#,
+    },
 ];
 
 /// Programs with `long double` values, which the interpreter does not

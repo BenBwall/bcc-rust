@@ -87,7 +87,7 @@ use crate::{
 /// Symbols the back end calls or reads on its own (`_tls_index` is the
 /// Windows image's TLS index); a module may not define them internally,
 /// since those references would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 54] = [
+pub(crate) const RUNTIME_SYMBOLS: [&str; 68] = [
     "memmove",
     "__main",
     "___chkstk_ms",
@@ -142,6 +142,21 @@ pub(crate) const RUNTIME_SYMBOLS: [&str; 54] = [
     "__fixtfdi",
     "__fixunstfdi",
     "_tls_index",
+    // libatomic, for `i128` and byte-buffer atomic operations.
+    "__atomic_load",
+    "__atomic_store",
+    "__atomic_exchange",
+    "__atomic_compare_exchange",
+    "__atomic_load_16",
+    "__atomic_store_16",
+    "__atomic_exchange_16",
+    "__atomic_compare_exchange_16",
+    "__atomic_fetch_add_16",
+    "__atomic_fetch_sub_16",
+    "__atomic_fetch_and_16",
+    "__atomic_fetch_or_16",
+    "__atomic_fetch_xor_16",
+    "__atomic_fetch_nand_16",
 ];
 
 /// Whether the module defines `symbol`: a function body, a global's

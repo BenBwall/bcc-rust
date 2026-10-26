@@ -724,6 +724,47 @@ into a 176-byte register save area, and `va_start` initializes `gp_offset`,
 all arguments are contiguous 8-byte slots, and `va_start` stores the address
 of the first variadic slot ("x64 calling convention", "Varargs").
 
+### Atomic operations
+
+`isel/atomic.rs` selects the IR's `atomic` instructions with the standard
+mapping of the C11 memory orders onto x86-64 ("C/C++11 mappings to
+processors", x86 column; GCC and LLVM emit the same). x86 already gives
+every load acquire and every store release semantics. Only a later load may
+pass an earlier store to another location, so sequential consistency puts
+the full barrier on the store:
+
+| IR operation | x86-64 |
+| --- | --- |
+| `load`, any order | `mov` (`movzx` below 32 bits) |
+| `store`, relaxed or release | `mov` |
+| `store`, `seq_cst` | `xchg` |
+| `exchange` | `xchg` |
+| `compare_exchange` (strong; weak may be strong) | `lock cmpxchg` through `%rax` |
+| `add`, `sub` | `lock xadd` (`neg` first for `sub`) |
+| `add`, `sub`, `and`, `or`, `xor`, old value unused | `lock add`, `sub`, `and`, `or`, `xor` |
+| `and`, `or`, `xor`, `nand`, `min`, `max`, `umin`, `umax`, `fadd`, `fsub` | a `lock cmpxchg` loop |
+| `thread_fence seq_cst` | `mfence` |
+| other fences, `signal_fence` | nothing |
+
+The loop loads the old value, computes the new one (`cmp` and `cmov` at 32
+bits or more for minimum and maximum, `addsd`/`subsd` through `movq` for
+floats), and retries `lock cmpxchg` until it succeeds. It is the one
+selection that splits an IR block: the loop and the rest of the block are
+new machine blocks at the end of the layout. Weaker fences emit nothing,
+because the selector never moves a memory access past another instruction.
+
+`i128` operations call libatomic's `__atomic_load_16`, `__atomic_store_16`,
+`__atomic_exchange_16`, `__atomic_compare_exchange_16` (expected value
+through a 16-byte temporary) and `__atomic_fetch_{add,sub,and,or,xor,nand}_16`.
+The byte-buffer operations call the generic `__atomic_load`, `__atomic_store`,
+`__atomic_exchange` and `__atomic_compare_exchange`. Both pass C's
+`memory_order` constants, as GCC does and as LLVM does for a CPU without
+`cmpxchg16b`, which baseline x86-64 lacks. The driver links `-latomic` when
+the listing calls one of them. The support check refuses `fmin`/`fmax`
+(IEEE `minNum` NaN handling has no single instruction), `i128` minimum and
+maximum (libatomic has no routine), and accesses aligned below their size,
+which a locked instruction would split across cache lines.
+
 ### Poison and undefined behaviour at the machine level
 
 The machine is a refinement of the IR's semantics. The rules:

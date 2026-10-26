@@ -380,6 +380,63 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// C11 atomics under contention
+    /// (`tests/fixtures/programs/atomic_threads.c`): counters that only atomic
+    /// read-modify-writes keep exact, a compare-exchange loop, an `atomic_flag`
+    /// spin lock and a libatomic `__int128`, with one, four and eight threads,
+    /// through LLVM and the native back end. The driver links `-latomic` for
+    /// the `__int128`. C11: §7.17.7, pp. 282-285; PDF pp. 300-303.
+    #[test]
+    fn atomic_counters_stay_exact_across_threads() {
+        if host() != Some("x86_64-unknown-linux-gnu")
+            || !Path::new("/usr/include/pthread.h").is_file()
+        {
+            eprintln!("skipping: no Linux host C library with pthreads");
+            return;
+        }
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/atomic_threads.c");
+        let executable = temporary("atomic-threads.exe");
+        let path = executable.to_str().unwrap();
+        for backend in [
+            &["--backend=llvm", "--llvm-opt=O0"][..],
+            &["--backend=llvm", "--opt=bcc", "--llvm-opt=O2"][..],
+            &["--backend=native", "--opt=none"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command
+                .arg(&source)
+                .args([
+                    "--target=x86_64-unknown-linux-gnu",
+                    "--idirafter",
+                    "/usr/include/x86_64-linux-gnu",
+                    "--idirafter",
+                    "/usr/include",
+                    "-o",
+                    path,
+                ])
+                .args(backend)
+                .env("NO_COLOR", "1");
+            let built = run_native(&mut command).unwrap();
+            assert!(
+                built.status.success(),
+                "{backend:?}: {}",
+                text(&built.stderr)
+            );
+            for threads in ["1", "4", "8"] {
+                let output = run_native(Command::new(&executable).arg(threads)).unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{backend:?} with {threads} threads: {}",
+                    text(&output.stdout)
+                );
+            }
+        }
+        std::fs::remove_file(&executable).unwrap();
+    }
+
     /// `setjmp` and `longjmp` (#50) from `tests/fixtures/programs/setjmp.c`:
     /// MinGW-w64's declarations, whose `setjmp` passes `mingw_getsp()`, in
     /// the interpreter for the Windows target; the host's `<setjmp.h>` in the

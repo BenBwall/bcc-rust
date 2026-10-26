@@ -295,6 +295,19 @@ impl Toolchain {
         target: Target,
         kind: OutputKind,
     ) -> io::Result<()> {
+        self.assemble_linking(assembly, out_path, target, kind, &[])
+    }
+
+    /// [`Self::assemble`], linking an executable with the extra `libraries`
+    /// (`-latomic`) as well.
+    pub(crate) fn assemble_linking(
+        &self,
+        assembly: &Path,
+        out_path: &Path,
+        target: Target,
+        kind: OutputKind,
+        libraries: &[&str],
+    ) -> io::Result<()> {
         let mut command = Command::new(&self.clang);
         _ = command.arg(concat_os("--target=", target.triple().as_ref()));
         if let Some(sysroot) = &self.sysroot {
@@ -307,6 +320,9 @@ impl Toolchain {
         _ = command.arg(assembly).arg("-o").arg(out_path);
         if kind != OutputKind::Object && matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
             _ = command.arg("-lm");
+        }
+        if kind != OutputKind::Object {
+            _ = command.args(libraries);
         }
         let output = command.output()?;
         if output.status.success() {

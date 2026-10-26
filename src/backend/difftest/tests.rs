@@ -260,6 +260,31 @@ fn noundef_poison_uses_the_existing_ub_oracle_rule() {
     assert!((0..50).any(|seed| generate(seed, false).contains(" noundef")));
 }
 
+/// Generated programs exercise atomic read-modify-writes, compare-exchange
+/// and fences, so the sweeps compare every back end's atomics with the
+/// interpreter.
+#[test]
+fn generated_programs_exercise_atomics() {
+    let programs: Vec<String> = (0..100).map(|seed| generate(seed, false)).collect();
+    for operation in [
+        " load ",
+        " store ",
+        " compare_exchange ",
+        " nand ",
+        " umax ",
+        "_fence ",
+    ] {
+        let count = programs
+            .iter()
+            .filter(|text| {
+                text.lines()
+                    .any(|line| line.contains("atomic.") && line.contains(operation))
+            })
+            .count();
+        assert!(count >= 2, "{operation}: {count} of 100 programs");
+    }
+}
+
 /// The record slots give `sroa` structures to split in many programs.
 #[test]
 fn generated_records_exercise_scalar_replacement() {

@@ -374,8 +374,13 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
             }
             Flags::Written
         },
-        | MInst::Jmp { .. } | MInst::X87Arith { .. } | MInst::X87Pop | MInst::Ud2 | MInst::Int3 =>
-            Flags::Untouched,
+        // `mfence` orders memory accesses and touches no register.
+        | MInst::Jmp { .. }
+        | MInst::X87Arith { .. }
+        | MInst::X87Pop
+        | MInst::Ud2
+        | MInst::Int3
+        | MInst::Mfence => Flags::Untouched,
         | MInst::Jcc { .. } => Flags::Read,
         | MInst::JmpIndirect { target, .. } => {
             at.reg(target, Read);
@@ -454,6 +459,33 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
         | MInst::X87ControlWord { mem, .. } => {
             at.mem(mem);
             Flags::Untouched
+        },
+        // `xchg` swaps without touching the flags; `xadd` leaves the sum
+        // in memory and the old value in the register, with the flags of
+        // the addition.
+        | MInst::Xchg { reg, mem, .. } => {
+            at.mem(mem);
+            at.reg(reg, ReadWrite);
+            Flags::Untouched
+        },
+        | MInst::LockXadd { reg, mem, .. } => {
+            at.mem(mem);
+            at.reg(reg, ReadWrite);
+            Flags::Written
+        },
+        | MInst::LockAlu { mem, src, .. } => {
+            at.mem(mem);
+            at.source(src);
+            Flags::Written
+        },
+        // `cmpxchg` compares `%rax` with memory and loads memory into
+        // `%rax` when they differ; ZF and the other arithmetic flags come
+        // from the comparison.
+        | MInst::LockCmpxchg { mem, src, .. } => {
+            at.mem(mem);
+            at.reg(src, Read);
+            at.phys(PReg::Rax, ReadWrite);
+            Flags::Written
         },
         // `fucomip` sets ZF, PF and CF like `ucomis*`.
         | MInst::X87Compare => Flags::Written,
@@ -667,6 +699,19 @@ fn forms() -> Vec<MInst> {
         }).collect::<Vec<_>>(),
         RepMovsb => [MInst::RepMovsb],
         RepStosb => [MInst::RepStosb],
+        Mfence => [MInst::Mfence],
+        Xchg => all.map(|width| MInst::Xchg { width, reg: v(), mem: mem() }),
+        LockXadd => all.map(|width| MInst::LockXadd { width, reg: v(), mem: mem() }),
+        LockAlu => [AluOp::Add, AluOp::Sub, AluOp::And, AluOp::Or, AluOp::Xor]
+            .into_iter()
+            .flat_map(|op| {
+                all.into_iter().flat_map(move |width| {
+                    [Operand::Reg(v()), Operand::Imm(7)]
+                        .map(|src| MInst::LockAlu { op, width, mem: mem(), src })
+                })
+            })
+            .collect::<Vec<_>>(),
+        LockCmpxchg => all.map(|width| MInst::LockCmpxchg { width, mem: mem(), src: v() }),
         X87Load => formats.map(|format| MInst::X87Load { format, mem: mem() }),
         X87Store => formats.map(|format| MInst::X87Store { format, mem: mem() }),
         X87Arith => [X87Op::Add, X87Op::Sub, X87Op::Mul, X87Op::Div]
