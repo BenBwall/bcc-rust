@@ -187,6 +187,33 @@ impl<'tu> Context<'tu> {
         *start = (*start).min(from);
     }
 
+    /// Starts or ends the system-header region of physical `file` at byte
+    /// `at`, where a GNU line marker appears: one with
+    /// flag 3 starts a region, or continues the open one; one without ends
+    /// it. A header that is a system header by its directory or its pragma
+    /// stays one.
+    /// GNU extension: GCC preprocessor manual, "Preprocessor Output",
+    /// <https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html>, over
+    /// the implementation-defined header places of C99 §6.10.2p2-3,
+    /// pp. 149-150; PDF pp. 161-162.
+    pub(crate) fn mark_system_region(&mut self, file: u32, at: u32, system: bool) {
+        let open = self
+            .system_regions
+            .iter_mut()
+            .rev()
+            .find(|region| region.physical == file && region.end == u32::MAX);
+        match open {
+            | Some(_) if system => {},
+            | Some(region) => region.end = at,
+            | None if system => self.system_regions.push(super::SystemRegion {
+                physical: file,
+                start:    at,
+                end:      u32::MAX,
+            }),
+            | None => {},
+        }
+    }
+
     /// Whether any part of `file` is a system header.
     pub(crate) fn has_system_header_part(&self, file: u32) -> bool {
         self.system_headers.contains_key(&file)
@@ -204,6 +231,9 @@ impl<'tu> Context<'tu> {
         self.system_headers
             .get(&physical)
             .is_some_and(|&from| vector.index >= from)
+            || self.system_regions.iter().any(|region| {
+                region.physical == physical && (region.start..region.end).contains(&vector.index)
+            })
     }
 
     /// Whether a diagnostic is withheld because it arises in a system
@@ -224,7 +254,7 @@ impl<'tu> Context<'tu> {
         #[cfg(debug_assertions)]
         let _ = self.diagnostic_position(source_vectors);
         (extension || severity == ErrorSeverity::Warning)
-            && !self.system_headers.is_empty()
+            && !(self.system_headers.is_empty() && self.system_regions.is_empty())
             && source_vectors.length() != 0
             && self.in_system_header(self.expansion_location(source_vectors))
     }

@@ -129,9 +129,23 @@ pub(crate) struct Context<'tu> {
     /// for a header found through a system directory, or the position of
     /// its `#pragma GCC system_header`.
     system_headers: ArenaMap<'tu, u32, u32>,
+    /// The regions GNU line markers with flag 3 make system headers, as
+    /// in preprocessed input, in the order they were opened.
+    system_regions: ArenaVec<'tu, SystemRegion>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
+}
+
+/// Bytes `start..end` of physical file `physical` that a line marker with
+/// flag 3 made a system header; `end` is `u32::MAX` until a later marker in
+/// the file ends the region.
+/// GNU extension: GCC preprocessor manual, "Preprocessor Output".
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SystemRegion {
+    physical: u32,
+    start:    u32,
+    end:      u32,
 }
 
 // Tests

@@ -192,6 +192,59 @@ mod tests {
         assert_eq!(sorted, listing.lines().collect::<Vec<_>>());
     }
 
+    /// Flag 3 of a line marker makes the following lines a system header
+    /// until the next marker, so `-E` output compiles with the system
+    /// header's warnings withheld, as GCC and Clang read it; the user's
+    /// own warnings remain, including in a system macro's expansion.
+    #[test]
+    fn line_marker_flag_three_withholds_system_header_warnings() {
+        let project = Project::new();
+        std::fs::create_dir_all(project.path("sys")).unwrap();
+        std::fs::write(
+            project.path("sys/s.h"),
+            "static int s(void) { return ({ 1; }); }\n#define SYS ({ 2; })\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path("u.c"),
+            "#include <s.h>\nint u(void) { return ({ 3; }); }\nint m(void) { return SYS; }\n",
+        )
+        .unwrap();
+        let output = project.bcc(&["-E", "-isystem", "sys", "u.c", "-o", "u.i"]);
+        succeeds(&output);
+        let text = std::fs::read_to_string(project.path("u.i")).unwrap();
+        assert!(text.contains("# 1 \"sys/s.h\" 3\n"), "{text}");
+        let warnings = |output: &Output| {
+            stderr(output)
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("--> "))
+                .map(|location| location.split(':').take(2).collect::<Vec<_>>().join(":"))
+                .collect::<Vec<_>>()
+        };
+        let reread = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "u.i"]);
+        succeeds(&reread);
+        assert_eq!(warnings(&reread), ["u.c:2", "u.c:3"], "{}", stderr(&reread));
+        // Without the flag the same text is user code.
+        std::fs::write(project.path("plain.i"), text.replace("\" 3\n", "\"\n")).unwrap();
+        let plain = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "plain.i"]);
+        assert_eq!(
+            warnings(&plain),
+            ["sys/s.h:1", "u.c:2", "u.c:3"],
+            "{}",
+            stderr(&plain)
+        );
+        // Ordinary source takes the markers too; a marker without the flag
+        // ends the region.
+        std::fs::write(
+            project.path("m.c"),
+            "# 1 \"h.h\" 1 3\nint h(void) { return ({ 1; }); }\n# 9 \"m.c\" 2\nint g(void) { \
+             return ({ 2; }); }\n",
+        )
+        .unwrap();
+        let marked = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "m.c"]);
+        assert_eq!(warnings(&marked), ["m.c:9"], "{}", stderr(&marked));
+    }
+
     #[test]
     fn preprocessed_output_keeps_pack_and_weak_pragmas() {
         let project = Project::new();

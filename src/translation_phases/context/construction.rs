@@ -71,6 +71,7 @@ impl<'tu> Context<'tu> {
             quote_include_count: 0,
             system_include_start: 0,
             system_headers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            system_regions: ArenaVec::new_in(tu),
             source_texts: ArenaVec::new_in(tu),
         }
     }

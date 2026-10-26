@@ -962,8 +962,13 @@ system_header` (also through `_Pragma`) makes the rest of the current header
 a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
 identity that is not a system header. A GNU line marker (`# 12 "file.c" 1 3`),
-the form `-E` writes, is read as `#line 12 "file.c"`; its flags are ignored,
-so flag 3 does not make what follows a system header. Already
+the form `-E` writes, is read as `#line 12 "file.c"`. Flag 3 makes the
+following lines a system header until the next line marker in the same
+physical file, which ends the region unless it has flag 3 too, as GCC and
+Clang read preprocessed output; the other flags are ignored, and a `#line`
+directive does not end the region. A header that is a system header by its
+directory or pragma stays one. So `-E` output compiled again withholds its
+system headers' warnings, also from ordinary source. Already
 preprocessed input (`.i`, `-x cpp-output`) is read as GCC's
 `-fpreprocessed` reads it: phases 1 and 2 replace no trigraph and delete no
 line splice (CR and CRLF still end lines), no macro, builtin or not, is
