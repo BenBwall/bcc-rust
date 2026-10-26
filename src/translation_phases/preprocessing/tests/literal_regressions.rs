@@ -496,6 +496,43 @@ fn valid_character_escape_controls_cover_narrow_and_wide_literals() {
     }
 }
 
+/// An unknown escape stands for its character after a warning, as in GCC
+/// and Clang; `-Wno-unknown-escape-sequence` silences it.
+/// C99: §6.4.4.4 footnote 65, p. 60; PDF p. 72; §6.11.4p1, p. 163; PDF
+/// p. 175.
+#[test]
+fn unknown_escapes_stand_for_their_character_after_a_warning() {
+    let actual = observe("'\\q' L'\\j' \"a\\%b\\(\\E\" u8\"\\\u{e9}\";\n");
+    assert_eq!(
+        actual.characters,
+        [
+            CharacterTokenType::Char('q'),
+            CharacterTokenType::WideChar(u32::from('j'))
+        ]
+    );
+    assert_eq!(actual.strings[0], (false, "a%b(\u{1b}".to_owned()));
+    let kinds: Vec<_> = actual.errors.iter().map(|error| error.0.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "UnknownEscapeSequence('q')",
+            "UnknownEscapeSequence('j')",
+            "UnknownEscapeSequence('%')",
+            "UnknownEscapeSequence('(')",
+            "UnknownEscapeSequence('\u{e9}')",
+        ]
+    );
+    let silenced = observe_with_configuration(
+        "'\\q';\n",
+        crate::configuration::CompilerConfiguration::default().with_warning_option(
+            crate::configuration::DiagnosticGroup::UnknownEscapeSequence,
+            crate::configuration::WarningOption::Enable(false),
+        ),
+    );
+    assert!(silenced.errors.is_empty(), "{:?}", silenced.errors);
+    assert_eq!(silenced.characters, [CharacterTokenType::Char('q')]);
+}
+
 #[test]
 fn failed_character_escapes_have_one_primary_diagnostic() {
     for (escape, error) in [
@@ -506,7 +543,6 @@ fn failed_character_escapes_have_one_primary_diagnostic() {
         ("\\U1", "LargeUnicodeEscapeSequenceTooSmall"),
         ("\\uD800", "InvalidSmallUnicodeEscapeSequence"),
         ("\\U00110000", "InvalidLargeUnicodeEscapeSequence"),
-        ("\\q", "InvalidEscapeSequence"),
     ] {
         for prefix in ["", "L"] {
             let literal = format!("{prefix}'{escape}'");

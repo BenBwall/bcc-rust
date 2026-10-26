@@ -45,6 +45,7 @@ use super::{
 use crate::{
     configuration::{
         CStandard,
+        DiagnosticGroup,
         Feature,
     },
     float_parsing::{
@@ -670,8 +671,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// digits and must not name a surrogate or a character below U+00A0 other
     /// than `$`, `@`, and `` ` `` (§6.4.3 paragraphs 1-2, p. 53; PDF p. 65).
     /// Any other character after `\` requires a diagnostic (footnote 65,
-    /// p. 60; PDF p. 72), except GNU `\e` and `\E` for ESC, an extension
-    /// (GCC manual, "The Character ESC in Constants").
+    /// p. 60; PDF p. 72): GNU `\e` and `\E` are ESC, an extension (GCC
+    /// manual, "The Character ESC in Constants"), and any other stands for
+    /// itself after an `unknown-escape-sequence` warning, as in GCC and
+    /// Clang.
     fn eval_escape_sequences(
         context: &mut Context<'_>,
         token: PreprocessorToken,
@@ -838,9 +841,26 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             None
                         }
                     },
+                    // An unknown escape stands for its character, as in GCC
+                    // and Clang, which warn (C99 §6.11.4p1 reserves the
+                    // lowercase letters and leaves others to extensions).
                     | _ => {
-                        error = Some(PreprocessorErrorType::InvalidEscapeSequence);
-                        None
+                        if context
+                            .group_severity(
+                                DiagnosticGroup::UnknownEscapeSequence,
+                                token.source_vectors,
+                            )
+                            .is_some()
+                        {
+                            Context::raw_preprocessor_error(
+                                &mut context.pending_errors,
+                                PreprocessorError {
+                                    error_type:     PreprocessorErrorType::UnknownEscapeSequence(c),
+                                    source_vectors: token.source_vectors,
+                                },
+                            );
+                        }
+                        Some(LiteralUnit::Character(c))
                     },
                 }
             };
@@ -1052,10 +1072,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         if !did_overflow
             && self
                 .context
-                .group_severity(
-                    crate::configuration::DiagnosticGroup::ConstantPromotion,
-                    token.source_vectors,
-                )
+                .group_severity(DiagnosticGroup::ConstantPromotion, token.source_vectors)
                 .is_some()
         {
             match (candidates[0], constant_type) {

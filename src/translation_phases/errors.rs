@@ -73,6 +73,7 @@ impl TranslationError<'_> {
             | Self::Preprocessing(error) => match error.error_type {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
                 | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
+                | P::UnknownEscapeSequence(_) => Some(G::UnknownEscapeSequence),
                 | P::UnknownPragmaSTDCArgument(_) => Some(G::UnknownStdcPragma),
                 | P::ForcedSignedPromotion { .. } | P::ForcedUnsignedPromotion { .. } =>
                     Some(G::ConstantPromotion),

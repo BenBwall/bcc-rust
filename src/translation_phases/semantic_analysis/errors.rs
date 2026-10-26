@@ -871,6 +871,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::DllAttributeOnRedeclaration
                     | crate::configuration::DiagnosticGroup::InconsistentDllimport
                     | crate::configuration::DiagnosticGroup::UnknownStdcPragma
+                    | crate::configuration::DiagnosticGroup::UnknownEscapeSequence
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
                     | crate::configuration::DiagnosticGroup::InitializerOverrides

@@ -174,6 +174,9 @@ diagnostic_groups! {
     /// A `#pragma` that names nothing bcc knows.
     UnknownPragmas => Some("unknown-pragmas"), Ignored, false;
     UnknownStdcPragma => Some("unknown-pragmas"), Warning, false;
+    /// A `\` before a character that begins no escape sequence; Clang's
+    /// extension warning, which `-pedantic-errors` promotes.
+    UnknownEscapeSequence => Some("unknown-escape-sequence"), Warning, true;
     UnknownWarningOption => Some("unknown-warning-option"), Warning, false;
     /// An attribute name unavailable in its spelling on the selected target.
     UnknownAttributes => Some("unknown-attributes"), Warning, false;

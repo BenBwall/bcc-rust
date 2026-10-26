@@ -379,10 +379,14 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     // only a replacement list gives a meaning, §6.10.3.3, p. 154; PDF p. 166.
     HashHashUsedOutsideOfMacro,
     CannotUseHashHashAfterFunctionLikeMacroCall,
-    /// A `\` followed by a character that begins no escape sequence.
+    /// A `\` followed by a character that begins no escape sequence, which
+    /// stands for that character, as in GCC and Clang. A warning in the
+    /// `unknown-escape-sequence` group; `-pedantic-errors` makes it an error.
     ///
-    /// C99: §6.4.4.4 paragraph 1 and footnote 65, pp. 59-60; PDF pp. 71-72.
-    InvalidEscapeSequence,
+    /// C99: §6.4.4.4 paragraph 1 and footnote 65, pp. 59-60; PDF pp. 71-72
+    /// require a diagnostic; using the character is an extension (§6.11.4,
+    /// p. 163; PDF p. 175 reserves the lowercase letters).
+    UnknownEscapeSequence(char),
     /// A `#line` file name that is not a path; how names map to files is the
     /// implementation's.
     ///
@@ -1067,9 +1071,18 @@ impl PreprocessorErrorType<'_> {
                     .label("pasting onto an invocation is not supported"),
             | Self::InvalidLineFilename => new("line filename is not representable as a path")
                 .label("use a UTF-8 filename without NUL characters"),
-            | Self::InvalidEscapeSequence => new("unknown escape sequence")
-                .label("contains an escape C99 does not define")
-                .note(ESCAPE_LIST_NOTE),
+            | Self::UnknownEscapeSequence(character) => new(format_in!(
+                arena,
+                "unknown escape sequence `\\{}` [-Wunknown-escape-sequence]",
+                character.escape_debug()
+            ))
+            .label("contains an escape C99 does not define")
+            .note(ESCAPE_LIST_NOTE)
+            .help(format_in!(
+                arena,
+                "it stands for `{}`; write `\\\\` for a backslash",
+                character.escape_debug()
+            )),
             | Self::UnterminatedEscapeSequence => new("incomplete escape sequence")
                 .label("`\\` ends the literal")
                 .help("write `\\\\` for a backslash character"),
@@ -1512,7 +1525,6 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashHashUsedOutsideOfMacro
             | PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
             | PreprocessorErrorType::InvalidLineFilename
-            | PreprocessorErrorType::InvalidEscapeSequence
             | PreprocessorErrorType::UnterminatedEscapeSequence
             | PreprocessorErrorType::InvalidHexEscapeSequence
             | PreprocessorErrorType::HexEscapeSequenceTooLarge
@@ -1637,6 +1649,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
             | PreprocessorErrorType::UnknownPragmaDirective
+            | PreprocessorErrorType::UnknownEscapeSequence(_)
             | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
