@@ -54,6 +54,8 @@ export function createEditor(host, options) {
 class Editor {
   constructor(host, options) {
     this.decorations = new Map();
+    // Listener registrations, released by dispose().
+    this.listeners = [];
     this.editor = monaco.editor.create(host, {
       value: options.value ?? '',
       language: options.language ?? 'plaintext',
@@ -117,30 +119,30 @@ class Editor {
 
   /** Call `callback(text)` after every edit. */
   onChange(callback) {
-    this.editor.onDidChangeModelContent(() => callback(this.editor.getValue()));
+    this.listeners.push(this.editor.onDidChangeModelContent(() => callback(this.editor.getValue())));
   }
 
   /** Call `callback(line)` (0 when leaving) as the pointer moves over lines. */
   onHoverLine(callback) {
     let current = 0;
-    this.editor.onMouseMove((event) => {
+    this.listeners.push(this.editor.onMouseMove((event) => {
       const line = event.target.position?.lineNumber ?? 0;
       if (line !== current) {
         current = line;
         callback(line);
       }
-    });
-    this.editor.onMouseLeave(() => {
+    }));
+    this.listeners.push(this.editor.onMouseLeave(() => {
       if (current !== 0) {
         current = 0;
         callback(0);
       }
-    });
+    }));
   }
 
   /** Call `callback(line)` when the gutter (line number or glyph) is clicked. */
   onGutterClick(callback) {
-    this.editor.onMouseDown((event) => {
+    this.listeners.push(this.editor.onMouseDown((event) => {
       const type = event.target.type;
       if (
         type === monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS ||
@@ -148,18 +150,18 @@ class Editor {
       ) {
         callback(event.target.position.lineNumber);
       }
-    });
+    }));
   }
 
   /** Call `callback(line)` when the cursor moves to another line. */
   onCursorLine(callback) {
     let current = 0;
-    this.editor.onDidChangeCursorPosition((event) => {
+    this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
       if (event.position.lineNumber !== current) {
         current = event.position.lineNumber;
         callback(current);
       }
-    });
+    }));
   }
 
   /**
@@ -211,7 +213,23 @@ class Editor {
     this.editor.layout();
   }
 
+  /**
+   * Release the editor: its listeners (so no callback runs afterwards), its
+   * decorations, its text model, and the editor itself with its layout
+   * observer. The page calls this when the view holding the editor unmounts.
+   */
   dispose() {
+    for (const listener of this.listeners.splice(0)) {
+      listener.dispose();
+    }
+    for (const collection of this.decorations.values()) {
+      collection.clear();
+    }
+    this.decorations.clear();
+    const model = this.editor.getModel();
     this.editor.dispose();
+    if (model && !model.isDisposed()) {
+      model.dispose();
+    }
   }
 }

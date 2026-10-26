@@ -169,6 +169,8 @@ mod monaco {
         fn on_hover_line(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method, js_name = onGutterClick)]
         fn on_gutter_click(this: &Editor, callback: &js_sys::Function);
+        #[wasm_bindgen(method)]
+        fn dispose(this: &Editor);
     }
 
     thread_local! {
@@ -233,10 +235,33 @@ mod monaco {
         theme:      &'a str,
     }
 
+    /// A mounted editor and the Rust closures its listeners call.
+    struct Instance {
+        editor:     Editor,
+        _listeners: Vec<Closure<dyn FnMut(JsValue)>>,
+    }
+
+    impl Instance {
+        /// Release the Monaco editor (its model, listeners and layout
+        /// observer) before the closures its listeners call are dropped.
+        fn dispose(self) {
+            self.editor.dispose();
+        }
+    }
+
+    type Slot = StoredValue<Option<Instance>, LocalStorage>;
+
     /// Load Monaco into `mount.host` once it exists, then keep the editor in
-    /// sync with the signals.
+    /// sync with the signals. The editor is disposed when the component's
+    /// owner is cleaned up, as when the workbench switches views.
     pub fn mount(mount: Mount) {
-        let editor = StoredValue::new_local(None::<Editor>);
+        let editor: Slot = StoredValue::new_local(None);
+        on_cleanup(move || {
+            if let Some(instance) = editor.try_update_value(Option::take).flatten() {
+                instance.dispose();
+            }
+        });
+        let owner = Owner::current();
         Effect::new(move |started: Option<bool>| {
             if started == Some(true) {
                 return true;
@@ -244,9 +269,16 @@ mod monaco {
             let Some(element) = mount.host.get() else {
                 return false;
             };
+            let owner = owner.clone();
             spawn_local(async move {
-                match module().await {
-                    | Ok(module) => create(mount, editor, module, &element),
+                let module = module().await;
+                // The view may have unmounted while the bundle loaded; its
+                // owner's cleanup disposed the slot, so create nothing.
+                let Some(owner) = owner.filter(|_| !editor.is_disposed()) else {
+                    return;
+                };
+                match module {
+                    | Ok(module) => owner.with(|| create(mount, editor, module, &element)),
                     | Err(error) => {
                         web_sys::console::warn_1(&format!("Monaco unavailable: {error}").into());
                     },
@@ -257,12 +289,7 @@ mod monaco {
         sync(mount, editor);
     }
 
-    fn create(
-        mount: Mount,
-        editor: StoredValue<Option<Editor>, LocalStorage>,
-        module: EditorModule,
-        element: &web_sys::HtmlElement,
-    ) {
+    fn create(mount: Mount, editor: Slot, module: EditorModule, element: &web_sys::HtmlElement) {
         let options = Options {
             value:      &mount.text.get_untracked(),
             language:   mount.language.get_untracked(),
@@ -274,28 +301,44 @@ mod monaco {
             return;
         };
         let instance = module.create_editor(element, &options);
+        let mut listeners = Vec::new();
         if let Some(callback) = mount.on_change {
-            listen(&instance, Editor::on_change, move |value: JsValue| {
-                callback.run(value.as_string().unwrap_or_default());
-            });
+            listeners.push(listen(
+                &instance,
+                Editor::on_change,
+                move |value: JsValue| {
+                    callback.run(value.as_string().unwrap_or_default());
+                },
+            ));
         }
         if let Some(callback) = mount.on_hover_line {
-            listen(&instance, Editor::on_hover_line, move |line: JsValue| {
-                callback.run(line_number(&line));
-            });
+            listeners.push(listen(
+                &instance,
+                Editor::on_hover_line,
+                move |line: JsValue| {
+                    callback.run(line_number(&line));
+                },
+            ));
         }
         if let Some(callback) = mount.on_gutter_click {
-            listen(&instance, Editor::on_gutter_click, move |line: JsValue| {
-                callback.run(line_number(&line));
-            });
+            listeners.push(listen(
+                &instance,
+                Editor::on_gutter_click,
+                move |line: JsValue| {
+                    callback.run(line_number(&line));
+                },
+            ));
         }
-        editor.set_value(Some(instance));
+        editor.set_value(Some(Instance {
+            editor:     instance,
+            _listeners: listeners,
+        }));
         mount.ready.set(true);
         Effect::new(move || module.set_theme(mount.theme.get()));
     }
 
     /// Apply text, language, decorations and scroll requests once ready.
-    fn sync(mount: Mount, editor: StoredValue<Option<Editor>, LocalStorage>) {
+    fn sync(mount: Mount, editor: Slot) {
         let Mount {
             ready,
             text,
@@ -305,9 +348,9 @@ mod monaco {
             ..
         } = mount;
         let with = move |apply: &dyn Fn(&Editor)| {
-            editor.with_value(|editor| {
-                if let Some(editor) = editor {
-                    apply(editor);
+            editor.try_with_value(|instance| {
+                if let Some(instance) = instance {
+                    apply(&instance.editor);
                 }
             });
         };
@@ -349,16 +392,16 @@ mod monaco {
         }
     }
 
-    /// Register `handler` through `register`; the closure lives as long as
-    /// the page, as the editors do.
+    /// Register `handler` through `register`, returning the closure, which
+    /// must outlive the editor's listener.
     fn listen(
         editor: &Editor,
         register: fn(&Editor, &js_sys::Function),
         handler: impl FnMut(JsValue) + 'static,
-    ) {
+    ) -> Closure<dyn FnMut(JsValue)> {
         let closure = Closure::<dyn FnMut(JsValue)>::new(handler);
         register(editor, closure.as_ref().unchecked_ref());
-        closure.forget();
+        closure
     }
 
     fn line_number(value: &JsValue) -> usize {
