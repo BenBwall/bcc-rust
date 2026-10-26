@@ -26,6 +26,7 @@ use crate::{
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
+            ucn,
         },
     },
     util::{
@@ -640,22 +641,17 @@ impl Expander<'_, '_, '_, '_> {
         let Some(literal) = literal else {
             return false;
         };
-        // The literal holds the macro name as written, without escapes.
+        // The literal holds the macro name as written, which must spell one
+        // identifier; a macro's identity is its canonical spelling.
         let spelling = self.context.string_cache.at(literal.contents);
         let Some(name) = spelling
             .strip_prefix('"')
             .and_then(|rest| rest.strip_suffix('"'))
-            .filter(|name| {
-                let mut bytes = name.bytes();
-                bytes.next().is_some_and(|first| {
-                    first.is_ascii_alphabetic() || matches!(first, b'_' | b'$')
-                }) && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
-            })
+            .map(|name| &*self.scratch.alloc_str(name))
+            .and_then(|name| ucn::identifier_name(self.context, self.scratch, name))
         else {
             return false;
         };
-        let name = &*self.scratch.alloc_str(name);
-        let name = self.context.string_cache.intern(name);
         if push {
             let saved = self.state.macro_definitions.get(&name).cloned();
             self.state.pushed_macros.push((name, saved));

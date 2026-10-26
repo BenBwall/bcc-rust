@@ -1095,3 +1095,27 @@ fn push_and_pop_macro_ignore_unmatched_and_malformed_operands() {
         ["6", "6", "6"]
     );
 }
+
+#[test]
+fn push_and_pop_macro_name_identifiers_beyond_ascii() {
+    // GCC and Clang restore `café`; a name is identified by its canonical
+    // spelling, as for the identifier `café`, and `$` where accepted.
+    assert_eq!(
+        spellings(
+            "#define café 1\n#pragma push_macro(\"café\")\n#undef café\n#define café \
+             2\ncafé\n#pragma pop_macro(\"café\")\ncafé\n#define caf\\u00e9x 3\n#pragma \
+             push_macro(\"caféx\")\n#undef caféx\n#pragma pop_macro(\"caféx\")\ncaféx\n#define $d \
+             4\n#pragma push_macro(\"$d\")\n#undef $d\n#define $d 5\n#pragma \
+             pop_macro(\"$d\")\n$d\n"
+        ),
+        ["2", "1", "3", "4"]
+    );
+    // An operand that does not spell one identifier is ignored.
+    assert_eq!(
+        spellings(
+            "#define N 7\n#pragma push_macro(\"N \")\n#pragma push_macro(\"9N\")\n#pragma \
+             push_macro(\"\")\n#undef N\n#define N 8\n#pragma pop_macro(\"N\")\nN\n"
+        ),
+        ["8"]
+    );
+}
