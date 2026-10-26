@@ -1,4 +1,0 @@
-<main>:
-     0  b8 00 00 00 00           mov $0x0,%eax
-     5  83 c0 01                 add $0x1,%eax
-     8  c3                       ret

@@ -259,7 +259,7 @@ impl<'tu> Stages<'_, '_, 'tu> {
                 &inspection,
                 self.context,
                 InspectionOptions {
-                    show_locations: false,
+                    show_locations: options.syntax_locations,
                 },
             )
             .to_string()

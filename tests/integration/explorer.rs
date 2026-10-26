@@ -126,6 +126,18 @@ mod tests {
                         Some(&*with(&["--syntax-tree"]).1),
                         "{name}"
                     );
+                    let located = compile(
+                        &source,
+                        &ExplorerOptions {
+                            syntax_locations: true,
+                            ..options(optimize)
+                        },
+                    );
+                    assert_eq!(
+                        located.syntax_tree.as_deref(),
+                        Some(&*with(&["--syntax-tree", "--syntax-locations"]).1),
+                        "{name}"
+                    );
                 }
                 for (view, flag) in [
                     (&output.ir, "--emit=ir"),

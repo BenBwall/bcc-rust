@@ -33,6 +33,10 @@ pub struct ExplorerOptions {
     /// (`#include "list.h"` finds `list.h`), searched before the embedded
     /// resource headers. The host file system is never read.
     pub files:             Vec<ExplorerFile>,
+    /// Ends every syntax-tree line with the `@line:column` of its node, as
+    /// `--syntax-locations` does, so a viewer can link the tree to the
+    /// source line by line.
+    pub syntax_locations:  bool,
 }
 
 /// An in-memory header.
@@ -167,6 +171,7 @@ impl Default for ExplorerOptions {
             max_nesting_depth: None,
             source_date_epoch: None,
             files:             Vec::new(),
+            syntax_locations:  false,
         }
     }
 }
