@@ -146,6 +146,36 @@ fn null_pointer_alternatives_precede_pointer_pair_rules() {
 }
 
 #[test]
+fn one_void_alternative_gives_a_conditional_void_type() {
+    // GCC and Clang: the whole expression is void and the other
+    // alternative's value is discarded, also for GNU `x ?: f()`.
+    with_source(
+        "int f(void); void n(void); long g(int c) { c ? f() : (void)0; c ? n() : 5; !c ? (n(), 5) \
+         : n(); c ?: n(); return c ? 1 : 2L; }",
+        |context, unit| {
+            let errors = context.take_pending_errors();
+            assert!(errors.is_empty(), "{errors:?}");
+            let types: Vec<_> = unit
+                .expressions
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.expression.kind,
+                        ExpressionType::Conditional(_) | ExpressionType::OmittedConditional(_)
+                    )
+                })
+                .map(|e| unit.types.nodes[e.ty.index])
+                .collect();
+            let void = TypeKind::Scalar(Scalar::Void);
+            assert_eq!(
+                types,
+                [void, void, void, void, TypeKind::Scalar(Scalar::Long)]
+            );
+        },
+    );
+}
+
+#[test]
 fn register_pointer_does_not_transfer_storage_to_pointee() {
     clean("void f(int *q) { register int *p=q; int *r=&p[1]; r=&1[p]; r=&*p; }");
     rejects(
