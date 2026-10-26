@@ -137,7 +137,8 @@ pub struct ExplorerInstruction {
 pub struct ExplorerLineMapping {
     /// The function's name.
     pub function: String,
-    /// The definition's lines in the source.
+    /// The definition's physical lines in the source, which `#line` does
+    /// not change.
     pub source:   ExplorerLineRange,
     /// Its lines in [`ExplorerOutput::ir`], from its header to its closing
     /// brace.

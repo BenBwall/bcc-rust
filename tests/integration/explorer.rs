@@ -355,6 +355,25 @@ mod tests {
     }
 
     #[test]
+    fn line_maps_use_physical_lines_of_the_input() {
+        for source in [
+            "#line 100\nint f(void) {\n    return 0;\n}\n",
+            "#line 100 \"generated.c\"\nint f(void) {\n    return 0;\n}\n",
+        ] {
+            let output = compile(source, &ExplorerOptions::default());
+            assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+            let [mapping] = &*output.line_map else {
+                panic!("{source:?}: {:#?}", output.line_map);
+            };
+            assert_eq!(
+                (mapping.source.start, mapping.source.end),
+                (2, 4),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
     fn host_files_are_never_found_or_read() {
         let host = temporary("host.h");
         std::fs::write(&host, "int host_header;\n").unwrap();

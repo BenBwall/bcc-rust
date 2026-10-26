@@ -2,6 +2,8 @@
 //! became in the IR before and after ABI lowering and in the assembly. The
 //! IR keeps no source locations, so this is the granularity the outputs
 //! support: a function's header through its closing line in each text.
+//! Source lines are the editor's, physical lines of the input that `#line`
+//! does not change.
 
 #![expect(
     clippy::disallowed_types,
@@ -48,12 +50,13 @@ pub(super) fn map(
             .get_source_vectors(definition.source_vectors)
             .iter()
             .filter(|vector| {
-                context
-                    .get_source_file(vector.source_file_index)
-                    .as_os_str()
-                    == input
+                let physical = context.physical_source_file(vector.source_file_index);
+                context.get_source_file(physical).as_os_str() == input
             })
-            .map(|vector| vector.line);
+            .filter_map(|vector| {
+                context.physical_position(vector.source_file_index, vector.index as usize)
+            })
+            .map(|(line, _)| line);
         let Some(first) = lines.next() else {
             continue;
         };
