@@ -11,6 +11,7 @@ use super::{
 };
 use crate::translation_phases::TranslationError;
 
+mod assembly;
 mod atomics;
 mod attributes;
 mod bit_field_alignment;

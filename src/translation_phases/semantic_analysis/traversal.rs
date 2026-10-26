@@ -600,7 +600,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
                 self.computed_goto(s, e);
             },
-            | S::Asm(_) | S::MsAsm(_) =>
+            | S::Asm(asm) => {
+                if let Some(function) = self.functions.current {
+                    self.function_records[function.id].assembly = true;
+                }
+                self.assembly_statement(s, asm);
+            },
+            | S::MsAsm(_) =>
                 if let Some(function) = self.functions.current {
                     self.function_records[function.id].assembly = true;
                 },

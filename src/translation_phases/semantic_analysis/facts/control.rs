@@ -260,6 +260,8 @@ pub(crate) struct StatementFacts<'tu> {
     pub(crate) entry:     ControlPoint,
     pub(crate) exit:      Transition,
     pub(crate) label:     Option<LabelId>,
+    /// The statement's jump; an `asm goto` has one per label, this first
+    /// one and the rest after it in label order.
     pub(crate) jump:      Option<JumpId>,
     pub(crate) switch:    Option<SwitchId>,
 }

@@ -75,6 +75,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
     pub(super) fn statement_work(&mut self, work: StatementWork<'tu>) {
         match work {
+            | StatementWork::AssemblyDone(statement, asm) => self.finish_assembly(statement, asm),
             | StatementWork::RetainTail(statement) => {
                 self.statement_effects(statement);
                 self.retain_statement_tail(statement);
@@ -1118,6 +1119,11 @@ pub(super) enum StatementWork<'tu> {
     ),
     ReturnDone(Option<ExpressionSlot<'tu>>, SourceVectors),
     ComputedGotoDone(ExpressionSlot<'tu>),
+    /// A GNU `asm` statement whose operand expressions are typed.
+    AssemblyDone(
+        &'tu Statement<'tu>,
+        &'tu crate::translation_phases::parsing::Asm<'tu>,
+    ),
 }
 
 /// A function-scoped label or a GNU local label and its definition.

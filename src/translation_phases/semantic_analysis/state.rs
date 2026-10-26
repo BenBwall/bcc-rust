@@ -103,6 +103,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             statements: statements::State::new(scratch),
             control: super::facts::builder::Builder::new(scratch),
             function_extensions: super::FunctionExtensions::new(tu),
+            assembly: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             extension_parameters: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             overload_previous: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             attributes: super::attributes::AttributeState::new(scratch),

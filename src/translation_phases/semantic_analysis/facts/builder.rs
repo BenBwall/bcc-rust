@@ -256,7 +256,9 @@ impl<'tu, 's> Builder<'tu, 's> {
             transition: Transition::empty(source.region),
             provenance: statement.source_vectors,
         });
-        self.statements[id.0].jump = Some(jump);
+        // An `asm goto` records one jump per label; the statement names the
+        // first, and the others follow it in order.
+        _ = self.statements[id.0].jump.get_or_insert(jump);
     }
 
     /// Records that `expression` takes the address of `label`, numbering the

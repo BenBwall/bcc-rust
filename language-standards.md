@@ -500,7 +500,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
 | GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; sema attribute pass; packed/aligned/scalar mode, transparent_union, cleanup, constructor/destructor, alias, weak, section, used, visibility lowering; vector_size sema |
-| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser; sema statement checks; LLVM lowering |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -733,7 +733,10 @@ the vendor grammar. `parse_gnu` owns assembly, builtins and `__label__`
 declarations. Assembly nodes keep typed qualifiers, the template literal,
 constraint and clobber literals, parsed operand expressions, symbolic names and
 goto labels; file assembly and declarator assembly labels have explicit AST
-variants. Builtins keep their type/expression operands and `__builtin_offsetof`
+variants. Semantic analysis checks statement-level assembly (constraints,
+operand lvalues and constants, clobbers, template references and goto
+labels) and retains it for lowering; see
+[middle-end.md](middle-end.md#gnu-inline-assembly-2026-10-26). Builtins keep their type/expression operands and `__builtin_offsetof`
 member paths. Statement expressions, local labels, label addresses, computed
 goto, omitted conditional operands, GNU initializers and nested definitions
 also have inspectable syntax nodes.

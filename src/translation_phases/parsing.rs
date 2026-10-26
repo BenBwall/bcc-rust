@@ -103,6 +103,8 @@ use extensions::{
     msvc,
 };
 pub(crate) use gnu::{
+    Asm,
+    AsmOperand,
     Builtin,
     OffsetMember,
 };
