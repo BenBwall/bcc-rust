@@ -27,6 +27,7 @@ mod driver_cli;
 mod file_scope_asm;
 mod freestanding_cli;
 mod hosted_cli;
+mod inline_asm;
 mod language_cli;
 mod late_builtins;
 mod link_temporary_object;

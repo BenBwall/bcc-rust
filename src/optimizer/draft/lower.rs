@@ -243,6 +243,13 @@ impl<'s> Draft<'_, 's> {
                         args: builder.value_list(&args),
                     }
                 },
+                | InstData::InlineAsm { asm, args } => {
+                    let args = self.mapped(self.call_operands(inst, args), &map);
+                    InstData::InlineAsm {
+                        asm,
+                        args: builder.value_list(&args),
+                    }
+                },
                 | InstData::Jump { .. }
                 | InstData::Brif { .. }
                 | InstData::Switch { .. }

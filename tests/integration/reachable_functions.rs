@@ -182,7 +182,7 @@ mod tests {
     fn unreachable_unsupported_definitions_are_not_lowered() {
         let source = "typedef int V __attribute__((vector_size(16))); static V v(V x) { return x; \
                       }
-static int dead(void) { __asm__(\"\"); return 0; }
+static int dead(void) { __asm__(\"\" :: \"t\"(1.0L)); return 0; }
 static int (*unused)(void) = dead;
 int main(void) { return 0; }";
         for flags in [&["--interpret"][..], &["--emit=llvm"][..]] {

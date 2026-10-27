@@ -37,6 +37,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(in crate::translation_phases::semantic_analysis) fn check_cleanup_entry(
         &mut self,
         statement: &'tu Statement<'tu>,
+        control: Option<super::super::JumpId>,
         source: SourceVectors,
         points: Option<(ControlPoint, ControlPoint)>,
     ) {
@@ -50,11 +51,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.entered_cleanup_from_initializer(key, from.region, to.region)
         } else {
-            let Some(jump) = self
-                .control
-                .statement_id(statement)
-                .and_then(|id| self.control.statements[id.0].jump)
-            else {
+            let Some(jump) = control else {
                 return;
             };
             let transition = self.control.jumps[jump.0].transition;

@@ -7,6 +7,7 @@ mod atomics;
 mod builder;
 mod dominators;
 mod extensions;
+mod inline_asm;
 mod labels;
 mod noundef;
 mod scalar_builtins;

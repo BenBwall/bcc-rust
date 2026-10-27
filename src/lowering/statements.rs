@@ -519,7 +519,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.draft.switch_to(block);
                 self.tasks.push(labeled_child(range.statement));
             },
-            | S::Asm(_) | S::MsAsm(_) =>
+            | S::Asm(_) => self.assembly(statement, source)?,
+            | S::MsAsm(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::InlineAssembly,
                     source,
@@ -856,7 +857,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .terminate_and_continue_dead(Terminator::Jump(edge));
     }
 
-    fn label_block(&mut self, label: LabelId) -> Block {
+    pub(super) fn label_block(&mut self, label: LabelId) -> Block {
         if let Some(&block) = self.labels.get(&label) {
             return block;
         }

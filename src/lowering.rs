@@ -42,9 +42,10 @@
 //!   conversions, including the floating ones; `places.rs` lvalues, loads and
 //!   stores; `alignment.rs` owns backing-place guarantees and all memory and
 //!   allocation alignment; `bit_fields.rs` bit-field reads and writes;
-//!   `initializers.rs` walks braced initializers; `vla.rs` evaluates saved
-//!   array extents and runs the cleanups of the regions an exit leaves: dynamic
-//!   stack restores, and GNU cleanup calls from `cleanup.rs`.
+//!   `initializers.rs` walks braced initializers; `assembly.rs` lowers GNU
+//!   `asm` statements; `vla.rs` evaluates saved array extents and runs the
+//!   cleanups of the regions an exit leaves: dynamic stack restores, and GNU
+//!   cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; shared `crate::float_parsing::bits` turns folded floating
@@ -65,6 +66,7 @@ mod symbols;
 
 // Function bodies
 mod alignment;
+mod assembly;
 mod bit_fields;
 mod builtin_effects;
 mod builtins;
@@ -481,6 +483,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 otherwise,
                 merge,
             } => self.omitted_conditional(expression, conditional, otherwise, merge),
+            | Task::Assembly(statement) => self.finish_assembly(statement),
             | Task::ReadForUpdate(expression) => {
                 let place = *self.operands.last().expect("the place is on the stack");
                 self.operands.push(place);

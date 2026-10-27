@@ -505,9 +505,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Clang expand it there (MinGW-w64's `FORCEINLINE` `intsafe.h`
     /// functions, which no library defines). Its body becomes an internal
     /// function that direct calls name and the inliner expands; its address
-    /// stays the external symbol's. A body with inline assembly, which
-    /// lowering cannot translate, keeps calling the external definition
-    /// instead, as MinGW-w64's `intrin-impl.h` expects.
+    /// stays the external symbol's. A body with inline assembly keeps
+    /// calling the external definition instead, as MinGW-w64's
+    /// `intrin-impl.h` expects: there the library's definition is the
+    /// assembly's own.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125 (a call to an inline
     /// function may use the inline or the external definition).
     /// GNU extension: GCC manual, "Common Function Attributes",

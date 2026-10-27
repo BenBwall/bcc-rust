@@ -115,6 +115,9 @@ pub(super) enum Op<'s> {
     Call(FuncId, &'s [Value]),
     Diagnostic(&'s super::CallDiagnostic),
     CallIndirect(SigId, Value, &'s [Value]),
+    /// Inline assembly with one value per descriptor operand; the
+    /// descriptor joins the module when the draft is emitted.
+    InlineAsm(&'s crate::ir::InlineAsm<'s>, &'s [Value]),
 }
 
 /// How a block ends.
@@ -434,6 +437,22 @@ impl<'s> Draft<'s> {
         let value = result.map(|ty| self.new_value(ty, def));
         self.blocks[self.current.index()].insts.push((op, value));
         value
+    }
+
+    /// Whether `value` is a `global_addr` or `func_addr` of the current
+    /// block: a symbol's address, which an immediate operand may hold.
+    pub(super) fn is_symbol_address(&self, value: Value) -> bool {
+        self.blocks[self.current.index()]
+            .insts
+            .iter()
+            .rev()
+            .find(|&&(_, result)| result == Some(value))
+            .is_some_and(|&(op, _)| {
+                matches!(
+                    op,
+                    Op::Inst(InstData::GlobalAddr { .. } | InstData::FuncAddr { .. })
+                )
+            })
     }
 
     pub(super) fn create_slot(&mut self, size: u32, align: crate::ir::Align) -> StackSlot {

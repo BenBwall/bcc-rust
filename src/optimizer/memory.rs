@@ -207,6 +207,7 @@ fn memory_write(draft: &Draft<'_, '_>, data: InstData) -> MemoryWrite {
         | InstData::Atomic { .. }
         | InstData::Call { .. }
         | InstData::CallIndirect { .. }
+        | InstData::InlineAsm { .. }
         | InstData::VaArgAggregate { .. }
         | InstData::MemoryRange { .. }
         | InstData::Unary {

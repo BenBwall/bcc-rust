@@ -17,6 +17,7 @@ use super::{
     ControlTarget,
     ExprId,
     FunctionId,
+    JumpId,
     LabelFacts,
     LabelId,
     LoopFacts,
@@ -75,6 +76,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
     pub(super) fn statement_work(&mut self, work: StatementWork<'tu>) {
         match work {
+            | StatementWork::AssemblyDone(statement, asm, jumps) =>
+                self.finish_assembly(statement, asm, jumps),
             | StatementWork::RetainTail(statement) => {
                 self.statement_effects(statement);
                 self.retain_statement_tail(statement);
@@ -237,7 +240,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self.tainted
             && let Some(point) = self.control.point()
         {
-            self.control.jump(
+            _ = self.control.jump(
                 statement,
                 ControlTarget::IndirectGoto(point.function),
                 point,
@@ -372,7 +375,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ));
     }
 
-    /// Records unique label definitions and goto uses in the current function.
+    /// Records unique label definitions and goto uses in the current function,
+    /// returning a use's control jump.
     /// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
     /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
     pub(super) fn label(
@@ -380,13 +384,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         statement: &'tu Statement<'tu>,
         name: Identifier,
         definition: bool,
-    ) {
+    ) -> Option<JumpId> {
         if self.tainted {
-            return;
+            return None;
         }
-        let Some(index) = self.label_index(name) else {
-            return;
-        };
+        let index = self.label_index(name)?;
         if definition {
             if let Some(previous) = self.statements.labels[index].definition {
                 self.error(
@@ -408,21 +410,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             _ = self.statements.labels[index].used.get_or_insert(name);
             self.record_initializing_jump(statement);
+            let control = self.control.point().and_then(|point| {
+                self.control.jump(
+                    statement,
+                    ControlTarget::Label(self.statements.labels[index].id),
+                    point,
+                )
+            });
             self.statements.jumps.push(Jump {
                 point: self.control.point(),
+                control,
                 function: self.functions.current.map_or(usize::MAX, |f| f.id),
                 label: index,
                 source: name,
                 statement,
             });
-            if let Some(point) = self.control.point() {
-                self.control.jump(
-                    statement,
-                    ControlTarget::Label(self.statements.labels[index].id),
-                    point,
-                );
-            }
+            return control;
         }
+        None
     }
 
     /// GNU local labels participate in lexical lookup; ordinary labels have
@@ -577,7 +582,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.control.statements[owner.0].entry,
                 )
             };
-            self.control.jump(statement, target, destination);
+            _ = self.control.jump(statement, target, destination);
         }
     }
 
@@ -629,10 +634,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if label.definition.is_some()
                 && label.function == jump.function
-                && let Some(binding) = self
+                && let Some(binding) = jump
                     .control
-                    .statement_id(jump.statement)
-                    .and_then(|id| self.control.statements[id.0].jump)
                     .and_then(|id| {
                         self.control
                             .ancestry
@@ -657,6 +660,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else if label.definition.is_some() && label.function == jump.function {
                 self.check_cleanup_entry(
                     jump.statement,
+                    jump.control,
                     jump.source.source_vectors,
                     jump.point.zip(label.point),
                 );
@@ -1118,6 +1122,12 @@ pub(super) enum StatementWork<'tu> {
     ),
     ReturnDone(Option<ExpressionSlot<'tu>>, SourceVectors),
     ComputedGotoDone(ExpressionSlot<'tu>),
+    /// A GNU `asm` statement whose operand expressions are typed.
+    AssemblyDone(
+        &'tu Statement<'tu>,
+        &'tu crate::translation_phases::parsing::Asm<'tu>,
+        &'tu [JumpId],
+    ),
 }
 
 /// A function-scoped label or a GNU local label and its definition.
@@ -1141,6 +1151,9 @@ struct Label {
 #[derive(Clone, Copy)]
 struct Jump<'tu> {
     point:     Option<ControlPoint>,
+    /// This use's control jump, whose transition the scope checks read: an
+    /// `asm goto` statement has one per label.
+    control:   Option<JumpId>,
     statement: &'tu Statement<'tu>,
     function:  usize,
     label:     usize,

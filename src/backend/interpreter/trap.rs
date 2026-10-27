@@ -241,6 +241,9 @@ pub(crate) enum Unsupported {
     /// A function that may return twice other than the `setjmp` family,
     /// such as `vfork` or one declared GNU `returns_twice`.
     ReturnsTwice,
+    /// Inline assembly, whose machine code the interpreter cannot run.
+    /// GNU extension: GCC manual, "Extended Asm".
+    InlineAsm,
 }
 
 impl fmt::Display for Unsupported {
@@ -254,6 +257,8 @@ impl fmt::Display for Unsupported {
             | Self::VaListTarget => "a target va_list in a module without a known target",
             | Self::WideVariadic => "a Win64 variadic argument wider than eight bytes",
             | Self::ReturnsTwice => "a returns-twice function other than setjmp",
+            | Self::InlineAsm =>
+                "inline assembly, which only compiled code can run; compile it with -o instead",
         })
     }
 }

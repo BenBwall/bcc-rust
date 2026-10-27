@@ -1060,7 +1060,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
                 false,
             ),
             (
-                "int main(void){__asm__(\"nop\");return 0;}",
+                "int main(void){__asm__(\"\" :: \"t\"(1.0L));return 0;}",
                 vec!["--emit=ir"],
                 1,
                 false,
@@ -1338,7 +1338,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
 
     #[test]
     fn unsupported_constructs_and_errors_fail_code_generation_only() {
-        let source = "int main(void) {\n  __asm__(\"nop\");\n  return 0;\n}\n";
+        let source = "int main(void) {\n  __asm__(\"\" :: \"t\"(1.0L));\n  return 0;\n}\n";
         for flags in [
             &["--interpret"][..],
             &["--emit=ir"][..],
@@ -1349,7 +1349,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             assert!(output.stdout.is_empty(), "{flags:?}");
             let stderr = text(&output.stderr);
             assert!(
-                stderr.contains("error: not yet supported by lowering: inline assembly"),
+                stderr.contains(
+                    "error: not yet supported by lowering: inline assembly operands of this \
+                     register class or type"
+                ),
                 "{stderr}"
             );
             assert!(stderr.contains("1 error generated."), "{stderr}");
@@ -1964,7 +1967,10 @@ int main(void) { printf("main\n"); return zero; }
             ("preprocessing", "#error deliberate failure\n"),
             ("parsing", "int value = ;\n"),
             ("semantics", "int value = not_declared;\n"),
-            ("lowering", "int value(void) { __asm__(\"\"); return 0; }\n"),
+            (
+                "lowering",
+                "int value(void) { __asm__(\"\" :: \"t\"(1.0L)); return 0; }\n",
+            ),
             (
                 "backend",
                 "static __attribute__((noinline,section(\".bss.fn\"))) int f(int x) { return x+1; \

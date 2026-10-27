@@ -462,6 +462,9 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "x86 Built-in Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     InvalidImmediate,
+    /// GNU extension: GCC manual, "Extended Asm"; C99 §J.5.10, p. 514;
+    /// PDF p. 526.
+    InvalidAsm(super::assembly::AsmFault),
     /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
     /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
     /// ignored). GNU extension: GCC manual, "Attribute Syntax".
@@ -627,6 +630,7 @@ impl SemanticErrorKind {
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
+            | Self::InvalidAsm(fault) => fault.label(),
             | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
             | Self::AmbiguousOverload => "ambiguous overload",
@@ -1039,6 +1043,7 @@ impl SemanticErrorKind {
                 "Clang Language Extensions: shufflevector requires matching vectors and constant \
                  indices; convertvector requires equal lane counts",
             ),
+            | Self::InvalidAsm(fault) => fault.explanation(),
             | Self::InvalidImmediate => (
                 "invalid intrinsic immediate operand",
                 "Clang x86 intrinsics: the immediate operand must be an integer constant \

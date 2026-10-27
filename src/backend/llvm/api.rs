@@ -23,6 +23,7 @@ use std::{
 use llvm_sys::{
     LLVMDLLStorageClass,
     LLVMDiagnosticSeverity,
+    LLVMInlineAsmDialect,
     LLVMIntPredicate,
     LLVMLinkage,
     LLVMOpcode,
@@ -109,6 +110,7 @@ use llvm_sys::{
         LLVMGetDiagInfoSeverity,
         LLVMGetEnumAttributeKindForName,
         LLVMGetFirstFunction,
+        LLVMGetInlineAsm,
         LLVMGetIntrinsicDeclaration,
         LLVMGetNamedFunction,
         LLVMGetNamedGlobalAlias,
@@ -1369,6 +1371,33 @@ impl<'id> Session<'id> {
             },
             PhantomData,
         )
+    }
+
+    /// An AT&T inline assembly callee of type `ty` with LLVM's template and
+    /// constraint syntax.
+    pub(super) fn inline_asm(
+        &self,
+        ty: Ty<'id>,
+        template: &str,
+        constraints: &str,
+        side_effects: bool,
+    ) -> Val<'id> {
+        // SAFETY: LLVM reads the two counted strings during the call; the
+        // function type belongs to this live session by the type system.
+        let raw = unsafe {
+            LLVMGetInlineAsm(
+                ty.0,
+                template.as_ptr().cast(),
+                template.len(),
+                constraints.as_ptr().cast(),
+                constraints.len(),
+                i32::from(side_effects),
+                0,
+                LLVMInlineAsmDialect::LLVMInlineAsmDialectATT,
+                0,
+            )
+        };
+        Val(raw, PhantomData)
     }
 
     pub(super) fn intrinsic(&self, name: &str, overloads: &[Ty<'id>]) -> (Val<'id>, Ty<'id>) {

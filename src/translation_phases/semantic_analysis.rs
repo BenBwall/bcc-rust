@@ -35,14 +35,15 @@
 //! - Types and values: `types.rs` interns and compares types and computes
 //!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
 //!   floating values.
-//! - Language extensions: `generic.rs` selects C11 generic associations;
-//!   `type_generic.rs` checks GNU type selections and math calls; `vectors.rs`
-//!   constructs vector types and checks operators; `attributes.rs` and
-//!   `attributes/` check attribute names once, apply entity attributes (weak,
-//!   alias, section, constructors, cleanup) and retain packing, alignment and
-//!   scalar machine modes; `bound_sites.rs` retains typeof operand execution at
-//!   written type sites; `builtins.rs` and `builtins/` recognize and check
-//!   header intrinsics, atomics and x86 calls.
+//! - Language extensions: `assembly.rs` and `assembly/` check GNU `asm`
+//!   statements' constraints, operands, clobbers and templates; `generic.rs`
+//!   selects C11 generic associations; `type_generic.rs` checks GNU type
+//!   selections and math calls; `vectors.rs` constructs vector types and checks
+//!   operators; `attributes.rs` and `attributes/` check attribute names once,
+//!   apply entity attributes (weak, alias, section, constructors, cleanup) and
+//!   retain packing, alignment and scalar machine modes; `bound_sites.rs`
+//!   retains typeof operand execution at written type sites; `builtins.rs` and
+//!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
 //! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
 //!   extensions; `errors.rs` defines diagnostic kinds and renders them;
 //!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
@@ -80,6 +81,7 @@ mod integer;
 mod types;
 
 // Language extensions and builtin calls
+mod assembly;
 mod attributes;
 mod bound_sites;
 mod builtins;
@@ -288,6 +290,9 @@ pub(crate) fn analyze<'tu>(
         expression_actions: analyzer.expression_actions,
         symbols,
         function_extensions: analyzer.function_extensions,
+        assembly: AssemblyFacts {
+            statements: analyzer.assembly,
+        },
         expressions: analyzer.expressions.leak(),
         expression_indices: index.expressions,
         flexible_arrays: analyzer.flexible_arrays,
@@ -1970,6 +1975,8 @@ struct Analyzer<'a, 'tu, 's> {
     statements:              statements::State<'tu, 's>,
     control:                 builder::Builder<'tu, 's>,
     function_extensions:     FunctionExtensions<'tu>,
+    /// Checked statement-level `asm` facts, by statement identity.
+    assembly:                ArenaMap<'tu, usize, AsmFacts<'tu>>,
     extension_parameters:    ArenaMap<'s, usize, SizeParameter>,
     overload_previous:       ArenaMap<'s, usize, usize>,
     attributes:              attributes::AttributeState<'tu, 's>,
