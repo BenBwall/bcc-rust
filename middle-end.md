@@ -1195,25 +1195,34 @@ a memory return area; the interpreter transports the same 128 bits.
 widened (`zeroext`), as Clang does; other narrow integers leave their upper bits
 unspecified.
 
-GCC and Clang disagree on one System V case: an aggregate with a
-`__float128` at offset 0 and another member covering its second eightbyte,
-such as `union { __float128 q; double d[2]; }`. Both classify it as the
-psABI says (SSE and SSE, or SSE and INTEGER); GCC passes it so, but Clang's
-IR type for it starts with `fp128`, and `GetX86_64ByValArgumentPair` widens
-that low part to `i64`, which travels in a general register while still
-counting a vector one. ABI lowering follows the compiler identity
-(`sysv::Dialect`): Clang's by default, GCC's under `--compiler-identity=gcc`,
-and a test links each with code built by that compiler in both directions.
-That applies to named parameters and results. Arguments after the
-ellipsis, and `va_arg`, follow the psABI (GCC's choice) in every identity,
-consistently with each other: Clang's caller counts two vector registers
-for the split aggregate but uses one, which moves the registers of later
-aggregates, and Clang's own `va_arg` reads both eightbytes from the vector
-save area, which matches no caller. So passing such an aggregate through
-`...` between Clang-compiled and bcc-compiled code is not supported (Clang
-itself mis-handles it); between GCC and bcc it works under either identity.
-`tests/fixtures/programs/binary128_varargs.c` checks every later argument
-after such unions on each back end and against GCC.
+bcc classifies aggregates that contain a `__float128` as the psABI says,
+as GCC does, in every compiler identity and position (named parameters,
+results, variadic and unprototyped arguments, `va_arg`). Clang deviates for
+an aggregate with a `__float128` at offset 0 and a member of class SSE over
+its second eightbyte: it classifies the eightbytes as SSE and SSE (or SSE
+and INTEGER) but its IR type for the aggregate starts with `fp128`, which
+`GetX86_64ByValArgumentPair` widens to `i64`, so it passes the low eightbyte
+in a general register while counting a vector one, and its own `va_arg`
+reads both eightbytes from the vector save area. So code built by Clang
+does not link with GCC's or bcc's for these shapes (`Q` is `__float128`),
+checked against bundled Clang 23.1.1 and GCC 15:
+
+| Union | Clang | psABI, GCC and bcc |
+| --- | --- | --- |
+| `{ Q q; double d[2]; }`, and with the members swapped | `i64`, `double` | `double`, `double` |
+| `{ Q q; float f[4]; }` | `i64`, `double` | `double`, `double` |
+| `{ Q q; _Complex double z; }` | `i64`, `double` | `double`, `double` |
+| `{ Q q; struct { double a; long b; } s; }` | `i64`, `i64` | `double`, `i64` |
+
+A structure wrapping one of these passes like it. Clang follows the psABI
+for `{ Q q; double d; }` and `{ Q q; Q r; }` (one vector register), for
+unions whose low eightbyte is INTEGER anyway (`{ Q q; long l; }`, `int`,
+`char`, `long l[2]`, `struct { long a; double b; }`), for a lone
+`__float128` and `struct { Q q; }`, and passes `{ Q q; long double ld; }` in
+memory, so those link with Clang. `tests/integration/binary128.rs` links
+bcc's halves with GCC's in both directions and with Clang's for the shapes
+it follows, and `tests/fixtures/programs/binary128_varargs.c` checks every
+later variadic argument after such unions.
 
 The LLVM back end emits register extension and `noundef` independently and
 exactly as the signature records them, on declarations, definitions and both

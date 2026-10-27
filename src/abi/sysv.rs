@@ -44,7 +44,6 @@ use crate::ir::{
 pub(super) fn argument<'s>(
     layout: AggregateLayout<'s>,
     registers: &mut ArgumentRegisters,
-    dialect: Dialect,
 ) -> Result<ArgPlan<'s>, AbiErrorKind> {
     // Clang gives the stack slot at least eight bytes' alignment.
     let stack = ArgPlan::Stack {
@@ -59,7 +58,7 @@ pub(super) fn argument<'s>(
     if classes.contains(&Class::X87) || classes.contains(&Class::X87Up) {
         return Ok(stack);
     }
-    let Some(parts) = parts(layout, classes, dialect)? else {
+    let Some(parts) = parts(layout, classes)? else {
         return Ok(ArgPlan::Ignore(layout));
     };
     let count = |wanted| {
@@ -83,7 +82,6 @@ pub(super) fn argument<'s>(
 pub(super) fn result<'s>(
     layout: AggregateLayout<'s>,
     registers: &mut ArgumentRegisters,
-    dialect: Dialect,
 ) -> Result<ResultPlan<'s>, AbiErrorKind> {
     let memory = |registers: &mut ArgumentRegisters| {
         _ = registers.take(1, 0);
@@ -129,7 +127,7 @@ pub(super) fn result<'s>(
     if classes.contains(&Class::X87) || classes.contains(&Class::X87Up) {
         return Ok(memory(registers));
     }
-    Ok(match parts(layout, classes, dialect)? {
+    Ok(match parts(layout, classes)? {
         | None => ResultPlan::Ignore(layout),
         | Some(parts) => match parts.types() {
             | &[first] => registers_of(first, None),
@@ -137,48 +135,6 @@ pub(super) fn result<'s>(
             | _ => unreachable!("an aggregate has one or two parts"),
         },
     })
-}
-
-/// Whose System V classification an aggregate follows where GCC and Clang
-/// disagree: the compiler identity's, so code links with that compiler.
-///
-/// They disagree on an aggregate that has a `__float128` at offset 0 and
-/// another member covering its second eightbyte, such as
-/// `union { __float128 q; double d[2]; }`. Both classify the eightbytes as
-/// the psABI does (SSE and SSE, or SSE and INTEGER), and GCC passes them so,
-/// in two vector registers or a vector and a general one. Clang's IR type
-/// for the aggregate starts with an `fp128`, which `GetSSETypeAtOffset`
-/// takes as the low eightbyte's type; `GetX86_64ByValArgumentPair` then
-/// widens that 16-byte part to `i64`, so the low eightbyte travels in a
-/// general register (`X86_64ABIInfo`, `clang/lib/CodeGen/Targets/X86.cpp`).
-/// Arguments after the ellipsis do not follow Clang there: Clang's own
-/// `va_arg` reads both eightbytes of such an aggregate from the vector save
-/// area, which matches no caller, and its caller counts two vector
-/// registers for one it uses, which moves later aggregates. So a variadic
-/// argument, and `va_arg`, follow the psABI (GCC's choice) in every
-/// dialect, consistently with each other; such an aggregate cannot pass
-/// through `...` between Clang-compiled and bcc-compiled code.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) enum Dialect {
-    #[default]
-    Clang,
-    Gcc,
-}
-
-impl Dialect {
-    /// Whether the dialect passes the low eightbyte of a split `fp128` as an
-    /// `i64` (see [`Dialect`]). Its class stays SSE, so it counts against
-    /// the vector registers as in Clang, while the back ends give the `i64`
-    /// a general register or a stack slot.
-    fn splits_quad(self, layout: AggregateLayout<'_>, classes: [Class; 2]) -> bool {
-        self == Self::Clang
-            && classes[0] == Class::Sse
-            && classes[1] != Class::SseUp
-            && layout
-                .scalars
-                .iter()
-                .any(|scalar| scalar.offset == 0 && scalar.ty == Type::F128)
-    }
 }
 
 /// How an integer argument or result narrower than `int` travels: widened
@@ -199,11 +155,7 @@ pub(super) const fn extension(extension: Extension) -> Extension {
 
 /// The IR type of each eightbyte of an aggregate in registers, or `None`
 /// when no eightbyte has a class and nothing is passed.
-fn parts(
-    layout: AggregateLayout<'_>,
-    classes: [Class; 2],
-    dialect: Dialect,
-) -> Result<Option<Parts>, AbiErrorKind> {
+fn parts(layout: AggregateLayout<'_>, classes: [Class; 2]) -> Result<Option<Parts>, AbiErrorKind> {
     let part = |index: usize| part_type(layout, index, classes[index]);
     Ok(match classes {
         | [Class::NoClass, Class::NoClass] => None,
@@ -216,12 +168,7 @@ fn parts(
             // `GetX86_64ByValArgumentPair` ensures: a low part narrower than
             // eight bytes before a high part aligned to less than eight is
             // widened.
-            let low = if dialect.splits_quad(layout, classes) {
-                Type::I64
-            } else {
-                part(0)
-            };
-            let high = part(1);
+            let (low, high) = (part(0), part(1));
             let registers = ResultRegisters {
                 complex:       false,
                 second_offset: 8,
@@ -310,6 +257,17 @@ pub(crate) enum Classification {
 }
 
 /// Classifies an aggregate by the psABI's algorithm.
+///
+/// An aggregate with a `__float128` at offset 0 and another member covering
+/// its second eightbyte, such as `union { __float128 q; double d[2]; }`,
+/// follows the psABI here, as GCC does: two SSE eightbytes travel in two
+/// vector registers, or the whole aggregate on the stack. Clang deviates:
+/// its IR type for the aggregate starts with an `fp128`, which
+/// `GetX86_64ByValArgumentPair` widens to `i64`, so it passes the low
+/// eightbyte in a general register while counting a vector one, and its own
+/// `va_arg` reads both from the vector save area. Code built by Clang does
+/// not link with GCC's or bcc's for such aggregates; `middle-end.md` lists
+/// the shapes.
 ///
 /// An aggregate larger than two eightbytes is MEMORY, since without vector
 /// types no larger one is passed in registers; so is one with a misaligned

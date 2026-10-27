@@ -823,13 +823,8 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
             overflow_size:  layout.size.next_multiple_of(8),
             overflow_align: layout.align.bytes().max(8),
         };
-        // Variadic arguments follow the psABI in every dialect.
-        let arg = sysv::argument(
-            layout,
-            &mut sysv::ArgumentRegisters::default(),
-            sysv::Dialect::Gcc,
-        )
-        .expect("aggregate descriptor preflight");
+        let arg = sysv::argument(layout, &mut sysv::ArgumentRegisters::default())
+            .expect("aggregate descriptor preflight");
         let ArgPlan::Registers { parts, .. } = arg else {
             if !matches!(arg, ArgPlan::Ignore(_)) {
                 let address = self.overflow_arg(list, stack_class);

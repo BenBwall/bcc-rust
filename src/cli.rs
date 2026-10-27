@@ -195,8 +195,7 @@ struct Cli {
     no_repeated_specifier_warnings: bool,
     /// Claim this compiler in the predefined identity macros: the pinned
     /// Clang (the default), GCC 14.2, MSVC 19.33, clang-cl, or TCC 0.9.27.
-    /// GCC's also passes System V aggregates as GCC does where it and Clang
-    /// differ. The driver personalities select their own.
+    /// The driver personalities select their own.
     #[arg(long, value_enum, value_name = "COMPILER", default_value = "clang")]
     compiler_identity: arguments::Identity,
     /// Print diagnostics as bcc's annotated snippets (the default), in

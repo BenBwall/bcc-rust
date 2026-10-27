@@ -172,26 +172,41 @@ strto 0.100000000000000000000000000000000005
         }
     }
 
-    /// Declarations shared by the two halves of the union ABI program.
+    /// Declarations shared by the two halves of the union ABI program. Clang
+    /// deviates from the psABI for the unions marked below (see
+    /// `middle-end.md`), so its halves are built with `CLANG_PAIR` and skip
+    /// them.
     const UNION_SHAPES: &str = r"typedef __float128 Q;
+/* Clang deviates from the psABI for these. */
 union A { Q q; double d[2]; };
 union B { Q q; float f[4]; };
 union C { Q q; struct { double a; long b; } s; };
 union D { Q q; _Complex double z; };
+struct F { union A u; };
+/* Clang follows the psABI for these. */
 union E { Q q; long l; };
 union G { Q q; double d; };
-struct F { union A u; };
+union H { Q q; long l[2]; };
+union I { Q q; struct { long a; double b; } s; };
+struct S { Q q; };
 union A fa(union A x, double y);
 union B fb(union B x);
 union C fc(union C x);
 union D fd(union D x);
-union E fe(union E x);
-union G fg(union G x);
 struct F ff(struct F x);
 union A full(long a, long b, long c, long d, long e, long f, union A x, union A y);
+union A sse_full(double a, double b, double c, double d, double e, double f, double g, union A x);
 union A vsum(int count, ...);
 union A gp_tail(long a, long b, long c, long d, long e, long f, ...);
 union A sse_tail(double a, double b, double c, double d, double e, double f, double g, ...);
+union A old_style();
+union E fe(union E x);
+union G fg(union G x);
+union H fh(union H x);
+union I fi(union I x);
+struct S fs(struct S x, Q y);
+Q fq(Q x, double y, Q z);
+union E e_full(long a, long b, long c, long d, long e, long f, union E x, union E y);
 ";
 
     /// Callees that change and return each union or structure shape.
@@ -200,11 +215,11 @@ union A fa(union A x, double y) { x.q = x.q * 2 + y; return x; }
 union B fb(union B x) { x.q += 1; return x; }
 union C fc(union C x) { x.q -= 3; return x; }
 union D fd(union D x) { x.q *= 5; return x; }
-union E fe(union E x) { x.q /= 2; return x; }
-union G fg(union G x) { x.q += 0.5Q; return x; }
 struct F ff(struct F x) { x.u.q += 7; return x; }
 union A full(long a, long b, long c, long d, long e, long f, union A x, union A y) {
     x.q += y.q + a + b + c + d + e + f; return x; }
+union A sse_full(double a, double b, double c, double d, double e, double f, double g, union A x) {
+    x.q += a + b + c + d + e + f + g; return x; }
 union A vsum(int count, ...) {
     va_list list; union A total = {0}; va_start(list, count);
     for (int i = 0; i < count; i++) total.q += va_arg(list, union A).q;
@@ -217,42 +232,58 @@ union A sse_tail(double a, double b, double c, double d, double e, double f, dou
     va_list list; va_start(list, g); union A x = va_arg(list, union A);
     x.q += va_arg(list, union A).q + va_arg(list, long) + a + b + c + d + e + f + g;
     va_end(list); return x; }
+union A old_style(x, y) union A x; double y; { x.q -= y; return x; }
+union E fe(union E x) { x.q /= 2; return x; }
+union G fg(union G x) { x.q += 0.5Q; return x; }
+union H fh(union H x) { x.q -= 0.5Q; return x; }
+union I fi(union I x) { x.q *= 3; return x; }
+struct S fs(struct S x, Q y) { x.q += y; return x; }
+Q fq(Q x, double y, Q z) { return x * z + y; }
+union E e_full(long a, long b, long c, long d, long e, long f, union E x, union E y) {
+    x.q += y.q + a + b + c + d + e + f; return x; }
 ";
 
     /// A caller that checks each result; it exits with the failing check.
     const UNION_CALLER: &str = r"int main(void) {
-    union A a = {1.5Q}; union B b = {2.5Q}; union C c = {3.5Q}; union D d = {4.5Q};
-    union E e = {5.5Q}; union G g = {6.5Q}; struct F f = {{7.5Q}};
+    union A a = {1.5Q}; union E e = {5.5Q}; union G g = {6.5Q}; union H h = {7.5Q};
+    union I i = {8.5Q}; struct S s = {9.5Q};
+#ifndef CLANG_PAIR
+    union B b = {2.5Q}; union C c = {3.5Q}; union D d = {4.5Q}; struct F f = {{7.5Q}};
     if (fa(a, 0.25).q != 3.25Q) return 1;
     if (fb(b).q != 3.5Q) return 2;
     if (fc(c).q != 0.5Q) return 3;
     if (fd(d).q != 22.5Q) return 4;
-    if (fe(e).q != 2.75Q) return 5;
-    if (fg(g).q != 7.0Q) return 6;
-    if (ff(f).u.q != 14.5Q) return 7;
-    if (full(1, 2, 3, 4, 5, 6, a, a).q != 24.0Q) return 8;
-#ifndef NO_VARARGS
-    if (vsum(3, a, a, a).q != 4.5Q) return 9;
-    if (gp_tail(1, 2, 3, 4, 5, 6, a, a, 7L).q != 31.0Q) return 10;
-    if (sse_tail(1, 2, 3, 4, 5, 6, 7, a, a, 8L).q != 39.0Q) return 11;
+    if (ff(f).u.q != 14.5Q) return 5;
+    if (full(1, 2, 3, 4, 5, 6, a, a).q != 24.0Q) return 6;
+    if (sse_full(1, 2, 3, 4, 5, 6, 7, a).q != 29.5Q) return 7;
+    if (vsum(3, a, a, a).q != 4.5Q) return 8;
+    if (gp_tail(1, 2, 3, 4, 5, 6, a, a, 7L).q != 31.0Q) return 9;
+    if (sse_tail(1, 2, 3, 4, 5, 6, 7, a, a, 8L).q != 39.0Q) return 10;
+    if (old_style(a, 0.5).q != 1.0Q) return 11;
 #endif
+    if (fe(e).q != 2.75Q) return 12;
+    if (fg(g).q != 7.0Q) return 13;
+    if (fh(h).q != 7.0Q) return 14;
+    if (fi(i).q != 25.5Q) return 15;
+    if (fs(s, 0.5Q).q != 10.0Q) return 16;
+    if (fq(1.5Q, 0.25, 2.0Q) != 3.25Q) return 17;
+    if (e_full(1, 2, 3, 4, 5, 6, e, e).q != 32.0Q) return 18;
     return 0;
 }
 ";
 
-    /// Unions that mix a `__float128` with other members link with the
-    /// compiler bcc claims to be, whose classification of them differs:
-    /// with the default (Clang) identity a callee or caller built by bcc
-    /// links with one built by the bundled Clang, and with the GCC identity
-    /// with one built by GCC, on both back ends and in both directions,
-    /// including an argument after the general registers run out, where
-    /// Clang passes a split union's low part on the stack and its high part
-    /// in a register. Through `...` such a union travels as the psABI says
-    /// in every identity, which Clang does not do (and its own `va_arg`
-    /// matches no caller), so the Clang pairs pass none; the variadic calls
-    /// run between bcc's halves, with GCC's, and in the interpreter.
+    /// Unions and structures that mix a `__float128` with other members
+    /// travel as the psABI says, as GCC passes them, under either compiler
+    /// identity: as named arguments and results, after the general or
+    /// vector registers run out, through `...` and to an old-style
+    /// definition, a callee or caller built by bcc links with one built by
+    /// GCC on both back ends in both directions, and bcc's halves link with
+    /// each other. Clang deviates from the psABI for a union of a
+    /// `__float128` and doubles, so its halves skip those (`CLANG_PAIR`) and
+    /// check the shapes it passes as the psABI says. The interpreter runs
+    /// the whole program.
     #[test]
-    fn binary128_unions_link_with_the_claimed_compiler() {
+    fn binary128_unions_follow_the_psabi_and_link_with_gcc() {
         if !cfg!(all(
             target_arch = "x86_64",
             target_os = "linux",
@@ -274,7 +305,7 @@ union A sse_tail(double a, double b, double c, double d, double e, double f, dou
         let compile = |program: &str, args: &[&str], output: &str| {
             let built = Command::new(program)
                 .args(args)
-                .args(["-c", "-o", output])
+                .args(["-std=gnu17", "-c", "-o", output])
                 .output()
                 .unwrap();
             assert!(
@@ -298,7 +329,7 @@ union A sse_tail(double a, double b, double c, double d, double e, double f, dou
         let bcc_binary = env!("CARGO_BIN_EXE_bcc-rust");
         let clang = "target/llvm/bin/clang";
         compile(clang, &[&definitions], &object("clang-callee.o"));
-        compile(clang, &[&checks, "-DNO_VARARGS"], &object("clang-caller.o"));
+        compile(clang, &[&checks, "-DCLANG_PAIR"], &object("clang-caller.o"));
         let gcc = Command::new("gcc")
             .arg("--version")
             .output()
@@ -308,59 +339,52 @@ union A sse_tail(double a, double b, double c, double d, double e, double f, dou
             compile("gcc", &[&checks], &object("gcc-caller.o"));
         }
         for backend in ["--backend=llvm", "--backend=native"] {
-            let bcc = |identity: &str, source: &str, extra: &[&str], output: &str| {
-                let mut args = vec![backend, identity, source];
-                args.extend_from_slice(extra);
-                compile(bcc_binary, &args, output);
-            };
-            let identity = "--compiler-identity=clang";
-            bcc(identity, &definitions, &[], &object("bcc-callee.o"));
-            bcc(
-                identity,
-                &checks,
-                &["-DNO_VARARGS"],
-                &object("bcc-caller.o"),
-            );
-            bcc(identity, &checks, &[], &object("bcc-full-caller.o"));
-            assert_eq!(
-                run(&object("bcc-callee.o"), &object("bcc-full-caller.o")),
-                Some(0),
-                "{backend}"
-            );
-            assert_eq!(
-                run(&object("clang-callee.o"), &object("bcc-caller.o")),
-                Some(0),
-                "{backend}"
-            );
-            assert_eq!(
-                run(&object("bcc-callee.o"), &object("clang-caller.o")),
-                Some(0),
-                "{backend}"
-            );
-            if gcc {
-                let identity = "--compiler-identity=gcc";
-                bcc(identity, &definitions, &[], &object("bccg-callee.o"));
-                bcc(identity, &checks, &[], &object("bccg-caller.o"));
-                assert_eq!(
-                    run(&object("gcc-callee.o"), &object("bccg-caller.o")),
-                    Some(0),
-                    "{backend}"
-                );
-                assert_eq!(
-                    run(&object("bccg-callee.o"), &object("gcc-caller.o")),
-                    Some(0),
-                    "{backend}"
-                );
+            for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+                let context = format!("{backend} {identity}");
+                let bcc = |source: &str, extra: &[&str], output: &str| {
+                    let mut args = vec![backend, identity, source];
+                    args.extend_from_slice(extra);
+                    compile(bcc_binary, &args, output);
+                };
+                bcc(&definitions, &[], &object("bcc-callee.o"));
+                bcc(&checks, &[], &object("bcc-caller.o"));
+                bcc(&checks, &["-DCLANG_PAIR"], &object("bcc-clang-caller.o"));
+                let pairs = [
+                    ("bcc-callee.o", "bcc-caller.o"),
+                    ("clang-callee.o", "bcc-clang-caller.o"),
+                    ("bcc-callee.o", "clang-caller.o"),
+                ];
+                for (callee, caller) in pairs {
+                    assert_eq!(
+                        run(&object(callee), &object(caller)),
+                        Some(0),
+                        "{context} {callee} {caller}"
+                    );
+                }
+                if gcc {
+                    for (callee, caller) in [
+                        ("gcc-callee.o", "bcc-caller.o"),
+                        ("bcc-callee.o", "gcc-caller.o"),
+                    ] {
+                        assert_eq!(
+                            run(&object(callee), &object(caller)),
+                            Some(0),
+                            "{context} {callee} {caller}"
+                        );
+                    }
+                }
             }
         }
         for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
-            let output = bcc(&[identity, "--interpret", &whole]);
-            assert_eq!(
-                output.status.code(),
-                Some(0),
-                "{identity}: {}",
-                text(&output.stderr)
-            );
+            for optimize in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(&[identity, optimize, "--interpret", &whole]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{identity}: {}",
+                    text(&output.stderr)
+                );
+            }
         }
         std::fs::remove_dir_all(directory).unwrap();
     }

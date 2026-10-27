@@ -1,11 +1,12 @@
 /* Variadic arguments around unions that mix a __float128 with doubles,
-   which Clang passes in a general and a vector register as named
-   arguments. Through `...` bcc passes and reads them as the psABI (and GCC)
-   does in every compiler identity, so a variadic callee reads every later
-   argument where its caller put it. take(id, ...) reads gp longs, fp
+   which bcc passes and reads as the psABI (and GCC) does, as two doubles in
+   vector registers or wholly on the stack, so a variadic callee reads every
+   later argument where its caller put it. take(id, ...) reads gp longs, fp
    doubles and n unions (id = gp * 1000 + fp * 10 + n), then a long, a
-   double, a long double and structures of each register class. Define
-   CALLEE_ONLY or CALLER_ONLY to build one half. */
+   double, a long double and structures of each register class. named()
+   takes a union as a named parameter before the variadic ones, called
+   directly and through a pointer. Define CALLEE_ONLY or CALLER_ONLY to
+   build one half. */
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -28,6 +29,7 @@ struct Q {
 };
 
 int take(int id, ...);
+int named(union U first, int count, ...);
 
 #ifndef CALLER_ONLY
 int take(int id, ...) {
@@ -80,6 +82,23 @@ int take(int id, ...) {
     }
     va_end(list);
     return 0;
+}
+
+int named(union U first, int count, ...) {
+    if (first.q != 1.5Q) {
+        return 1;
+    }
+    va_list list;
+    va_start(list, count);
+    for (int i = 0; i < count; i++) {
+        if (va_arg(list, double) != i + 1.0) {
+            return 2;
+        }
+    }
+    union U u = va_arg(list, union U);
+    struct D d = va_arg(list, struct D);
+    va_end(list);
+    return u.q != 2.5Q || d.d[0] != 906.25 || d.d[1] != 907.25 ? 3 : 0;
 }
 #endif
 
@@ -206,6 +225,18 @@ int main(void) {
        of two doubles; and after four longs, then a mixed structure. */
     CHECK(51, 200.25, 201.25, 202.25, 203.25, 204.25, u[0], TAIL)
     CHECK(4001, 100L, 101L, 102L, 103L, u[0], TAIL)
+    union U first = {1.5Q}, second = {2.5Q};
+    int (*pointer)(union U, int, ...) = named;
+    for (int count = 4; count <= 7; count++) {
+        result = count == 4   ? named(first, count, 1.0, 2.0, 3.0, 4.0, second, d)
+                 : count == 5 ? pointer(first, count, 1.0, 2.0, 3.0, 4.0, 5.0, second, d)
+                 : count == 6 ? named(first, count, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, second, d)
+                              : pointer(first, count, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, second, d);
+        if (result != 0) {
+            printf("named(%d) failed check %d\n", count, result);
+            failures++;
+        }
+    }
     printf("%d failures\n", failures);
     return failures != 0;
 }
