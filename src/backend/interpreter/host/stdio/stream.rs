@@ -1,17 +1,20 @@
-//! One stream as glibc's libio keeps it for reading. Its buffer has the size
-//! glibc picks (the file's `st_blksize` when that is below `BUFSIZ`, which
-//! makes 4096 for most files and 1024 for a Linux terminal) and is refilled
-//! by one `read` when the program has taken what it holds; a request at
-//! least as large as the buffer reads straight into the program's array
-//! instead. `ungetc` steps back over the byte just read when it is that
-//! byte, and otherwise pushes into a separate pushback area that a seek
-//! discards. The cached file offset decides how a seek refills the buffer.
+//! One stream as glibc's libio keeps it. Its buffer has the size glibc
+//! picks (the file's `st_blksize` when that is below `BUFSIZ`, which makes
+//! 4096 for most files and 1024 for a Linux terminal). Reading refills it by
+//! one `read` when the program has taken what it holds; a request at least
+//! as large as the buffer reads straight into the program's array instead.
+//! `ungetc` steps back over the byte just read when it is that byte, and
+//! otherwise pushes into a separate pushback area that a seek discards. The
+//! cached file offset decides how a seek refills the buffer. Writing fills
+//! the buffer, which glibc writes out when it is full, at `fflush`, before a
+//! seek or a read, at `fclose`, at the program's normal end, and after each
+//! newline on a terminal.
 //!
 //! Each function follows its libio counterpart in glibc 2.43, named in its
 //! documentation (`libio/fileops.c`, `libio/genops.c`, `libio/ioseekoff.c`
 //! and `libio/ioftell.c`). glibc 2.39 agrees except where [`Stream::sync`]
-//! says otherwise. Writes are not buffered: each reaches the file at once,
-//! where glibc writes when it flushes.
+//! says otherwise. Captured standard output and error are not streams of
+//! this kind: the host's console orders them.
 
 use std::{
     fs::File,
@@ -21,6 +24,7 @@ use std::{
         Read as _,
         Seek as _,
         SeekFrom,
+        Write as _,
     },
 };
 
@@ -92,12 +96,15 @@ pub(super) struct Stream<'a> {
     /// the pushback area alone.
     pub(super) oriented:  bool,
     /// glibc's put area while the stream writes (`_IO_CURRENTLY_PUTTING`):
-    /// where in the buffer its unflushed bytes start, and how many there
-    /// are. Writes reach the file at once; the host keeps this to choose
-    /// the refill glibc's next seek makes.
+    /// where in the buffer the bytes it holds start, and those bytes, which
+    /// reach the file only when glibc writes them out.
     putting:              bool,
     write_base:           usize,
-    queued:               usize,
+    pending:              ArenaVec<'a, u8>,
+    /// When the stream was opened, which orders `fflush(NULL)` and the
+    /// flush at exit: glibc's `_IO_list_all` puts each stream it opens
+    /// first.
+    pub(super) opened:    u64,
 }
 
 /// Where a stream's bytes go or come from.
@@ -136,7 +143,9 @@ impl Stream<'_> {
     /// The next byte, or `None` at end of file or on an error, which set
     /// the indicator (`__uflow` and `_IO_default_uflow`).
     pub(super) fn read(&mut self, stdout: &mut Release<'_, '_>) -> Option<u8> {
-        self.end_write();
+        if !self.end_write() {
+            return None;
+        }
         if self.in_backup {
             if let Some(byte) = self.backup.pop() {
                 return Some(byte);
@@ -210,7 +219,9 @@ impl Stream<'_> {
         stdout: &mut Release<'_, '_>,
         mut store: impl FnMut(&[u8]) -> Result<(), E>,
     ) -> Result<usize, E> {
-        self.end_write();
+        if !self.end_write() {
+            return Ok(0);
+        }
         self.allocate();
         let mut want = wanted;
         while want > 0 {
@@ -312,8 +323,11 @@ impl Stream<'_> {
         }
         // POSIX: after an `fflush` the descriptor's offset must be exact, so
         // nothing read ahead and nothing waiting to be written.
-        let must_be_exact = !self.in_backup && self.base == self.bytes.len() && self.queued == 0;
-        self.end_write();
+        let must_be_exact =
+            !self.in_backup && self.base == self.bytes.len() && self.pending.is_empty();
+        if !self.end_write() {
+            return false;
+        }
         if self.size == 0 {
             self.drop_backup();
         }
@@ -416,6 +430,20 @@ impl Stream<'_> {
     /// pushback area.
     /// C99: §7.19.9.4 paragraph 2, p. 304; PDF p. 316.
     pub(super) fn tell(&mut self) -> Option<i64> {
+        if !self.pending.is_empty() {
+            // The bytes glibc holds count after the descriptor's offset; an
+            // appending stream's go at the file's end.
+            let at = if self.appending {
+                let at = self.descriptor_seek(SeekFrom::End(0)).ok()?;
+                self.offset = i64::try_from(at).ok();
+                at
+            } else {
+                self.descriptor_seek(SeekFrom::Current(0)).ok()?
+            };
+            return i64::try_from(at)
+                .ok()
+                .map(|at| at + to_offset(self.pending.len()));
+        }
         let at = i64::try_from(self.descriptor_seek(SeekFrom::Current(0)).ok()?).ok()?;
         if self.size == 0 {
             return Some(at);
@@ -447,7 +475,9 @@ impl Stream<'_> {
     /// glibc 2.43 drops the pushback area too and seeks back over its bytes;
     /// 2.39 seeks back over the pushback area alone and keeps the buffer.
     pub(super) fn sync(&mut self) -> bool {
-        self.flush_writes();
+        if !self.write_out() {
+            return false;
+        }
         let ahead = if self.in_backup {
             self.backup.len() + self.bytes.len() - self.base
         } else {
@@ -475,27 +505,129 @@ impl Stream<'_> {
         }
     }
 
-    /// Writes out what glibc holds for the stream, as `fflush(NULL)` does
-    /// for every stream.
-    pub(super) fn flush_writes(&mut self) {
-        if self.queued > 0 {
-            (self.write_base, self.queued) = (0, 0);
+    /// Writes out the bytes glibc holds (`_IO_do_write`), whether or not
+    /// they all reach the file: the buffer is empty afterwards either way,
+    /// and a failed write sets the error indicator. Whether it worked.
+    pub(super) fn write_out(&mut self) -> bool {
+        if self.pending.is_empty() {
+            return true;
         }
+        let (written, complete) = write_file(&mut self.target, &self.pending);
+        self.pending.clear();
+        self.write_base = 0;
+        self.wrote(written, complete)
     }
 
-    /// Readies the stream for a write of some bytes: `None` when it may not
-    /// write, else whether it was already writing. Writing starts where
-    /// reading stopped, so the descriptor seeks back over what was read
-    /// ahead (`_IO_new_file_overflow` and `new_do_write`). C99 §7.19.5.3p6
-    /// asks for a seek between reading and writing.
-    pub(super) fn start_write(&mut self) -> Option<bool> {
+    /// Accounts for a write straight to the file (`new_do_write` and
+    /// `_IO_new_file_write`) that took `written` bytes and may not have
+    /// been `complete`: an appending stream no longer knows its offset,
+    /// another moves it past what reached the file, and a short write sets
+    /// the error indicator. Whether it was complete.
+    fn wrote(&mut self, written: usize, complete: bool) -> bool {
+        self.offset = if self.appending {
+            None
+        } else {
+            self.offset.map(|offset| offset + to_offset(written))
+        };
+        self.error |= !complete;
+        complete
+    }
+
+    /// Writes one byte as `fputc` does (`_IO_new_file_overflow`), saying
+    /// whether it could: into the buffer, writing it out first when it is
+    /// full, and after a newline on a line-buffered stream.
+    pub(super) fn put_char(&mut self, byte: u8) -> bool {
+        self.oriented = true;
+        if !self.start_write() {
+            return false;
+        }
+        if self.room() == 0 && !self.write_out() {
+            return false;
+        }
+        self.pending.push(byte);
+        !(self.line_buffered && byte == b'\n') || self.write_out()
+    }
+
+    /// Writes what the `printf` family formatted, as glibc's
+    /// `__printf_buffer_to_file` does: byte by byte into the buffer, like
+    /// `fputc`. A stream that may not write fails even with nothing to
+    /// write. Whether all of it was written.
+    pub(super) fn put_formatted(&mut self, bytes: &[u8]) -> bool {
+        self.oriented = true;
         if !self.writable {
             self.error = true;
-            return None;
+            return false;
         }
+        bytes.iter().all(|&byte| self.put_char(byte))
+    }
+
+    /// Writes `bytes` as `fputs` and `fwrite` do (`_IO_new_file_xsputn`),
+    /// returning how many it took: what fits fills the buffer if the stream
+    /// was already writing; otherwise the buffer is written out, whole
+    /// buffers' worth go to the file directly, and the rest fills the
+    /// buffer. Nothing to write is no write at all.
+    pub(super) fn put_block(&mut self, bytes: &[u8]) -> usize {
         self.oriented = true;
+        if bytes.is_empty() {
+            return 0;
+        }
+        let writing = self.putting;
+        if !self.start_write() {
+            return 0;
+        }
+        if self.line_buffered {
+            return bytes
+                .iter()
+                .take_while(|&&byte| self.put_char(byte))
+                .count();
+        }
+        let mut taken = 0;
+        if writing {
+            taken = bytes.len().min(self.room());
+            self.pending.extend_from_slice(&bytes[..taken]);
+        }
+        if taken < bytes.len() {
+            if !self.write_out() {
+                return taken;
+            }
+            let rest = bytes.len() - taken;
+            let blocks = if self.size >= 128 {
+                rest - rest % self.size
+            } else {
+                rest
+            };
+            if blocks > 0 {
+                let (written, complete) =
+                    write_file(&mut self.target, &bytes[taken..taken + blocks]);
+                self.write_base = 0;
+                taken += written;
+                if !self.wrote(written, complete) {
+                    return taken;
+                }
+            }
+            while taken < bytes.len() && self.put_char(bytes[taken]) {
+                taken += 1;
+            }
+        }
+        taken
+    }
+
+    /// How many more bytes the buffer can hold before glibc writes it out.
+    fn room(&self) -> usize {
+        self.size - self.write_base - self.pending.len()
+    }
+
+    /// Readies the stream to write, saying whether it may. Writing starts
+    /// where reading stopped, so the descriptor seeks back over what was
+    /// read ahead (`_IO_new_file_overflow` and `new_do_write`). C99
+    /// §7.19.5.3p6 asks for a seek between reading and writing.
+    fn start_write(&mut self) -> bool {
+        if !self.writable {
+            self.error = true;
+            return false;
+        }
         if self.putting {
-            return Some(true);
+            return true;
         }
         self.allocate();
         // Pushed-back bytes are given up, and the write position moves back
@@ -521,74 +653,23 @@ impl Stream<'_> {
         self.drop_backup();
         (self.base, self.position) = (0, 0);
         self.bytes.clear();
-        (self.putting, self.write_base, self.queued) = (true, start, 0);
-        Some(false)
-    }
-
-    /// Accounts for `count` bytes written one at a time, as `fputc` and the
-    /// `printf` family write them: each fills the buffer, and one that finds
-    /// it full writes it out first. An appending stream no longer knows its
-    /// offset (glibc's `new_do_write`).
-    pub(super) fn wrote_bytes(&mut self, count: usize) {
-        self.put_bytes(count);
-        self.advance(count);
-    }
-
-    /// Accounts for `count` bytes written as a block, as `fputs` and
-    /// `fwrite` write them (`_IO_new_file_xsputn`): what fits fills the
-    /// buffer if the stream was `writing`; otherwise the buffer is written
-    /// out, whole buffers' worth go to the file directly, and the rest fills
-    /// the buffer.
-    pub(super) fn wrote_block(&mut self, count: usize, writing: bool) {
-        let mut rest = count;
-        if writing {
-            let fill = rest.min(self.size - self.write_base - self.queued);
-            self.queued += fill;
-            rest -= fill;
-        }
-        if rest > 0 {
-            self.flush_writes();
-            let blocks = if self.size >= 128 {
-                rest - rest % self.size
-            } else {
-                rest
-            };
-            if blocks > 0 {
-                (self.write_base, self.queued) = (0, 0);
-            }
-            self.put_bytes(rest - blocks);
-        }
-        self.advance(count);
-    }
-
-    /// Fills the buffer with `count` bytes, writing it out whenever it is
-    /// full and another byte comes.
-    fn put_bytes(&mut self, mut count: usize) {
-        while count > 0 {
-            if self.write_base + self.queued == self.size {
-                (self.write_base, self.queued) = (0, 0);
-            }
-            let fill = count.min(self.size - self.write_base - self.queued);
-            self.queued += fill;
-            count -= fill;
-        }
-    }
-
-    /// Moves the known offset past `count` bytes written.
-    fn advance(&mut self, count: usize) {
-        self.offset = if self.appending {
-            None
-        } else {
-            self.offset.map(|offset| offset + to_offset(count))
-        };
+        (self.putting, self.write_base) = (true, start);
+        self.pending.clear();
+        true
     }
 
     /// Leaves writing, as glibc does before it reads or seeks
-    /// (`_IO_switch_to_get_mode`): what it held is written out.
-    fn end_write(&mut self) {
+    /// (`_IO_switch_to_get_mode`): what it holds is written out first, and
+    /// a write that fails keeps the stream writing and fails the read or
+    /// seek.
+    fn end_write(&mut self) -> bool {
         if self.putting {
-            (self.putting, self.write_base, self.queued) = (false, 0, 0);
+            if !self.write_out() {
+                return false;
+            }
+            (self.putting, self.write_base) = (false, 0);
         }
+        true
     }
 
     /// Gives up the pushback area, back to reading the buffer
@@ -667,7 +748,8 @@ impl Stream<'_> {
         self.drop_backup();
         self.offset = None;
         self.oriented = false;
-        (self.putting, self.write_base, self.queued) = (false, 0, 0);
+        (self.putting, self.write_base) = (false, 0);
+        self.pending.clear();
     }
 }
 
@@ -694,7 +776,8 @@ impl<'a> Stream<'a> {
             oriented:      false,
             putting:       false,
             write_base:    0,
-            queued:        0,
+            pending:       ArenaVec::new_in(arena),
+            opened:        0,
         }
     }
 }
@@ -751,6 +834,22 @@ pub(super) enum Whence {
     Start,
     Current,
     End,
+}
+
+/// Writes `bytes` to `target`'s file: how many reached it, and whether all
+/// did.
+fn write_file(target: &mut Target, bytes: &[u8]) -> (usize, bool) {
+    let Target::File(file) = target else {
+        return (0, false);
+    };
+    let mut written = 0;
+    while written < bytes.len() {
+        match file.write(&bytes[written..]) {
+            | Ok(0) | Err(_) => return (written, false),
+            | Ok(count) => written += count,
+        }
+    }
+    (written, true)
 }
 
 /// A byte count as a file offset.

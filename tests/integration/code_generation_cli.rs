@@ -556,6 +556,54 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
         interpreter_matches_glibc("host_library.c", &["--interpret-allow-fs"]);
     }
 
+    /// `tests/fixtures/programs/stdio_writes.c` checks when writes reach a
+    /// file (held in the stream's buffer until it fills, `fflush`,
+    /// `fflush(NULL)` in glibc's stream order, `fclose`, a seek or a read),
+    /// how a failing write surfaces, `ftell` with bytes held, and the
+    /// orientation writes and `fgets` give: the interpreter must write what
+    /// the program built against glibc writes.
+    #[test]
+    fn stdio_writes_match_glibc() {
+        interpreter_matches_glibc("stdio_writes.c", &["--interpret-allow-fs"]);
+    }
+
+    /// At a normal end, after `main` returns or the program calls `exit`,
+    /// glibc writes out what every stream holds, the most recently opened
+    /// first; `abort` writes out nothing. The expected file contents are
+    /// what glibc programs leave.
+    #[test]
+    fn interpreter_writes_out_streams_at_exit_in_glibc_order() {
+        let path = temporary("exit-order.txt");
+        let path_text = path.to_str().unwrap().replace('\\', "/");
+        for (ending, expected) in [
+            ("return 0;", "Abcdef"),
+            ("exit(0);", "Abcdef"),
+            ("abort();", "abcdef"),
+        ] {
+            std::fs::write(&path, "abcdef").unwrap();
+            let source = format!(
+                "typedef struct _IO_FILE FILE; FILE *fopen(const char *, const char *);
+int fputc(int, FILE *); void exit(int); void abort(void);
+int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
+  FILE *second = fopen(\"{path_text}\", \"r+\"); fputc('A', first); fputc('B', second);
+  {ending} }}
+"
+            );
+            let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+            assert!(
+                matches!(output.status.code(), Some(0 | 134)),
+                "{ending}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                expected,
+                "{ending}"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// `tests/fixtures/programs/scanf_cases.c` runs the `sscanf` edge cases
     /// that glibc 2.39 to 2.43 agree on: matching and input failures,
     /// suppression, widths, scansets, white space and every form of floating

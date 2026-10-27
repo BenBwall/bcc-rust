@@ -125,6 +125,7 @@ pub(crate) use value::{
 
 use crate::{
     ir::{
+        FuncId,
         Module,
         Type,
     },
@@ -184,7 +185,7 @@ pub(crate) fn run_main_with_limits(
         let outcome = machine.run(host)?;
         match outcome.termination {
             | Termination::Returned(_) => {},
-            | Termination::Exited(_) => return machine.finish(&destructors, outcome, host),
+            | Termination::Exited(_) => return exit(&mut machine, &destructors, outcome, host),
             | Termination::Aborted => return Ok(outcome),
         }
     }
@@ -193,7 +194,20 @@ pub(crate) fn run_main_with_limits(
     if outcome.termination == Termination::Aborted {
         return Ok(outcome);
     }
-    machine.finish(&destructors, outcome, host)
+    exit(&mut machine, &destructors, outcome, host)
+}
+
+/// Ends a program that returned from `main` or called `exit`: the
+/// destructors run, and then the host ends it normally.
+fn exit(
+    machine: &mut Machine<'_, '_, '_>,
+    destructors: &[FuncId],
+    outcome: Outcome,
+    host: &mut dyn Host,
+) -> Result<Outcome, Trap> {
+    let outcome = machine.finish(destructors, outcome, host)?;
+    host.at_exit();
+    Ok(outcome)
 }
 
 /// Runs `entry` of `module` with `args`, stopping at `limits`.
