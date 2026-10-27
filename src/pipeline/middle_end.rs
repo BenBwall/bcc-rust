@@ -180,7 +180,7 @@ fn lower_diagnosed<'tu, 'ir>(
         resolve_inline_copies(&mut module, &scratch);
     }
     scratch.reset();
-    resolve_object_sizes(&mut module, &scratch);
+    resolve_object_sizes(&mut module, context.configuration.hosted(), &scratch);
     scratch.reset();
     let retained_diagnostics =
         crate::lowering::retained_call_diagnostics(&module, call_diagnostics, arena, &scratch);

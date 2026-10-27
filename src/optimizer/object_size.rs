@@ -10,7 +10,13 @@
 //! Lowering also passes each pointer argument of an `always_inline` call
 //! through a `subobject` that records the closest surrounding subobject the
 //! argument names, which the IR's addresses do not record and modes 1 and 3
-//! need.
+//! need. The hint closest to a query decides: an argument that is the
+//! caller's own parameter offset by pointer arithmetic gets none, so its
+//! caller's hint still answers, and any other argument whose subobject
+//! semantic analysis cannot size gets one saying it is unknown, so that no
+//! hint from further out answers across a member access that narrowed it.
+//! A mode 1 or 3 query of anything but such a parameter is answered as
+//! unknown in lowering.
 //!
 //! [`resolve_object_sizes`] runs after the always-inline expansion, for
 //! every back end and at every optimization level. It walks each query's
@@ -72,6 +78,11 @@ use crate::{
     },
 };
 
+/// The size a `subobject` hint gives when the closest subobject is not
+/// known: the hints further out, which a member access may have narrowed,
+/// no longer answer for the pointer.
+const UNKNOWN_SUBOBJECT: u64 = u64::MAX;
+
 /// How many values one query's walk visits before it gives up and answers
 /// as for an unknown object; loops reach it through their block parameters.
 const WALK_LIMIT: usize = 64;
@@ -87,7 +98,7 @@ const WALK_LIMIT: usize = 64;
 /// the next round (a wrapper may offset its pointer by another query's
 /// answer). The queries left are answered with runtime arithmetic when
 /// dynamic, else as for an unknown object.
-pub(crate) fn resolve_object_sizes(module: &mut Module<'_>, scratch: &Bump) {
+pub(crate) fn resolve_object_sizes(module: &mut Module<'_>, library: bool, scratch: &Bump) {
     if !module
         .functions()
         .any(|(_, function)| function.body.as_ref().is_some_and(has_size_facts))
@@ -103,7 +114,7 @@ pub(crate) fn resolve_object_sizes(module: &mut Module<'_>, scratch: &Bump) {
     );
     let mut function_scratch = Bump::new();
     for &func in &*functions {
-        resolve_function(module, func, &function_scratch);
+        resolve_function(module, func, library, &function_scratch);
         function_scratch.reset();
     }
 }
@@ -132,21 +143,22 @@ pub(super) fn has_queries(body: &Body<'_>) -> bool {
 /// Answers the queries of one function, drops its hints, and folds what
 /// the answers decide. These rewrites are not counted against
 /// `--opt-bisect-limit`, as the answers are part of the program's meaning.
-fn resolve_function(module: &mut Module<'_>, func: FuncId, scratch: &Bump) {
+fn resolve_function(module: &mut Module<'_>, func: FuncId, library: bool, scratch: &Bump) {
     let Some(body) = module.function_mut(func).body.take() else {
         return;
     };
     let signature = module.function_signature(func);
     let mut draft = Draft::lift(&body, scratch);
     let mut report = OptimizationReport::new(None);
+    let objects = Objects { module, library };
     for _ in 0..MAX_ROUNDS {
-        if !answer_queries(&mut draft, module, false)
+        if !answer_queries(&mut draft, objects, false)
             || !fold::run(&mut draft, signature, &mut report)
         {
             break;
         }
     }
-    _ = answer_queries(&mut draft, module, true);
+    _ = answer_queries(&mut draft, objects, true);
     remove_subobjects(&mut draft);
     for _ in 0..MAX_ROUNDS {
         let round = fold::run(&mut draft, signature, &mut report)
@@ -162,7 +174,7 @@ fn resolve_function(module: &mut Module<'_>, func: FuncId, scratch: &Bump) {
 
 /// Answers the queries [`walk`] can answer with a constant; with `last`,
 /// every other query too. Returns whether it answered any.
-fn answer_queries(draft: &mut Draft<'_, '_>, module: &Module<'_>, last: bool) -> bool {
+fn answer_queries(draft: &mut Draft<'_, '_>, objects: Objects<'_, '_>, last: bool) -> bool {
     let mut queries = ArenaVec::new_in(draft.scratch);
     for block in draft.alive_blocks() {
         for &inst in &draft.block(block).insts {
@@ -176,11 +188,11 @@ fn answer_queries(draft: &mut Draft<'_, '_>, module: &Module<'_>, last: bool) ->
     }
     let mut answered = false;
     for (block, inst, ty, query, ptr) in queries {
-        let answer = match walk(draft, module, ptr, query) {
+        let answer = match walk(draft, objects, ptr, query) {
             | Walk::Known(bytes) => u128::from(bytes),
             | _ if !last => continue,
             | Walk::Variable { branched: false } if query.dynamic() && ty == Type::I64 => {
-                if let Some(plan) = runtime_plan(draft, module, ptr, query) {
+                if let Some(plan) = runtime_plan(draft, objects, ptr, query) {
                     emit_runtime(draft, block, inst, query, &plan);
                     answered = true;
                     continue;
@@ -228,7 +240,12 @@ struct Path {
 /// 1, the fewest for 2 and 3, as GCC combines the arms of a conditional.
 /// An explicit stack replaces recursion through `select` operands and the
 /// arguments block parameters receive.
-fn walk(draft: &Draft<'_, '_>, module: &Module<'_>, ptr: Value, query: ObjectSizeQuery) -> Walk {
+fn walk(
+    draft: &Draft<'_, '_>,
+    objects: Objects<'_, '_>,
+    ptr: Value,
+    query: ObjectSizeQuery,
+) -> Walk {
     let mut stack = ArenaVec::new_in(draft.scratch);
     stack.push(Path {
         value:     ptr,
@@ -319,7 +336,7 @@ fn walk(draft: &Draft<'_, '_>, module: &Module<'_>, ptr: Value, query: ObjectSiz
                     stack.push(Path { value: no, ..path });
                     continue;
                 },
-                | _ => allocation(draft, module, inst),
+                | _ => allocation(draft, objects, inst),
             },
         };
         let bytes = match object {
@@ -363,11 +380,13 @@ fn left(query: ObjectSizeQuery, size: u64, path: Path) -> Option<u64> {
 }
 
 /// The bytes left in the closest subobject a hint on the path named, for
-/// modes 1 and 3. A pointer before the subobject leaves none of it (mode
-/// 3); mode 1 then asks about the enclosing object, which is not known.
+/// modes 1 and 3; the hint closest to the query names it, and one that
+/// names none leaves the subobject unknown. A pointer before the subobject
+/// leaves none of it (mode 3); mode 1 then asks about the enclosing object,
+/// which is not known.
 fn subobject_left(query: ObjectSizeQuery, path: Path) -> Option<u64> {
     let (size, offset) = path.subobject.filter(|_| query.subobject())?;
-    if offset < 0 && !query.minimum() {
+    if size == UNKNOWN_SUBOBJECT || (offset < 0 && !query.minimum()) {
         return None;
     }
     Some(remaining(size, offset))
@@ -390,6 +409,16 @@ fn signed(constant: Constant) -> Option<i128> {
     }
 }
 
+/// What the walks read besides the function: the module's globals and
+/// declarations, and whether the C library's allocation functions have
+/// their library meaning, as in a hosted implementation; a freestanding
+/// one may define `malloc` as anything (C99 §5.1.2.1p1, p. 11; PDF p. 23).
+#[derive(Clone, Copy)]
+struct Objects<'m, 'ir> {
+    module:  &'m Module<'ir>,
+    library: bool,
+}
+
 /// What a pointer that is not derived from another one points to.
 enum Object {
     /// An object of this many bytes.
@@ -400,14 +429,16 @@ enum Object {
 }
 
 /// The object `inst` creates or names: a stack slot, a defined global no
-/// other unit can replace, a dynamic allocation, or the result of a call of
-/// the C library's allocation functions, which GCC knows as built-ins.
+/// other unit can replace, a dynamic allocation, or, in a hosted unit, the
+/// result of a call of the C library's allocation functions, which GCC
+/// knows as built-ins unless `-ffreestanding`.
 /// Their identifiers are reserved with external linkage, so a declaration
 /// of one names the library's function.
 /// C99: §7.20.3, pp. 313-314; PDF pp. 325-326 (`malloc`, `calloc`,
 /// `realloc`); §7.1.3p1, p. 166; PDF p. 178 (reserved identifiers).
 /// C11: §7.22.3.1, p. 347; PDF p. 365 (`aligned_alloc`).
-fn allocation(draft: &Draft<'_, '_>, module: &Module<'_>, inst: Inst) -> Object {
+fn allocation(draft: &Draft<'_, '_>, objects: Objects<'_, '_>, inst: Inst) -> Object {
+    let module = objects.module;
     let bytes = |size: Value| match draft.constant(size) {
         | Some(Constant::Int(_, bytes)) =>
             u64::try_from(bytes).map_or(Object::Unknown, Object::Bytes),
@@ -430,7 +461,8 @@ fn allocation(draft: &Draft<'_, '_>, module: &Module<'_>, inst: Inst) -> Object 
         | InstData::DynAlloca { size, .. } => bytes(size),
         | InstData::Call { func, args } => {
             let function = module.function(func);
-            if function.body.is_some() || function.linkage != Linkage::External {
+            if !objects.library || function.body.is_some() || function.linkage != Linkage::External
+            {
                 return Object::Unknown;
             }
             let args = draft.call_operands(inst, args);
@@ -474,7 +506,7 @@ enum Size {
 /// cannot be answered from what the path shows.
 fn runtime_plan<'s>(
     draft: &Draft<'_, 's>,
-    module: &Module<'_>,
+    objects: Objects<'_, '_>,
     ptr: Value,
     query: ObjectSizeQuery,
 ) -> Option<RuntimePlan<'s>> {
@@ -520,7 +552,7 @@ fn runtime_plan<'s>(
                 value = base;
             },
             | _ => {
-                plan.size = match allocation(draft, module, inst) {
+                plan.size = match allocation(draft, objects, inst) {
                     | Object::Bytes(bytes) => Some(Size::Bytes(bytes)),
                     | Object::Runtime(size) => Some(Size::Runtime(size)),
                     | Object::Unknown => None,
@@ -531,7 +563,8 @@ fn runtime_plan<'s>(
     }
     let i64_range = i128::from(i64::MIN)..=i128::from(i64::MAX);
     let usable = if query.subobject() {
-        plan.subobject.is_some()
+        plan.subobject
+            .is_some_and(|(size, ..)| size != UNKNOWN_SUBOBJECT)
     } else {
         plan.size.is_some()
     };

@@ -335,6 +335,63 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
+impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// The pointer parameter `expression` is computed from by pointer
+    /// arithmetic and casts alone, if it is: what the caller passed for it
+    /// then still designates the closest surrounding subobject
+    /// ([`super::SubobjectArgument::Through`]). A member access, subscript,
+    /// dereference or anything else may narrow it.
+    /// C99: §6.5.6p8, p. 83; PDF p. 95; §6.3.2.3p7, pp. 47-48; PDF pp. 59-60.
+    pub(super) fn pointer_parameter_base(&self, expression: &'tu Expression<'tu>) -> Option<usize> {
+        let mut node = expression;
+        loop {
+            node = self.selected_designator(node);
+            let info = self.expression_info(node);
+            if !matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(_)) {
+                return None;
+            }
+            node = match node.kind {
+                | ExpressionType::Identifier(_) => {
+                    let binding = info.binding?;
+                    return (self.bindings[binding].kind == super::BindingKind::Parameter)
+                        .then_some(binding);
+                },
+                | ExpressionType::Cast {
+                    operand_expression, ..
+                } => operand_expression,
+                | ExpressionType::Binary {
+                    operator: BinaryOperator::Addition,
+                    left_expression,
+                    right_expression,
+                } => {
+                    let left = self.expression_info(left_expression);
+                    if matches!(self.types.nodes[left.ty.index], TypeKind::Pointer(_)) {
+                        left_expression
+                    } else {
+                        right_expression
+                    }
+                },
+                | ExpressionType::Binary {
+                    operator: BinaryOperator::Subtraction,
+                    left_expression,
+                    ..
+                } => left_expression,
+                | _ => return None,
+            };
+        }
+    }
+
+    /// Records that an assignment, increment or decrement writes the
+    /// object `binding` names, if it is a parameter.
+    pub(super) fn note_parameter_write(&mut self, binding: Option<usize>) {
+        if let Some(binding) = binding
+            && self.bindings[binding].kind == super::BindingKind::Parameter
+        {
+            _ = self.function_extensions.written_parameters.insert(binding);
+        }
+    }
+}
+
 /// The bytes from a signed `offset` to the end of a `size`-byte object; a
 /// position before the object or past its end leaves none, as in Clang.
 fn remaining(size: u64, offset: i128) -> u64 {

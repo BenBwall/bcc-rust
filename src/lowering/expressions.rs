@@ -65,7 +65,7 @@ use crate::{
             Callee,
             ConversionKind,
             ExpressionInfo,
-            Inlining,
+            SubobjectArgument,
             TypeId,
             TypeKind,
         },
@@ -1776,6 +1776,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// analysis found it (`FunctionExtensions::subobject_argument`): once
     /// the call is expanded, the callee's `object_size` queries of modes 1
     /// and 3 find it, as GCC finds the member an inlined argument names.
+    /// An argument that is this function's own parameter offset by pointer
+    /// arithmetic needs none: the hint its caller passed still holds
+    /// ([`Self::subobject_hints_pass`]). Any other gets a hint that the
+    /// subobject is unknown, so no hint from further out, which a member
+    /// access here may have narrowed, answers for it.
     /// GNU extension: GCC manual, "Object Size Checking".
     fn mark_subobject_arguments(
         &mut self,
@@ -1785,22 +1790,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
         let sema = self.unit.sema;
-        let inlined = callee.is_some_and(|binding| {
-            self.unit.pack_function(binding).is_some()
-                || sema
-                    .entity_attributes(binding)
-                    .is_some_and(|attributes| attributes.inlining == Inlining::Always)
-        });
-        if !inlined {
+        if !callee.is_some_and(|binding| self.unit.hints_subobjects(binding)) {
             return Ok(());
         }
         for (item, argument) in items.iter_mut().zip(arguments) {
-            let Some(size) = sema
+            if !matches!(
+                sema.types.kind(sema.types.non_atomic(argument.ty)),
+                TypeKind::Pointer(_)
+            ) {
+                continue;
+            }
+            let fact = sema
                 .expressions
                 .get(argument.expression.0)
-                .and_then(|info| sema.function_extensions.subobject_argument(info.expression))
-            else {
-                continue;
+                .and_then(|info| sema.function_extensions.subobject_argument(info.expression));
+            let size = match fact {
+                | Some(SubobjectArgument::Size(size)) => size,
+                | Some(SubobjectArgument::Through(parameter))
+                    if self.subobject_hints_pass(parameter) =>
+                    continue,
+                | _ => u64::MAX,
             };
             let pointer = self.value(*item, source)?;
             let size = self.iconst(Type::I64, i128::from(size));
@@ -1816,6 +1825,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             item.operand = Operand::Value(marked);
         }
         Ok(())
+    }
+
+    /// Whether a `subobject` hint the caller passed for `parameter` still
+    /// names the closest subobject of a pointer this function computes from
+    /// it by pointer arithmetic: the function is one whose calls carry hints
+    /// for every pointer argument (`always_inline`, or an argument pack
+    /// copy), and nothing writes the parameter. Elsewhere, and for a written
+    /// parameter, an inlined call could reach a hint from further out
+    /// across a narrowing member access.
+    pub(super) fn subobject_hints_pass(&self, parameter: usize) -> bool {
+        self.record
+            .binding
+            .is_some_and(|binding| self.unit.hints_subobjects(binding))
+            && !self
+                .unit
+                .sema
+                .function_extensions
+                .parameter_written(parameter)
     }
 
     /// A copy of the structure or union argument `item` in a fresh slot,

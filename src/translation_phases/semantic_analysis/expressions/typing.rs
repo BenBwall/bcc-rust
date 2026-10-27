@@ -162,6 +162,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if operand.category != ValueCategory::ModifiableLvalue {
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
+            self.note_parameter_write(operand.binding);
             if !(self.real(ty)
                 || self
                     .pointer_target(ty)
@@ -259,6 +260,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if left.category != ValueCategory::ModifiableLvalue {
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
+            self.note_parameter_write(left.binding);
             if let Some(operation) = compound {
                 // This is one bounded delegation, never a traversal of syntax.
                 if matches!(operation, B::Addition | B::Subtraction) {

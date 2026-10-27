@@ -474,6 +474,119 @@ int main(int argc, char **argv) { char a[4]; return (argc > 1 ? g(a, \"x\") : f(
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// A pointer an inlined function forms by a member access names a
+    /// narrower subobject than its caller's argument (#151 review round 1):
+    /// modes 1 and 3 of it, queried there or in a further wrapper, get the
+    /// unknown answers (GCC finds 3), never the 15 bytes left in the
+    /// structure the caller named. A parameter offset by pointer arithmetic
+    /// alone keeps its caller's subobject and matches GCC. Without the C
+    /// library (`-ffreestanding`), `malloc` names no known object, as in GCC
+    /// and Clang, since the program may define it as anything.
+    #[test]
+    fn object_size_hints_never_cross_member_accesses() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let prologue = "struct S { char a[4]; char b[12]; };\n#define INLINE static inline \
+                        __attribute__((always_inline))\n";
+        let member = "\
+INLINE unsigned long f(struct S *p) { char *q = &p->a[1]; return QUERY(q, MODE); }
+int main(void) { struct S s; return f(&s); }
+";
+        let forwarded = "\
+INLINE unsigned long g(char *q) { return __builtin_object_size(q, 1) + (__builtin_object_size(q, \
+                         3) << 4); }
+INLINE unsigned long f(struct S *p) { char *q = &p->a[1]; return g(q); }
+int main(void) { struct S s; return f(&s) & 0xff; }
+";
+        let written = "\
+INLINE unsigned long f(char *p) { p = &((struct S *)p)->b[1]; return __builtin_object_size(p, 1); }
+int main(void) { char buf[16]; return f(buf); }
+";
+        let arithmetic = "\
+INLINE unsigned long g(char *q) { return __builtin_object_size(q + 1, 1); }
+INLINE unsigned long f(char *p) { return g(p + 2); }
+int main(void) { struct S s; return f(s.b) * 10 + g(&s.a[1]); }
+";
+        let programs = [
+            (
+                member
+                    .replace("QUERY", "__builtin_object_size")
+                    .replace("MODE", "3"),
+                0,
+            ),
+            (
+                member
+                    .replace("QUERY", "__builtin_object_size")
+                    .replace("MODE", "1"),
+                255,
+            ),
+            (
+                member
+                    .replace("QUERY", "__builtin_dynamic_object_size")
+                    .replace("MODE", "1"),
+                255,
+            ),
+            (forwarded.to_owned(), 255),
+            (written.to_owned(), 255),
+            (arithmetic.to_owned(), 92),
+        ];
+        let executable = temporary("subobject-hints.exe");
+        for (program, expected) in &programs {
+            let source = format!("{prologue}{program}");
+            for options in [
+                &["--opt=none"][..],
+                &["--opt=bcc"][..],
+                &["--opt=none", "--backend=native"][..],
+                &["--opt=bcc", "--backend=native"][..],
+            ] {
+                let built = bcc(
+                    &source,
+                    &[options, &["-o", executable.to_str().unwrap()]].concat(),
+                );
+                assert!(
+                    built.status.success(),
+                    "{options:?}: {}",
+                    text(&built.stderr)
+                );
+                let output = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(*expected),
+                    "{options:?}\n{source}"
+                );
+            }
+            for optimizer in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(&source, &[optimizer, "--interpret"]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(*expected),
+                    "{optimizer}\n{source}"
+                );
+            }
+        }
+        let source = "\
+extern void *malloc(unsigned long);
+int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff; }
+";
+        for backend in ["--backend=llvm", "--backend=native"] {
+            for (hosted, expected) in [("-fhosted", 16), ("-ffreestanding", 255)] {
+                let built = bcc(
+                    source,
+                    &[backend, hosted, "-o", executable.to_str().unwrap()],
+                );
+                assert!(
+                    built.status.success(),
+                    "{backend} {hosted}: {}",
+                    text(&built.stderr)
+                );
+                let output = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(output.status.code(), Some(expected), "{backend} {hosted}");
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

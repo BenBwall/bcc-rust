@@ -220,7 +220,16 @@ a call to an `always_inline` function (an argument pack copy is one) through
 it when the argument names a subobject with a constant number of bytes left
 (`__builtin_object_size (arg, 1)` and `(arg, 3)` agree in the caller). The
 IR's addresses do not record subobjects, so this is how a callee's mode 1
-or 3 query of its parameter finds `s.name` once the call is expanded.
+or 3 query of its parameter finds `s.name` once the call is expanded. The
+hint closest to the query decides, and it holds only across pointer
+arithmetic: an argument that is the calling wrapper's own parameter, offset
+by pointer arithmetic and casts alone and never assigned, gets no hint (its
+caller's still names the subobject), and every other argument gets a
+`subobject ptr, -1`, "not known", so that no hint from further out answers
+across a member access (`char *q = &p->a[1]`) that narrowed the subobject.
+Likewise a mode 1 or 3 query is emitted only in such a wrapper and of such a
+parameter expression; any other gets the unknown answer at once. GCC tracks
+the member there and answers more often; bcc never answers more.
 
 `optimizer::resolve_object_sizes` (`optimizer/object_size.rs`) answers every
 query before ABI lowering, for every back end and at every optimization
@@ -229,8 +238,10 @@ the LLVM back end `expand_object_size_wrappers`, which expands the calls of
 `always_inline` functions that ask, directly or through another such
 function, and keeps the copies LLVM needs). It walks the pointer back
 through `ptr_add`, `subobject`, `select` and block parameters (at most 64
-values) to stack slots, defined non-weak globals, `dyn_alloca` and calls of
-the library's `malloc`, `calloc`, `realloc` and `aligned_alloc`, and takes
+values) to stack slots, defined non-weak globals, `dyn_alloca` and, in a
+hosted unit (not `-ffreestanding`, where a program may define them as
+anything, as GCC and Clang assume), calls of the library's `malloc`,
+`calloc`, `realloc` and `aligned_alloc`, and takes
 the most or fewest bytes left over the objects reached; modes 1 and 3 also
 need a `subobject` on the path and answer the fewer of its bytes and the
 object's. Offsets must be constant: queries whose offset another query
@@ -248,8 +259,9 @@ would answer it after LLVM's inlining, but could disagree with the
 interpreter and cannot tell a member from its enclosing object for modes 1
 and 3. Not answered (the unknown answer, as before): pointers loaded from
 memory or passed to functions that are not expanded, offsets that stay
-runtime values in non-dynamic queries, and modes 1 and 3 of a pointer no
-`always_inline` call site named (`char *p = s.name; strcpy (p, ...)`).
+runtime values in non-dynamic queries, and modes 1 and 3 of a pointer that
+is not a wrapper parameter's arithmetic (`char *p = s.name; strcpy (p,
+...)`, or a member address formed in a wrapper).
 GNU extension: [GCC Object Size Checking](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html).
 
 Atomic memory operations carry their operation, success and failure orders,

@@ -22,6 +22,7 @@ use crate::{
         arena_list::ArenaList,
         bump::{
             ArenaMap,
+            ArenaSet,
             Bump,
         },
         string_cache::StringCacheId,
@@ -59,14 +60,16 @@ pub(crate) struct FunctionExtensions<'tu> {
         ArenaMap<'tu, usize, StringCacheId>,
     pub(in crate::translation_phases::semantic_analysis) object_sizes:
         ArenaMap<'tu, usize, ObjectSize<'tu>>,
-    /// The bytes from each pointer argument of a direct call to the end of
-    /// the closest surrounding subobject it designates, where that is a
-    /// constant (`__builtin_object_size (argument, 1)` and `(argument, 3)`
-    /// agree), by argument expression. Lowering passes them to
-    /// `always_inline` callees, whose `object_size` queries of modes 1 and 3
-    /// need the subobject the IR's addresses do not record.
+    /// What each pointer argument of a direct call says about the closest
+    /// surrounding subobject it designates, by argument expression.
+    /// Lowering passes it to `always_inline` callees, whose `object_size`
+    /// queries of modes 1 and 3 need the subobject the IR's addresses do
+    /// not record.
     pub(in crate::translation_phases::semantic_analysis) subobject_arguments:
-        ArenaMap<'tu, usize, u64>,
+        ArenaMap<'tu, usize, SubobjectArgument>,
+    /// The parameters an assignment, increment or decrement writes: their
+    /// value may no longer be the pointer the caller passed.
+    pub(in crate::translation_phases::semantic_analysis) written_parameters:  ArenaSet<'tu, usize>,
     /// Hidden size of a cleanup call's synthetic address argument, keyed by
     /// the automatic object's binding rather than expression syntax.
     pub(in crate::translation_phases::semantic_analysis) cleanup_sizes:
@@ -88,6 +91,7 @@ impl<'tu> FunctionExtensions<'tu> {
             typedef_names:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
             object_sizes:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
             subobject_arguments: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_parameters:  ArenaSet::with_hasher_in(FxBuildHasher, arena),
             cleanup_sizes:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
     }
@@ -109,8 +113,17 @@ impl<'tu> FunctionExtensions<'tu> {
     }
 
     /// See [`Self::subobject_arguments`].
-    pub(crate) fn subobject_argument(&self, argument: &Expression<'tu>) -> Option<u64> {
+    pub(crate) fn subobject_argument(
+        &self,
+        argument: &Expression<'tu>,
+    ) -> Option<SubobjectArgument> {
         self.subobject_arguments.get(&identity(argument)).copied()
+    }
+
+    /// Whether an assignment, increment or decrement writes the parameter
+    /// `binding`.
+    pub(crate) fn parameter_written(&self, binding: usize) -> bool {
+        self.written_parameters.contains(&binding)
     }
 
     pub(crate) fn cleanup_size(&self, variable: usize) -> Option<ObjectSize<'tu>> {
@@ -223,7 +236,24 @@ pub(crate) enum ObjectSize<'tu> {
     Deferred {
         mode:    u8,
         dynamic: bool,
+        /// The pointer parameter the operand is computed from by pointer
+        /// arithmetic and casts alone ([`SubobjectArgument::Through`]).
+        through: Option<usize>,
     },
+}
+
+/// What a pointer argument says about the closest surrounding subobject it
+/// designates. GNU extension: GCC manual, "Object Size Checking".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubobjectArgument {
+    /// It designates one with this many bytes left: the constant answer
+    /// `__builtin_object_size (argument, 1)` and `(argument, 3)` agree on.
+    Size(u64),
+    /// It is the pointer parameter `binding`, offset by pointer arithmetic
+    /// and converted by casts alone: no member access or subscript narrows
+    /// the subobject on the way, so it is the one the caller's argument for
+    /// `binding` designates.
+    Through(usize),
 }
 
 pub(in crate::translation_phases::semantic_analysis) fn identity(

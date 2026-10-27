@@ -13,13 +13,20 @@ use crate::{
     ir::Type,
 };
 
-/// Answers the queries of `text` and returns the resolved module text.
+/// Answers the queries of `text`, for a hosted unit, and returns the
+/// resolved module text.
 fn resolve(text: &str) -> String {
+    resolve_for(text, true)
+}
+
+/// Answers the queries of `text`, whose allocation functions have their
+/// library meaning if `library`, and returns the resolved module text.
+fn resolve_for(text: &str, library: bool) -> String {
     let arena = Bump::new();
     let scratch = Bump::new();
     let mut module = parse(&arena, text);
     assert_verifies(&module, "the input");
-    resolve_object_sizes(&mut module, &scratch);
+    resolve_object_sizes(&mut module, library, &scratch);
     assert_verifies(&module, "the output");
     let text = module.to_string();
     assert!(!text.contains("object_size"), "a query is left:\n{text}");
@@ -108,6 +115,65 @@ fn the_innermost_hint_names_the_subobject() {
 ";
     let text = resolve(&query(prefix, "v4", 1));
     assert_eq!(answer(&text, &[]), 4, "{text}");
+}
+
+/// A hint that the subobject is unknown, as lowering passes for a pointer
+/// a member access formed, stops the hints further out: `&p->a[1]` of a
+/// `struct { char a[4]; char b[12]; }` the caller hinted as a whole gets
+/// the unknown answers for modes 1 and 3, never the 15 bytes left in the
+/// structure, constant or dynamic. Modes 0 and 2 still see the object.
+#[test]
+fn an_unknown_subobject_hint_stops_the_outer_hints() {
+    let prefix = "\
+    v1 = iconst.i64 16
+    v2 = subobject v0, v1
+    v3 = iconst.i64 1
+    v4 = ptr_add inbounds v2, v3
+    v5 = iconst.i64 -1
+    v6 = subobject v4, v5
+";
+    for (mode, expected) in [(0, 15), (1, UNKNOWN), (2, 15), (3, 0)] {
+        let text = resolve(&query(prefix, "v6", mode));
+        assert_eq!(answer(&text, &[]), expected, "mode {mode}:\n{text}");
+    }
+    let dynamic = resolve(
+        "\
+function @f(i64) -> i64 external {
+    slot0 = stack_slot 16, align 8
+block0(v0: i64):
+    v1 = stack_addr slot0
+    v2 = iconst.i64 16
+    v3 = subobject v1, v2
+    v4 = ptr_add inbounds v3, v0
+    v5 = iconst.i64 -1
+    v6 = subobject v4, v5
+    v7 = object_size.i64 dynamic v6, 1
+    v8 = object_size.i64 dynamic v6, 3
+    v9 = xor.i64 v7, v8
+    return v9
+}
+",
+    );
+    assert_eq!(answer(&dynamic, &[1]), UNKNOWN, "{dynamic}");
+}
+
+/// Without the C library's meaning (`-ffreestanding`), `malloc` is just a
+/// function that returns some pointer.
+#[test]
+fn freestanding_allocations_are_unknown() {
+    let text = "\
+function @malloc(i64) -> ptr external
+
+function @f() -> i64 external {
+block0:
+    v0 = iconst.i64 16
+    v1 = call @malloc(v0)
+    v2 = object_size.i64 v1, 0
+    return v2
+}
+";
+    assert_eq!(answer(&resolve_for(text, false), &[]), UNKNOWN);
+    assert_eq!(answer(&resolve_for(text, true), &[]), 16);
 }
 
 /// Positions past the end or before the start leave nothing; before a

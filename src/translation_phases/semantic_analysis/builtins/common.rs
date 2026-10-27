@@ -216,7 +216,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let size = match size {
                     | super::super::ObjectSize::Unknown
                         if pure && self.functions.current.is_some() && mode <= 3 =>
-                        super::super::ObjectSize::Deferred { mode, dynamic },
+                        super::super::ObjectSize::Deferred {
+                            mode,
+                            dynamic,
+                            through: self.pointer_parameter_base(args[0]),
+                        },
                     | super::super::ObjectSize::Unknown =>
                         super::super::ObjectSize::Constant(if mode >= 2 { 0 } else { u64::MAX }),
                     | size => size,

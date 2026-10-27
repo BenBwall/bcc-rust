@@ -17,6 +17,7 @@ use super::{
         ExpressionInfo,
         ObjectSize,
         SemanticTranslationUnit,
+        SubobjectArgument,
         TypeId,
         TypeKind,
     },
@@ -373,11 +374,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
     }
 
-    /// Retains the closest-subobject size of a direct call's pointer
-    /// argument (`FunctionExtensions::subobject_arguments`), when the
-    /// argument designates one with a constant number of bytes left: the
-    /// answer `__builtin_object_size (argument, 1)` would give in the
-    /// caller, which an inlined callee's query of its parameter then reaches.
+    /// Retains what a direct call's pointer argument says about the closest
+    /// subobject it designates (`FunctionExtensions::subobject_arguments`):
+    /// its constant number of bytes left, the answer
+    /// `__builtin_object_size (argument, 1)` would give in the caller, or
+    /// the parameter whose caller's argument it still designates. An
+    /// inlined callee's query of its parameter then reaches it.
     /// GNU extension: GCC manual, "Object Size Checking".
     fn retain_subobject_argument(&mut self, argument: &'tu Expression<'tu>) {
         let ty = self
@@ -391,15 +393,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ) {
             return;
         }
-        if let ObjectSize::Constant(most) = self.infer_object_size(argument, 1, false)
+        let fact = if let ObjectSize::Constant(most) = self.infer_object_size(argument, 1, false)
             && let ObjectSize::Constant(least) = self.infer_object_size(argument, 3, false)
             && most == least
         {
-            _ = self
-                .function_extensions
-                .subobject_arguments
-                .insert(identity(argument), most);
-        }
+            SubobjectArgument::Size(most)
+        } else if let Some(parameter) = self.pointer_parameter_base(argument) {
+            SubobjectArgument::Through(parameter)
+        } else {
+            return;
+        };
+        _ = self
+            .function_extensions
+            .subobject_arguments
+            .insert(identity(argument), fact);
     }
 
     /// Forward only the immediate label's completed value tail; compound
