@@ -30,10 +30,18 @@
 //! disk: the standard library's `File::open` and `Path::is_file` convert
 //! each path to the operating system's encoding in a buffer of their own,
 //! which the compiler cannot supply.
+//!
+//! Building this target with the feature also rebuilds the `bcc-rust`
+//! binary with it, so [`command_line`] checks that the binary is still the
+//! command-line compiler rather than a benchmark loop.
 #![expect(
     unused_crate_dependencies,
     reason = "This test binary uses only the measurement API."
 )]
+
+#[cfg(test)]
+#[path = "support/native.rs"]
+mod native;
 
 #[cfg(test)]
 #[cfg_attr(
@@ -1091,5 +1099,29 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
             allocations.bytes = allocations.stacks.iter().map(|(size, _)| size).sum();
         }
         assert_no_allocations(&main.display().to_string(), summary, &allocations);
+    }
+}
+
+#[cfg(test)]
+mod command_line {
+    use std::process::Command;
+
+    use crate::native::run_native;
+
+    /// The `bcc-rust` binary built beside this target answers `--version` in
+    /// every feature set. It once ran a profiling loop that ignored its
+    /// arguments under `benchmarking-internals`, so any later use of the
+    /// binary from the same target directory spun forever.
+    #[test]
+    fn the_binary_built_with_these_features_is_the_cli() {
+        let output = run_native(Command::new(env!("CARGO_BIN_EXE_bcc-rust")).arg("--version"))
+            .expect("`bcc-rust --version` must exit before the test deadline");
+        let stdout = std::str::from_utf8(&output.stdout).unwrap_or_default();
+        assert!(
+            output.status.success() && stdout.contains(env!("CARGO_PKG_VERSION")),
+            "{}\nstdout:\n{stdout}\nstderr:\n{}",
+            output.status,
+            output.stderr.escape_ascii()
+        );
     }
 }
