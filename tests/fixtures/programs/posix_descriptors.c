@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <wchar.h>
 
 /* Prints CALL's value and the errno it leaves, clearing errno first. */
 #define SHOW(label, call)                                                      \
@@ -267,6 +268,31 @@ int main(void) {
     SHOW("fstatat on stdout", fstatat(1, "relative", &st, 0));
     SHOW("fstatat missing", fstatat(AT_FDCWD, PATH "-missing", &st, 0));
     close(root);
+    unlink(PATH);
+#elif MODE == 10
+    /* ungetwc of the character just read moves the position back, which
+       ftell (and fclose's seek) counts; any other stays in the backup
+       area, where ftell fails with EINVAL until it is read. */
+    FILE *w = fopen(PATH, "w");
+    fputs("abcdef", w);
+    fclose(w);
+    for (int other = 0; other < 2; other++) {
+        FILE *f = fopen(PATH, "r");
+        fgetwc(f);
+        fgetwc(f);
+        ungetwc(other ? L'Z' : L'b', f);
+        SHOW("ftell after ungetwc", ftell(f));
+        wint_t next = fgetwc(f);
+        printf("next %d\n", (int)next);
+        SHOW("ftell after reading it", ftell(f));
+        fclose(f);
+    }
+    /* ftell of a device whose offset stays 0 has no position. */
+    FILE *z = fopen("/dev/zero", "r");
+    int c = fgetc(z);
+    long at = ftell(z);
+    printf("device %d %ld\n", c, at);
+    fclose(z);
     unlink(PATH);
 #endif
     return 0;

@@ -9,8 +9,9 @@
    leaves null). glibc 2.42 also made fclose of a stream that has read
    ahead seek its descriptor back to the stream's position, which other
    descriptors on the same open file description then see (commit
-   be6818be31e7, bug 12724). The expected output is in
-   stdio_modern_glibc.expected.
+   be6818be31e7, bug 12724), and ftell of a device whose offset stays 0
+   fail with ESPIPE, which that seek ignores, rather than EINVAL (commit
+   7b47b3dd214c). The expected output is in stdio_modern_glibc.expected.
    Declarations are written out so that no system header is needed. */
 typedef struct _IO_FILE FILE;
 typedef unsigned long size_t;
@@ -35,6 +36,9 @@ int dup(int);
 int close(int);
 long lseek(int, long, int);
 FILE *fdopen(int, const char *);
+unsigned fgetwc(FILE *);
+unsigned ungetwc(unsigned, FILE *);
+int *__errno_location(void);
 
 /* After ungetc and a SEEK_CUR of 1, where the stream is and what it reads:
    since glibc 2.41 a stream that some operation oriented counts the
@@ -109,6 +113,36 @@ int main(void)
   long offset = lseek(copy, 0, 1);
   printf("fclose seeks %c %d %ld\n", first, closed, offset);
   close(copy);
+  /* glibc 2.39 gives EINVAL from ftell and leaves errno alone in fclose. */
+  reader = fopen("/dev/zero", "r");
+  first = fgetc(reader);
+  *__errno_location() = 0;
+  at = ftell(reader);
+  int failure = *__errno_location();
+  *__errno_location() = 0;
+  closed = fclose(reader);
+  int failed = *__errno_location();
+  printf("device %d %ld %d %d %d\n", first, at, failure, closed, failed);
+  /* A wide stream's pushed-back character counts in that seek: the one
+     just read moves the position back; another stays in the backup area,
+     where ftell, and so fclose, fails with EINVAL. glibc 2.39 gives
+     0 0 6 for both. */
+  printf("wide");
+  for (int other = 0; other < 2; other++) {
+    fd = open(name, 0);
+    copy = dup(fd);
+    reader = fdopen(fd, "r");
+    for (int i = 0; i < 6; i++)
+      fgetwc(reader);
+    ungetwc(other ? 'Z' : 'f', reader);
+    *__errno_location() = 0;
+    closed = fclose(reader);
+    failed = *__errno_location();
+    offset = lseek(copy, 0, 1);
+    printf(" %d %d %ld", closed, failed, offset);
+    close(copy);
+  }
+  printf("\n");
   /* So does printf to a redirected stdout that has no buffer yet. */
   freopen(name, "r+", stdout);
   ungetc('X', stdout);

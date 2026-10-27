@@ -190,7 +190,7 @@ impl DefaultHost<'_> {
                     RuntimeValue::Int(WEOF)
                 } else {
                     let entry = &mut self.streams.entries[stream];
-                    entry.wide_backup.push(truncate_u32(wide));
+                    entry.push_back_wide(truncate_u32(wide));
                     entry.eof = false;
                     RuntimeValue::Int(wide)
                 }
@@ -381,7 +381,7 @@ impl DefaultHost<'_> {
         stream: usize,
     ) -> Option<u32> {
         let entry = &mut self.streams.entries[stream];
-        if let Some(character) = entry.wide_backup.pop() {
+        if let Some(character) = entry.pop_wide_backup() {
             return Some(character);
         }
         let utf8 = entry.utf8;
@@ -476,13 +476,20 @@ impl DefaultHost<'_> {
         bytes: &[u8],
     ) {
         let entry = &mut self.streams.entries[stream];
-        let start = entry.wide_backup.len();
-        let mut at = 0;
-        while let Some((character, length)) = locale::decode(true, &bytes[at..]) {
-            entry.wide_backup.push(character);
-            at += length;
+        // The last character read goes back first.
+        let mut end = bytes.len();
+        while end > 0 {
+            let mut start = end - 1;
+            while start > 0 && end - start < 4 && bytes[start] & 0xC0 == 0x80 {
+                start -= 1;
+            }
+            match locale::decode(true, &bytes[start..end]) {
+                | Some((character, length)) if start + length == end =>
+                    entry.push_back_wide(character),
+                | _ => break,
+            }
+            end = start;
         }
-        entry.wide_backup[start..].reverse();
         entry.eof = false;
     }
 }

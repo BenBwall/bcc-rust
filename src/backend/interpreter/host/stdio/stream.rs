@@ -118,8 +118,12 @@ pub(super) struct Stream<'a> {
     /// `_codecvt`, from the locale then) is UTF-8.
     pub(super) utf8: bool,
     /// The wide characters `ungetwc` and the `wscanf` family pushed back,
-    /// the next one last.
+    /// the next one last, and whether one of them is not the character
+    /// before the read position, so that glibc keeps them in its wide
+    /// backup area (`_IO_wdefault_pbackfail`) rather than moving the read
+    /// position back (`_IO_sputbackwc`).
     pub(super) wide_backup: ArenaVec<'a, u32>,
+    wide_backed_up: bool,
     /// A wide stream's put area, over what its characters converted to
     /// (`wide_log`), of which the first `wide_written` bytes are in the
     /// file.
@@ -390,6 +394,7 @@ impl Stream<'_> {
             offset = offset.wrapping_sub(to_offset(self.wide_backup_bytes()));
         }
         self.wide_backup.clear();
+        self.wide_backed_up = false;
         // `_IO_seekoff_unlocked` gives up the pushback area of a stream a byte
         // operation has oriented, counting its unread bytes for `SEEK_CUR`.
         // Before glibc 2.41 (commit 3e1d8d1d1dca) it skipped a stream whose
@@ -512,6 +517,12 @@ impl Stream<'_> {
     /// pushback area.
     /// C99: §7.19.9.4 paragraph 2, p. 304; PDF p. 316.
     pub(super) fn tell(&mut self) -> Option<i64> {
+        // glibc cannot place wide characters in its backup area
+        // (`do_ftell_wide`).
+        if self.wide && self.wide_backed_up && !self.wide_backup.is_empty() {
+            self.errno = Some(EINVAL);
+            return None;
+        }
         // A wide stream's unwritten characters count as the bytes they
         // convert to, and its pushed-back ones before its position.
         let held = self.pending.len() + (self.wide_log.len() - self.wide_written);
@@ -540,9 +551,14 @@ impl Stream<'_> {
             (self.bytes.len() - self.position, 0)
         };
         // A character device that reports offset 0 after a read has no
-        // position.
+        // position: glibc 2.42 reports it as `ESPIPE`, which `fclose`
+        // ignores (commit 7b47b3dd214c); 2.39 gave `EINVAL`.
         let position = at - to_offset(ahead);
-        if (at == 0 && ahead > 0) || position < 0 {
+        if at == 0 && ahead > 0 {
+            self.errno = Some(ESPIPE);
+            return None;
+        }
+        if position < 0 {
             self.errno = Some(EINVAL);
             return None;
         }
@@ -566,14 +582,18 @@ impl Stream<'_> {
     /// a stream that is not writing but has read ahead, or holds pushed-back
     /// bytes, then seeks its descriptor to the stream's position, so that
     /// descriptors sharing the open file description continue from there
-    /// (commit be6818be31e7, bug 12724); a descriptor that cannot seek is
-    /// left as it is. glibc 2.39 left the offset where the reads left it.
+    /// (commit be6818be31e7, bug 12724); a descriptor that cannot seek
+    /// (`ESPIPE`) is left as it is, while a position `ftell` cannot give,
+    /// as with wide characters in the backup area, fails the close. A wide
+    /// stream has read ahead while it holds unread bytes or pushed-back
+    /// characters. glibc 2.39 left the offset where the reads left it.
     pub(super) fn close_out(&mut self) -> bool {
         let putting = self.writable && self.putting;
         if !self.write_out() {
             return false;
         }
-        let read_ahead = self.in_backup || self.position < self.bytes.len();
+        let read_ahead =
+            self.in_backup || self.position < self.bytes.len() || !self.wide_backup.is_empty();
         if putting || !read_ahead || matches!(self.target, Target::Detached) {
             return true;
         }
@@ -943,6 +963,39 @@ impl Stream<'_> {
         self.write_wide()
     }
 
+    /// Pushes `character` back as `ungetwc` does: the character before the
+    /// read position, read since the buffer was last filled, only moves the
+    /// position back; any other goes into the wide backup area.
+    pub(super) fn push_back_wide(&mut self, character: u32) {
+        let rewound = self.position.saturating_sub(self.wide_backup_bytes());
+        let mut start = rewound;
+        while start > self.base
+            && rewound - start < 4
+            && (start == rewound || (self.utf8 && self.bytes[start] & 0xC0 == 0x80))
+        {
+            start -= 1;
+        }
+        let previous = (start < rewound)
+            .then(|| super::super::locale::decode(self.utf8, &self.bytes[start..rewound]))
+            .flatten()
+            .filter(|&(_, length)| start + length == rewound)
+            .map(|(previous, _)| previous);
+        if previous != Some(character) {
+            self.wide_backed_up = true;
+        }
+        self.wide_backup.push(character);
+    }
+
+    /// The next pushed-back wide character, leaving the backup area once
+    /// none is left.
+    pub(super) fn pop_wide_backup(&mut self) -> Option<u32> {
+        let character = self.wide_backup.pop();
+        if self.wide_backup.is_empty() {
+            self.wide_backed_up = false;
+        }
+        character
+    }
+
     /// How many bytes the pushed-back wide characters take in the stream's
     /// conversion.
     fn wide_backup_bytes(&self) -> usize {
@@ -1047,6 +1100,7 @@ impl Stream<'_> {
         self.offset = None;
         (self.oriented, self.wide, self.utf8) = (false, false, false);
         self.wide_backup.clear();
+        self.wide_backed_up = false;
         self.wide_log.clear();
         (self.wide_written, self.user_buffer) = (0, false);
         (self.putting, self.write_base) = (false, 0);
@@ -1085,6 +1139,7 @@ impl<'a> Stream<'a> {
             errno:          None,
             utf8:           false,
             wide_backup:    ArenaVec::new_in(arena),
+            wide_backed_up: false,
             wide_area:      Channel::new(Mode::Full),
             wide_log:       ArenaVec::new_in(arena),
             wide_written:   0,

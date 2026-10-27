@@ -1203,7 +1203,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
     /// write what glibc writes and leave the same file.
     #[test]
     fn descriptors_and_streams_match_glibc() {
-        for mode in 0..=9 {
+        for mode in 0..=10 {
             merged_mode_matches_glibc("posix_descriptors.c", mode);
         }
     }
