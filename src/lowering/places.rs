@@ -432,6 +432,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.settle(item)
     }
 
+    /// Pops the operand a truth test reads: GCC tests a `_Float16` excess
+    /// itself, Clang the rounded value (`half.rs`).
+    pub(super) fn pop_truth(&mut self) -> Item {
+        if self.half_in_float() {
+            self.pop_excess()
+        } else {
+            self.pop()
+        }
+    }
+
     /// Pops the top operand, keeping a `_Float16` excess.
     pub(super) fn pop_excess(&mut self) -> Item {
         self.operands.pop().expect("an operand is on the stack")

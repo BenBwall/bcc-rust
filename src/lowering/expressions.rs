@@ -1085,7 +1085,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// Pops a scalar and branches on it; a constant condition jumps.
     pub(super) fn branch(&mut self, then: Block, otherwise: Block) -> Result<(), LoweringError> {
-        let item = self.pop();
+        let item = self.pop_truth();
         let truth = self.truth(item, SourceVectors::empty())?;
         match self.draft.constant(truth) {
             | Some(0) => self.draft.jump(otherwise, &[]),
@@ -1105,7 +1105,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         right: Block,
         merge: Block,
     ) -> Result<(), LoweringError> {
-        let item = self.pop();
+        let item = self.pop_truth();
         let truth = self.truth(item, SourceVectors::empty())?;
         let decided = self.iconst(Type::I1, i128::from(!and));
         let (then, otherwise) = if and {
@@ -1147,7 +1147,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
             self.operands.push(item);
         }
-        let item = self.pop();
+        let item = if truth { self.pop_truth() } else { self.pop() };
         if let Operand::Complex(id) = item.operand
             && !truth
         {
@@ -1443,7 +1443,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(Operand::Excess(result), info.ty);
             return Ok(());
         }
-        let operand = self.pop();
+        let operand = if operator == U::LogicalNot {
+            self.pop_truth()
+        } else {
+            self.pop()
+        };
         let result = match operator {
             | U::AddressOf => match operand.operand {
                 | Operand::Place(Place::Memory(address)) => Operand::Value(address),

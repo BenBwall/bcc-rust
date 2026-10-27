@@ -59,3 +59,14 @@ fn constants_and_memory_keep_binary16_bits() {
     assert!(text.contains("fconst.f16 0x2E66"), "{text}");
     assert!(!text.contains("fptrunc"), "{text}");
 }
+
+/// GCC tests a product's excess, which may be nonzero where the rounded
+/// value is zero; Clang tests the rounded value.
+#[test]
+fn truth_tests_read_the_excess_for_gcc() {
+    let source = "int f(_Float16 a) { if (a * a) return 1; return !(a * a) + (a * a && 1); }";
+    let gcc = lowered_as(source, CompilerIdentity::Gcc);
+    let clang = lowered_as(source, CompilerIdentity::Clang);
+    assert!(!gcc.contains("fptrunc"), "{gcc}");
+    assert_eq!(clang.matches("fptrunc.f16").count(), 3, "{clang}");
+}

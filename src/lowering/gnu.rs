@@ -39,7 +39,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         merge: Block,
     ) -> Result<(), LoweringError> {
         let source = e.source_vectors;
-        let mut item = self.pop();
+        let mut item = self.pop_truth();
         // Only lvalue conversion and decay precede the truth test. Sema's
         // arithmetic conversions belong to the saved true result afterward.
         for conversion in self.conversions(c.condition_expression) {
@@ -76,7 +76,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.draft.edge(merge, &[])
         } else {
             let result = self.convert_value(item, ty, source)?;
-            let value = self.value(result, source)?;
+            // GCC's `_Float16` result keeps its excess in an `f32` parameter.
+            let value = if self.half(ty) && self.half_in_float() {
+                self.excess(result, source)?
+            } else {
+                let result = self.settle(result);
+                self.value(result, source)?
+            };
             self.draft.edge(merge, &[value])
         };
         let edges = [true_edge, self.draft.edge(otherwise, &[])];

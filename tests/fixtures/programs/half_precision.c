@@ -157,9 +157,33 @@ static void classification(void) {
            (double)__FLT16_MAX__, sizeof(H), _Alignof(H));
 }
 
+/* GCC tests the excess of a product that rounds to zero, converts it to a
+   complex type directly, classifies a folded constant as a binary16 value
+   and reads an underflowing constant as zero. */
+static void excess_uses(void) {
+    int a = (tiny * tiny) ? 1 : 0, b = 0, c = (tiny * tiny) && 1, d = (tiny * tiny) || 0;
+    int e = !(tiny * tiny), f = 0;
+    if (tiny * tiny)
+        b = 1;
+    while (tiny * tiny) {
+        f = 1;
+        break;
+    }
+    H g = (tiny * tiny) ?: vc;
+    printf("truth %d %d %d %d %d %d %04x\n", a, b, c, d, e, f, bits(g));
+    double _Complex z = (double _Complex)X;
+    float _Complex w = X;
+    printf("complex %g %g\n", __real__ z, (double)__real__ w);
+    printf("folded %d %d %d\n", __builtin_isnormal(0x1p-24f16), __builtin_isnormal(0x1p-14f16),
+           __builtin_fpclassify(0, 1, 2, 3, 4, 0x1p-15f16));
+    H u = 1e-99999f16, v = -1e-99999f16, o = 1e99999f16;
+    printf("underflow %04x %04x %04x\n", bits(u), bits(v), bits(o));
+}
+
 int main(void) {
     contexts();
     conversions();
     classification();
+    excess_uses();
     return 0;
 }

@@ -1379,7 +1379,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             },
             // Beyond binary128's range: infinity or zero in both formats.
             | Err(ParseFloatError::OutOfRange(_, error)) => (
-                constant(crate::binary128::Binary128::infinity(false)),
+                constant(if error == FloatRangeError::Overflow {
+                    crate::binary128::Binary128::infinity(false)
+                } else {
+                    crate::binary128::Binary128::zero(false)
+                }),
                 Some(PreprocessorErrorType::FloatConstantOutOfRange {
                     type_name: "_Float16",
                     error,
