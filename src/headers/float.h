@@ -107,4 +107,90 @@
 #define LDBL_HAS_SUBNORM __LDBL_HAS_DENORM__
 #endif
 #endif
+/* ISO/IEC TS 18661-3 (C23 Annex H.11): the _FloatN and _FloatNx
+   characteristics, as GCC's <float.h> defines them for the types whose
+   __FLTN_MANT_DIG__ the compiler predefines (the GCC identity and
+   -ffloatn-types). */
+#ifdef __STDC_WANT_IEC_60559_TYPES_EXT__
+#ifdef __FLT32_MANT_DIG__
+#define FLT32_MANT_DIG __FLT32_MANT_DIG__
+#define FLT32_DIG __FLT32_DIG__
+#define FLT32_MIN_EXP __FLT32_MIN_EXP__
+#define FLT32_MIN_10_EXP __FLT32_MIN_10_EXP__
+#define FLT32_MAX_EXP __FLT32_MAX_EXP__
+#define FLT32_MAX_10_EXP __FLT32_MAX_10_EXP__
+#define FLT32_MAX __FLT32_MAX__
+#define FLT32_EPSILON __FLT32_EPSILON__
+#define FLT32_MIN __FLT32_MIN__
+#define FLT32_DECIMAL_DIG __FLT32_DECIMAL_DIG__
+#define FLT32_TRUE_MIN __FLT32_DENORM_MIN__
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#define FLT32_SNAN (__builtin_nansf32(""))
+#endif
+#endif
+#ifdef __FLT64_MANT_DIG__
+#define FLT64_MANT_DIG __FLT64_MANT_DIG__
+#define FLT64_DIG __FLT64_DIG__
+#define FLT64_MIN_EXP __FLT64_MIN_EXP__
+#define FLT64_MIN_10_EXP __FLT64_MIN_10_EXP__
+#define FLT64_MAX_EXP __FLT64_MAX_EXP__
+#define FLT64_MAX_10_EXP __FLT64_MAX_10_EXP__
+#define FLT64_MAX __FLT64_MAX__
+#define FLT64_EPSILON __FLT64_EPSILON__
+#define FLT64_MIN __FLT64_MIN__
+#define FLT64_DECIMAL_DIG __FLT64_DECIMAL_DIG__
+#define FLT64_TRUE_MIN __FLT64_DENORM_MIN__
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#define FLT64_SNAN (__builtin_nansf64(""))
+#endif
+#endif
+#ifdef __FLT128_MANT_DIG__
+#define FLT128_MANT_DIG __FLT128_MANT_DIG__
+#define FLT128_DIG __FLT128_DIG__
+#define FLT128_MIN_EXP __FLT128_MIN_EXP__
+#define FLT128_MIN_10_EXP __FLT128_MIN_10_EXP__
+#define FLT128_MAX_EXP __FLT128_MAX_EXP__
+#define FLT128_MAX_10_EXP __FLT128_MAX_10_EXP__
+#define FLT128_MAX __FLT128_MAX__
+#define FLT128_EPSILON __FLT128_EPSILON__
+#define FLT128_MIN __FLT128_MIN__
+#define FLT128_DECIMAL_DIG __FLT128_DECIMAL_DIG__
+#define FLT128_TRUE_MIN __FLT128_DENORM_MIN__
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#define FLT128_SNAN (__builtin_nansf128(""))
+#endif
+#endif
+#ifdef __FLT32X_MANT_DIG__
+#define FLT32X_MANT_DIG __FLT32X_MANT_DIG__
+#define FLT32X_DIG __FLT32X_DIG__
+#define FLT32X_MIN_EXP __FLT32X_MIN_EXP__
+#define FLT32X_MIN_10_EXP __FLT32X_MIN_10_EXP__
+#define FLT32X_MAX_EXP __FLT32X_MAX_EXP__
+#define FLT32X_MAX_10_EXP __FLT32X_MAX_10_EXP__
+#define FLT32X_MAX __FLT32X_MAX__
+#define FLT32X_EPSILON __FLT32X_EPSILON__
+#define FLT32X_MIN __FLT32X_MIN__
+#define FLT32X_DECIMAL_DIG __FLT32X_DECIMAL_DIG__
+#define FLT32X_TRUE_MIN __FLT32X_DENORM_MIN__
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#define FLT32X_SNAN (__builtin_nansf32x(""))
+#endif
+#endif
+#ifdef __FLT64X_MANT_DIG__
+#define FLT64X_MANT_DIG __FLT64X_MANT_DIG__
+#define FLT64X_DIG __FLT64X_DIG__
+#define FLT64X_MIN_EXP __FLT64X_MIN_EXP__
+#define FLT64X_MIN_10_EXP __FLT64X_MIN_10_EXP__
+#define FLT64X_MAX_EXP __FLT64X_MAX_EXP__
+#define FLT64X_MAX_10_EXP __FLT64X_MAX_10_EXP__
+#define FLT64X_MAX __FLT64X_MAX__
+#define FLT64X_EPSILON __FLT64X_EPSILON__
+#define FLT64X_MIN __FLT64X_MIN__
+#define FLT64X_DECIMAL_DIG __FLT64X_DECIMAL_DIG__
+#define FLT64X_TRUE_MIN __FLT64X_DENORM_MIN__
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#define FLT64X_SNAN (__builtin_nansf64x(""))
+#endif
+#endif
+#endif
 #endif
