@@ -466,7 +466,7 @@ impl DefaultHost<'_> {
     }
 
     /// The target's `wchar_t`.
-    fn wide_type(&self) -> Type {
+    pub(super) fn wide_type(&self) -> Type {
         if matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc) {
             Type::I16
         } else {

@@ -188,6 +188,10 @@ pub(crate) enum UbKind {
     /// or one whose function has returned since.
     /// C99: §7.13.2.1 paragraph 2, p. 244; PDF p. 256.
     InvalidJmpBuf,
+    /// A byte input/output function on a wide-oriented stream, or a wide
+    /// character one on a byte-oriented stream.
+    /// C99: §7.19.2 paragraph 5, p. 264; PDF p. 276.
+    StreamOrientation,
 }
 
 impl fmt::Display for UbKind {
@@ -224,6 +228,9 @@ impl fmt::Display for UbKind {
             | Self::InvalidComparison => "a qsort or bsearch comparison function of the wrong type",
             | Self::InvalidJmpBuf =>
                 "longjmp to an environment that no active setjmp invocation saved",
+            | Self::StreamOrientation =>
+                "a byte stream function on a wide-oriented stream, or a wide one on a \
+                 byte-oriented stream",
         })
     }
 }

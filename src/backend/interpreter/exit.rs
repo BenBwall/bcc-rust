@@ -92,12 +92,19 @@ pub(super) struct Exit<'a> {
 }
 
 impl Machine<'_, '_, '_> {
-    /// Runs the exit function `name` with the call's arguments: the
-    /// registration's result, or the program's ending.
+    /// Runs the exit function `name`, declared with the result type
+    /// `result`, with the call's arguments: the registration's result, or
+    /// the program's ending. A call through an incompatible declaration is
+    /// undefined.
     pub(super) fn exit_function(
         &mut self,
         name: &str,
+        result: Option<Type>,
     ) -> Result<Result<Option<RuntimeValue>, Termination>, Fault> {
+        let registers = matches!(name, "atexit" | "on_exit" | "at_quick_exit");
+        if result != registers.then_some(Type::I32) {
+            return Err(UbKind::SignatureMismatch.into());
+        }
         let argument = |index: usize| {
             self.arguments
                 .get(index)

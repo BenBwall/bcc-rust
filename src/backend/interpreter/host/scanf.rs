@@ -10,8 +10,14 @@
 //! glibc does even after a suppressed conversion). A numeric field that
 //! stops after a prefix such as a sign, `0x`, `1e`, `nan(` or `infin` is a
 //! matching failure, the prefix consumed. White space is the "C" locale's,
-//! `\v` included. The wide forms `%lc`, `%ls` and `%l[` and `long double`
-//! input (`%Lf`) are not implemented and trap as unsupported.
+//! `\v` included. `%lc`, `%ls` and `%l[` store wide characters, converting
+//! the multibyte input with the locale; `long double` input (`%Lf`) is not
+//! implemented and traps as unsupported.
+//!
+//! The `wscanf` family reads wide characters ([`Input::Wide`]) with the same
+//! engine: the format and each input character are taken as their UTF-8
+//! bytes, so a field width counts characters for ASCII input, and the
+//! characters a call reads ahead go back to a wide stream when it ends.
 //!
 //! C99: §7.19.6.2 paragraphs 3-14, pp. 282-288; PDF pp. 294-300.
 
@@ -39,15 +45,51 @@ use crate::{
 
 /// Where a `scanf` call reads.
 #[derive(Clone, Copy)]
-#[expect(
-    variant_size_differences,
-    reason = "A short-lived cursor; boxing the string position would allocate."
-)]
 pub(super) enum Input {
     /// The C string at `pointer`, from byte `offset`.
     String { pointer: RuntimeValue, offset: u64 },
     /// The stream with this table index.
     Stream(usize),
+    /// Wide characters, taken byte by byte in UTF-8: the bytes of the
+    /// character being read and those pushed back, the next one last.
+    Wide {
+        source:  WideSource,
+        pending: [u8; 8],
+        held:    u8,
+    },
+}
+
+/// Where the `wscanf` family reads wide characters.
+#[derive(Clone, Copy)]
+#[expect(
+    variant_size_differences,
+    reason = "A short-lived cursor; boxing the string position would allocate."
+)]
+pub(super) enum WideSource {
+    /// The wide string at `pointer`, from element `index`.
+    String { pointer: RuntimeValue, index: u64 },
+    /// The wide-oriented stream with this table index.
+    Stream(usize),
+}
+
+impl Input {
+    /// Wide characters from the wide string at `pointer`.
+    pub(super) const fn wide_string(pointer: RuntimeValue) -> Self {
+        Self::Wide {
+            source:  WideSource::String { pointer, index: 0 },
+            pending: [0; 8],
+            held:    0,
+        }
+    }
+
+    /// Wide characters from the stream `stream`.
+    pub(super) const fn wide_stream(stream: usize) -> Self {
+        Self::Wide {
+            source:  WideSource::Stream(stream),
+            pending: [0; 8],
+            held:    0,
+        }
+    }
 }
 
 /// Which `scanf` a call runs: the C99 forms (`__isoc99_scanf` and the
@@ -95,7 +137,11 @@ impl DefaultHost<'_> {
         dialect: Dialect,
     ) -> Result<i32, Fault> {
         let mut directives = super::ArenaVec::new_in(self.allocator);
-        memory.read_c_string(format, &mut directives)?;
+        if matches!(input, Input::Wide { .. }) {
+            self.wide_format_bytes(format, &mut directives, memory)?;
+        } else {
+            memory.read_c_string(format, &mut directives)?;
+        }
         if let Input::Stream(stream) = input {
             self.orient(stream);
         }
@@ -202,8 +248,14 @@ impl DefaultHost<'_> {
                     } else {
                         width
                     };
+                    // `%lc`, `%ls` and `%l[` store each character as a
+                    // `wchar_t`, converted from its multibyte form.
+                    let wide = (length == Length::Long).then(|| self.wide_type());
+                    let utf8 = matches!(input, Input::Wide { .. }) || self.locale.utf8();
+                    let element = wide.map_or(Type::I8, |wide| wide);
                     let mut count = 0;
                     let mut ended = false;
+                    let mut unconverted = false;
                     while count < width {
                         let Some(byte) = self.next(&mut input, memory)? else {
                             ended = true;
@@ -218,20 +270,39 @@ impl DefaultHost<'_> {
                             self.unread(&mut input, byte);
                             break;
                         }
+                        let mut value = u32::from(byte);
+                        if wide.is_some() {
+                            let length = super::locale::sequence_length(utf8, byte);
+                            let mut sequence = [byte, 0, 0, 0];
+                            for slot in sequence.iter_mut().take(length).skip(1) {
+                                *slot = self.next(&mut input, memory)?.unwrap_or(0);
+                            }
+                            let Some((character, _)) =
+                                super::locale::decode(utf8, &sequence[..length])
+                            else {
+                                unconverted = true;
+                                break;
+                            };
+                            value = character;
+                        }
                         if !suppress {
                             let at = memory.ptr_add(
                                 destination,
-                                RuntimeValue::Int(u128::from(count)),
+                                RuntimeValue::Int(u128::from(count) * u128::from(element.bytes())),
                                 true,
                             );
                             memory.store(
-                                Type::I8,
-                                RuntimeValue::Int(u128::from(byte)),
+                                element,
+                                RuntimeValue::int(element, u128::from(value)),
                                 at,
                                 Align::BYTE,
                             )?;
                         }
                         count += 1;
+                    }
+                    if unconverted {
+                        self.set_errno(memory, super::errno::EILSEQ)?;
+                        break Some(Failure::Matching);
                     }
                     consumed += count;
                     // `%c` needs all its characters; `%[` and `%s` at least
@@ -244,9 +315,12 @@ impl DefaultHost<'_> {
                         });
                     }
                     if conversion != b'c' && !suppress {
-                        let at =
-                            memory.ptr_add(destination, RuntimeValue::Int(u128::from(count)), true);
-                        memory.store(Type::I8, RuntimeValue::Int(0), at, Align::BYTE)?;
+                        let at = memory.ptr_add(
+                            destination,
+                            RuntimeValue::Int(u128::from(count) * u128::from(element.bytes())),
+                            true,
+                        );
+                        memory.store(element, RuntimeValue::int(element, 0), at, Align::BYTE)?;
                     }
                     Some(())
                 },
@@ -279,10 +353,43 @@ impl DefaultHost<'_> {
             }
             assigned = assigned.saturating_add(i32::from(!suppress));
         };
+        // What a wide stream's call read ahead goes back to it.
+        if let Input::Wide {
+            source: WideSource::Stream(stream),
+            pending,
+            held,
+        } = input
+        {
+            for &byte in &pending[..usize::from(held)] {
+                self.push_back(stream, byte);
+            }
+        }
         Ok(match failure {
             | Some(Failure::Input) if assigned == 0 => -1,
             | _ => assigned,
         })
+    }
+
+    /// The wide format at `format` as UTF-8 bytes.
+    fn wide_format_bytes(
+        &self,
+        format: RuntimeValue,
+        out: &mut super::ArenaVec<'_, u8>,
+        memory: &Memory<'_>,
+    ) -> Result<(), Fault> {
+        let wide = self.wide_type();
+        let size = u64::from(wide.bytes());
+        let align = Align::from_bytes(size).expect("a power of two");
+        for index in 0.. {
+            let at = memory.ptr_add(format, RuntimeValue::Int(u128::from(index * size)), true);
+            let character = integer(memory.load(wide, at, align)?)?;
+            if character == 0 {
+                break;
+            }
+            let character = u32::try_from(character).unwrap_or(u32::MAX);
+            super::locale::encode_for_stream(true, character, out);
+        }
+        Ok(())
     }
 
     /// The length modifier at `position`, advancing past it.
@@ -323,6 +430,8 @@ impl DefaultHost<'_> {
                 | _ => return unsupported,
             },
             | b'c' | b's' | b'[' if length == Length::None => 1,
+            // `%lc`, `%ls` and `%l[` store `wchar_t`.
+            | b'c' | b's' | b'[' if length == Length::Long => self.wide_type().bytes(),
             | _ => return unsupported,
         })
     }
@@ -340,6 +449,45 @@ impl DefaultHost<'_> {
                 Ok(Some(byte))
             },
             | Input::Stream(stream) => Ok(self.read(*stream)),
+            | Input::Wide {
+                source,
+                pending,
+                held,
+            } => {
+                if *held == 0 {
+                    let character = match source {
+                        | WideSource::String { pointer, index } => {
+                            let wide = self.wide_type();
+                            let size = u128::from(wide.bytes());
+                            let at = memory.ptr_add(
+                                *pointer,
+                                RuntimeValue::Int(u128::from(*index) * size),
+                                true,
+                            );
+                            let align = Align::from_bytes(u64::from(wide.bytes()))
+                                .expect("a power of two");
+                            let character = integer(memory.load(wide, at, align)?)?;
+                            if character == 0 {
+                                return Ok(None);
+                            }
+                            *index += 1;
+                            u32::try_from(character).unwrap_or(u32::MAX)
+                        },
+                        | WideSource::Stream(stream) => match self.read_wide(*stream) {
+                            | Some(character) => character,
+                            | None => return Ok(None),
+                        },
+                    };
+                    let mut bytes = super::ArenaVec::new_in(self.allocator);
+                    super::locale::encode_for_stream(true, character, &mut bytes);
+                    for &byte in bytes.iter().rev() {
+                        pending[usize::from(*held)] = byte;
+                        *held += 1;
+                    }
+                }
+                *held -= 1;
+                Ok(Some(pending[usize::from(*held)]))
+            },
         }
     }
 
@@ -348,6 +496,10 @@ impl DefaultHost<'_> {
         match input {
             | Input::String { offset, .. } => *offset -= 1,
             | Input::Stream(stream) => self.push_back(*stream, byte),
+            | Input::Wide { pending, held, .. } => {
+                pending[usize::from(*held)] = byte;
+                *held += 1;
+            },
         }
     }
 

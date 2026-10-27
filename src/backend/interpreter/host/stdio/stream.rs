@@ -104,6 +104,9 @@ pub(super) struct Stream<'a> {
     /// write, `fgets`, `fscanf` or a refill does; until then a seek leaves
     /// the pushback area alone.
     pub(super) oriented:  bool,
+    /// Whether the orientation is wide (`_mode > 0`), as a wide character
+    /// function or `fwide` makes it.
+    pub(super) wide:      bool,
     /// glibc's put area while the stream writes (`_IO_CURRENTLY_PUTTING`):
     /// where in the buffer the bytes it holds start, and those bytes, which
     /// reach the file only when glibc writes them out.
@@ -864,7 +867,7 @@ impl Stream<'_> {
         (self.base, self.position) = (0, 0);
         self.drop_backup();
         self.offset = None;
-        self.oriented = false;
+        (self.oriented, self.wide) = (false, false);
         (self.putting, self.write_base) = (false, 0);
         self.pending.clear();
     }
@@ -892,6 +895,7 @@ impl<'a> Stream<'a> {
             in_backup:     false,
             offset:        None,
             oriented:      false,
+            wide:          false,
             putting:       false,
             write_base:    0,
             pending:       ArenaVec::new_in(arena),

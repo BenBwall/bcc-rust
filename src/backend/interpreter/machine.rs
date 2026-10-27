@@ -207,7 +207,8 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             return Err(Fault::Unsupported(Unsupported::ReturnsTwice));
         }
         if super::exit::FUNCTIONS.contains(&callee.name) && host.provides(callee.name) {
-            return match self.exit_function(callee.name)? {
+            let declared = self.module.function_signature(func).result;
+            return match self.exit_function(callee.name, declared)? {
                 | Ok(value) => {
                     if let (Some(result), Some(value)) = (result, value) {
                         self.set(result, value);

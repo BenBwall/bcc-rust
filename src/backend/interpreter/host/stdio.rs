@@ -40,6 +40,9 @@
 
 mod console;
 mod stream;
+mod wide;
+
+pub(super) use wide::FUNCTIONS as WIDE_FUNCTIONS;
 
 use std::{
     fs::OpenOptions,
@@ -224,9 +227,37 @@ impl DefaultHost<'_> {
         call: HostCall<'_>,
         memory: &mut Memory<'_>,
     ) -> Option<Result<HostReturn, Fault>> {
+        if wide::FUNCTIONS.contains(&call.name) {
+            return Some(self.run_wide(call, memory));
+        }
         FUNCTIONS
             .contains(&call.name)
             .then(|| self.run_stdio(call, memory))
+    }
+
+    /// The stream a byte function reads or writes, named or implicit, which
+    /// a wide orientation forbids.
+    /// C99: §7.19.2 paragraph 5, p. 264; PDF p. 276.
+    pub(super) fn byte_stream(
+        &self,
+        call: HostCall<'_>,
+        memory: &Memory<'_>,
+    ) -> Result<Option<usize>, Fault> {
+        let operand = match call.name {
+            | "printf" | "puts" | "putchar" | "vprintf" | "__printf_chk" | "__vprintf_chk" =>
+                return Ok(Some(1)),
+            | "getchar" | "scanf" | "__isoc99_scanf" | "__isoc23_scanf" => return Ok(Some(0)),
+            | "fgetc" | "getc" | "fprintf" | "vfprintf" | "__fprintf_chk" | "__vfprintf_chk"
+            | "fscanf" | "__isoc99_fscanf" | "__isoc23_fscanf" => 0,
+            | "fputc" | "putc" | "fputs" | "ungetc" => 1,
+            | "fgets" => 2,
+            | "fwrite" | "fread" => 3,
+            | _ => return Ok(None),
+        };
+        match call.args.get(operand) {
+            | Some(&pointer) => self.stream(pointer, memory).map(Some),
+            | None => Ok(None),
+        }
     }
 
     fn run_stdio(
@@ -706,8 +737,12 @@ impl DefaultHost<'_> {
         let entry = &mut self.streams.entries[stream];
         let bytes = &self.output[before..];
         let written = match entry.target {
-            | Target::Output => return true,
+            | Target::Output => {
+                entry.oriented = true;
+                return true;
+            },
             | Target::Errors => {
+                entry.oriented = true;
                 let start = self.console.errors.len();
                 self.console.errors.extend_from_slice(bytes);
                 self.console
@@ -1101,27 +1136,43 @@ mod tests {
     /// after each newline; an unbuffered one at once.
     #[test]
     fn standard_output_is_written_out_where_glibc_writes_it() {
-        let arena = Bump::new();
-        let mut output = ArenaVec::new_in(&arena);
-        let mut channel = Channel::new(Mode::Full);
-        channel.block = 4096;
-        let mut write = |channel: &mut Channel, bytes: &[u8], kind: Written| {
+        fn write(
+            output: &mut ArenaVec<'_, u8>,
+            channel: &mut Channel,
+            bytes: &[u8],
+            kind: Written,
+        ) -> usize {
             let before = output.len();
             output.extend_from_slice(bytes);
-            channel.put(&output, before, kind);
+            channel.put(output, before, kind);
             channel.flushed
-        };
-        assert_eq!(write(&mut channel, &[b'a'; 4096], Written::Byte), 0);
-        assert_eq!(write(&mut channel, b"b", Written::Byte), 4096);
+        }
+        let arena = Bump::new();
+        let mut output = ArenaVec::new_in(&arena);
+        let mut full = Channel::new(Mode::Full);
+        full.block = 4096;
+        assert_eq!(write(&mut output, &mut full, &[b'a'; 4096], Written::Byte), 0);
+        assert_eq!(write(&mut output, &mut full, b"b", Written::Byte), 4096);
         // 4095 bytes fill the buffer; the rest writes it out, sends a whole
         // buffer's worth through and keeps 100.
-        assert_eq!(write(&mut channel, &[b'c'; 4095 + 4096 + 100], Written::Block), 4097 + 4095 + 4096);
+        let block = [b'c'; 4095 + 4096 + 100];
+        assert_eq!(
+            write(&mut output, &mut full, &block, Written::Block),
+            4097 + 4095 + 4096
+        );
+        output.clear();
         let mut line = Channel::new(Mode::Line);
         line.block = 1024;
-        output.clear();
-        assert_eq!(write(&mut line, b"one\ntwo", Written::Byte), 4);
-        assert_eq!(write(&mut line, b"three\n", Written::Line), 13);
+        assert_eq!(write(&mut output, &mut line, b"one\ntwo", Written::Byte), 4);
+        assert_eq!(write(&mut output, &mut line, b"three\n", Written::Line), 13);
         let mut none = Channel::new(Mode::Unbuffered);
-        assert_eq!(write(&mut none, b"x", Written::Byte), output.len());
+        assert_eq!(write(&mut output, &mut none, b"x", Written::Byte), 14);
+        // `printf` on a stream with no room stages up to 128 bytes and
+        // writes them as a block, which a 64-byte buffer sends straight
+        // through.
+        output.clear();
+        let mut small = Channel::new(Mode::Full);
+        small.set_buffering(Mode::Full, Some(64), 0);
+        assert_eq!(write(&mut output, &mut small, b"one\n", Written::Formatted), 4);
     }
 }

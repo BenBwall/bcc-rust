@@ -140,6 +140,23 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "setbuf" => fixed(Void, &[Ptr, Ptr]),
         | "setbuffer" => fixed(Void, &[Ptr, Ptr, Wide64]),
         | "setlinebuf" => fixed(Void, &[Ptr]),
+        | "setlocale" => fixed(Ptr, &[Int, Ptr]),
+        | "__ctype_get_mb_cur_max" => fixed(Wide64, &[]),
+        // `wint_t` is `wchar_t`'s width on every target.
+        | "fwide" => fixed(Int, &[Ptr, Int]),
+        | "fputwc" | "putwc" | "ungetwc" => fixed(WChar, &[WChar, Ptr]),
+        | "putwchar" => fixed(WChar, &[WChar]),
+        | "fputws" => fixed(Int, &[Ptr, Ptr]),
+        | "fgetwc" | "getwc" => fixed(WChar, &[Ptr]),
+        | "getwchar" => fixed(WChar, &[]),
+        | "fgetws" => fixed(Ptr, &[Ptr, Int, Ptr]),
+        | "wprintf" | "wscanf" | "__isoc99_wscanf" | "__isoc23_wscanf" => variadic(Int, &[Ptr]),
+        | "fwprintf" | "fwscanf" | "swscanf" | "__isoc99_fwscanf" | "__isoc99_swscanf"
+        | "__isoc23_fwscanf" | "__isoc23_swscanf" => variadic(Int, &[Ptr, Ptr]),
+        | "vwprintf" => fixed(Int, &[Ptr, Ptr]),
+        | "vfwprintf" => fixed(Int, &[Ptr, Ptr, Ptr]),
+        | "swprintf" => variadic(Int, &[Ptr, Wide64, Ptr]),
+        | "vswprintf" => fixed(Int, &[Ptr, Wide64, Ptr, Ptr]),
         | "qsort" => fixed(Void, &[Ptr, Wide64, Wide64, Ptr]),
         | "bsearch" => fixed(Ptr, &[Ptr, Ptr, Wide64, Wide64, Ptr]),
         | _ => return None,
@@ -193,6 +210,10 @@ pub(super) fn check(
 fn every_added_host_function_has_a_signature() {
     for &name in super::stdio::FUNCTIONS
         .iter()
+        .chain(super::stdio::WIDE_FUNCTIONS)
+        .chain(super::errno::FUNCTIONS)
+        .chain(super::locale::FUNCTIONS)
+        .chain(&crate::backend::interpreter::exit::FUNCTIONS)
         .chain(super::strings::FUNCTIONS)
         .chain(&crate::backend::interpreter::callbacks::FUNCTIONS)
         .chain(&[

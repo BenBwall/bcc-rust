@@ -57,6 +57,7 @@ pub(super) const FUNCTIONS: &[&str] = &[
 /// The Linux error numbers the host sets.
 pub(super) const EPERM: i32 = 1;
 pub(super) const ENOENT: i32 = 2;
+pub(super) const E2BIG: i32 = 7;
 pub(super) const EBADF: i32 = 9;
 pub(super) const ENOMEM: i32 = 12;
 pub(super) const EACCES: i32 = 13;

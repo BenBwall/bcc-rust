@@ -4,7 +4,8 @@
 //! implements the part of the C library that test programs use to report
 //! results, manage memory and handle strings and files, and captures their
 //! output in arena buffers. `errno.rs` holds `errno` and its messages,
-//! `stdio.rs` the streams and files,
+//! `locale.rs` the locale and its character conversions, `stdio.rs` the
+//! streams and files (with the wide character functions in `stdio/wide.rs`),
 //! `printf.rs` and `scanf.rs` formatted input and output, `strings.rs` the
 //! string, wide-string, character and conversion functions, `math.rs` and
 //! `complex.rs` the numeric library, and `checked.rs` the
@@ -25,6 +26,7 @@ mod checked;
 mod complex;
 mod errno;
 mod library;
+mod locale;
 mod math;
 mod stdio;
 mod strings;
@@ -165,6 +167,12 @@ pub(crate) struct DefaultHost<'a> {
     /// for an unknown code.
     messages: [Option<Pointer>; errno::MESSAGE_COUNT],
     unknown_message: Option<Pointer>,
+    /// The program's locale.
+    locale:        locale::Locale,
+    /// Whether the format being run is a wide one, and whether a conversion
+    /// met a character the locale cannot convert, which fails the call.
+    wide_format:   bool,
+    format_error:  bool,
     /// glibc's character tables, by `strings::ctype_table` slot, once made.
     ctype:         [Option<Pointer>; 3],
     /// Where `strtok` continues.
@@ -210,6 +218,20 @@ impl Host for DefaultHost<'_> {
         {
             result = Err(fault);
         }
+        // A formatting function fails with EILSEQ on a character the locale
+        // cannot convert, after writing what came before it.
+        if std::mem::take(&mut self.format_error) && result.is_ok() {
+            if let Err(fault) = self.set_errno(memory, errno::EILSEQ) {
+                return Err(fault);
+            }
+            result = result.map(|value| match value {
+                | HostReturn::Value(Some(RuntimeValue::Int(_))) => HostReturn::Value(
+                    call.result
+                        .map(|ty| RuntimeValue::int(ty, (-1_i32).cast_unsigned().into())),
+                ),
+                | value => value,
+            });
+        }
         if redirected || implicit_stream(call.name) != Some(1) {
             return result;
         }
@@ -251,9 +273,15 @@ impl DefaultHost<'_> {
             let windows = matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc);
             library::check(call, signature, self.long_width, self.long_double, windows)?;
         }
-        // Using a closed standard stream is undefined even without naming it.
+        // Using a closed standard stream is undefined even without naming it,
+        // and a byte function on a wide-oriented stream is undefined.
         if let Some(stream) = implicit_stream(call.name) {
             let _ = self.standard(stream)?;
+        }
+        if let Some(stream) = self.byte_stream(call, memory)?
+            && self.is_wide(stream)
+        {
+            return Err(UbKind::StreamOrientation.into());
         }
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
             return result;
@@ -275,6 +303,9 @@ impl DefaultHost<'_> {
             return result;
         }
         if let Some(result) = self.errno_functions(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.locale_functions(call, memory) {
             return result;
         }
         if let Some(result) = self.stdio(call, memory) {
@@ -490,9 +521,9 @@ impl DefaultHost<'_> {
 /// C99: §7.19.6.8-§7.19.6.13, pp. 292-294; PDF pp. 304-306.
 pub(crate) fn va_list_operand(name: &str) -> Option<usize> {
     match name {
-        | "vprintf" => Some(1),
-        | "vfprintf" | "vsprintf" => Some(2),
-        | "vsnprintf" => Some(3),
+        | "vprintf" | "vwprintf" => Some(1),
+        | "vfprintf" | "vsprintf" | "vfwprintf" => Some(2),
+        | "vsnprintf" | "vswprintf" => Some(3),
         | _ => checked::va_list_operand(name),
     }
 }
@@ -719,8 +750,10 @@ pub(crate) enum Channel {
 /// `FILE *` argument.
 fn implicit_stream(name: &str) -> Option<usize> {
     match name {
-        | "printf" | "puts" | "putchar" | "vprintf" | "__printf_chk" | "__vprintf_chk" => Some(1),
-        | "getchar" | "scanf" | "__isoc99_scanf" | "__isoc23_scanf" => Some(0),
+        | "printf" | "puts" | "putchar" | "vprintf" | "__printf_chk" | "__vprintf_chk"
+        | "putwchar" | "wprintf" | "vwprintf" => Some(1),
+        | "getchar" | "scanf" | "__isoc99_scanf" | "__isoc23_scanf" | "getwchar" | "wscanf"
+        | "__isoc99_wscanf" | "__isoc23_wscanf" => Some(0),
         | "perror" => Some(2),
         | _ => None,
     }
@@ -815,6 +848,9 @@ impl<'a> DefaultHost<'a> {
             errno: None,
             messages: [None; errno::MESSAGE_COUNT],
             unknown_message: None,
+            locale: locale::Locale::new(),
+            wide_format: false,
+            format_error: false,
             ctype:         [None; 3],
             strtok:        RuntimeValue::NULL,
             scratch:       ArenaVec::new_in(arena),
