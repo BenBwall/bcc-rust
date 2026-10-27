@@ -300,6 +300,9 @@ enum LanguageFlag {
     Hosted(bool),
     /// `-fgnu89-inline` or `-fno-gnu89-inline`.
     Gnu89Inline(bool),
+    /// `-fsigned-char` or `-fno-unsigned-char` (true), `-funsigned-char` or
+    /// `-fno-signed-char` (false).
+    CharSigned(bool),
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
 }
@@ -321,6 +324,8 @@ impl LanguageFlag {
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
+            | "-fsigned-char" | "-fno-unsigned-char" => return Some(Self::CharSigned(true)),
+            | "-funsigned-char" | "-fno-signed-char" => return Some(Self::CharSigned(false)),
             | _ => {},
         }
         if Relocation::parse(text).is_some() {
@@ -381,6 +386,7 @@ impl LanguageFlag {
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
+            | Self::CharSigned(signed) => configuration.with_char_signed(signed),
         }
     }
 }

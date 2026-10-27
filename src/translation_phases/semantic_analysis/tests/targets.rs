@@ -451,3 +451,55 @@ fn msvc_forceinline_is_inline_and_always_inline() {
         );
     }
 }
+
+/// `-funsigned-char` makes plain `char` unsigned on every target, still a
+/// type distinct from `unsigned char`: character constants, conversions and
+/// constant folding follow it, and `__CHAR_UNSIGNED__` marks it (with
+/// `_CHAR_UNSIGNED` on the MSVC target, as Clang defines it).
+/// C99: §6.2.5 paragraph 15, p. 35; PDF p. 47; §6.4.4.4 paragraph 10,
+/// p. 61; PDF p. 73.
+#[test]
+fn unsigned_plain_char_follows_the_configuration() {
+    let unsigned = "_Static_assert((char)-1 > 0 && (char)200 == 200 && '\\xff' == 255, \
+                    \"value\");\n_Static_assert(_Generic((char)0, char: 1, unsigned char: 2, \
+                    default: 3) == 1, \"type\");\n_Static_assert(sizeof(char) == 1 && (char)256 \
+                    == 0, \"width\");\n#ifndef __CHAR_UNSIGNED__\n#error marker\n#endif\n#if \
+                    '\\xff' != 255 || '\\x7f' != 127 || L'\\x7f' != 127\n#error if\n#endif\n";
+    // `#if` reads narrow constants as phase 7 does (C99 §6.10.1p4) and keeps
+    // wide ones in `wchar_t`.
+    let signed = "_Static_assert((char)-1 < 0 && '\\xff' == -1, \"value\");\n#ifdef \
+                  __CHAR_UNSIGNED__\n#error marker\n#endif\n#if '\\xff' != -1 || !('\\x80' < 0) \
+                  || '\\x7f' != 127 || L'\\xff' != 255\n#error if\n#endif\n";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        let configuration = CompilerConfiguration::default().with_target(target);
+        for (source, configuration) in [
+            (unsigned, configuration.with_char_signed(false)),
+            (signed, configuration),
+            (
+                signed,
+                configuration.with_char_signed(false).with_char_signed(true),
+            ),
+        ] {
+            with_configuration(source, configuration, |context, _| {
+                assert_eq!(
+                    context.pending_error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                );
+            });
+        }
+    }
+    with_configuration(
+        "#ifndef _CHAR_UNSIGNED\n#error msvc\n#endif\nint x;\n",
+        CompilerConfiguration::default()
+            .with_target(Target::WindowsMsvc)
+            .with_char_signed(false),
+        |context, _| assert_eq!(context.pending_error_count(), 0),
+    );
+    with_configuration(
+        "#ifdef _CHAR_UNSIGNED\n#error not msvc\n#endif\nint x;\n",
+        CompilerConfiguration::default().with_char_signed(false),
+        |context, _| assert_eq!(context.pending_error_count(), 0),
+    );
+}

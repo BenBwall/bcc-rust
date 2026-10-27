@@ -150,6 +150,33 @@ int main(void) {
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// `-funsigned-char` makes plain `char` unsigned in every phase, with
+    /// the resource `<limits.h>` following it; `-fsigned-char` restores the
+    /// target's signed `char`, and the last flag wins.
+    #[test]
+    fn unsigned_char_flag_reaches_limits_folding_and_lowering() {
+        let source = "#include <limits.h>\nstatic int f(char x) { return x; }\nint main(void) { \
+                      char d = -1; return (d > 0) + (f((char)0x80) == 128) * 2 + (CHAR_MIN == 0) \
+                      * 4 + (CHAR_MAX == 255) * 8 + ('\\xff' == 255) * 16; }\n";
+        for (flags, expected) in [
+            (&["-funsigned-char"][..], 31),
+            (&["-fno-signed-char"], 31),
+            (&["-funsigned-char", "-fsigned-char"], 0),
+            (&[], 0),
+        ] {
+            let result = bcc(
+                source,
+                &[&["-ffreestanding", "--interpret"][..], flags].concat(),
+            );
+            assert_eq!(
+                result.status.code(),
+                Some(expected),
+                "{flags:?}: {}",
+                text(&result.stderr)
+            );
+        }
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

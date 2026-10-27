@@ -111,17 +111,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Scalar::Int
                 };
                 let (bits, signed) = self.types.target.integer(scalar).unwrap();
-                let mut value = i128::from(value.target_value(&self.types.target));
-                if matches!(
-                    expression.kind,
-                    ExpressionType::Constant(Constant::Char(
-                        super::super::preprocessing::CharacterTokenType::Char(_)
-                    ))
-                ) && self.types.target.char_signed
-                    && (128..=255).contains(&value)
-                {
-                    value -= 256;
-                }
+                let value = i128::from(value.target_value(&self.types.target));
                 self.integers.push(Some(Integer {
                     value,
                     bits,

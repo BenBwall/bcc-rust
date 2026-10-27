@@ -83,6 +83,9 @@ pub(crate) struct CompilerConfiguration {
     hosted: bool,
     optimization: (bool, bool),
     gnu89_inline: Option<bool>,
+    /// Whether plain `char` is signed, overriding the target's choice, as
+    /// `-fsigned-char` and `-funsigned-char` do.
+    char_signed: Option<bool>,
     suppress_warnings: bool,
     warnings_as_errors: bool,
     /// Most recursive grammar productions active at once; see

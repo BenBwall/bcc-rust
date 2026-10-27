@@ -79,6 +79,32 @@ struct CountDiagnostics(usize);
     clippy::disallowed_macros,
     reason = "Startup argv tests own clap argument strings."
 )]
+fn char_signedness_flags_override_the_target_and_each_other() {
+    for (flags, signed) in [
+        (vec![], true),
+        (vec!["-funsigned-char"], false),
+        (vec!["-fno-signed-char"], false),
+        (vec!["-funsigned-char", "-fsigned-char"], true),
+        (
+            vec!["-fsigned-char", "-fno-unsigned-char", "-funsigned-char"],
+            false,
+        ),
+    ] {
+        let args = [vec!["bcc-rust", "--input", "int x;"], flags].concat();
+        let cli = Cli::try_parse_from(
+            normalize_language_arguments(args.iter().map(std::ffi::OsString::from)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cli.configuration().layout().char_signed, signed, "{args:?}");
+    }
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Startup argv tests own clap argument strings."
+)]
 fn inline_flags_override_the_final_standard_and_each_other() {
     for (flags, expected) in [
         (vec!["-std=gnu89"], true),

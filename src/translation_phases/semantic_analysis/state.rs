@@ -33,7 +33,7 @@ use crate::{
 impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     pub(super) fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
-        let target = context.configuration.target().layout();
+        let target = context.configuration.layout();
         let pack_alignments = super::packing::states(context, scratch);
         let mut analyzer = Self {
             references: ArenaVec::new_in(tu),

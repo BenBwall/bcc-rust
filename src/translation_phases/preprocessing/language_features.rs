@@ -1021,6 +1021,16 @@ pub(super) fn with_identity_macros<'a>(
     if configuration.accepts(Feature::C23Keywords) {
         out.push_str(configuration.target().atomic_c23_macros());
     }
+    // GCC and Clang mark an unsigned plain `char`, which `<limits.h>` reads
+    // for `CHAR_MIN` and `CHAR_MAX` (C99 §5.2.4.2.1p2, p. 23; PDF p. 35).
+    // On the MSVC target Clang also defines `_CHAR_UNSIGNED`, the macro
+    // `cl /J` defines.
+    if !configuration.layout().char_signed {
+        out.push_str("#define __CHAR_UNSIGNED__ 1\n");
+        if configuration.target() == crate::target::Target::WindowsMsvc {
+            out.push_str("#define _CHAR_UNSIGNED 1\n");
+        }
+    }
     // The relocation model `-fpic` and its family select, as Clang spells
     // it (GCC manual, "Code Gen Options").
     let relocation = configuration

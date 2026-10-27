@@ -161,6 +161,28 @@ impl CompilerConfiguration {
         }
     }
 
+    /// Makes plain `char` signed or unsigned, overriding the target, like
+    /// GCC's and Clang's `-fsigned-char` and `-funsigned-char`. Plain `char`
+    /// stays a type distinct from `signed char` and `unsigned char`.
+    /// C99: implementation-defined, §6.2.5 paragraph 15, p. 35; PDF p. 47.
+    /// GCC manual, "C Dialect Options",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/C-Dialect-Options.html#index-funsigned-char>.
+    pub(crate) const fn with_char_signed(mut self, signed: bool) -> Self {
+        self.char_signed = Some(signed);
+        self
+    }
+
+    /// The target's scalar layout, with plain `char`'s signedness as
+    /// [`Self::with_char_signed`] chose it. Semantic analysis, constant
+    /// folding and lowering read their types from this layout.
+    pub(crate) const fn layout(self) -> crate::target::TargetLayout {
+        let mut layout = self.target.layout();
+        if let Some(signed) = self.char_signed {
+            layout.char_signed = signed;
+        }
+        layout
+    }
+
     pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
         self.suppress_warnings = enabled;
         self
@@ -259,6 +281,7 @@ impl CompilerConfiguration {
             hosted: true,
             optimization: (false, false),
             gnu89_inline: None,
+            char_signed: None,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,
