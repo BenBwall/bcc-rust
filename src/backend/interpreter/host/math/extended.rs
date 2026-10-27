@@ -14,14 +14,15 @@
 //! processor, and trap as unsupported on a host without one. A public name
 //! that glibc wraps for SVID error handling (`w_*l_compat.c`) returns the
 //! wrapper's value where it differs from the function's; `errno` is not
-//! set here. `lgammal` and `tgammal` stay unsupported and trap.
+//! set here.
 //!
 //! Reading order: [`extended`] dispatches; `exact.rs` holds the exact
 //! functions on the representation's words, `trigonometric.rs` (with the
 //! table in `sincos_table.rs`) the sine, cosine and tangent, `inverse.rs`
 //! their inverses, `exponential.rs` the exponentials, logarithms and
 //! powers, `hyperbolic.rs` the hyperbolic functions and their inverses,
-//! `error_function.rs` `erfl` and `erfcl`, and `algebraic.rs` `cbrtl`,
+//! `error_function.rs` `erfl` and `erfcl`, `gamma.rs` (with
+//! `gamma_negative.rs`) `lgammal` and `tgammal`, and `algebraic.rs` `cbrtl`,
 //! `hypotl` and `fmal`. `processor.rs` runs the microcoded instructions
 //! and models `fxam` and the comparisons, and `expression.rs` gives C's
 //! comparisons and conversions on the model. `tests.rs` compares every
@@ -33,6 +34,8 @@ mod algebraic;
 mod error_function;
 mod exact;
 mod exponential;
+mod gamma;
+mod gamma_negative;
 mod hyperbolic;
 mod inverse;
 mod sincos_table;
@@ -61,6 +64,7 @@ use exponential::{
     Base,
     Logarithm,
 };
+pub(super) use gamma::lgamma;
 
 use super::{
     Fault,
@@ -69,7 +73,6 @@ use super::{
     RuntimeValue,
     Type,
     UbKind,
-    Unsupported,
 };
 use crate::{
     ir::Align,
@@ -229,8 +232,8 @@ pub(super) fn extended(
         | Operation::Fma => algebraic::fma(float(0)?, float(1)?, float(2)?),
         | Operation::Erf => error_function::erf(float(0)?)?,
         | Operation::Erfc => error_function::erfc(float(0)?)?,
-        | Operation::Lgamma | Operation::Tgamma =>
-            return Err(Fault::Unsupported(Unsupported::WideFloat)),
+        | Operation::Lgamma => lgamma(float(0)?)?.0,
+        | Operation::Tgamma => gamma::tgamma(float(0)?)?,
     };
     Ok(RuntimeValue::F80(value))
 }

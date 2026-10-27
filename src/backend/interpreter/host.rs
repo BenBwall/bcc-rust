@@ -6,7 +6,9 @@
 //! output in arena buffers. `errno.rs` holds `errno` and its messages,
 //! `locale.rs` the locale and its character conversions, `stdio.rs` the
 //! streams and files (with the wide character functions in `stdio/wide.rs`),
-//! `printf.rs` and `scanf.rs` formatted input and output, `strings.rs` the
+//! `posix.rs` the POSIX file descriptors (`open`, `read`, `write`, `pipe`,
+//! `stat`, …), `printf.rs` and `scanf.rs` formatted input and output,
+//! `strings.rs` the
 //! string, wide-string, character and conversion functions, `math.rs`,
 //! `quad.rs` (glibc's `_Float128` functions) and `complex.rs` the numeric
 //! library, and `checked.rs` the
@@ -29,6 +31,7 @@ mod errno;
 mod library;
 mod locale;
 mod math;
+mod posix;
 mod quad;
 mod stdio;
 mod strings;
@@ -90,6 +93,13 @@ pub(crate) trait Host {
         None
     }
 
+    /// The C library object other than a stream that a declared but
+    /// undefined object names, if the host's C library defines it. A host
+    /// that does not say defines none.
+    fn library_object(&self, _name: &str) -> Option<LibraryObject> {
+        None
+    }
+
     /// Ends the program normally, after `main` returns or the program calls
     /// `exit` and the destructors have run, but not after `abort` or a
     /// trap: as the C library does then, the host writes out what its
@@ -101,6 +111,15 @@ pub(crate) trait Host {
     /// what the host's streams hold is lost, as the C library loses it.
     /// C99: §7.20.4.4 paragraph 2, p. 316; PDF p. 328.
     fn at_immediate_exit(&mut self) {}
+}
+
+/// An object of the host's C library other than a stream, which the
+/// program's declaration of it becomes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LibraryObject {
+    /// glibc's `signgam`: the sign of Γ the last `lgamma`, `lgammaf`,
+    /// `lgammal` or `gamma` call found (XSI; glibc's own symbol since 2.0).
+    Signgam = 0,
 }
 
 /// A call the host is asked to run.
@@ -146,6 +165,10 @@ pub(crate) enum HostReturn {
 /// C99: §7.20.6.1, p. 320; PDF p. 332 (`abs`).
 /// C99: §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251 (real math).
 /// C99: §7.4.1.8, p. 183; PDF p. 195 (`isprint` in the initial C locale).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent switches: file access, the console's terminals and a call's state."
+)]
 pub(crate) struct DefaultHost<'a> {
     allocator:       &'a Bump,
     output:          ArenaVec<'a, u8>,
@@ -159,6 +182,24 @@ pub(crate) struct DefaultHost<'a> {
     denied_path:     ArenaVec<'a, u8>,
     /// The open streams.
     streams:         stdio::Streams<'a>,
+    /// The open file descriptors.
+    descriptors:     posix::Descriptors,
+    /// How much of `stdout`'s and `stderr`'s write-outs the host has passed
+    /// on to what descriptors 1 and 2 refer to, how many bytes the current
+    /// call inserted into the output buffer (a `write` to the console) and
+    /// took out of it (write-outs that went elsewhere), all before what the
+    /// call itself writes, and buffers for bytes between the console and
+    /// descriptors.
+    routed_output:   usize,
+    routed_errors:   usize,
+    inserted_output: usize,
+    removed_output:  usize,
+    io_buffer:       ArenaVec<'a, u8>,
+    io_errors:       ArenaVec<'a, u8>,
+    /// Whether the console's output and input are terminals, as the
+    /// command line says.
+    terminal_output: bool,
+    terminal_input:  bool,
     /// A file name being passed to the host's file system.
     path:            ArenaVec<'a, u8>,
     /// `tmpnam`'s static buffer, once made.
@@ -204,11 +245,19 @@ impl Host for DefaultHost<'_> {
         stdio::standard_stream(name)
     }
 
+    fn library_object(&self, name: &str) -> Option<LibraryObject> {
+        (name == "signgam").then_some(LibraryObject::Signgam)
+    }
+
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
         // Standard output written by any function follows a `freopen`; a
         // function that writes it implicitly fails when that write does.
         let before = self.output.len();
         let mut result = self.dispatch(call, memory);
+        // A `write` to the console put its bytes before what `stdout` holds,
+        // and write-outs that went elsewhere left the output buffer.
+        let before = before + std::mem::take(&mut self.inserted_output)
+            - std::mem::take(&mut self.removed_output);
         let redirected = self.redirect_output(before, call.name);
         // What remains past `before` went to the captured standard output;
         // a `printf` that met a character it could not convert discards
@@ -223,12 +272,24 @@ impl Host for DefaultHost<'_> {
         } else {
             self.console.output.put(&self.output, before, kind);
         }
-        // A stream operation that failed passes its `errno` on.
+        // What the standard streams wrote out reaches what descriptors 1
+        // and 2 refer to now, after this call's output was accounted for.
+        self.route_console();
+        (self.inserted_output, self.removed_output) = (0, 0);
+        // A stream operation that failed passes its `errno` on; on a pipe
+        // the program alone holds, a stream that would wait or that wrote
+        // to no reader stops it, as for the descriptors.
         if let Some(code) = self.streams.take_errno()
             && result.is_ok()
-            && let Err(fault) = self.set_errno(memory, code)
         {
-            result = Err(fault);
+            let fault = match code {
+                | errno::EAGAIN => Some(Fault::Unsupported(Unsupported::PipeWait)),
+                | errno::EPIPE => Some(Fault::Unsupported(Unsupported::PipeSignal)),
+                | _ => self.set_errno(memory, code).err(),
+            };
+            if let Some(fault) = fault {
+                result = Err(fault);
+            }
         }
         // A formatting function fails with EILSEQ on a character the locale
         // cannot convert, after writing what came before it.
@@ -256,6 +317,7 @@ impl Host for DefaultHost<'_> {
 
     fn at_exit(&mut self) {
         let _ = self.flush_all();
+        self.route_console();
     }
 
     fn at_immediate_exit(&mut self) {
@@ -303,11 +365,22 @@ impl DefaultHost<'_> {
             self.long_width,
             &mut self.text,
         ) {
-            let (value, code) = result?;
-            if code != 0 {
-                self.set_errno(memory, code)?;
+            let outcome = result?;
+            if outcome.errno != 0 {
+                self.set_errno(memory, outcome.errno)?;
             }
-            return Ok(HostReturn::Value(Some(value)));
+            // glibc's `lgamma` family leaves the sign of Γ in `signgam`.
+            if let Some(sign) = outcome.signgam
+                && let Some(signgam) = memory.library_object(LibraryObject::Signgam)
+            {
+                memory.store(
+                    Type::I32,
+                    RuntimeValue::int(Type::I32, u128::from(sign.cast_unsigned())),
+                    RuntimeValue::Ptr(signgam),
+                    Align::BYTE,
+                )?;
+            }
+            return Ok(HostReturn::Value(Some(outcome.value)));
         }
         if let Some(result) = self.checked(call, memory) {
             return result;
@@ -316,6 +389,9 @@ impl DefaultHost<'_> {
             return result;
         }
         if let Some(result) = self.locale_functions(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.posix(call, memory) {
             return result;
         }
         if let Some(result) = self.stdio(call, memory) {
@@ -690,6 +766,7 @@ impl DefaultHost<'_> {
     /// Treats standard output as a terminal, which glibc line-buffers rather
     /// than fully buffering as for a pipe or file.
     pub(crate) fn set_terminal_output(&mut self, terminal: bool) {
+        self.terminal_output = terminal;
         if terminal {
             self.console.output.mode = stdio::Mode::Line;
             self.console.output.block = stdio::TERMINAL_BUFFER;
@@ -715,6 +792,7 @@ impl DefaultHost<'_> {
     /// Treats standard input as a terminal, which glibc line-buffers:
     /// refilling its buffer flushes a terminal's stdout.
     pub(crate) fn set_terminal_input(&mut self, terminal: bool) {
+        self.terminal_input = terminal;
         self.streams.set_terminal_input(terminal);
     }
 
@@ -856,6 +934,15 @@ impl<'a> DefaultHost<'a> {
             denied_files:    0,
             denied_path:     ArenaVec::new_in(arena),
             streams:         stdio::Streams::new_in(arena),
+            descriptors:     posix::Descriptors::new(),
+            routed_output:   0,
+            routed_errors:   0,
+            inserted_output: 0,
+            removed_output:  0,
+            io_buffer:       ArenaVec::new_in(arena),
+            io_errors:       ArenaVec::new_in(arena),
+            terminal_output: false,
+            terminal_input:  false,
             path:            ArenaVec::new_in(arena),
             tmpnam_buffer:   None,
             errno:           None,

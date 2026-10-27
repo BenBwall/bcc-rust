@@ -1160,6 +1160,48 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         interpreter_matches_glibc("wide_stdio.c", &["--interpret-allow-fs"]);
     }
 
+    /// `tests/fixtures/programs/gamma_functions.c` calls the `lgamma`
+    /// family in each precision, with the sign each leaves in `signgam` or
+    /// stores through its pointer, glibc's `gamma` names, and `tgamma`, with
+    /// `errno`: the interpreter must print what glibc prints, the x87
+    /// `lgammal` and `tgammal` bit for bit.
+    #[test]
+    fn gamma_functions_and_signgam_match_glibc() {
+        interpreter_matches_glibc("gamma_functions.c", &[]);
+    }
+
+    /// `tests/fixtures/programs/wide_stream_positions.c` runs every sequence
+    /// of four reads, pushbacks, flushes and seeks on wide streams in the
+    /// "C" locale and UTF-8 through several buffer sizes, with `ftell` after
+    /// each: the interpreter must follow glibc's wide get and backup areas
+    /// and print what glibc prints.
+    #[test]
+    fn wide_stream_positions_match_glibc() {
+        interpreter_matches_glibc("wide_stream_positions.c", &["--interpret-allow-fs"]);
+    }
+
+    /// glibc aborts a `SEEK_CUR` seek while a wide stream reads its backup
+    /// area (`_IO_seekoff_unlocked`), after what it wrote out; so does the
+    /// interpreter.
+    #[test]
+    fn wide_seek_from_the_backup_area_aborts_as_glibc_does() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source = "typedef struct _IO_FILE FILE; extern FILE *stdout; typedef unsigned wint_t;
+FILE *fopen(const char *, const char *); int fputs(const char *, FILE *); int fclose(FILE *);
+wint_t fgetwc(FILE *); wint_t ungetwc(wint_t, FILE *); int fseek(FILE *, long, int);
+int printf(const char *, ...); int fflush(FILE *); char *tmpnam(char *); int remove(const char *);
+int main(void) { char name[20]; tmpnam(name); FILE *w = fopen(name, \"w\"); fputs(\"abc\", w);
+  fclose(w); FILE *f = fopen(name, \"r\"); fgetwc(f); ungetwc('Z', f); remove(name);
+  printf(\"before\\n\"); fflush(stdout); fseek(f, 0, 0); ungetwc('Z', f); printf(\"set\\n\");
+  fflush(stdout); fseek(f, 0, 1); printf(\"after\\n\"); return 0; }
+";
+        let output = bcc(source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(134), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "before\nset\n");
+    }
+
     /// `tests/fixtures/programs/exit_handlers.c` ends in each way glibc
     /// offers: the `atexit` and `on_exit` handlers in reverse order around
     /// the destructors, then the streams written out, for a return from
@@ -1183,6 +1225,133 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         for mode in 0..=12 {
             merged_mode_matches_glibc("stdio_buffering.c", mode);
         }
+    }
+
+    /// `tests/fixtures/programs/posix_descriptors.c` mixes descriptors with
+    /// the streams: `write(1)` and `write(2)` against buffered `stdout` and
+    /// `stderr`, `dup2` and `close` under `stdout`, `freopen`, `fdopen`,
+    /// `fileno`, files and pipes through descriptors, and `errno` on each
+    /// failure. With stdout and stderr in one file, the interpreter must
+    /// write what glibc writes and leave the same file.
+    #[test]
+    fn descriptors_and_streams_match_glibc() {
+        for mode in 0..=10 {
+            merged_mode_matches_glibc("posix_descriptors.c", mode);
+        }
+    }
+
+    /// With every descriptor taken, `open`, `creat` and `fopen` fail with
+    /// `EMFILE` before touching the file system, as Linux does, so neither
+    /// `O_TRUNC` nor `"w"` empties the file; and glibc's `__xstat` family
+    /// accepts both x86-64 `_STAT_VER` values, 0 and 1. The host's own
+    /// descriptor limit varies, so the expected output is written out.
+    #[test]
+    fn full_descriptor_table_and_stat_versions_fail_as_glibc_does() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let path = temporary("full-table.txt");
+        std::fs::write(&path, "KEEP").unwrap();
+        let path_text = path.to_str().unwrap();
+        let source = format!(
+            "typedef struct _IO_FILE FILE; int printf(const char *, ...);
+int open(const char *, int, ...); int creat(const char *, unsigned); int *__errno_location(void);
+FILE *fopen(const char *, const char *); struct stat {{ long words[18]; }};
+int __fxstat(int, int, struct stat *); int __xstat(int, const char *, struct stat *);
+int __lxstat(int, const char *, struct stat *);
+int main(void) {{ const char *name = \"{path_text}\"; int last = -1, fd, e[4], r[4]; struct stat \
+             st;
+  while ((fd = open(\"/dev/null\", 0)) >= 0) last = fd;
+  r[0] = open(name, 01 | 01000); e[0] = *__errno_location();
+  r[1] = creat(name, 0600); e[1] = *__errno_location();
+  r[2] = fopen(name, \"w\") != 0; e[2] = *__errno_location();
+  printf(\"%d %d %d %d %d %d %d\\n\", last, r[0], e[0], r[1], e[1], r[2], e[2]);
+  *__errno_location() = 0; r[0] = __fxstat(0, 1, &st); e[0] = *__errno_location();
+  r[1] = __xstat(1, name, &st); r[2] = __lxstat(0, name, &st);
+  r[3] = __xstat(3, name, &st); e[3] = *__errno_location();
+  printf(\"%d %d %d %d %d %d\\n\", r[0], e[0], r[1], r[2], r[3], e[3]); return 0; }}
+"
+        );
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(
+            text(&output.stdout),
+            "1023 -1 24 -1 24 0 24\n0 0 0 0 -1 22\n"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "KEEP");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// `tests/fixtures/programs/posix_console.c`: on pipes, as the tests run
+    /// programs, `fstat`, `lseek` and `isatty` of descriptors 1 and 2 report
+    /// what glibc's do, and `write(1)` overtakes buffered `stdout`.
+    #[test]
+    fn console_descriptors_match_glibc_on_pipes() {
+        interpreter_matches_glibc("posix_console.c", &[]);
+    }
+
+    /// The program is a pipe's only process, so reading an empty pipe whose
+    /// write end is open, or filling one, would wait forever, and writing to
+    /// one nobody reads raises `SIGPIPE`: the interpreter stops the program,
+    /// through a descriptor or a stream. Without `--interpret-allow-fs`,
+    /// `open`, `stat` and `unlink` fail with `EACCES` and are noted, while
+    /// the console's descriptors and pipes still work.
+    #[test]
+    fn descriptors_stop_on_dead_pipes_and_need_file_access() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let prelude = "typedef struct _IO_FILE FILE; int printf(const char *, ...);
+int pipe(int *); long read(int, void *, unsigned long); long write(int, const void *, unsigned \
+                       long);
+int close(int); FILE *fdopen(int, const char *); int fputs(const char *, FILE *);
+int fflush(FILE *); int fgetc(FILE *);
+";
+        for (body, message) in [
+            ("char c; read(p[0], &c, 1);", "wait forever"),
+            (
+                "static char big[100000]; write(p[1], big, sizeof big);",
+                "wait forever",
+            ),
+            ("close(p[0]); write(p[1], \"x\", 1);", "SIGPIPE"),
+            ("fgetc(fdopen(p[0], \"r\"));", "wait forever"),
+            (
+                "close(p[0]); FILE *f = fdopen(p[1], \"w\"); fputs(\"x\", f); fflush(f);",
+                "SIGPIPE",
+            ),
+        ] {
+            let source =
+                format!("{prelude}int main(void) {{ int p[2]; pipe(p); {body} return 0; }}\n");
+            let output = bcc(&source, &["--interpret"]);
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(70), "{body}: {stderr}");
+            assert!(stderr.contains(message), "{body}: {stderr}");
+        }
+        let path = temporary("descriptor-access.txt");
+        std::fs::write(&path, "kept\n").unwrap();
+        let path_text = path.to_str().unwrap();
+        let source = format!(
+            "int printf(const char *, ...); int open(const char *, int, ...); int \
+             *__errno_location(void);
+struct stat {{ char bytes[144]; }}; int stat(const char *, struct stat *); int unlink(const char \
+             *);
+long write(int, const void *, unsigned long); int pipe(int *);
+int main(void) {{ const char *name = \"{path_text}\"; struct stat st; int p[2];
+  int fd = open(name, 01 | 01000); int e1 = *__errno_location();
+  int s = stat(name, &st); int u = unlink(name); int e2 = *__errno_location();
+  printf(\"%d %d %d %d %d %ld %d\\n\", fd, e1, s, u, e2, write(1, \"\", 0), pipe(p)); return 0; }}
+"
+        );
+        let output = bcc(&source, &["--interpret"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "-1 13 -1 -1 13 0 0\n");
+        let stderr = text(&output.stderr);
+        assert!(stderr.contains("refused 3 host file accesses"), "{stderr}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept\n");
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "3 0 0 0 0 0 0\n");
+        assert!(!path.exists());
     }
 
     /// A byte function on a wide-oriented stream, or a wide one on a
@@ -1627,8 +1796,8 @@ int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return 
     }
 
     /// The interpreter computes the x87 `long double` functions, including
-    /// the transcendental ones on an x86-64 host, and refuses those it does
-    /// not implement, such as `tgammal`.
+    /// the transcendental ones (and `tgammal`, built on them) on an x86-64
+    /// host, and refuses those it does not implement, such as `cabsl`.
     #[test]
     fn host_math_runs_x87_functions_and_refuses_the_rest() {
         for target in [
@@ -1646,13 +1815,18 @@ int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return 
                     "long double expl(long double); int main(void) { return expl(1.0L) <= 2.718L; \
                      }",
                 );
+                sources.push(
+                    "long double tgammal(long double); int main(void) { return tgammal(3.0L) != \
+                     2.0L; }",
+                );
             }
             for source in sources {
                 let output = bcc(source, &["--interpret", target]);
                 assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
             }
             let output = bcc(
-                "long double tgammal(long double); int main(void) { return tgammal(3.0L) > 0; }",
+                "long double cabsl(long double _Complex); int main(void) { long double _Complex z \
+                 = 3.0L; return cabsl(z) > 0; }",
                 &["--interpret", target],
             );
             assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));

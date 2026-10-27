@@ -34,6 +34,7 @@
 use std::num::NonZeroU32;
 
 use super::{
+    host::LibraryObject,
     trap::{
         Fault,
         UbKind,
@@ -73,6 +74,9 @@ pub(crate) struct Memory<'a> {
     max_object_size:  u64,
     /// The `FILE` objects of `stdin`, `stdout` and `stderr`, once made.
     standard_streams: [Option<Pointer>; 3],
+    /// The C library's other objects the program declares, by
+    /// [`LibraryObject`].
+    library_objects:  [Option<Pointer>; 1],
 }
 
 /// One object of memory.
@@ -659,6 +663,17 @@ impl Memory<'_> {
         }
     }
 
+    /// Records the program's object for the C library's `object`.
+    pub(crate) fn set_library_object(&mut self, object: LibraryObject, pointer: Pointer) {
+        self.library_objects[object as usize] = Some(pointer);
+    }
+
+    /// The program's object for the C library's `object`, if it declares
+    /// one.
+    pub(crate) fn library_object(&self, object: LibraryObject) -> Option<Pointer> {
+        self.library_objects[object as usize]
+    }
+
     /// The `FILE` object of standard stream `stream` (0 to 2), made the
     /// first time anything asks for it.
     pub(crate) fn standard_stream(&mut self, stream: u32) -> Result<Pointer, Fault> {
@@ -821,6 +836,7 @@ impl<'a> Memory<'a> {
             next_address: FIRST_ADDRESS,
             max_object_size,
             standard_streams: [None; 3],
+            library_objects: [None; 1],
         }
     }
 }

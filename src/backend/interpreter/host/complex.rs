@@ -2,8 +2,11 @@
 //! basics (`conj`, `cproj`, `cabs`, `carg`) for the default host.
 //! Compiler helpers use the retained guest return area, even for a target
 //! register result. Native C sees only real scalars and host output
-//! temporaries. C99: §6.2.5p13, p. 34; PDF p. 46; §7.3.9.2p2, p. 179; PDF p.
+//! temporaries; the binary128 helpers compute in software (`complex/quad.rs`).
+//! C99: §6.2.5p13, p. 34; PDF p. 46; §7.3.9.2p2, p. 179; PDF p.
 //! 191; §7.3.9.5p2, p. 180; PDF p. 192.
+
+mod quad;
 
 use super::{
     Fault,
@@ -209,6 +212,10 @@ fn evaluate_basic(
     Ok(HostReturn::Value(Some(value)))
 }
 
+#[expect(
+    clippy::many_single_char_names,
+    reason = "The helpers' operands are `a + ib` and `c + id`, as libgcc names them."
+)]
 fn evaluate(
     call: HostCall<'_>,
     memory: &mut Memory<'_>,
@@ -222,9 +229,9 @@ fn evaluate(
         | "__multc3" | "__divtc3" => Type::F128,
         | _ => long_double,
     };
-    // The x87 and binary128 helpers' recovery of infinite results from NaN
-    // parts is not modelled; component extraction reads the parts directly.
-    if matches!(precision, Type::F80 | Type::F128) && helper {
+    // The x87 helpers' recovery of infinite results from NaN parts is not
+    // modelled; component extraction reads the parts directly.
+    if precision == Type::F80 && helper {
         return Err(Fault::Unsupported(Unsupported::WideFloat));
     }
     if call.args.iter().any(|value| value.is_poison()) {
@@ -269,6 +276,24 @@ fn evaluate(
                     if call.name.starts_with("__div") { 3 } else { 2 },
                 );
                 [RuntimeValue::F64(pair[0]), RuntimeValue::F64(pair[1])]
+            },
+            | (
+                [
+                    RuntimeValue::F128(a),
+                    RuntimeValue::F128(b),
+                    RuntimeValue::F128(c),
+                    RuntimeValue::F128(d),
+                ],
+                Type::F128,
+            ) => {
+                let part = crate::binary128::Binary128::from_bits;
+                let (z, w) = ([part(*a), part(*b)], [part(*c), part(*d)]);
+                let pair = if call.name.starts_with("__div") {
+                    quad::divide(z, w)
+                } else {
+                    quad::multiply(z, w)
+                };
+                pair.map(|part| RuntimeValue::F128(part.to_bits()))
             },
             | _ => return Err(UbKind::SignatureMismatch.into()),
         };

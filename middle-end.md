@@ -1319,8 +1319,12 @@ soft-float routines do on x86-64, so interpreted programs print what
 programs linked with libgcc print. The host provides glibc's `strtof128`
 and `strfromf128` (with `printf`'s exact digits, since glibc's `printf`
 has no binary128 conversion) and the exact `_Float128` math functions
-(`sqrtf128`, `fabsf128`, `floorf128`, `fmodf128`, `frexpf128`, …); the
-others, like the complex helpers, are refused.
+(`sqrtf128`, `fabsf128`, `floorf128`, `fmodf128`, `frexpf128`, …), and
+the complex helpers `__multc3` and `__divtc3` as libgcc computes them
+(`host/complex/quad.rs`: Annex G's recovery of infinities, the scaling
+of a divisor near the range's ends, and the operand order GCC 13 and 15
+compile libgcc's sums and products in, which decides a NaN result's sign
+and payload); the other `_Float128` functions are refused.
 
 x87 values compute in `src/x87.rs`, a software model of the processor's x87
 unit under the default control word (64-bit precision, round to nearest even,
@@ -1333,20 +1337,27 @@ bit for bit: the exact ones (rounding to integers, `sqrtl`, `fmodl`,
 `remainderl`, glibc's `remquol` algorithm, scaling, decomposition,
 neighbours, `nanl`) and the ports of glibc's C code (`sinl`, `cosl` and
 `tanl` with their argument reduction, `asinl`, the hyperbolic functions,
-`erfl`, `erfcl`, `cbrtl`, `hypotl`, and `fmal` correctly rounded) on the
-x87 model. The exponentials, logarithms, `powl` and the arctangents follow
+`erfl`, `erfcl`, `lgammal` with `__lgamma_negl`'s expansions about the
+zeros between -33 and -2, `tgammal`, `cbrtl`, `hypotl`, and `fmal`
+correctly rounded) on the x87 model. The exponentials, logarithms, `powl` and the arctangents follow
 glibc's assembly language, whose `f2xm1`, `fyl2x`, `fyl2xp1` and `fpatan`
 results come from the processor's microcode: those four instructions run
 on the host's own x87 unit, so the results match glibc on the same
 processor (they may differ between processor makers, as glibc's do), and a
 host without an x87 unit refuses those functions. The return values of
 glibc's SVID wrappers apply (`NAN` for `asinl`, `acosl` and the logarithms
-of out-of-domain arguments). `lgammal` and `tgammal` are refused.
+of out-of-domain arguments, and `tgammal`'s values for poles, negative
+integers and overflows). The `lgamma` family stores the sign of Γ in the
+program's `signgam` when it declares one (a host-defined object, as the
+standard streams are), or through `lgamma_r`'s pointer, with glibc's
+`gamma` names as aliases; `float` and `double` take the sign glibc's own
+`lgamma` left in the host's `signgam`.
 `src/backend/interpreter/host/math/extended/tests.rs` compares every
 function with the test binary's glibc on random encodings (skipping, on a
-glibc before 2.43, the `powl` cases its commit 1b657c53c21a changed), and
-`tests/fixtures/programs/long_double_math.c` with a program built against
-glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
+glibc before 2.43, the `powl` cases its commit 1b657c53c21a changed, and
+`tgammal` of an unnormal, which reaches them), and
+`tests/fixtures/programs/long_double_math.c` and `gamma_functions.c` with
+programs built against glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
 bases to small integer powers) on which glibc 2.39 and 2.43 differ. `printf` formats every
 conversion of `double` and `long double` exactly, digit for digit as glibc
 does, with halfway cases to even. The floating-environment APIs remain
@@ -1404,9 +1415,50 @@ buffer size, with glibc's mode constants (or the Windows runtimes' on
 Windows targets). The command line replays `stdout` and `stderr` in the
 order a shared pipe or file would have received them. Host files are
 opt-in: with `--interpret-allow-fs`, `fopen` (including C11's exclusive
-`x`), `freopen` and `remove` act on the host's file system; without it they
-fail as glibc does for a permission error (`EACCES`), the command line notes
-the refusal, and `tmpnam` names files without looking at the file system.
+`x`), `freopen`, `remove`, `open`, `stat` and `unlink` act on the host's
+file system; without it they fail as glibc does for a permission error
+(`EACCES`), the command line notes the refusal, and `tmpnam` names files
+without looking at the file system.
+
+The POSIX descriptors (`host/posix.rs`) are a table of numbers from 0 to
+1023, of which only 0, 1 and 2 (the console) are open at the start, handed
+out lowest first: `open` and `openat` with Linux's flags and the mode
+after the umask, `creat`, `close`, `read`, `write`, `lseek`, `dup`,
+`dup2`, `dup3`, `pipe`, `fstat`, `stat`, `lstat`, `fstatat` (and glibc's
+older `__xstat` forms, which accept both x86-64 `_STAT_VER` values)
+filling glibc's 144-byte x86-64 `struct stat`, `unlink` and `isatty`,
+each with the `errno` glibc's wrapper reports. A full table fails with
+`EMFILE` before the file system is touched, so a refused `O_TRUNC` or
+`fopen` in `w` empties nothing. A descriptor
+on a file holds a host duplicate, so offsets and `O_APPEND` are shared as
+an open file description shares them. A pipe is a host pipe kept
+non-blocking: the program is its only process, so a read of an empty
+pipe with an open write end, or a write to a full one, would wait
+forever, and a write to one without a reader raises `SIGPIPE`; the
+interpreter stops the program in all three cases, through a descriptor or
+a stream. The console's output and error descriptors present a pipe of
+the buffer size glibc would choose (a terminal under
+`--interpret-terminal-stdout`), which cannot seek. Streams and descriptors
+interoperate as glibc's do (`host/stdio/descriptors.rs`): each stream
+keeps its descriptor number (`fileno`), `fopen` takes the lowest free one
+and `freopen` keeps the old one, `fclose` closes it whatever it now refers
+to (failing with `EBADF` once it is closed) and, as glibc 2.42 does
+(commit be6818be31e7), first seeks a stream that has read ahead (or holds
+pushed-back characters, wide ones included) back to its position, ignoring
+`ESPIPE`, which `ftell` reports since commit 7b47b3dd214c for a device
+whose offset stays 0 (a wide stream's `do_ftell_wide` still gives
+`EINVAL`, which fails the close), and failing where `ftell` cannot place
+a wide character in glibc's backup area, `fdopen` makes a stream on a descriptor with glibc's access
+checks (in an appending mode setting `O_APPEND`, and starting at the end
+only when it had to set it), `ftell` counts from the offset the stream
+cached rather than the descriptor's, and a stream follows its number
+through `close`, `dup2` and reuse. `stdout` and `stderr` stay in the
+console model; after each call the host passes what they wrote out to what
+descriptors 1 and 2 refer to then (a file after `dup2`, nothing after
+`close`, which sets the stream's error indicator), and a `write` to the
+console lands after what it has received and before what the streams still
+buffer, so `write(1, ...)` overtakes buffered `printf` output exactly as
+with glibc.
 It provides the `fprintf`, `vprintf`, `vfprintf`, `vsprintf` and
 `vsnprintf` family and glibc's `__printf_chk` forms, with `%lc` and `%ls`;
 `sscanf`/`fscanf`/`scanf` with glibc's failure rules, the wide conversions
@@ -1423,8 +1475,17 @@ ASCII and reads such a byte as `EILSEQ`, and in "C.UTF-8" both are UTF-8; a
 stream keeps the conversion of the locale it was oriented in. A wide
 stream has glibc's wide put area, as many wide characters as the byte
 buffer holds bytes (a quarter as many in a `setvbuf` buffer), whose
-write-outs convert and write all it holds, and a wide pushback area that
-`ungetwc` fills with the characters themselves. The `wscanf` family reads
+write-outs convert and write all it holds, and glibc's wide get areas
+with their pointers (`host/stdio/stream/wide_get.rs`):
+`_IO_wfile_underflow` converts the byte buffer into a wide buffer of that
+size, carrying an incomplete character's bytes over refills; `ungetwc`
+steps back over the character just read and otherwise switches to a
+backup buffer (`_IO_sputbackwc`, `_IO_wdefault_pbackfail`); and `ftell`,
+`fflush`, `fseek` and `fclose` compute from those pointers as
+`do_ftell_wide`, `_IO_wfile_sync` and `_IO_wfile_seekoff` do, by the
+fixed width of the "C" locale's conversion or by reconverting UTF-8 from
+the byte buffer's base, including glibc's abort of a `SEEK_CUR` seek
+while the backup area is read. The `wscanf` family reads
 whole characters, matches scansets by character and converts what `%c`,
 `%s` and `%[` store with the current locale (`EILSEQ` when it cannot); a
 `printf` or `wprintf` that meets a character it cannot convert keeps what

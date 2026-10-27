@@ -34,11 +34,16 @@
 //! negative position, `EBADF` for a direction the stream's mode does not
 //! allow, and otherwise the code the host's system reports.
 //!
+//! Each stream reads and writes through a POSIX descriptor
+//! (`stdio/descriptors.rs` and `host/posix.rs`): `fileno`, `fdopen`, and
+//! the console's order when `write` and the streams both reach it.
+//!
 //! C99: §7.19.3, pp. 264-266; PDF pp. 276-278 (files); §7.19.4-§7.19.10,
 //! pp. 268-304; PDF pp. 280-316 (operations, access, I/O, positioning and
 //! errors).
 
 mod console;
+mod descriptors;
 mod stream;
 mod wide;
 
@@ -132,6 +137,8 @@ pub(super) const FUNCTIONS: &[&str] = &[
     "setbuf",
     "setbuffer",
     "setlinebuf",
+    "fileno",
+    "fdopen",
 ];
 
 /// `EOF`.
@@ -166,9 +173,11 @@ impl<'a> Streams<'a> {
         entries[0].reopen(Target::Input, true, false, false);
         entries[1].reopen(Target::Output, false, true, false);
         entries[2].reopen(Target::Errors, false, true, false);
-        // glibc's list starts as `stderr`, `stdout`, `stdin`.
+        // glibc's list starts as `stderr`, `stdout`, `stdin`, on
+        // descriptors 0, 1 and 2.
         for (index, entry) in entries[..3].iter_mut().enumerate() {
             entry.opened = index as u64;
+            entry.descriptor = Some(i32::try_from(index).expect("a standard stream"));
         }
         Self {
             entries,
@@ -279,12 +288,18 @@ impl DefaultHost<'_> {
             | "fclose" => {
                 let stream = self.stream(arg(0), memory)?;
                 let flushed = self.flush_before_closing(stream);
+                // glibc closes the stream's descriptor, whatever it now
+                // refers to; one already closed fails with `EBADF`.
+                let closed = self.close_stream_descriptor(stream);
                 let entry = &mut self.streams.entries[stream];
                 entry.reopen(Target::Closed, false, false, false);
                 if let Some(object) = entry.object.take() {
                     memory.free(object.provenance.expect("streams have provenance"));
                 }
-                RuntimeValue::Int(if flushed { 0 } else { EOF })
+                if !closed {
+                    self.set_errno(memory, errno::EBADF)?;
+                }
+                RuntimeValue::Int(if flushed && closed { 0 } else { EOF })
             },
             | "fflush" => {
                 // C99 §7.19.5.2p3: a null pointer flushes every stream.
@@ -298,11 +313,11 @@ impl DefaultHost<'_> {
                     match entry.target {
                         | Target::Output => {
                             self.console.output.flush(self.output.len());
-                            true
+                            self.route_flushed(stream)
                         },
                         | Target::Errors => {
                             self.console.flush_errors(&self.output);
-                            true
+                            self.route_flushed(stream)
                         },
                         | _ => entry.sync(),
                     }
@@ -489,6 +504,11 @@ impl DefaultHost<'_> {
                 };
                 let entry = &mut self.streams.entries[stream];
                 let moved = entry.seek(offset, whence);
+                // glibc aborts a `SEEK_CUR` while a wide stream reads its
+                // backup area (`_IO_seekoff_unlocked`).
+                if entry.aborted {
+                    return Ok(HostReturn::Abort);
+                }
                 if call.name == "rewind" {
                     // glibc's `rewind` clears both indicators even when the
                     // seek fails.
@@ -572,6 +592,8 @@ impl DefaultHost<'_> {
                 }
                 RuntimeValue::Int(if set { 0 } else { EOF })
             },
+            | "fileno" => self.fileno(arg(0), memory)?,
+            | "fdopen" => self.fdopen(int(arg(0))?, arg(1), memory)?,
             | "__acrt_iob_func" => {
                 let stream = u32::try_from(integer(arg(0))?).map_err(|_| UbKind::InvalidStream)?;
                 RuntimeValue::Ptr(memory.standard_stream(stream)?)
@@ -704,14 +726,14 @@ impl DefaultHost<'_> {
         match entry.target {
             | Target::Output => self.console.output.flush(self.output.len()),
             | Target::Errors => self.console.flush_errors(&self.output),
-            | _ => return entry.write_out(),
+            | _ => return entry.close_out(),
         }
-        true
+        self.route_flushed(stream)
     }
 
     /// Counts a refused file-system access and keeps the first path, for the
     /// command line's note.
-    fn deny_file_access(&mut self) {
+    pub(super) fn deny_file_access(&mut self) {
         if self.denied_files == 0 {
             self.denied_path.clear();
             self.denied_path.extend_from_slice(&self.path);
@@ -812,8 +834,14 @@ impl DefaultHost<'_> {
         for index in order {
             let entry = &mut self.streams.entries[index];
             match entry.target {
-                | Target::Output => self.console.output.flush(self.output.len()),
-                | Target::Errors => self.console.flush_errors(&self.output),
+                | Target::Output => {
+                    self.console.output.flush(self.output.len());
+                    flushed &= self.route_flushed(index);
+                },
+                | Target::Errors => {
+                    self.console.flush_errors(&self.output);
+                    flushed &= self.route_flushed(index);
+                },
                 | Target::Closed => {},
                 | _ => {
                     flushed &= entry.write_out();
@@ -822,6 +850,8 @@ impl DefaultHost<'_> {
                     }
                 },
             }
+            // Each write-out reaches the console or its file in this order.
+            self.route_console();
         }
         flushed
     }
@@ -881,8 +911,15 @@ impl DefaultHost<'_> {
             // for writing truncates what it held too (glibc's `freopen`
             // syncs and closes before it opens).
             let _ = self.flush_before_closing(stream);
-            self.streams.entries[stream].reopen(Target::Closed, false, false, false);
         }
+        // The stream's descriptor closes with it; glibc's `dup3` then gives
+        // the new file that number.
+        let number = reopen.and_then(|(stream, _)| {
+            let number = self.streams.entries[stream].descriptor;
+            _ = self.close_stream_descriptor(stream);
+            self.streams.entries[stream].reopen(Target::Closed, false, false, false);
+            number
+        });
         self.text.clear();
         memory.read_c_string(mode, &mut self.text)?;
         // glibc reads the access letter and then up to six modifiers, of
@@ -907,7 +944,19 @@ impl DefaultHost<'_> {
         let writable = access != Some(b'r') || plus;
         let appending = access == Some(b'a');
         let allowed = self.file_access;
-        let opened = if known {
+        // A full stream or descriptor table fails before the file system is
+        // touched, so `w` truncates nothing: `freopen` reuses its stream and
+        // the descriptor it just closed.
+        let room = match reopen {
+            | Some(_) => number.is_some() || self.descriptors.lowest_free(0).is_some(),
+            | None =>
+                (3..MAX_STREAMS)
+                    .any(|index| matches!(self.streams.entries[index].target, Target::Closed))
+                    && self.descriptors.lowest_free(0).is_some(),
+        };
+        let opened = if known && !room {
+            Err(errno::EMFILE)
+        } else if known {
             match self.path(path, memory)? {
                 | _ if !allowed => Err(errno::EACCES),
                 | Some(path) => options.open(path).map_err(|error| errno::from_io(&error)),
@@ -931,9 +980,20 @@ impl DefaultHost<'_> {
         {
             _ = opened.seek(SeekFrom::End(0)).ok();
         }
-        if known && !allowed {
+        if known && room && !allowed {
             self.deny_file_access();
         }
+        let descriptor = match &file {
+            | Some(opened) => match self.attach_descriptor(opened, readable, writable, number) {
+                | Ok(descriptor) => Some(descriptor),
+                | Err(code) => {
+                    self.set_errno(memory, code)?;
+                    file = None;
+                    None
+                },
+            },
+            | None => None,
+        };
         if let Some((stream, pointer)) = reopen {
             // C99 §7.19.5.4p3: the original stream stays closed when the new
             // file cannot be opened, so its `FILE *` dies with it.
@@ -945,6 +1005,7 @@ impl DefaultHost<'_> {
                 return Ok(RuntimeValue::NULL);
             };
             entry.reopen(Target::File(file), readable, writable, appending);
+            entry.descriptor = descriptor;
             self.streams.entries[stream].opened = self.streams.open_next();
             return Ok(pointer);
         }
@@ -954,6 +1015,9 @@ impl DefaultHost<'_> {
         let Some(index) = (3..MAX_STREAMS)
             .find(|&index| matches!(self.streams.entries[index].target, Target::Closed))
         else {
+            if let Some(descriptor) = descriptor {
+                _ = self.descriptors.close(descriptor.into());
+            }
             self.set_errno(memory, errno::EMFILE)?;
             return Ok(RuntimeValue::NULL);
         };
@@ -964,12 +1028,13 @@ impl DefaultHost<'_> {
         entry.reopen(Target::File(file), readable, writable, appending);
         entry.object = Some(object);
         entry.opened = opened;
+        entry.descriptor = descriptor;
         Ok(RuntimeValue::Ptr(object))
     }
 
     /// The host path the C string at `pointer` names, or `None` when it is
     /// not valid UTF-8.
-    fn path(
+    pub(super) fn path(
         &mut self,
         pointer: RuntimeValue,
         memory: &Memory<'_>,
