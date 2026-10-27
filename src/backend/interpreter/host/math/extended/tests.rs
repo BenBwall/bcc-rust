@@ -1,14 +1,26 @@
 //! Compares the `long double` functions with the host glibc's own, called
 //! through the System V calling convention, on random encodings of every
-//! class and on values near each function's branch points. Only cases on
-//! which glibc 2.39 and 2.43 agree are compared: `powl` of an invalid
-//! exponent changed between them. The test binary links glibc statically,
+//! class and on values near each function's branch points. The interpreter
+//! follows glibc 2.43; on an older host glibc the test skips the `powl` cases
+//! glibc 2.43 changed (commit 1b657c53c21a, "Simplify powl computation for
+//! small integral y", BZ #33411: an invalid-encoding exponent, and a
+//! pseudo-denormal or invalid base to an integral power from -3 to 3), and
+//! reports per function how many it compared and skipped. Results that come
+//! from the processor's microcode (`f2xm1`, `fyl2x`, `fyl2xp1`, `fpatan`)
+//! are the same on both sides, since the interpreter runs those
+//! instructions on the same processor. The test binary links glibc statically,
 //! and a static libm has no SVID compatibility wrappers, so where a
 //! dynamically linked program's wrapper returns `NAN` instead of the
 //! function's real indefinite (the fixture `long_double_math.c` checks
 //! those), the comparison expects the wrapper's value.
 
-use std::arch::asm;
+use std::{
+    arch::asm,
+    ffi::{
+        CStr,
+        c_char,
+    },
+};
 
 use super::{
     Operation,
@@ -26,6 +38,41 @@ use crate::{
         X87,
     },
 };
+
+unsafe extern "C" {
+    fn gnu_get_libc_version() -> *const c_char;
+}
+
+/// The (major, minor) version of the glibc the test binary runs with.
+fn host_glibc() -> (u32, u32) {
+    // SAFETY: `gnu_get_libc_version` has no preconditions.
+    let version = unsafe { gnu_get_libc_version() };
+    // SAFETY: glibc returns a pointer to a static, null-terminated string.
+    let version = unsafe { CStr::from_ptr(version) };
+    let version = version.to_str().unwrap_or("0.0");
+    let mut parts = version.split('.').map(|part| part.parse().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
+/// Whether glibc 2.43 computes `operation` of `args` differently from
+/// earlier releases (commit 1b657c53c21a, BZ #33411, which rewrote
+/// `e_powl.S`'s path for a small integral exponent): `powl` of an
+/// invalid-encoding exponent, or of a pseudo-denormal or invalid base to an
+/// integral power from -3 to 3.
+fn changed_in_glibc_2_43(operation: Operation, args: &[X87]) -> bool {
+    if operation != Operation::Pow {
+        return false;
+    }
+    let (x, y) = (args[0], args[1]);
+    let (biased, significand) = x.magnitude_parts();
+    let noncanonical = x.class() == Class::Unsupported || (biased == 0 && significand >> 63 != 0);
+    let small_integral = matches!(y.class(), Class::Zero | Class::Finite { .. })
+        && y.round_integral(crate::x87::Integral::Truncate) == y
+        && y.with_sign(false)
+            .compare(X87::from_integer(false, 3))
+            .is_some_and(std::cmp::Ordering::is_le);
+    y.class() == Class::Unsupported || (noncanonical && small_integral)
+}
 
 #[link(name = "m")]
 unsafe extern "C" {
@@ -260,24 +307,27 @@ fn wrapped(operation: Operation, x: X87, result: X87) -> X87 {
 
 #[test]
 fn transcendental_functions_match_glibc_bit_for_bit() {
+    let older_glibc = host_glibc() < (2, 43);
     let mut encodings = Encodings(0x9E37_79B9_7F4A_7C15);
     let mut failures = 0;
     for (name, operation, arity) in FUNCTIONS {
         let glibc_function = function(name);
-        let mut shown = 0;
+        let (mut shown, mut compared, mut skipped) = (0, 0, 0);
         for case in 0..100_000 {
             let mut args = [encodings.value(), encodings.value(), encodings.value()];
             if operation == Operation::Pow {
                 args[1] = encodings.exponent_operand();
-                if args[1].class() == Class::Unsupported {
-                    continue;
-                }
             }
             if case % 4 == 0 && arity > 1 {
                 // Operands of nearby magnitudes.
                 let exponent = args[0].to_bits() & (0x7FFF << 64);
                 args[1] = X87::from_bits((args[1].to_bits() & !(0x7FFF << 64)) | exponent);
             }
+            if older_glibc && changed_in_glibc_2_43(operation, &args) {
+                skipped += 1;
+                continue;
+            }
+            compared += 1;
             let expected = wrapped(operation, args[0], glibc(glibc_function, args));
             let actual = interpreted(operation, &args[..arity]);
             if actual != expected {
@@ -288,6 +338,45 @@ fn transcendental_functions_match_glibc_bit_for_bit() {
                 }
             }
         }
+        eprintln!("{name}: {compared} compared, {skipped} skipped, {shown} differ");
     }
     assert_eq!(failures, 0, "results that differ from glibc");
+}
+
+/// The cases glibc 2.43's `powl` rewrite changed, as an older glibc reported
+/// them, are the ones the comparison skips there; ordinary powers are not.
+#[test]
+fn powl_cases_changed_in_glibc_2_43_are_classified() {
+    let x87 = |bits: u128| X87::from_bits(bits);
+    for (x, y, changed) in [
+        (0xBFFB_C90F_DAA2_2168_5608, 0xBFFB_4816_1511_FD93_566C, true),
+        (0xBFFC_8B79_F5EA_94A0_8663, 0x3FFC_0000_0000_0000_0000, true),
+        (0x8000_A423_B61F_1B20_C989, 0x3FFF_8000_0000_0000_0000, true),
+        (0x3FFF_4000_0000_0000_0000, 0x4000_C000_0000_0000_0000, true),
+        (
+            0x8000_A423_B61F_1B20_C989,
+            0x4001_8000_0000_0000_0000,
+            false,
+        ),
+        (
+            0x3FFF_C000_0000_0000_0000,
+            0x4000_C000_0000_0000_0000,
+            false,
+        ),
+        (
+            0x3FFF_C000_0000_0000_0000,
+            0x3FFE_C000_0000_0000_0000,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            changed_in_glibc_2_43(Operation::Pow, &[x87(x), x87(y)]),
+            changed,
+            "{x:#x} {y:#x}"
+        );
+    }
+    assert!(!changed_in_glibc_2_43(
+        Operation::Exp,
+        &[x87(0x3FFF_4000_0000_0000_0000)]
+    ));
 }

@@ -1329,7 +1329,8 @@ host without an x87 unit refuses those functions. The return values of
 glibc's SVID wrappers apply (`NAN` for `asinl`, `acosl` and the logarithms
 of out-of-domain arguments). `lgammal` and `tgammal` are refused.
 `src/backend/interpreter/host/math/extended/tests.rs` compares every
-function with the test binary's glibc on random encodings, and
+function with the test binary's glibc on random encodings (skipping, on a
+glibc before 2.43, the `powl` cases its commit 1b657c53c21a changed), and
 `tests/fixtures/programs/long_double_math.c` with a program built against
 glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
 bases to small integer powers) on which glibc 2.39 and 2.43 differ. `printf` formats every
