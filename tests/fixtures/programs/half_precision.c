@@ -176,6 +176,12 @@ static void excess_uses(void) {
     printf("complex %g %g\n", __real__ z, (double)__real__ w);
     printf("folded %d %d %d\n", __builtin_isnormal(0x1p-24f16), __builtin_isnormal(0x1p-14f16),
            __builtin_fpclassify(0, 1, 2, 3, 4, 0x1p-15f16));
+    /* Both compilers round a statement expression's value; a generic
+       selection, __extension__ and __builtin_choose_expr pass the excess
+       through. */
+    printf("statement %g %g %g %g %g\n", (double)(({ X; }) / vc),
+           (double)(({ int k = 1; (void)k; X; }) / vc), (double)(_Generic(0, int: X) / vc),
+           (double)(__extension__(X) / vc), (double)(__builtin_choose_expr(1, X, vc) / vc));
     H u = 1e-99999f16, v = -1e-99999f16, o = 1e99999f16;
     printf("underflow %04x %04x %04x\n", bits(u), bits(v), bits(o));
 }

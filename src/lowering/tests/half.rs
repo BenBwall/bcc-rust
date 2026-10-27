@@ -70,3 +70,13 @@ fn truth_tests_read_the_excess_for_gcc() {
     assert!(!gcc.contains("fptrunc"), "{gcc}");
     assert_eq!(clang.matches("fptrunc.f16").count(), 3, "{clang}");
 }
+
+/// Both compilers round a statement expression's `_Float16` value.
+#[test]
+fn statement_expressions_round_their_value() {
+    let source = "float f(_Float16 a, _Float16 b) { return ({ a * b; }) / b; }";
+    for identity in [CompilerIdentity::Clang, CompilerIdentity::Gcc] {
+        let text = lowered_as(source, identity);
+        assert!(text.contains("fptrunc.f16"), "{identity:?}\n{text}");
+    }
+}

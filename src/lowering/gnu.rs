@@ -147,6 +147,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             if mode == StatementMode::Value && self.transition_has_cleanup(facts.exit) {
                 self.tasks.push(Task::SnapshotArgument(expression));
             }
+            // GCC and Clang both round a `_Float16` tail to its type.
+            if mode == StatementMode::Value && self.half(ty) {
+                self.tasks.push(Task::Settle);
+            }
             self.tasks.push(if mode == StatementMode::Effects {
                 Task::StatementEffects(tail)
             } else {
