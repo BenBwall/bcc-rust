@@ -1003,10 +1003,10 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
 
     /// `tests/fixtures/programs/stdio_writes.c` checks when writes reach a
     /// file (held in the stream's buffer until it fills, `fflush`,
-    /// `fflush(NULL)` in glibc's stream order, `fclose`, a seek or a read),
-    /// how a failing write surfaces, `ftell` with bytes held, and the
-    /// orientation writes and `fgets` give: the interpreter must write what
-    /// the program built against glibc writes.
+    /// `fflush(NULL)` in glibc's stream order, `fclose`, `freopen`, a seek or
+    /// a read), how a failing write surfaces, `ftell` with bytes held, and
+    /// `fgets` without room leaving the stream unoriented: the interpreter
+    /// must write what the program built against glibc 2.39 to 2.43 writes.
     #[test]
     fn stdio_writes_match_glibc() {
         interpreter_matches_glibc("stdio_writes.c", &["--interpret-allow-fs"]);
@@ -1081,27 +1081,32 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         interpreter_writes("scanf_cases_modern_glibc.c", &[], &expected, "");
     }
 
-    /// `tests/fixtures/programs/stdio_modern_glibc.c` flushes streams that
-    /// read, which glibc 2.43 changed (`fflush(NULL)` gives back what they
-    /// read ahead; `fflush` drops a pushback area): the interpreter follows
-    /// 2.43, so it must write the checked-in `.expected` output on any
-    /// glibc, and a host with glibc 2.43 or later must still write it too.
+    /// `tests/fixtures/programs/stdio_modern_glibc.c` runs the stdio cases
+    /// glibc changed after 2.39: flushing streams that read (2.42:
+    /// `fflush(NULL)` gives back what they read ahead, `fflush` drops a
+    /// pushback area) and a seek on an oriented stream without a buffer
+    /// (2.41: it counts and drops the pushback area). The interpreter
+    /// follows 2.43, so it must write the checked-in `.expected` output (and
+    /// the redirected `stdout` case's report on stderr) on any glibc, and a
+    /// host with glibc 2.43 or later must still write it too.
     #[test]
-    fn stdio_flushes_match_modern_glibc() {
+    fn stdio_matches_modern_glibc() {
         if host() != Some("x86_64-unknown-linux-gnu") {
             return;
         }
         let expected =
             std::fs::read_to_string(fixture_program("stdio_modern_glibc.expected")).unwrap();
+        let errors = "stdout 0 0 a\n";
         if host_glibc_version() >= (2, 43) {
             let glibc = glibc_output("stdio_modern_glibc.c");
             assert_eq!(text(&glibc.stdout), expected, "glibc");
+            assert_eq!(text(&glibc.stderr), errors, "glibc");
         }
         interpreter_writes(
             "stdio_modern_glibc.c",
             &["--interpret-allow-fs"],
             &expected,
-            "",
+            errors,
         );
     }
 

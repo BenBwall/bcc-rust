@@ -1,10 +1,10 @@
-/* When glibc's writes reach a file, and the stream orientation writes
-   give: each stream holds what it writes in a buffer of the file's block
-   size and writes it out when the buffer fills, at fflush, fflush(NULL)
-   (the most recently opened stream first), fclose and before a seek or
-   read; a write orients the stream even when it fails. Compared with the
-   program built against glibc. Declarations are written out so that no
-   system header is needed. */
+/* When glibc's writes reach a file: each stream holds what it writes in a
+   buffer of the file's block size and writes it out when the buffer fills,
+   at fflush, fflush(NULL) (the most recently opened stream first), fclose,
+   freopen and before a seek or read. Compared with the program built
+   against glibc; the orientation cases that glibc 2.41 changed are in
+   stdio_modern_glibc.c. Declarations are written out so that no system
+   header is needed. */
 typedef struct _IO_FILE FILE;
 typedef unsigned long size_t;
 extern FILE *stdout, *stderr;
@@ -54,16 +54,6 @@ static int first_byte(void)
   int byte = fgetc(reader);
   fclose(reader);
   return byte;
-}
-
-/* After ungetc and a SEEK_CUR of 1, where the stream is and what it reads:
-   a stream that some operation oriented counts the pushed-back byte. */
-static void report_orientation(FILE *file)
-{
-  int failed = fseek(file, 1, 1);
-  long at = ftell(file);
-  int next = fgetc(file);
-  printf(" %d %ld %c", failed, at, next);
 }
 
 int main(void)
@@ -135,33 +125,18 @@ int main(void)
   fclose(other);
   printf("%ld\n", ftell(writer));
   fclose(writer);
-  /* fgets with room for the terminator alone does not orient the stream;
-     a write orients it even when the stream may not write. */
+  /* fgets with room for the terminator alone does not orient the stream,
+     so a SEEK_CUR after ungetc drops the pushed-back byte uncounted. */
   reset("abcdef");
   FILE *file = fopen(name, "r");
   ungetc('X', file);
   char byte;
   fgets(&byte, 1, file);
-  printf("orientation");
-  report_orientation(file);
+  int failed = fseek(file, 1, 1);
+  long at = ftell(file);
+  int next = fgetc(file);
+  printf("fgets %d %ld %c\n", failed, at, next);
   fclose(file);
-  for (int how = 0; how < 5; how++) {
-    file = fopen(name, "r");
-    ungetc('X', file);
-    if (how == 0)
-      fputc('Q', file);
-    else if (how == 1)
-      fputs("Q", file);
-    else if (how == 2)
-      fwrite("Q", 1, 1, file);
-    else if (how == 3)
-      fprintf(file, "Q");
-    else
-      fprintf(file, "%s", "");
-    report_orientation(file);
-    fclose(file);
-  }
-  printf("\n");
   /* freopen closes the stream, writing out what it holds, before it opens
      the file: reopening its own file for writing truncates those bytes,
      and a mode it refuses still closes the stream. */
@@ -175,17 +150,11 @@ int main(void)
   fputs("old", writer);
   int refused = freopen(name, "q", writer) == 0;
   printf(" %d %lu\n", refused, on_disk());
-  /* printf orients a redirected stdout even when it formats nothing, and
-     fails on one that may not write. */
-  freopen(name, "r+", stdout);
-  ungetc('X', stdout);
-  printf("%s", "");
-  int failed = fseek(stdout, 1, 1);
-  long at = ftell(stdout);
-  int next = fgetc(stdout);
+  /* printf fails on a redirected stdout that may not write, even when it
+     formats nothing. */
   freopen(name, "r", stdout);
   int formatted = printf("%s", "");
-  fprintf(stderr, "stdout %d %ld %c %d %d\n", failed, at, next, formatted, ferror(stdout));
+  fprintf(stderr, "stdout %d %d\n", formatted, ferror(stdout));
   fclose(stdout);
   remove(name);
   return 0;

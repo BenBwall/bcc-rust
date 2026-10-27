@@ -13,8 +13,8 @@
 //! Each function follows its libio counterpart in glibc 2.43, named in its
 //! documentation (`libio/fileops.c`, `libio/genops.c`, `libio/ioseekoff.c`
 //! and `libio/ioftell.c`). glibc 2.39 agrees except where [`Stream::sync`]
-//! says otherwise. Captured standard output and error are not streams of
-//! this kind: the host's console orders them.
+//! and [`Stream::seek`] say otherwise. Captured standard output and error are
+//! not streams of this kind: the host's console orders them.
 
 use std::{
     fs::File,
@@ -324,6 +324,9 @@ impl Stream<'_> {
         let mut offset = offset;
         // `_IO_seekoff_unlocked` gives up the pushback area of a stream a byte
         // operation has oriented, counting its unread bytes for `SEEK_CUR`.
+        // Before glibc 2.41 (commit 3e1d8d1d1dca) it skipped a stream whose
+        // buffer was never allocated, whose `_IO_save_base` `ungetc` leaves
+        // null, so the seek below dropped the area uncounted.
         if self.oriented && self.in_backup {
             if whence == Whence::Current {
                 offset = offset.wrapping_sub(to_offset(self.backup.len()));
