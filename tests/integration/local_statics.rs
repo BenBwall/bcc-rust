@@ -424,7 +424,6 @@ mod tests {
             typedef int vector __attribute__((vector_size(16)));
             typedef int extvector __attribute__((ext_vector_type(4)));
             int f(int a) {
-                static __float128 quad = 1.5Q;
                 static vector v = {1,2,3,4};
                 static extvector e = {1,2,3,4};
                 static _BitInt(200) bits = 7;
@@ -435,7 +434,7 @@ mod tests {
         );
         assert_runs_like_clang(
             r"
-            static void unsupported(void) { __float128 q = 1.5Q; (void)q; }
+            static void unsupported(void) { _BitInt(9) b = 1; (void)b; }
             int f(void) { static void (*hook)(void) = unsupported; return 42; }
             int main(void) { return f() != 42; }
         ",
@@ -481,11 +480,11 @@ mod tests {
         );
         assert!(!used_helper.status.success());
         let used = bcc(
-            "int main(void){static __float128 q __attribute__((used))=1;return 0;}",
+            "int main(void){static _BitInt(200) q __attribute__((used))=1;return 0;}",
             &["--emit=llvm"],
         );
         assert!(!used.status.success());
-        assert!(text(&used.stderr).contains("binary128"));
+        assert!(text(&used.stderr).contains("_BitInt"));
     }
 
     #[test]
