@@ -1446,10 +1446,11 @@ bcc changes it in three places. Where the interchange floating types are on
 same format, so a call gives the value GCC's `_FloatN` function gives, with
 the standard type as its type; `_Float128` stays refused like `__float128`,
 and `nexttoward` refuses a `_FloatN` first argument, as GCC's tgmath does
-(the C library has no such function). And in every mode `conj` of a real
-argument returns imaginary part -0, the conjugate of the +0 a real number
-has as a complex one (§7.22p6, §7.3.9.3), as glibc and GCC give; Clang's
-header returns the argument unchanged, with +0.
+(the C library has no such function). And under the GCC identity `conj` of
+a real argument returns imaginary part -0, the conjugate of the +0 a real
+number has as a complex one (§7.22p6, §7.3.9.3), as glibc and GCC give;
+otherwise it returns the argument with +0, as Clang's header and the pinned
+Clang do.
 
 Binary128 literals are parsed exactly with arena-backed integer rational
 conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,

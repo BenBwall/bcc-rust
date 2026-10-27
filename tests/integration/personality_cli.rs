@@ -370,6 +370,24 @@ mod tests {
             assert_eq!(stdout(&run), "1.5 1024 5 1.5 0\n1 1\n", "{standard}");
             std::fs::remove_file(directory.path("a.out")).unwrap();
         }
+        // `conj` of a real argument keeps the imaginary +0 the pinned Clang
+        // gives, in bcc's own mode and the Clang personality; GCC gives -0.
+        directory.write(
+            "conj.c",
+            "#include <stdio.h>\n#include <tgmath.h>\nint main(void) {\n  volatile double w = \
+             1;\n  printf(\"%d\\n\", !!signbit(cimag(conj(w))));\n  return 0;\n}\n",
+        );
+        for (mode, args) in [
+            ("", &["conj.c", "-o", "a.out", "-lm"][..]),
+            ("--clang-mode", &["conj.c", "-lm"]),
+            ("--gcc-mode", &["conj.c", "-lm"]),
+        ] {
+            succeeds(&directory.bcc(mode, args));
+            let run = Command::new(directory.path("a.out")).output().unwrap();
+            let expected = if mode == "--gcc-mode" { "1\n" } else { "0\n" };
+            assert_eq!(stdout(&run), expected, "{mode}");
+            std::fs::remove_file(directory.path("a.out")).unwrap();
+        }
     }
 
     /// The floating-point macros of the GCC identity are the host GCC's,

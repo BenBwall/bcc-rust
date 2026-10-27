@@ -208,13 +208,21 @@ mod tests {
         }
     }
 
-    /// `conj` of a real argument gives imaginary part -0, as GCC's and
-    /// glibc's do, for the standard types and integers in every identity and
-    /// for the `_FloatN` types under GCC's. The pinned Clang's header gives
-    /// +0, so bcc's resource copy differs from it here.
+    /// `conj` of a real argument gives imaginary part -0 under the GCC
+    /// identity, as GCC's and glibc's do, for the standard types, integers
+    /// and the `_FloatN` types, and +0 otherwise, as the pinned Clang's
+    /// header gives. The fixture expects the sign of the identity it sees.
     #[test]
-    fn tgmath_conj_of_a_real_argument_negates_the_imaginary_zero() {
-        for options in [&[][..], &["--compiler-identity=gcc"], &["-std=c11"]] {
+    fn tgmath_conj_of_a_real_argument_follows_the_identity() {
+        for options in [
+            &[][..],
+            &["-std=c11"],
+            &["--compiler-identity=gcc"],
+            &["--compiler-identity=gcc", "-std=c11", "-fno-floatn-types"],
+            &["--compiler-identity=clang-cl", "-fms-extensions"],
+            &["--compiler-identity=tcc", "-std=gnu99"],
+            &["-ffloatn-types"],
+        ] {
             let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                 .args(["-nostdlibinc", "-isystem", "tests/fixtures/overloadable"])
                 .args(options)

@@ -1317,20 +1317,29 @@ static long double
 
 // conj
 
-/* bcc: a real argument is a complex number with imaginary part +0, whose
-   conjugate has imaginary part -0 (C99 7.22p6, 7.3.9.3), as glibc's and
-   GCC's conj give. */
+/* bcc: under its GCC identity, a real argument is a complex number with
+   imaginary part +0, whose conjugate has imaginary part -0 (C99 7.22p6,
+   7.3.9.3), as GCC's and glibc's conj give. Otherwise the argument is
+   returned with +0, as Clang's header and the pinned Clang give. */
+#if defined(__bcc__) && defined(__GNUC__) && !defined(__clang__)
+#define __tg_conj_real(__x, __zero) __builtin_complex(__x, -__zero)
+#else
+#define __tg_conj_real(__x, __zero) (__x)
+#endif
+
 static float _Complex
     _TG_ATTRS
-    __tg_conj(float __x) {return __builtin_complex(__x, -0.0f);}
+    __tg_conj(float __x) {return __tg_conj_real(__x, 0.0f);}
 
 static double _Complex
     _TG_ATTRS
-    __tg_conj(double __x) {return __builtin_complex(__x, -0.0);}
+    __tg_conj(double __x) {return __tg_conj_real(__x, 0.0);}
 
 static long double _Complex
     _TG_ATTRS
-    __tg_conj(long double __x) {return __builtin_complex(__x, -0.0L);}
+    __tg_conj(long double __x) {return __tg_conj_real(__x, 0.0L);}
+
+#undef __tg_conj_real
 
 static float _Complex
     _TG_ATTRS
