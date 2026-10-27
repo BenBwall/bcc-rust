@@ -76,6 +76,9 @@ _Static_assert((int)((__bf16)0.0f + 257) == V(257, 256), "an integer operand");
 _Static_assert((int)((P + (_Float16)1.0009765625f) * 1024) == V(2065, 2064), "with _Float16");
 _Static_assert((unsigned long long)(__bf16)0x8080000000000001ull == 0x8100000000000000ull, "once");
 _Static_assert((int)((__bf16)(1 / 3.0) * 768) == 256, "a cast rounds");
+_Static_assert((float)(__bf16)0x1.0100000000001p0Q == 0x1.02p0f, "binary128 rounds once");
+_Static_assert((float)(_Float16)0x1.0020000000001p0Q == 0x1.004p0f, "for _Float16 too");
+_Static_assert((float)(__bf16)0x1.0100000000001p0L == 0x1.02p0f, "x87 rounds once");
 _Static_assert(((float)P != (float)(__bf16)P) == V(1, 0), "conversions");
 "#;
     for id in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {

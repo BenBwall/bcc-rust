@@ -196,6 +196,11 @@ static void conversions(void) {
         printf("%04x ", bits(from_float(edges[i])));
     printf("\nrounding %04x %04x %04x\n", bits(from_double(1.00390625000000001)),
            bits(from_double(0x1.0100000000001p0)), bits((B)1.0039062500000002));
+    /* Folded casts round once from binary128 and the x87 format, as the
+       run-time conversions do. */
+    printf("folded %04x %04x %04x %04x %04x\n", bits((B)0x1.0100000000001p0Q),
+           bits(from_quad(0x1.0100000000001p0Q)), bits((B)0x1.0100000000001p0L),
+           hbits((_Float16)0x1.0020000000001p0Q), hbits((_Float16)0x1.0020000000001p0L));
 }
 
 /* small * small is 2^-140: a float subnormal, but zero as a __bf16. */

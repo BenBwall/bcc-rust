@@ -423,8 +423,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// A binary128 constant converted to the standard real or complex
     /// floating type `ty`, each component rounded once, as `__trunctfdf2`
-    /// and its relatives round it. `None` when the host carrier cannot hold
-    /// the x87 result.
+    /// and its relatives round it (`__trunctfhf2` and `__trunctfbf2` for
+    /// the 16-bit types, not through binary32). `None` when the host
+    /// carrier cannot hold the x87 result.
     /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56.
     pub(super) fn floating_from_binary128(
         &self,
@@ -435,9 +436,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         };
         let precision = self.floating_precision(scalar)?;
-        let convert = |component: Binary128| match precision {
-            | 1 => Some(LongDouble::from_double(f64::from(component.to_f32()))),
-            | 2 => Some(LongDouble::from_double(component.to_f64())),
+        let half = scalar.real_type().half_format();
+        let convert = |component: Binary128| match (half, precision) {
+            | (Some(format), _) => Some(LongDouble::from_double(f64::from(
+                format.widen(format.round_binary128(component)),
+            ))),
+            | (_, 1) => Some(LongDouble::from_double(f64::from(component.to_f32()))),
+            | (_, 2) => Some(LongDouble::from_double(component.to_f64())),
             | _ => LongDouble::from_x87(component.to_x87()),
         };
         Some(Floating {
