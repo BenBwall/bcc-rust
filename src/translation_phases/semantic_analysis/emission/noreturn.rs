@@ -79,7 +79,8 @@ const DEPTH: u32 = 64;
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether a call through `callee` does not return: a direct call of a
     /// function declared `noreturn` in any spelling, of a library function
-    /// Clang marks, or of `__builtin_unreachable` or `__builtin_abort`,
+    /// Clang marks, or of `__builtin_unreachable`, `__builtin_abort` or
+    /// `__builtin_longjmp`,
     /// through casts to pointer types too (the call then still names the
     /// function); or a call whose callee's function type is `noreturn`. A
     /// cast to an integer may lose the address, and `*` of a pointer to a
@@ -113,7 +114,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let data = self.bindings[binding];
             match data.origin {
                 | BindingOrigin::Intrinsic(id) =>
-                    return matches!(id, BuiltinId::Unreachable | BuiltinId::LibraryAbort),
+                    return matches!(
+                        id,
+                        BuiltinId::Unreachable | BuiltinId::LibraryAbort | BuiltinId::Longjmp
+                    ),
                 | BindingOrigin::OpaqueIntrinsic => return false,
                 | BindingOrigin::User | BindingOrigin::ImplicitOrdinary =>
                     if data.kind == BindingKind::Function

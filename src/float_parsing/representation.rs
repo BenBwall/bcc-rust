@@ -124,6 +124,18 @@ impl LongDouble {
         }
     }
 
+    /// The carrier of an x87 value, written byte for byte so a signaling NaN
+    /// stays one; `None` on a host whose `long double` is binary64, which
+    /// cannot hold it.
+    pub(crate) fn from_x87(value: crate::x87::X87) -> Option<Self> {
+        if ffi::LONG_DOUBLE_VALUE_BYTES == 8 {
+            return None;
+        }
+        let mut carrier = Self::ZERO;
+        carrier.value[..10].copy_from_slice(&value.to_bits().to_le_bytes()[..10]);
+        Some(carrier)
+    }
+
     /// Constructs a quiet NaN with the target precision's low payload bits.
     /// The x87 carrier stores binary32/64 payloads in the corresponding high
     /// significand positions so narrowing preserves the requested bits.

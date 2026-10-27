@@ -55,7 +55,7 @@ fn planned(personality: Personality, arguments: &[&str]) -> Vec<Vec<String>> {
     plan.steps
         .into_iter()
         .filter_map(|step| match step {
-            | Step::Bcc(arguments) => Some(
+            | Step::Bcc(arguments) | Step::Link(arguments) => Some(
                 arguments
                     .iter()
                     .map(|argument| argument.to_string_lossy().into_owned())

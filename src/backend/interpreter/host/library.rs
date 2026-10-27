@@ -31,6 +31,8 @@ pub(super) enum P {
     Double,
     /// `long double`: the target's representation.
     LongDouble,
+    /// `_Float128`.
+    Quad,
 }
 
 /// A function's result, fixed parameters and whether it is variadic.
@@ -70,6 +72,7 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         Long,
         LongDouble,
         Ptr,
+        Quad,
         Void,
         WChar,
         Wide64,
@@ -158,6 +161,15 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "swprintf" => variadic(Int, &[Ptr, Wide64, Ptr]),
         | "vswprintf" => fixed(Int, &[Ptr, Wide64, Ptr, Ptr]),
         | "qsort" => fixed(Void, &[Ptr, Wide64, Wide64, Ptr]),
+        | "strtof128" => fixed(Quad, &[Ptr, Ptr]),
+        | "strfromf128" => fixed(Int, &[Ptr, Wide64, Ptr, Quad]),
+        | "fabsf128" | "sqrtf128" | "ceilf128" | "floorf128" | "truncf128" | "roundf128"
+        | "rintf128" | "nearbyintf128" => fixed(Quad, &[Quad]),
+        | "copysignf128" | "fmodf128" | "fmaxf128" | "fminf128" | "fdimf128" =>
+            fixed(Quad, &[Quad, Quad]),
+        | "ldexpf128" | "scalbnf128" => fixed(Quad, &[Quad, Int]),
+        | "frexpf128" => fixed(Quad, &[Quad, Ptr]),
+        | "nanf128" => fixed(Quad, &[Ptr]),
         | "bsearch" => fixed(Ptr, &[Ptr, Ptr, Wide64, Wide64, Ptr]),
         | _ => return None,
     })
@@ -188,6 +200,7 @@ pub(super) fn check(
             | P::Float => Type::F32,
             | P::Double => Type::F64,
             | P::LongDouble => long_double,
+            | P::Quad => Type::F128,
         })
     };
     let fixed = signature.parameters.len();
@@ -215,6 +228,7 @@ fn every_added_host_function_has_a_signature() {
         .chain(super::locale::FUNCTIONS)
         .chain(&crate::backend::interpreter::exit::FUNCTIONS)
         .chain(super::strings::FUNCTIONS)
+        .chain(super::quad::FUNCTIONS)
         .chain(&crate::backend::interpreter::callbacks::FUNCTIONS)
         .chain(&[
             "sscanf",

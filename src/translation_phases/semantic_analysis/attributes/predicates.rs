@@ -382,7 +382,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<PredicateConstant> {
         info.integer
             .map(PredicateConstant::Integer)
-            .or_else(|| info.floating.map(PredicateConstant::Floating))
+            .or_else(|| info.floating().map(PredicateConstant::Floating))
             .or_else(|| {
                 self.address_parts(info.expression, false)
                     .and_then(|(base, _)| {

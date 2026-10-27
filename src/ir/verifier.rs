@@ -737,8 +737,15 @@ impl Verifier<'_, '_, '_, '_> {
                     checker.operand(0, arg, ty);
                 },
                 | Opcode::Freeze => checker.operand(0, arg, ty),
-                | Opcode::VaArg | Opcode::VaStart | Opcode::VaEnd | Opcode::StackRestore =>
-                    checker.operand(0, arg, Type::Ptr),
+                | Opcode::VaArg
+                | Opcode::VaStart
+                | Opcode::VaEnd
+                | Opcode::StackRestore
+                | Opcode::SjljLongjmp => checker.operand(0, arg, Type::Ptr),
+                | Opcode::SjljSetjmp => {
+                    checker.require(ty == Type::I32, ty);
+                    checker.operand(0, arg, Type::Ptr);
+                },
                 | _ if opcode.is_conversion() => {
                     if let Some(from) = checker.value_type(arg)
                         && !conversion_is_legal(opcode, from, ty)

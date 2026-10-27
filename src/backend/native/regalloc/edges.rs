@@ -224,7 +224,9 @@ pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
             || target.index() == block
             || insts.len() > DUPLICATED
             || !(falls || body.is_some())
-            || insts.iter().any(|inst| matches!(inst, MInst::Call { .. }))
+            || insts
+                .iter()
+                .any(|inst| matches!(inst, MInst::Call { .. } | MInst::SjljSetjmp { .. }))
         {
             continue;
         }

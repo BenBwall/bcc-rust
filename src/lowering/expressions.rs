@@ -139,7 +139,32 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(Operand::Value(value), info.ty);
             return Ok(());
         }
-        if let Some(folded) = info.floating.filter(|_| !info.runtime_query)
+        // A folded binary128 constant has exact bits too.
+        if let Some(folded) = info.binary128().filter(|_| !info.runtime_query) {
+            match repr(&self.unit.sema.types, info.ty) {
+                | Ok(Repr::Complex { component }) => {
+                    let parts = [folded.real, folded.imag].map(|part| {
+                        floats::binary128_bits(part, component)
+                            .ok_or_else(|| LoweringError::missing("complex constant bits", source))
+                    });
+                    let [real, imag] = parts;
+                    let values = [self.fconst(component, real?), self.fconst(component, imag?)];
+                    let operand = self.complex_pair(values);
+                    self.push_item(operand, info.ty);
+                    return Ok(());
+                },
+                | Ok(Repr::Float { ty }) => {
+                    let bits = floats::binary128_bits(folded.real, ty).ok_or_else(|| {
+                        LoweringError::missing("a floating constant has no bits", source)
+                    })?;
+                    let value = self.fconst(ty, bits);
+                    self.push_item(Operand::Value(value), info.ty);
+                    return Ok(());
+                },
+                | _ => {},
+            }
+        }
+        if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
             && let Ok(Repr::Complex { component }) = repr(&self.unit.sema.types, info.ty)
         {
             let real = floats::constant_bits(&folded.real, component)
@@ -152,7 +177,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         // A folded floating constant has exact bits (§6.6 paragraph 8).
-        if let Some(folded) = info.floating.filter(|_| !info.runtime_query)
+        if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
             && let Ok(Repr::Float { ty }) = repr(&self.unit.sema.types, info.ty)
         {
             let bits = floats::constant_bits(&folded.real, ty)
@@ -2047,10 +2072,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Repr::Complex {
                 component: Type::F64,
             } => &[Type::F64, Type::F64],
+            | Repr::Complex {
+                component: Type::F128,
+            } => &[Type::F128, Type::F128],
             | Repr::Complex { .. } => &[Type::F80, Type::F80],
             | Repr::Float { ty } => match ty {
                 | Type::F32 => &[Type::F32],
                 | Type::F64 => &[Type::F64],
+                | Type::F128 => &[Type::F128],
                 | _ => &[Type::F80],
             },
             | Repr::Int { ty, .. } => match ty {

@@ -294,7 +294,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             if let Some(integer) = info.integer {
                 return Some(Value::Integer(integer));
             }
-            if let Some(floating) = info.floating {
+            if let Some(floating) = info.floating() {
                 return Some(Value::Floating(floating));
             }
         }
@@ -1120,7 +1120,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         ..
                     } => self
                         .expression_info(current)
-                        .floating
+                        .floating()
                         .is_some_and(|value| not_a_number(value.real) || not_a_number(value.imag)),
                     | _ => false,
                 };
@@ -1491,7 +1491,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             && (self.discarded_comma_constant(right_expression, depth + 1) || {
                 let info = self.expression_info(right_expression);
                 info.constant == ConstantClass::Arithmetic
-                    && (info.integer.is_some() || info.floating.is_some())
+                    && (info.integer.is_some() || info.floating().is_some())
             })
     }
 

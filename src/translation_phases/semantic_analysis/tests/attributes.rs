@@ -346,9 +346,9 @@ int following;
                 .find(|info| {
                     info.constant == ConstantClass::Arithmetic
                         && info.operation_type.is_some()
-                        && info.floating.is_some()
+                        && info.floating().is_some()
                 })
-                .and_then(|info| info.floating)
+                .and_then(ExpressionInfo::floating)
                 .expect("the static initializer folds");
             assert!(constant.imag.is_zero() && constant.imag.x87_parts().unwrap().0);
         },
@@ -476,7 +476,7 @@ fn floating_builtins_retain_constants_and_reject_bad_operands() {
                 .expressions
                 .iter()
                 .find(|info| {
-                    info.floating.is_some_and(|value| {
+                    info.floating().is_some_and(|value| {
                         value
                             .real
                             .compare(crate::float_parsing::LongDouble::from_double(-2.0))

@@ -794,12 +794,18 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                         | Opcode::VaStart
                         | Opcode::VaEnd
                         | Opcode::StackRestore
+                        | Opcode::SjljLongjmp
                 ) =>
                 InstData::Unary {
                     opcode,
                     ty,
                     arg: self.value()?,
                 },
+            | Opcode::SjljSetjmp => InstData::Unary {
+                opcode,
+                ty: Type::I32,
+                arg: self.value()?,
+            },
             | Opcode::DynAlloca => {
                 let size = self.value()?;
                 let align = if self.cursor.eat(TokenKind::Comma) {

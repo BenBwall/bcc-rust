@@ -1,8 +1,8 @@
 //! Non-local jumps: `setjmp` returning again through `longjmp` from deeper
 //! frames, the value 0 delivered as 1, buffers whose frame has returned,
 //! MinGW-w64's `mingw_getsp`, corrupted buffers, dynamic objects across a
-//! jump, the accepted `setjmp` shapes, and returns-twice functions without
-//! a model.
+//! jump, the accepted `setjmp` shapes, returns-twice functions without
+//! a model, and GCC's `__builtin_setjmp` and `__builtin_longjmp`.
 //! C99: §7.13.2.1 paragraphs 2-4, p. 244; PDF p. 256.
 
 use super::*;
@@ -306,4 +306,102 @@ fn setjmp_accepts_the_three_x86_64_library_shapes_only() {
             "{params}"
         );
     }
+}
+
+/// `@main` fills a five-word buffer as `__builtin_setjmp` does, calls
+/// `@thrower`, which jumps back with `sjlj_longjmp`, and returns ten times
+/// the second result plus the count kept in a volatile slot, then the
+/// buffer's frame address word compared with its own frame address.
+/// GNU extension: GCC manual, "Nonlocal Gotos".
+const BUILTIN: &str = "\
+function @thrower(ptr) internal {
+block0(v0: ptr):
+    sjlj_longjmp v0
+    unreachable
+}
+
+function @main() -> i32 external {
+    slot0 = stack_slot 40, align 8
+    slot1 = stack_slot 4, align 4
+block0:
+    v0 = stack_addr slot0
+    v1 = stack_addr slot1
+    v2 = iconst.i32 0
+    store.i32 v2, v1, align 4
+    v3 = frame_address
+    store.ptr v3, v0, align 8
+    v4 = stack_save
+    v5 = iconst.i64 16
+    v6 = ptr_add inbounds v0, v5
+    store.ptr v4, v6, align 8
+    v7 = sjlj_setjmp v0
+    v8 = icmp.i32 eq v7, v2
+    brif v8, block1, block2
+block1:
+    v9 = load.i32 volatile v1, align 4
+    v10 = iconst.i32 1
+    v11 = iadd.i32 v9, v10
+    store.i32 volatile v11, v1, align 4
+    call @thrower(v0)
+    unreachable
+block2:
+    v12 = load.i32 volatile v1, align 4
+    v13 = iconst.i32 10
+    v14 = imul.i32 v7, v13
+    v15 = iadd.i32 v14, v12
+    v16 = load.ptr v0, align 8
+    v17 = frame_address
+    v18 = icmp.ptr eq v16, v17
+    v19 = zext.i32 v18
+    v20 = imul.i32 v19, v13
+    v21 = imul.i32 v20, v13
+    v22 = iadd.i32 v15, v21
+    return v22
+}
+";
+
+#[test]
+fn builtin_longjmp_resumes_builtin_setjmp_with_one() {
+    // 10 * 1 + 1 round, and the frame address word left in place (100).
+    assert_eq!(returned(BUILTIN, "main"), int(111));
+}
+
+#[test]
+fn builtin_longjmp_needs_a_live_builtin_setjmp() {
+    // The saving frame has returned.
+    let returned_frame = "\
+function @save(ptr) -> i32 internal {
+block0(v0: ptr):
+    v1 = sjlj_setjmp v0
+    return v1
+}
+
+function @main() -> i32 external {
+    slot0 = stack_slot 40, align 8
+block0:
+    v0 = stack_addr slot0
+    v1 = call @save(v0)
+    sjlj_longjmp v0
+    unreachable
+}
+";
+    assert_eq!(undefined(returned_frame, "main"), UbKind::InvalidJmpBuf);
+    // A buffer no `sjlj_setjmp` filled holds poison.
+    let unfilled = returned_frame.replace("v1 = call @save(v0)", "v1 = iconst.i32 0");
+    assert_eq!(undefined(&unfilled, "main"), UbKind::InvalidJmpBuf);
+    // A library `setjmp` record does not resume through `sjlj_longjmp`,
+    // nor the other way round.
+    let library = BUILTIN
+        .replace("v7 = sjlj_setjmp v0", "v7 = call @setjmp(v0)")
+        .replace(
+            "    slot0 = stack_slot 40, align 8",
+            "    slot0 = stack_slot 200, align 8",
+        );
+    let library = format!("function @setjmp(ptr) -> i32 external\n{library}");
+    assert_eq!(undefined(&library, "main"), UbKind::InvalidJmpBuf);
+    let builtin = THROW.replace("v3 = call @setjmp(v0)", "v3 = sjlj_setjmp v0");
+    assert_eq!(
+        undefined(&builtin.replace("VALUE", "1"), "main"),
+        UbKind::InvalidJmpBuf
+    );
 }

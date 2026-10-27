@@ -52,7 +52,7 @@ use crate::{
 
 /// Interpreter limit on padding and precision for one conversion (one MiB).
 /// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287 (decimal field width).
-const MAX_FORMAT_WIDTH: usize = 1024 * 1024;
+pub(super) const MAX_FORMAT_WIDTH: usize = 1024 * 1024;
 
 impl DefaultHost<'_> {
     /// Appends the output of `format` with the arguments `args` to the

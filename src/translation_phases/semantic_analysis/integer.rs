@@ -546,6 +546,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 (negative, mantissa, exponent - fractional)
             },
+            | F::Float128(value) => match value.class() {
+                | crate::binary128::Class::Zero => (value.is_negative(), 0, 0),
+                | crate::binary128::Class::Finite {
+                    exponent,
+                    significand,
+                } => (value.is_negative(), significand, exponent),
+                | _ => return None,
+            },
             | _ => return None,
         };
         if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {

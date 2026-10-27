@@ -1,6 +1,7 @@
 //! Floating constants as target bits: the folded values semantic analysis keeps
-//! are host `long double`s. Initializer checks and lowering need the exact bits
-//! of an `f32`, `f64` or `f80` constant.
+//! are host `long double`s, or binary128 values for binary128 constants.
+//! Initializer checks and lowering need the exact bits of an `f32`, `f64`,
+//! `f80` or `f128` constant.
 //!
 //! An x87 extended value is 80 bits: a 64-bit significand with an explicit
 //! integer bit, a 15-bit biased exponent and a sign. [`constant_bits`]
@@ -21,8 +22,10 @@
 //! conversions); §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
 
 use crate::{
+    binary128::Binary128,
     float_parsing::LongDouble,
     ir::Type,
+    x87::X87,
 };
 
 /// The exponent bias of an x87 extended value.
@@ -53,6 +56,11 @@ pub(crate) fn constant_parts(
             return Some(
                 u128::from(significand) | u128::from(u16::from(sign) << 15 | exponent) << 64,
             );
+        },
+        // Binary128 holds every x87 value exactly.
+        | Type::F128 => {
+            let x87 = u128::from(significand) | u128::from(u16::from(sign) << 15 | exponent) << 64;
+            return Some(Binary128::from_x87(X87::from_bits(x87)).to_bits());
         },
         | _ => return None,
     };
@@ -102,6 +110,7 @@ fn from_magnitude(sign: bool, magnitude: u128, ty: Type) -> Option<u128> {
         | Type::F32 => (23, 8),
         | Type::F64 => (52, 11),
         | Type::F80 => return Some(x87_from_magnitude(sign, magnitude)),
+        | Type::F128 => return Some(Binary128::from_integer(sign, magnitude).to_bits()),
         | _ => return None,
     };
     let format = Format {
@@ -137,24 +146,34 @@ fn x87_from_magnitude(sign: bool, magnitude: u128) -> u128 {
     u128::from(significand) | biased << 64
 }
 
-/// The integer a floating constant truncates to (C99 §6.3.1.4 paragraph 1),
-/// or `None` for a NaN, an infinity or a value beyond `i128`.
-pub(crate) fn to_integer(value: &LongDouble) -> Option<i128> {
+/// The bits of the integer of `width` bits and the given signedness that a
+/// floating constant truncates to (C99 §6.3.1.4 paragraph 1), or `None` for
+/// a NaN, an infinity or a value out of the destination's range.
+pub(crate) fn to_integer(value: &LongDouble, width: u32, signed: bool) -> Option<u128> {
     let (sign, exponent, significand) = parts(value)?;
-    if exponent == 0x7FFF {
-        return None;
-    }
-    let power = i64::from(exponent) - X87_BIAS;
-    let magnitude: i128 = if exponent == 0 || power < 0 {
-        0
-    } else if power >= 127 {
-        return None;
-    } else if power >= 63 {
-        i128::from(significand) << (power - 63)
-    } else {
-        i128::from(significand >> (63 - power))
-    };
-    Some(if sign { -magnitude } else { magnitude })
+    let bits = u128::from(significand) | u128::from(u16::from(sign) << 15 | exponent) << 64;
+    X87::from_bits(bits).to_integer(signed, width)
+}
+
+/// The bits of the binary128 constant `value` converted to the floating
+/// type `ty`, rounded to nearest even as libgcc's conversions round; `None`
+/// for any other type.
+/// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56.
+pub(crate) fn binary128_bits(value: Binary128, ty: Type) -> Option<u128> {
+    Some(match ty {
+        | Type::F32 => u128::from(value.to_f32().to_bits()),
+        | Type::F64 => u128::from(value.to_f64().to_bits()),
+        | Type::F80 => value.to_x87().to_bits(),
+        | Type::F128 => value.to_bits(),
+        | _ => return None,
+    })
+}
+
+/// The bits of the integer of `width` bits and the given signedness that a
+/// binary128 constant truncates to (C99 §6.3.1.4 paragraph 1), or `None`
+/// for a NaN, an infinity or a value out of the destination's range.
+pub(crate) fn binary128_to_integer(value: Binary128, width: u32, signed: bool) -> Option<u128> {
+    value.to_integer(signed, width)
 }
 
 /// The bytes of a floating constant in memory: little-endian, `size` bytes,

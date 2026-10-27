@@ -498,6 +498,22 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
             }
             Flags::Untouched
         },
+        // `leaq label(%rip), %rax; movq %rax, 8(%rdi); xorl %eax, %eax`,
+        // and on a second return every register but `%rsp` (and a frame's
+        // `%rbp`) has changed, the flags too.
+        | MInst::SjljSetjmp { clobbers } => {
+            at.phys(PReg::Rdi, Read);
+            for register in clobbers.iter() {
+                at.phys(register, Clobber);
+            }
+            Flags::Written
+        },
+        // `movq (%rdi), %rbp; movq 8(%rdi), %rax; movq 16(%rdi), %rsp;
+        // jmpq *%rax`: nothing after it runs in this frame.
+        | MInst::SjljLongjmp => {
+            at.phys(PReg::Rdi, Read);
+            Flags::Untouched
+        },
         // Inline assembly reads its input registers and writes its output
         // and clobbered ones; every x86 statement may change the flags, as
         // GCC and Clang assume.
@@ -736,6 +752,10 @@ fn forms() -> Vec<MInst> {
         Ret => [MInst::Ret { uses: PRegSet::of(&[PReg::Rax, PReg::Rdx, PReg::Xmm0]) }],
         Ud2 => [MInst::Ud2],
         Int3 => [MInst::Int3],
+        SjljSetjmp => [MInst::SjljSetjmp {
+            clobbers: PRegSet::of(&[PReg::Rax, PReg::Rbx, PReg::Rdi, PReg::R15, PReg::Xmm15]),
+        }],
+        SjljLongjmp => [MInst::SjljLongjmp],
         InlineAsm => [MInst::InlineAsm {
             index: 0,
             uses: PRegSet::of(&[PReg::Rax, PReg::Rcx, PReg::Xmm1]),

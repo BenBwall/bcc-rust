@@ -450,7 +450,7 @@ fn floating_arithmetic_constants_preserve_precision_and_casts() {
             assert!(
                 unit.expressions
                     .iter()
-                    .filter_map(|e| e.floating)
+                    .filter_map(ExpressionInfo::floating)
                     .any(|v| format!("{}", v.real) == "0x1p-63")
             );
         },
@@ -637,7 +637,7 @@ fn mixed_floating_operands_round_before_arithmetic() {
                     )
                 })
                 .unwrap();
-            assert_eq!(format!("{}", addition.floating.unwrap().real), "0x1p+24");
+            assert_eq!(format!("{}", addition.floating().unwrap().real), "0x1p+24");
         },
     );
 }
@@ -650,7 +650,8 @@ fn sizeof_matches_shared_linux_clang_assertions() {
 }
 
 /// A retained record per typed expression; lowering's facts must not grow it
-/// carelessly. Pinned for the 64-bit hosts the arenas require.
+/// carelessly. Pinned for the 64-bit hosts the arenas require. A folded
+/// binary128 value shares the standard floating value's byte-aligned slot.
 #[test]
 fn expression_record_size_is_pinned() {
     assert_eq!(size_of::<ExpressionInfo<'_>>(), 160);

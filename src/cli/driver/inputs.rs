@@ -164,16 +164,7 @@ pub(super) fn ordered_inputs<'a>(
                     path,
                     language: Some(preprocessed),
                 }),
-                | None => match path.extension().and_then(OsStr::to_str) {
-                    | _ if path == Path::new("-") => Input::C(Source::File(path)),
-                    | Some("c" | "h") => Input::C(Source::File(path)),
-                    | Some("i") => Input::C(Source::Preprocessed(path)),
-                    | Some("s" | "S" | "sx") => Input::Assembly(Assembly {
-                        path,
-                        language: None,
-                    }),
-                    | _ => Input::Link(path.as_os_str()),
-                },
+                | None => by_extension(path),
             }),
         }
     }
@@ -184,6 +175,57 @@ pub(super) fn ordered_inputs<'a>(
         return Err(MainError::Driver("no input files"));
     }
     Ok(inputs)
+}
+
+/// The input `path` is without `-x`: `-` (stdin), `.c` and `.h` are C, `.i`
+/// preprocessed C, `.s`, `.S` and `.sx` assembly, and anything else goes to
+/// the linker.
+fn by_extension(path: &Path) -> Input<'_> {
+    match path.extension().and_then(OsStr::to_str) {
+        | _ if path == Path::new("-") => Input::C(Source::File(path)),
+        | Some("c" | "h") => Input::C(Source::File(path)),
+        | Some("i") => Input::C(Source::Preprocessed(path)),
+        | Some("s" | "S" | "sx") => Input::Assembly(Assembly {
+            path,
+            language: None,
+        }),
+        | _ => Input::Link(path.as_os_str()),
+    }
+}
+
+/// What the driver does with an input, for the personalities.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::cli) enum InputKind {
+    /// Compile it as C, preprocessed or not.
+    C,
+    /// Assemble it, after preprocessing it (`.S`, `.sx`) or not (`.s`).
+    Assembly { preprocessed: bool },
+    /// Pass it to the linker.
+    Link,
+}
+
+/// What the driver does with `path` without `-x`.
+pub(in crate::cli) fn kind(path: &Path) -> InputKind {
+    match by_extension(path) {
+        | Input::C(_) => InputKind::C,
+        | Input::Assembly(assembly) => InputKind::Assembly {
+            preprocessed: assembly.preprocessed(),
+        },
+        | Input::Link(_) => InputKind::Link,
+    }
+}
+
+/// What the driver does with an input under the `-x` language `name`, or
+/// `None` when the name does not decide it (`none`, or one bcc refuses).
+pub(in crate::cli) fn kind_of_language(name: &str) -> Option<InputKind> {
+    Some(match name {
+        | "c" | "c-header" | "cpp-output" => InputKind::C,
+        | "assembler" => InputKind::Assembly {
+            preprocessed: false,
+        },
+        | "assembler-with-cpp" => InputKind::Assembly { preprocessed: true },
+        | _ => return None,
+    })
 }
 
 /// The `-o` path, or the input's file name with `extension` in the working
@@ -201,11 +243,12 @@ pub(super) fn output_or_stem(
     if let Some(output) = output {
         return Ok(output.to_path_buf());
     }
-    if input == Path::new("<input>") || input == Path::new("-") {
+    if input == Path::new("<input>") {
         return Err(MainError::Driver(
-            "-c and -S name their output after the input file; give -o for --input or stdin",
+            "-c and -S name their output after the input file; give -o for --input",
         ));
     }
+    // Stdin's output is `-.o` or `-.s`, as GCC and Clang name it.
     let name = input.file_name().map_or(input.as_os_str(), |name| name);
     Ok(Path::new(name).with_extension(extension))
 }

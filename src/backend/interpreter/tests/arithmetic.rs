@@ -373,23 +373,84 @@ fn extended_integer_conversions_poison_just_outside_each_width() {
     }
 }
 
+/// `f128` computes as libgcc's soft-float routines: correctly rounded,
+/// with the x86-64 default NaN for an invalid operation and the larger NaN
+/// of two (the first operand of `fadd` on a tie, the second of `fsub`).
 #[test]
-fn binary128_arithmetic_is_unsupported() {
-    let text = "\
-function @f() -> f128 external {
-block0:
-    v0 = fconst.f128 0x3FFF0000000000000000000000000000
-    v1 = fadd.f128 v0, v0
-    return v1
-}
-";
-    let run = run_text(text, "f");
-    assert!(
-        matches!(
-            run.result,
-            Err(Trap::Unsupported(trap::Unsupported::WideFloat, _))
+fn binary128_arithmetic_matches_libgcc() {
+    let one = 0x3FFF_0000_0000_0000_0000_0000_0000_0000;
+    let three = 0x4000_8000_0000_0000_0000_0000_0000_0000;
+    let quad = |opcode: &str, a: u128, b: u128| {
+        let text = format!(
+            "function @f() -> f128 external {{\nblock0:\n    v0 = fconst.f128 {a:#x}\n    v1 = \
+             fconst.f128 {b:#x}\n    v2 = {opcode}.f128 v0, v1\n    return v2\n}}\n"
+        );
+        returned(&text, "f")
+    };
+    let positive_nan = 0x7FFF_8000_0000_0000_0000_0000_0000_0005;
+    let negative_nan = 0xFFFF_8000_0000_0000_0000_0000_0000_0005;
+    let infinity = 0x7FFF_u128 << 112;
+    for (opcode, a, b, expected) in [
+        ("fadd", one, one, 0x4000_0000_0000_0000_0000_0000_0000_0000),
+        (
+            "fdiv",
+            one,
+            three,
+            0x3FFD_5555_5555_5555_5555_5555_5555_5555,
         ),
-        "{:?}",
-        run.result
+        (
+            "fmul",
+            three,
+            three,
+            0x4002_2000_0000_0000_0000_0000_0000_0000,
+        ),
+        (
+            "fsub",
+            infinity,
+            infinity,
+            0xFFFF_8000_0000_0000_0000_0000_0000_0000,
+        ),
+        (
+            "frem",
+            three,
+            0x4000_0000_0000_0000_0000_0000_0000_0000,
+            one,
+        ),
+        ("fadd", positive_nan, negative_nan, positive_nan),
+        ("fsub", positive_nan, negative_nan, negative_nan),
+    ] {
+        assert_eq!(
+            quad(opcode, a, b),
+            RuntimeValue::F128(expected),
+            "{opcode} {a:#x} {b:#x}"
+        );
+    }
+    let convert = |op: &str, to: &str, operand: &str| {
+        let text = format!(
+            "function @f() -> {to} external {{\nblock0:\n    v0 = {operand}\n    v1 = {op}.{to} \
+             v0\n    return v1\n}}\n"
+        );
+        returned(&text, "f")
+    };
+    let third = "fconst.f128 0x3FFD5555555555555555555555555555";
+    assert_eq!(
+        convert("fptrunc", "f64", third),
+        RuntimeValue::F64(1.0 / 3.0)
+    );
+    assert_eq!(
+        convert(
+            "fptosi",
+            "i32",
+            "fconst.f128 0xC0008000000000000000000000000000"
+        ),
+        int(0xFFFF_FFFD)
+    );
+    assert_eq!(
+        convert("fpext", "f128", "fconst.f64 0x3FF0000000000000"),
+        RuntimeValue::F128(one)
+    );
+    assert_eq!(
+        convert("sitofp", "f128", "iconst.i64 -3"),
+        RuntimeValue::F128(three | 1 << 127)
     );
 }

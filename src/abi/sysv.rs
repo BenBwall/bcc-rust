@@ -258,6 +258,17 @@ pub(crate) enum Classification {
 
 /// Classifies an aggregate by the psABI's algorithm.
 ///
+/// An aggregate with a `__float128` at offset 0 and another member covering
+/// its second eightbyte, such as `union { __float128 q; double d[2]; }`,
+/// follows the psABI here, as GCC does: two SSE eightbytes travel in two
+/// vector registers, or the whole aggregate on the stack. Clang deviates:
+/// its IR type for the aggregate starts with an `fp128`, which
+/// `GetX86_64ByValArgumentPair` widens to `i64`, so it passes the low
+/// eightbyte in a general register while counting a vector one, and its own
+/// `va_arg` reads both from the vector save area. Code built by Clang does
+/// not link with GCC's or bcc's for such aggregates; `middle-end.md` lists
+/// the shapes.
+///
 /// An aggregate larger than two eightbytes is MEMORY, since without vector
 /// types no larger one is passed in registers; so is one with a misaligned
 /// member or a flexible array member, as Clang decides. Otherwise each

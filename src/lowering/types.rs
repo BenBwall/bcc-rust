@@ -123,8 +123,10 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
                 Type::F80
             },
         }),
-        | Scalar::Float128 | Scalar::ComplexFloat128 =>
-            Err(LoweringErrorKind::Unsupported(Construct::Float128)),
+        | Scalar::Float128 => Ok(Repr::Float { ty: Type::F128 }),
+        | Scalar::ComplexFloat128 => Ok(Repr::Complex {
+            component: Type::F128,
+        }),
         | Scalar::ComplexFloat => Ok(Repr::Complex {
             component: Type::F32,
         }),

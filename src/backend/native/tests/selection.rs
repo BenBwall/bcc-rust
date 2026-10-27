@@ -575,6 +575,128 @@ block2:
     });
 }
 
+/// GCC's `__builtin_setjmp` and `__builtin_longjmp` in LLVM's sequences:
+/// the resume label in word 1, `%eax` 0 now and 1 on resume, and the jump
+/// through words 0-2. Every callee-saved register is saved, since a jump
+/// changes them all, and a frame addressed from `%rbp` derives it from the
+/// frame address there. GNU extension: GCC manual, "Nonlocal Gotos".
+#[test]
+fn builtin_setjmp_saves_every_callee_saved_register_and_resumes_with_one() {
+    let ir = "abi lowered
+function @f(ptr, i64) -> i32 external {
+block0(v0: ptr, v1: i64):
+    v2 = frame_address
+    store.ptr v2, v0, align 8
+    v3 = stack_save
+    v4 = iconst.i64 16
+    v5 = ptr_add inbounds v0, v4
+    store.ptr v3, v5, align 8
+    v6 = sjlj_setjmp v0
+    v7 = trunc.i32 v1
+    v8 = iadd.i32 v6, v7
+    return v8
+}
+function @g(ptr) external {
+block0(v0: ptr):
+    sjlj_longjmp v0
+    unreachable
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let f = function_text(&text, "f");
+        let saved = if target == Target::LinuxGnu {
+            &["%rbx", "%rbp", "%r12", "%r13", "%r14", "%r15"][..]
+        } else {
+            &[
+                "%rbx", "%rbp", "%rsi", "%rdi", "%r12", "%r13", "%r14", "%r15",
+            ][..]
+        };
+        for register in saved {
+            assert!(
+                f.contains(&format!("\tpushq\t{register}\n")),
+                "{target:?} {register}: {f}"
+            );
+        }
+        if target == Target::WindowsGnu {
+            assert!(f.contains("movaps\t%xmm15, "), "{f}");
+        }
+        let sequence = "\tleaq\t.LSJ0(%rip), %rax\n\tmovq\t%rax, 8(%rdi)\n\txorl\t%eax, \
+                        %eax\n\tjmp\t.LSJE0\n.LSJ0:\n\tmovl\t$1, %eax\n.LSJE0:\n";
+        assert!(f.contains(sequence), "{target:?}: {f}");
+        // The argument lives across the setjmp, so it waits in memory.
+        let resume = f.find(".LSJE0:").expect(f);
+        assert!(f[resume..].contains("(%rsp)"), "{target:?}: {f}");
+        let g = function_text(&text, "g");
+        assert!(
+            g.contains(
+                "\tmovq\t(%rdi), %rbp\n\tmovq\t8(%rdi), %rax\n\tmovq\t16(%rdi), \
+                 %rsp\n\tjmpq\t*%rax\n"
+            ),
+            "{target:?}: {g}"
+        );
+    }
+    // A frame whose `%rsp` moves is addressed from `%rbp`; the resume
+    // label restores it from the frame address `%rbp` arrives with.
+    let dynamic = ir.replace(
+        "    v6 = sjlj_setjmp v0",
+        "    v9 = dyn_alloca.i64 v1, align 16\n    v6 = sjlj_setjmp v9",
+    );
+    let text = assembly(&dynamic, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    let label = f.find(".LSJ0:\n").expect(f);
+    let fixup = &f[label..];
+    assert!(fixup.starts_with(".LSJ0:\n\tleaq\t-"), "{f}");
+    assert!(fixup.contains("(%rbp), %rbp\n\tmovl\t$1, %eax"), "{f}");
+}
+
+/// Nothing is coalesced across a `__builtin_setjmp` either: a second
+/// return finds every value in its own spill slot.
+#[test]
+fn values_live_across_builtin_setjmp_are_not_coalesced() {
+    let ir = "abi lowered
+function @f(ptr, i64) -> i64 external {
+block0(v0: ptr, v1: i64):
+    v2 = imul.i64 v1, v1
+    v3 = sjlj_setjmp v0
+    jump block1(v2)
+block1(v4: i64):
+    v5 = iconst.i64 3
+    v6 = imul.i64 v4, v5
+    v7 = icmp.i64 ult v6, v1
+    brif v7, block1(v6), block2
+block2:
+    return v6
+}
+";
+    with_allocation(ir, "f", Target::LinuxGnu, |_, func, allocation| {
+        let entry = &func.blocks[0].insts;
+        let setjmp = entry
+            .iter()
+            .position(|inst| matches!(inst, MInst::SjljSetjmp { .. }))
+            .expect("the entry saves");
+        let copies: Vec<_> = entry[setjmp..]
+            .iter()
+            .filter_map(|inst| match *inst {
+                | MInst::Mov {
+                    width: Width::B64,
+                    dst: Reg::Virt(dst),
+                    src: Operand::Reg(Reg::Virt(src)),
+                } => Some((dst, src)),
+                | _ => None,
+            })
+            .collect();
+        assert!(!copies.is_empty(), "no edge copy after the setjmp");
+        for (dst, src) in copies {
+            assert_ne!(
+                allocation.representative(dst),
+                allocation.representative(src),
+                "the copy {dst:?} <- {src:?} was coalesced"
+            );
+        }
+    });
+}
+
 #[test]
 fn unsupported_constructs_are_refused_with_their_function() {
     let message = refusal(

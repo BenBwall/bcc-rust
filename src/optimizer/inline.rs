@@ -360,6 +360,7 @@ impl<'s> CallGraph<'s> {
                                 | Opcode::DynAlloca
                                 | Opcode::StackSave
                                 | Opcode::StackRestore
+                                | Opcode::SjljSetjmp
                         );
                     }
                 }

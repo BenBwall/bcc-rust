@@ -7,8 +7,9 @@
 //! `locale.rs` the locale and its character conversions, `stdio.rs` the
 //! streams and files (with the wide character functions in `stdio/wide.rs`),
 //! `printf.rs` and `scanf.rs` formatted input and output, `strings.rs` the
-//! string, wide-string, character and conversion functions, `math.rs` and
-//! `complex.rs` the numeric library, and `checked.rs` the
+//! string, wide-string, character and conversion functions, `math.rs`,
+//! `quad.rs` (glibc's `_Float128` functions) and `complex.rs` the numeric
+//! library, and `checked.rs` the
 //! object-size-checking `__*_chk` entry points of fortified C libraries;
 //! `library.rs` gives the signatures of the functions outside the builtin
 //! catalog, and `arguments.rs` reads the variadic arguments of formatted
@@ -28,6 +29,7 @@ mod errno;
 mod library;
 mod locale;
 mod math;
+mod quad;
 mod stdio;
 mod strings;
 
@@ -320,6 +322,9 @@ impl DefaultHost<'_> {
             return result;
         }
         if let Some(result) = self.strings(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.quad(call, memory) {
             return result;
         }
         let args = call.args;

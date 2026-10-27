@@ -101,24 +101,170 @@ fn generic_math_selection_classification_and_components() {
     );
 }
 
+/// Binary128 constants fold with IEEE binary128 arithmetic, correctly
+/// rounded, as libgcc computes them at run time; conversions to other types
+/// round once.
 #[test]
-fn binary128_arithmetic_constants_are_retained_without_approximate_folding() {
+fn binary128_arithmetic_constants_fold_exactly() {
     with_source(
-        "__float128 a=0.1q, b=1.0q+2.0q, c=(__float128)3, d=1?0.1q:0.2q; double \
-         conditional=0.0q?1.0:2.0;",
+        "__float128 a=1.0q/3, b=0.1q+0.2q, c=(__float128)3, d=1?0.1q:0.2q, e=-(1.0q-1.0q), \
+         f=(__float128)0x1p-16400L*0x1p-90q; double narrowed=(double)(1.0q/3); int \
+         truncated=(int)-7.75q; _Static_assert((int)7.75q == 7, \"cast\"); \
+         _Static_assert(sizeof(int[(int)2.5q]) == 8, \"bound\"); _Complex __float128 \
+         z=1.5q-2.0qi+1;",
+        |context, unit| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+            let folded = |bits: u128| {
+                unit.expressions.iter().any(|info| {
+                    info.binary128()
+                        .is_some_and(|value| value.real.to_bits() == bits && value.imag.is_zero())
+                })
+            };
+            for bits in [
+                0x3FFD_5555_5555_5555_5555_5555_5555_5555,
+                0x3FFD_3333_3333_3333_3333_3333_3333_3334,
+                0x4000_8000_0000_0000_0000_0000_0000_0000,
+                0x3FFB_9999_9999_9999_9999_9999_9999_999A,
+                0x8000_0000_0000_0000_0000_0000_0000_0000,
+                // 2^-16490, a subnormal.
+                0x10,
+            ] {
+                assert!(folded(bits), "{bits:#x}");
+            }
+            assert!(
+                unit.expressions
+                    .iter()
+                    .any(|info| info.binary128().is_some_and(|value| {
+                        value.real.to_bits() == 0x3FFF_8000_0000_0000_0000_0000_0000_0000
+                            && value.imag.to_bits() == 0xC000_0000_0000_0000_0000_0000_0000_0000
+                    }))
+            );
+            assert!(unit.expressions.iter().any(|info| {
+                info.floating()
+                    .and_then(|value| value.real.x87_parts())
+                    .is_some_and(|parts| parts == (false, 0x3FFD, 0xAAAA_AAAA_AAAA_A800))
+            }));
+            assert!(
+                unit.expressions
+                    .iter()
+                    .any(|info| { info.integer.is_some_and(|value| value.value == -7) })
+            );
+            assert!(unit.expressions.iter().all(|info| !info.unfolded_binary128));
+        },
+    );
+}
+
+/// The product and quotient of two complex binary128 values, which
+/// libgcc's `__multc3` and `__divtc3` compute, stay unfolded; so does
+/// everything computed from them.
+#[test]
+fn complex_binary128_products_stay_unfolded() {
+    with_source(
+        "_Complex __float128 p=(1.0q+1.0qi)*(2.0q+1.0qi); __float128 r=__real__ \
+         ((1.0q+1.0qi)/(2.0q+1.0qi));",
         |context, unit| {
             assert_eq!(context.pending_error_count(), 0);
-            let constants: Vec<_> = unit
+            let unfolded: Vec<_> = unit
                 .expressions
                 .iter()
                 .filter(|info| info.unfolded_binary128)
                 .collect();
-            assert!(constants.len() >= 8);
-            for info in constants {
+            assert!(unfolded.len() >= 3);
+            for info in unfolded {
                 assert_eq!(info.constant, ConstantClass::Arithmetic);
                 assert!(!info.ice);
-                assert!(info.integer.is_none() && info.floating.is_none());
+                assert!(info.binary128().is_none() && info.floating().is_none());
             }
+        },
+    );
+}
+
+/// GCC's binary128 constant builtins fold: infinity, quiet and signaling
+/// NaNs with the tag's payload, absolute value and sign copying.
+#[test]
+fn binary128_builtins_fold_to_their_bits() {
+    with_source(
+        "__float128 i=__builtin_inff128(), h=__builtin_huge_valf128(), \
+         q=__builtin_nanf128(\"5\"), s=__builtin_nansf128(\"\"), a=__builtin_fabsf128(-1.0q), \
+         c=__builtin_copysignf128(1.0q, -2.0q), w=__builtin_nanf128(\"0x10000000000000000\"), \
+         z=__builtin_nansf128(\"0xffffffffffffffffffffffffffffffffff\");",
+        |context, unit| {
+            assert_eq!(context.pending_error_count(), 0);
+            let calls: Vec<u128> = unit
+                .expressions
+                .iter()
+                .filter(|info| matches!(info.expression.kind, ExpressionType::Call { .. }))
+                .filter_map(|info| info.binary128().map(|value| value.real.to_bits()))
+                .collect();
+            assert_eq!(
+                calls,
+                [
+                    0x7FFF_0000_0000_0000_0000_0000_0000_0000,
+                    0x7FFF_0000_0000_0000_0000_0000_0000_0000,
+                    0x7FFF_8000_0000_0000_0000_0000_0000_0005,
+                    0x7FFF_4000_0000_0000_0000_0000_0000_0000,
+                    0x3FFF_0000_0000_0000_0000_0000_0000_0000,
+                    0xBFFF_0000_0000_0000_0000_0000_0000_0000,
+                    // A tag wider than 64 bits keeps its low bits, as GCC
+                    // and Clang fold it.
+                    0x7FFF_8000_0000_0001_0000_0000_0000_0000,
+                    0x7FFF_7FFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF,
+                ]
+            );
+        },
+    );
+}
+
+/// A constant converted to a floating type keeps only the converted value:
+/// a conditional whose integer arm becomes binary128 or `double` has no
+/// integer value left to fold later operators with, so 2^113 + 1 compares
+/// equal to 2^113 once rounded to binary128, and 2^62 + 1 to 2^62 in
+/// `double`.
+#[test]
+fn converted_constants_keep_only_their_types_value() {
+    with_source(
+        "#define N ((unsigned __int128)1 << 113)\nint quad = (1 ? N + 1 : 0.0q) == (1 ? N : \
+         0.0q), dbl = (1 ? (1LL << 62) + 1 : 0.0) == (1 ? 1LL << 62 : 0.0); unsigned __int128 w = \
+         1 ? N + 1 : 0.0q;",
+        |context, unit| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+            for info in unit.expressions {
+                let floating = matches!(
+                    unit.types.nodes[info.ty.index],
+                    TypeKind::Scalar(scalar) if scalar.floating()
+                );
+                assert!(!floating || info.integer.is_none(), "{info:?}");
+            }
+            assert!(unit.expressions.iter().any(|info| {
+                info.binary128().is_some_and(|value| {
+                    value.real.to_bits() == 0x4070_0000_0000_0000_0000_0000_0000_0000
+                })
+            }));
+            let comparisons: Vec<_> = unit
+                .expressions
+                .iter()
+                .filter(|info| {
+                    matches!(
+                        info.expression.kind,
+                        ExpressionType::Binary {
+                            operator: BinaryOperator::Equal,
+                            ..
+                        }
+                    )
+                })
+                .map(|info| info.integer.map(|value| value.value))
+                .collect();
+            assert_eq!(comparisons, [Some(1), Some(1)]);
         },
     );
 }

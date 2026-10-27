@@ -43,6 +43,11 @@ use inputs::{
     ordered_inputs,
     output_or_stem,
 };
+pub(super) use inputs::{
+    InputKind,
+    kind,
+    kind_of_language,
+};
 use job::{
     Job,
     compile,
@@ -58,9 +63,11 @@ use super::{
     MainError,
     code_generation::{
         Emit,
+        FAILURE_STATUS,
         report_stderr,
     },
 };
+use crate::util::bump::Bump;
 
 /// Runs the jobs the arguments ask for and returns the exit status.
 pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
@@ -86,11 +93,20 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
         Stage::Inspect
     };
     if stage != Stage::Link {
-        if output.is_some() && sources > 1 {
+        // GCC lets `-M` and `-MM` without `-E`, `-c` or `-S` write each
+        // unit's rules to `-o` in turn, every unit replacing the one before.
+        let rules_only = args.driver.dependencies.is_some()
+            && !args.driver.preprocess
+            && !generation.object
+            && !generation.assembly;
+        if output.is_some() && sources > 1 && !rules_only {
             return Err(MainError::Driver(
                 "cannot specify '-o' with '-c', '-S' or '-E' with multiple files",
             ));
         }
+    }
+    let mut status = 0;
+    if stage != Stage::Link {
         for input in &inputs {
             if let Input::Link(name) = input
                 && !name.to_string_lossy().starts_with('-')
@@ -99,13 +115,22 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                     "warning: {}: linker input file unused because linking not done",
                     name.to_string_lossy()
                 ));
+                // GCC also fails when the unused file does not exist.
+                if let Err(error) = std::fs::metadata(name) {
+                    let arena = Bump::new();
+                    report_stderr(format_args!(
+                        "error: {}: linker input file not found: {}",
+                        name.to_string_lossy(),
+                        job::os_reason(&error, &arena)
+                    ));
+                    status = combine(status, FAILURE_STATUS);
+                }
             }
         }
     }
     if inputs.iter().any(|input| input.c_source().is_some()) {
         link::warn_unused_assembler_options(args);
     }
-    let mut status = 0;
     match stage {
         | Stage::Inspect => {
             let views = args.output.tokens || generation.requested();

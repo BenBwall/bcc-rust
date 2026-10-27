@@ -375,7 +375,7 @@ fn unsigned_high_half_floating_and_pointer_constants_use_the_value() {
                         && unit.types.nodes[e.ty.index] == TypeKind::Scalar(Scalar::LongDouble)
                 })
                 .unwrap()
-                .floating
+                .floating()
                 .unwrap();
             assert!(!floating.real.is_zero());
             assert_eq!(

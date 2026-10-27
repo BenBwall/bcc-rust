@@ -5,19 +5,19 @@
 //! poison or zero is undefined behaviour. A violated `nsw`, `nuw` or
 //! `exact`, a shift by the width or more, and a float-to-integer conversion
 //! out of range all produce poison. `f80` values compute as the x87 unit
-//! does, through the software model in `crate::x87`; `f128` operations are
-//! not supported yet.
+//! does, through the software model in `crate::x87`, and `f128` values as
+//! libgcc's soft-float routines do, through `crate::binary128`.
 
 use super::{
     memory::truncate_u64,
     trap::{
         Fault,
         UbKind,
-        Unsupported,
     },
     value::RuntimeValue,
 };
 use crate::{
+    binary128::Binary128,
     ir::{
         FloatCC,
         InstFlags,
@@ -117,7 +117,7 @@ pub(crate) fn float_binary(
     ty: Type,
     a: RuntimeValue,
     b: RuntimeValue,
-) -> Result<RuntimeValue, Fault> {
+) -> RuntimeValue {
     let apply32 = |a: f32, b: f32| match opcode {
         | Opcode::Fadd => a + b,
         | Opcode::Fsub => a - b,
@@ -139,24 +139,37 @@ pub(crate) fn float_binary(
         | Opcode::Fdiv => a.div(b),
         | _ => a.rem(b),
     };
-    supported_float(ty)?;
-    Ok(match (a, b) {
+    let apply128 = |a: u128, b: u128| {
+        let (a, b) = (Binary128::from_bits(a), Binary128::from_bits(b));
+        match opcode {
+            | Opcode::Fadd => a.add(b),
+            | Opcode::Fsub => a.sub(b),
+            | Opcode::Fmul => a.mul(b),
+            | Opcode::Fdiv => a.div(b),
+            | _ => a.rem(b),
+        }
+        .to_bits()
+    };
+    debug_assert!(ty.is_float(), "{opcode} on {ty}");
+    match (a, b) {
         | (RuntimeValue::F32(a), RuntimeValue::F32(b)) => RuntimeValue::F32(apply32(a, b)),
         | (RuntimeValue::F64(a), RuntimeValue::F64(b)) => RuntimeValue::F64(apply64(a, b)),
         | (RuntimeValue::F80(a), RuntimeValue::F80(b)) => RuntimeValue::F80(apply80(a, b)),
+        | (RuntimeValue::F128(a), RuntimeValue::F128(b)) => RuntimeValue::F128(apply128(a, b)),
         | _ => RuntimeValue::Poison,
-    })
+    }
 }
 
-/// `fneg`.
-pub(crate) fn float_negate(ty: Type, a: RuntimeValue) -> Result<RuntimeValue, Fault> {
-    supported_float(ty)?;
-    Ok(match a {
+/// `fneg`: the sign bit flipped, NaNs included.
+pub(crate) fn float_negate(ty: Type, a: RuntimeValue) -> RuntimeValue {
+    debug_assert!(ty.is_float(), "fneg on {ty}");
+    match a {
         | RuntimeValue::F32(a) => RuntimeValue::F32(-a),
         | RuntimeValue::F64(a) => RuntimeValue::F64(-a),
         | RuntimeValue::F80(a) => RuntimeValue::F80(a.negate()),
+        | RuntimeValue::F128(a) => RuntimeValue::F128(Binary128::from_bits(a).negate().to_bits()),
         | _ => RuntimeValue::Poison,
-    })
+    }
 }
 
 /// `icmp` on integers or pointers; pointers compare by address.
@@ -193,16 +206,18 @@ pub(crate) fn float_compare(
     ty: Type,
     a: RuntimeValue,
     b: RuntimeValue,
-) -> Result<RuntimeValue, Fault> {
-    supported_float(ty)?;
+) -> RuntimeValue {
+    debug_assert!(ty.is_float(), "fcmp on {ty}");
     let order = match (a, b) {
         | (RuntimeValue::F32(a), RuntimeValue::F32(b)) => a.partial_cmp(&b),
         | (RuntimeValue::F64(a), RuntimeValue::F64(b)) => a.partial_cmp(&b),
         | (RuntimeValue::F80(a), RuntimeValue::F80(b)) => a.compare(b),
-        | _ => return Ok(RuntimeValue::Poison),
+        | (RuntimeValue::F128(a), RuntimeValue::F128(b)) =>
+            Binary128::from_bits(a).compare(Binary128::from_bits(b)),
+        | _ => return RuntimeValue::Poison,
     };
     let Some(order) = order else {
-        return Ok(boolean(matches!(
+        return boolean(matches!(
             cond,
             FloatCC::Ueq
                 | FloatCC::Une
@@ -211,9 +226,9 @@ pub(crate) fn float_compare(
                 | FloatCC::Ugt
                 | FloatCC::Uge
                 | FloatCC::Uno
-        )));
+        ));
     };
-    Ok(boolean(match cond {
+    boolean(match cond {
         | FloatCC::Oeq | FloatCC::Ueq => order.is_eq(),
         | FloatCC::One | FloatCC::Une => order.is_ne(),
         | FloatCC::Olt | FloatCC::Ult => order.is_lt(),
@@ -222,7 +237,7 @@ pub(crate) fn float_compare(
         | FloatCC::Oge | FloatCC::Uge => order.is_ge(),
         | FloatCC::Ord => true,
         | FloatCC::Uno => false,
-    }))
+    })
 }
 
 /// A conversion of `a` from type `from` to type `to`, other than
@@ -232,22 +247,14 @@ pub(crate) fn float_compare(
     clippy::cast_precision_loss,
     reason = "sitofp and uitofp round to the nearest representable value."
 )]
-pub(crate) fn convert(
-    opcode: Opcode,
-    from: Type,
-    to: Type,
-    a: RuntimeValue,
-) -> Result<RuntimeValue, Fault> {
-    if from.is_float() && !(opcode == Opcode::Bitcast && from == Type::F128) {
-        supported_float(from)?;
-    }
-    if to.is_float() && !(opcode == Opcode::Bitcast && to == Type::F128) {
-        supported_float(to)?;
-    }
+pub(crate) fn convert(opcode: Opcode, from: Type, to: Type, a: RuntimeValue) -> RuntimeValue {
     if a.is_poison() {
-        return Ok(RuntimeValue::Poison);
+        return RuntimeValue::Poison;
     }
-    Ok(match (opcode, a) {
+    if let Some(value) = binary128_conversion(opcode, from, to, a) {
+        return value;
+    }
+    match (opcode, a) {
         | (Opcode::Zext | Opcode::Trunc, RuntimeValue::Int(a)) => RuntimeValue::int(to, a),
         | (Opcode::Sext, RuntimeValue::Int(a)) => RuntimeValue::int(to, sext(from, a) as u128),
         | (Opcode::Fpext, RuntimeValue::F32(a)) if to == Type::F64 =>
@@ -285,6 +292,43 @@ pub(crate) fn convert(
             RuntimeValue::int(to, u128::from(pointer.address)),
         | (Opcode::Bitcast, value) => bitcast(to, value),
         | _ => unreachable!("{opcode} from {from} to {to} is not a legal conversion"),
+    }
+}
+
+/// A conversion to or from `f128`, as libgcc's `__extenddftf2`,
+/// `__trunctfdf2`, `__fixtfdi`, `__floatditf` and their relatives give it;
+/// `None` for any other conversion. An out-of-range conversion to an
+/// integer is poison.
+/// C99: §6.3.1.4-§6.3.1.5, pp. 43-44; PDF pp. 55-56.
+fn binary128_conversion(
+    opcode: Opcode,
+    from: Type,
+    to: Type,
+    a: RuntimeValue,
+) -> Option<RuntimeValue> {
+    let quad = |value: Binary128| RuntimeValue::F128(value.to_bits());
+    Some(match (opcode, a) {
+        | (Opcode::Fpext, RuntimeValue::F32(a)) if to == Type::F128 => quad(Binary128::from_f32(a)),
+        | (Opcode::Fpext, RuntimeValue::F64(a)) if to == Type::F128 => quad(Binary128::from_f64(a)),
+        | (Opcode::Fpext, RuntimeValue::F80(a)) if to == Type::F128 => quad(Binary128::from_x87(a)),
+        | (Opcode::Sitofp, RuntimeValue::Int(a)) if to == Type::F128 => {
+            let value = sext(from, a);
+            quad(Binary128::from_integer(value < 0, value.unsigned_abs()))
+        },
+        | (Opcode::Uitofp, RuntimeValue::Int(a)) if to == Type::F128 =>
+            quad(Binary128::from_integer(false, a)),
+        | (Opcode::Fptrunc, RuntimeValue::F128(a)) => {
+            let a = Binary128::from_bits(a);
+            match to {
+                | Type::F32 => RuntimeValue::F32(a.to_f32()),
+                | Type::F64 => RuntimeValue::F64(a.to_f64()),
+                | _ => RuntimeValue::F80(a.to_x87()),
+            }
+        },
+        | (Opcode::Fptosi | Opcode::Fptoui, RuntimeValue::F128(a)) => Binary128::from_bits(a)
+            .to_integer(opcode == Opcode::Fptosi, to.bits())
+            .map_or(RuntimeValue::Poison, |bits| RuntimeValue::int(to, bits)),
+        | _ => return None,
     })
 }
 
@@ -344,14 +388,6 @@ const fn int_to_float(to: Type, wide: f64, narrow: f32) -> RuntimeValue {
     match to {
         | Type::F32 => RuntimeValue::F32(narrow),
         | _ => RuntimeValue::F64(wide),
-    }
-}
-
-/// Fails for the float types the interpreter does not implement.
-fn supported_float(ty: Type) -> Result<(), Fault> {
-    match ty {
-        | Type::F128 => Err(Fault::Unsupported(Unsupported::WideFloat)),
-        | _ => Ok(()),
     }
 }
 

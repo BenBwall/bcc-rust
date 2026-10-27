@@ -301,10 +301,10 @@ fn msvc_long_double_literals_and_operations_have_binary64_precision() {
                 let results: Vec<_> = unit
                     .expressions
                     .iter()
-                    .filter(|info| info.floating.is_some())
+                    .filter(|info| info.floating().is_some())
                     .collect();
-                let literal = results[0].floating.unwrap().real;
-                let operation = results.last().unwrap().floating.unwrap().real;
+                let literal = results[0].floating().unwrap().real;
+                let operation = results.last().unwrap().floating().unwrap().real;
                 let binary64 = target == Target::WindowsMsvc;
                 assert_eq!(
                     format!("{literal}"),

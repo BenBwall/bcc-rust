@@ -47,7 +47,10 @@ mod atomics;
 // Target immediates and overloaded operands
 mod x86_builtins;
 
-pub(super) use floating::nan_payload;
+pub(super) use floating::{
+    nan_payload,
+    nan_payload_wide,
+};
 
 use super::expressions;
 use crate::{

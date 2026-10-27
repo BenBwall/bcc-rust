@@ -203,6 +203,110 @@ mod tests {
         );
     }
 
+    /// An input that cannot be read is reported in the words of the compiler
+    /// whose diagnostic format is selected, and fails its own job alone.
+    #[test]
+    fn unreadable_inputs_are_reported_in_the_formats_words() {
+        let project = Project::new();
+        std::fs::create_dir(project.path("dir.c")).unwrap();
+        let missing = "No such file or directory";
+        for (format, expected) in [
+            (
+                "gcc",
+                format!("cc1: fatal error: missing.c: {missing}\ncompilation terminated.\n"),
+            ),
+            (
+                "clang",
+                format!("error: error reading 'missing.c': {missing}\n1 error generated.\n"),
+            ),
+            (
+                "msvc",
+                format!("c1: fatal error C1083: Cannot open source file: 'missing.c': {missing}\n"),
+            ),
+            ("tcc", "tcc: error: file 'missing.c' not found\n".into()),
+            (
+                "bcc",
+                format!("error: cannot read `missing.c`: {missing} (os error 2)\n"),
+            ),
+        ] {
+            let option = format!("--diagnostic-format={format}");
+            drop(std::fs::remove_file(project.path("a.o")));
+            let output = project.bcc(&[&option, "-c", "missing.c", "a.c"]);
+            assert_eq!(output.status.code(), Some(1), "{format}");
+            if cfg!(unix) {
+                assert_eq!(stderr(&output), expected, "{format}");
+            }
+            assert!(project.path("a.o").is_file(), "{format}");
+            // A file that exists but cannot be read is reported the same way.
+            let directory = project.bcc(&[&option, "--syntax-only", "dir.c"]);
+            assert_eq!(directory.status.code(), Some(1), "{format}");
+            assert!(
+                stderr(&directory).contains("dir.c"),
+                "{}",
+                stderr(&directory)
+            );
+        }
+        // clang-cl writes Clang's words in MSVC's format.
+        let clang_cl = project.bcc(&[
+            "--diagnostic-format=msvc",
+            "--compiler-identity=clang-cl",
+            "--syntax-only",
+            "missing.c",
+        ]);
+        assert!(
+            stderr(&clang_cl).starts_with("error: error reading 'missing.c': "),
+            "{}",
+            stderr(&clang_cl)
+        );
+    }
+
+    /// `-c`, `-S` and `-E` refuse `-o` for several inputs, but `-M` and `-MM`
+    /// without `-E` take it, each unit's rules replacing the last, as in
+    /// GCC. A linker input they leave unused must still exist.
+    #[test]
+    fn stages_that_stop_early_take_outputs_and_linker_inputs_as_gcc_does() {
+        let project = Project::new();
+        for stage in [
+            &["-c"][..],
+            &["-S"],
+            &["-E"],
+            &["-E", "-M"],
+            &["-M", "-c"],
+            &["-MM", "-S"],
+        ] {
+            let refused = project.bcc(&[stage, &["a.c", "main.c", "-o", "out"]].concat());
+            assert_eq!(refused.status.code(), Some(1), "{stage:?}");
+            assert!(
+                stderr(&refused).contains("cannot specify '-o' with '-c', '-S' or '-E'"),
+                "{}",
+                stderr(&refused)
+            );
+        }
+        for rules in ["-M", "-MM"] {
+            succeeds(&project.bcc(&[rules, "a.c", "main.c", "-o", "deps"]));
+            assert_eq!(
+                std::fs::read_to_string(project.path("deps")).unwrap(),
+                "main.o: main.c h.h\n"
+            );
+        }
+        succeeds(&project.bcc(&["-c", "a.c", "-o", "a.o"]));
+        let unused = project.bcc(&["-c", "main.c", "a.o"]);
+        succeeds(&unused);
+        assert!(
+            stderr(&unused).contains("warning: a.o: linker input file unused"),
+            "{}",
+            stderr(&unused)
+        );
+        let missing = project.bcc(&["-c", "main.c", "missing.o"]);
+        assert_eq!(missing.status.code(), Some(1));
+        assert!(
+            stderr(&missing).contains("error: missing.o: linker input file not found: "),
+            "{}",
+            stderr(&missing)
+        );
+        assert!(project.path("main.o").is_file());
+    }
+
     /// An interpreted program's status reaches the shell as a native build's
     /// would: the OS keeps its low byte on POSIX and all 32 bits on Windows.
     #[test]

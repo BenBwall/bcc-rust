@@ -1,28 +1,56 @@
-//! Binary128 conversion reads decimal or hexadecimal floating spellings,
-//! builds an exact integer significand, and rounds it into the IEEE binary128
-//! carrier. Arena-backed integer limbs hold intermediate values.
+//! IEEE binary128 values: conversion from decimal or hexadecimal floating
+//! spellings, and arithmetic computed in software, bit for bit as libgcc's
+//! soft-float routines compute it on x86-64 in the default rounding mode.
 //!
-//! For `0x1p+0Q`, conversion reads significand 1 and exponent 0. The exact
-//! ratio 1/1 becomes the binary128 encoding of 1 without rounding loss.
+//! Conversion reads a spelling, builds an exact integer significand, and
+//! rounds it into the binary128 carrier; arena-backed integer limbs hold
+//! intermediate values. For `0x1p+0Q`, conversion reads significand 1 and
+//! exponent 0. The exact ratio 1/1 becomes the binary128 encoding of 1
+//! without rounding loss.
+//!
+//! Arithmetic unpacks each operand into a [`Class`], computes the exact
+//! result with integers (or with a sticky bit for an inexact quotient or
+//! root), and rounds it once to 113 bits. For `1 / 3`, division forms 115
+//! quotient bits with a sticky bit for the remainder, and rounding keeps
+//! 113, giving `0x3FFD_5555_5555_5555_5555_5555_5555_5555`. Semantic
+//! analysis folds constants with it, and the interpreter computes with it,
+//! so both agree with programs that call libgcc.
 //!
 //! Read [`parse`], [`Binary128`], and [`arithmetic::Natural`], then
-//! the integer operations in `arithmetic.rs`.
+//! [`Class`] in `encoding.rs`, `operations.rs` and `conversion.rs`.
 //!
 //! Files by role:
 //! - Integer arithmetic, exponent parsing, and display: `arithmetic.rs`.
-//! - Conversion fixtures: `tests.rs`.
+//! - Encoding fields and classes: `encoding.rs`.
+//! - Operations: `operations.rs` (add, subtract, multiply, divide, `fmod`,
+//!   square root, comparison) and `functions.rs` (the exact `<math.h>`
+//!   functions: rounding to integers, scaling, decomposition).
+//! - Rounding and format conversion: `conversion.rs`.
+//! - Conversion and arithmetic fixtures: `tests.rs`.
 //!
 //! C99: floating constants, §6.4.4.2 paragraphs 1-7, pp. 57-58;
-//! PDF pp. 69-70. Binary128 is a GNU floating-type extension.
+//! PDF pp. 69-70; §5.2.4.2.2 paragraphs 2-4, pp. 22-24; PDF pp. 34-36
+//! (floating model); §6.3.1.4-§6.3.1.5, pp. 43-44; PDF pp. 55-56
+//! (conversions). Binary128 is a GNU floating-type extension (GCC manual,
+//! "Additional Floating Types").
 
 // Exact arithmetic
 mod arithmetic;
+
+// Encoding and operations
+mod encoding;
+mod functions;
+mod operations;
+
+// Rounding and format conversion
+mod conversion;
 
 use arithmetic::error;
 pub(crate) use arithmetic::{
     Natural,
     exponent,
 };
+pub(crate) use encoding::Class;
 
 use crate::{
     float_parsing::{

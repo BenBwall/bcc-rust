@@ -1453,12 +1453,18 @@ otherwise it returns the argument with +0, as Clang's header and the pinned
 Clang do.
 
 Binary128 literals are parsed exactly with arena-backed integer rational
-conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,
-comparisons and casts are retained as non-ICE arithmetic constants without
-numerical folding. Static arithmetic initializers are accepted, but an
-integer constant expression requiring binary128 evaluation is unavailable.
+conversion and one IEEE round-to-nearest-even step. Since 2026-10-27
+binary128 arithmetic, comparisons and casts fold with software IEEE
+binary128 arithmetic that rounds and propagates NaNs as libgcc does, so a
+cast of a binary128 constant to an integer type is an integer constant
+expression and static initializers hold the run-time bits; only the product
+and quotient of two complex values stay unfolded. Programs compute with
+binary128 on every back end: `fp128` in LLVM, libgcc's soft-float routines
+(`__addtf3`, `__lttf2`, `__extenddftf2` …) in the native back end, and the
+same software arithmetic in the interpreter, whose host also provides
+glibc's `strtof128`, `strfromf128` and exact `_Float128` math functions.
 The x87 helper is never used to approximate binary128. See
-[semantic-analysis.md](semantic-analysis.md#binary128-and-type-generic-math-2026-10-09)
+[semantic-analysis.md](semantic-analysis.md#binary128-arithmetic-and-folding-2026-10-27)
 for verification and limits.
 
 ## Interchange floating types (2026-10-26)
@@ -1514,13 +1520,16 @@ Verified against real glibc 2.43 headers (`<math.h>`, `<complex.h>`,
 GCC 14 identity (`-U__clang__ -U__GNUC__ -D__GNUC__=14 ...`) in C11, GNU17
 and C23, and programs using `HUGE_VAL_F32`, `sqrtf32`, `strtof64` and the
 builtins print what GCC 15's builds print (`signbit` returns another
-nonzero value). Limits: the resource `<float.h>` is Clang's and knows
-none of these types (no `FLT32_MAX`), so a GCC identity still needs GCC's
-own `<float.h>` macros; the resource `<tgmath.h>` takes them with the
-standard type's functions and result types (above), and refuses
-`_Float128`; GNU vector element types, imaginary `_FloatN` constants such as
-`1.0f32i`, `__builtin_*f128` math beyond the existing primitives, and
-binary128 arithmetic in lowering remain unsupported.
+nonzero value). The resource `<float.h>` defines GCC's TS 18661-3 names
+(`FLT128_MAX`, `FLT32X_EPSILON`, … and, after C17, `FLTN_SNAN`) when
+`__STDC_WANT_IEC_60559_TYPES_EXT__` is defined, for each type whose
+`__FLTN_MANT_DIG__` is predefined, as GCC's header does; a test checks
+`FLT128_*` and `_Float128` arithmetic against GCC 15's output. Limits: the
+resource `<tgmath.h>` takes the types with the standard type's functions and
+result types (above), and refuses `_Float128`; GNU vector element types,
+imaginary `_FloatN` constants such as `1.0f32i`, and `__builtin_*f128` math
+beyond the existing primitives remain unsupported. `_Float16`, `__fp16` and
+`__bf16` are not implemented.
 
 ## GNU vectors and x86 SIMD resources (2026-10-09)
 
@@ -1578,6 +1587,12 @@ coverage is not implied.
 `__builtin_frame_address` and `__builtin_return_address` take a constant level
 and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
 `__builtin_extract_return_addr` is the identity.
+GCC's `__builtin_setjmp (void *)` and `__builtin_longjmp (void *, 1)`
+([Nonlocal Gotos](https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html))
+take GCC's `void *` buffer and require an integer constant that converts
+to the `int` 1, as GCC and Clang do (a value the conversion changes gets
+`-Wconstant-conversion`, which bcc reports only there so far); they run on every back end with LLVM's buffer layout (see
+[middle-end.md](middle-end.md#gccs-builtin-setjmp-and-longjmp-2026-10-27)).
 
 GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html),
 [union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html),

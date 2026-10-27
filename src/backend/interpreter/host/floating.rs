@@ -1,5 +1,6 @@
 //! The text of `printf`'s floating conversions `e E f F g G a A` for
-//! `double` and x87 `long double`, digit for digit as glibc prints them.
+//! `double` and x87 `long double`, and of `strfromf128`'s for binary128,
+//! digit for digit as glibc prints them.
 //!
 //! A finite value is `significand × 2^exponent`, so its decimal expansion is
 //! finite: the integer part is a big integer, and the fraction `F / 2^shift`
@@ -7,9 +8,9 @@
 //! digits looks at the next digit and at whether anything nonzero remains,
 //! and rounds halfway cases to even, as glibc does in the default rounding
 //! mode. Hexadecimal output takes the digits straight from the
-//! representation: `double` normalizes to a leading `1` (or `0` for
-//! denormals), while glibc prints the x87 significand's top four bits as the
-//! leading digit (`0x8p-3` for 1.0).
+//! representation: `double` and binary128 normalize to a leading `1` (or
+//! `0` for denormals), while glibc prints the x87 significand's top four
+//! bits as the leading digit (`0x8p-3` for 1.0).
 //!
 //! C99: §7.19.6.1 paragraph 8, pp. 278-279; PDF pp. 290-291 (the `f`, `e`,
 //! `g` and `a` conversions); paragraph 13, p. 280; PDF p. 292 (exact
@@ -17,6 +18,10 @@
 //! all digits).
 
 use crate::{
+    binary128::{
+        self,
+        Binary128,
+    },
     util::bump::ArenaVec,
     x87::{
         Class,
@@ -29,6 +34,7 @@ use crate::{
 pub(super) enum Floating {
     Double(f64),
     Extended(X87),
+    Quad(Binary128),
 }
 
 /// How a conversion shows the sign of a nonnegative value.
@@ -47,7 +53,7 @@ pub(super) enum PositiveSign {
 enum Decoded {
     /// `significand × 2^exponent`; zero has a zero significand.
     Finite {
-        significand: u64,
+        significand: u128,
         exponent:    i32,
     },
     Infinite,
@@ -65,11 +71,11 @@ impl Floating {
                     | 0x7FF if fraction == 0 => Decoded::Infinite,
                     | 0x7FF => Decoded::Nan,
                     | 0 => Decoded::Finite {
-                        significand: fraction,
+                        significand: u128::from(fraction),
                         exponent:    -1074,
                     },
                     | _ => Decoded::Finite {
-                        significand: fraction | 1 << 52,
+                        significand: u128::from(fraction | 1 << 52),
                         exponent:    biased - 1075,
                     },
                 };
@@ -85,13 +91,31 @@ impl Floating {
                         exponent,
                         significand,
                     } => Decoded::Finite {
-                        significand,
+                        significand: u128::from(significand),
                         exponent,
                     },
                     | Class::Infinite => Decoded::Infinite,
                     // glibc's `isnanl` counts unnormals and pseudo-NaNs as
                     // NaNs.
                     | Class::Nan { .. } | Class::Unsupported => Decoded::Nan,
+                };
+                (value.is_negative(), decoded)
+            },
+            | Self::Quad(value) => {
+                let decoded = match value.class() {
+                    | binary128::Class::Zero => Decoded::Finite {
+                        significand: 0,
+                        exponent:    0,
+                    },
+                    | binary128::Class::Finite {
+                        exponent,
+                        significand,
+                    } => Decoded::Finite {
+                        significand,
+                        exponent,
+                    },
+                    | binary128::Class::Infinite => Decoded::Infinite,
+                    | binary128::Class::Nan { .. } => Decoded::Nan,
                 };
                 (value.is_negative(), decoded)
             },
@@ -294,7 +318,7 @@ struct Expansion<'d, 'a> {
 }
 
 impl<'d, 'a> Expansion<'d, 'a> {
-    fn new(significand: u64, exponent: i32, digits: &'d mut ArenaVec<'a, u8>) -> Self {
+    fn new(significand: u128, exponent: i32, digits: &'d mut ArenaVec<'a, u8>) -> Self {
         digits.clear();
         let mut integer = Natural::default();
         let mut fraction = Natural::default();
@@ -303,7 +327,7 @@ impl<'d, 'a> Expansion<'d, 'a> {
             0
         } else {
             let shift = exponent.unsigned_abs();
-            if shift < 64 {
+            if shift < 128 {
                 integer.set_shifted(significand >> shift, 0);
                 fraction.set_shifted(significand & ((1 << shift) - 1), 0);
             } else {
@@ -378,8 +402,9 @@ impl<'d, 'a> Expansion<'d, 'a> {
 }
 
 /// A natural number of up to `LIMBS` 32-bit limbs, least significant first:
-/// enough for the integer part of the largest x87 value (2^16384) and for
-/// the fraction of the smallest (2^-16445) times ten.
+/// enough for the integer part of the largest x87 or binary128 value
+/// (2^16384) and for the fraction of the smallest binary128 value
+/// (2^-16494) times ten.
 #[derive(Clone)]
 struct Natural {
     limbs: [u32; LIMBS],
@@ -398,18 +423,21 @@ impl Default for Natural {
 }
 
 impl Natural {
-    fn set_shifted(&mut self, value: u64, shift: u32) {
+    fn set_shifted(&mut self, value: u128, shift: u32) {
         self.limbs = [0; LIMBS];
         let word = (shift / 32) as usize;
         let bit = shift % 32;
-        let wide = u128::from(value) << bit;
-        for index in 0..4 {
-            let limb = u32::try_from((wide >> (32 * index)) & 0xFFFF_FFFF).expect("masked");
+        // The shifted value spans at most five limbs.
+        let low = value << bit;
+        let high = if bit == 0 { 0 } else { value >> (128 - bit) };
+        for index in 0..5 {
+            let bits = if index < 4 { low >> (32 * index) } else { high };
+            let limb = u32::try_from(bits & 0xFFFF_FFFF).expect("masked");
             if let Some(slot) = self.limbs.get_mut(word + index) {
                 *slot = limb;
             }
         }
-        self.len = (word + 4).min(LIMBS);
+        self.len = (word + 5).min(LIMBS);
         self.trim();
     }
 
@@ -492,35 +520,46 @@ fn hexadecimal(
 ) {
     // The leading digit, the fraction digits after it and the binary
     // exponent of the leading digit's lowest bit.
-    let (mut leading, fraction, fraction_digits, mut exponent): (u64, u64, usize, i64) = match value
-    {
-        | Floating::Double(value) => {
-            let bits = value.to_bits();
-            let biased = i64::try_from((bits >> 52) & 0x7FF).expect("eleven bits");
-            let fraction = bits & ((1 << 52) - 1);
-            match (biased, fraction) {
-                | (0, 0) => (0, 0, 13, 0),
-                | (0, _) => (0, fraction, 13, -1022),
-                | _ => (1, fraction, 13, biased - 1023),
-            }
-        },
-        | Floating::Extended(value) => {
-            let bits = value.to_bits();
-            let significand = u64::try_from(bits & u128::from(u64::MAX)).expect("masked");
-            let biased = i64::try_from((bits >> 64) & 0x7FFF).expect("fifteen bits");
-            if significand == 0 {
-                (0, 0, 15, 0)
-            } else {
-                (
-                    significand >> 60,
-                    significand & ((1 << 60) - 1),
-                    15,
-                    biased.max(1) - 16383 - 3,
-                )
-            }
-        },
-    };
-    let mut digits = [0_u8; 15];
+    let (mut leading, fraction, fraction_digits, mut exponent): (u64, u128, usize, i64) =
+        match value {
+            | Floating::Double(value) => {
+                let bits = value.to_bits();
+                let biased = i64::try_from((bits >> 52) & 0x7FF).expect("eleven bits");
+                let fraction = bits & ((1 << 52) - 1);
+                let fraction = u128::from(fraction);
+                match (biased, fraction) {
+                    | (0, 0) => (0, 0, 13, 0),
+                    | (0, _) => (0, fraction, 13, -1022),
+                    | _ => (1, fraction, 13, biased - 1023),
+                }
+            },
+            | Floating::Extended(value) => {
+                let bits = value.to_bits();
+                let significand = u64::try_from(bits & u128::from(u64::MAX)).expect("masked");
+                let biased = i64::try_from((bits >> 64) & 0x7FFF).expect("fifteen bits");
+                if significand == 0 {
+                    (0, 0, 15, 0)
+                } else {
+                    (
+                        significand >> 60,
+                        u128::from(significand & ((1 << 60) - 1)),
+                        15,
+                        biased.max(1) - 16383 - 3,
+                    )
+                }
+            },
+            | Floating::Quad(value) => {
+                let bits = value.to_bits();
+                let biased = i64::try_from((bits >> 112) & 0x7FFF).expect("fifteen bits");
+                let fraction = bits & ((1 << 112) - 1);
+                match (biased, fraction) {
+                    | (0, 0) => (0, 0, 28, 0),
+                    | (0, _) => (0, fraction, 28, -16382),
+                    | _ => (1, fraction, 28, biased - 16383),
+                }
+            },
+        };
+    let mut digits = [0_u8; 28];
     for (index, digit) in digits[..fraction_digits].iter_mut().enumerate() {
         *digit = u8::try_from((fraction >> (4 * (fraction_digits - 1 - index))) & 0xF)
             .expect("a nibble");

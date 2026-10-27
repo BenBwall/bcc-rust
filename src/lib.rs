@@ -128,7 +128,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod float_parsing;
 #[cfg(feature = "explorer")]
 pub(crate) mod util;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod x87;
 
 // Measurements and test support
