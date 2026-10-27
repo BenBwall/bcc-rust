@@ -7,8 +7,11 @@
 //!
 //! ```sh
 //! cargo build --release --features benchmarking-internals --example coz_preprocessing
-//! coz run --- target/release/examples/coz_preprocessing 100
+//! coz run --- target/x86_64-unknown-linux-gnu/release/examples/coz_preprocessing 100
 //! ```
+//!
+//! The repository's Cargo configuration builds for an explicit host target,
+//! so the artifact sits under `target/<host-triple>/`.
 #![expect(
     unused_crate_dependencies,
     reason = "The workload uses the library's benchmark API and coz."
