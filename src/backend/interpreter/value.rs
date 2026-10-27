@@ -7,6 +7,7 @@
 use std::num::NonZeroU32;
 
 use crate::{
+    half_precision::HalfFormat,
     ir::Type,
     x87::X87,
 };
@@ -21,6 +22,8 @@ pub(crate) enum RuntimeValue {
     Int(u128),
     /// IEEE binary16 bits, which only move and convert.
     F16(u16),
+    /// bfloat16 bits, which only move and convert.
+    BF16(u16),
     F32(f32),
     F64(f64),
     /// An x87 double-extended value; moves keep every one of its 80 bits.
@@ -45,6 +48,7 @@ impl RuntimeValue {
         match self {
             | Self::Int(bits) => ty.is_int() && bits & !ty.mask() == 0,
             | Self::F16(_) => matches!(ty, Type::F16),
+            | Self::BF16(_) => matches!(ty, Type::BF16),
             | Self::F32(_) => matches!(ty, Type::F32),
             | Self::F64(_) => matches!(ty, Type::F64),
             | Self::F80(_) => matches!(ty, Type::F80),
@@ -64,12 +68,30 @@ impl RuntimeValue {
     pub(crate) const fn zero(ty: Type) -> Self {
         match ty {
             | Type::F16 => Self::F16(0),
+            | Type::BF16 => Self::BF16(0),
             | Type::F32 => Self::F32(0.0),
             | Type::F64 => Self::F64(0.0),
             | Type::F80 => Self::F80(X87::zero(false)),
             | Type::F128 => Self::F128(0),
             | Type::Ptr => Self::NULL,
             | _ => Self::Int(0),
+        }
+    }
+
+    /// The 16-bit floating `bits` of type `ty`, `f16` or `bf16`.
+    pub(crate) const fn half(ty: Type, bits: u16) -> Self {
+        match ty {
+            | Type::BF16 => Self::BF16(bits),
+            | _ => Self::F16(bits),
+        }
+    }
+
+    /// The format and bits of an `f16` or `bf16` value.
+    pub(crate) const fn as_half(self) -> Option<(HalfFormat, u16)> {
+        match self {
+            | Self::F16(bits) => Some((HalfFormat::Binary16, bits)),
+            | Self::BF16(bits) => Some((HalfFormat::BFloat16, bits)),
+            | _ => None,
         }
     }
 
