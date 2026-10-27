@@ -134,6 +134,8 @@ pub(crate) struct DefaultHost<'a> {
     /// What the program wrote to `stderr`, and where it falls among the
     /// flushes of `stdout`.
     console:       stdio::Console<'a>,
+    /// glibc's buffer for `stdin`.
+    input:         stdio::Input<'a>,
     /// Whether the program may open, create and remove host files.
     file_access:   bool,
     /// How many file-system accesses were refused, and the first path.
@@ -550,6 +552,12 @@ impl DefaultHost<'_> {
         self.console.line_buffered = terminal;
     }
 
+    /// Treats standard input as a terminal, which glibc line-buffers:
+    /// refilling its buffer flushes a terminal's stdout.
+    pub(crate) fn set_terminal_input(&mut self, terminal: bool) {
+        self.input.terminal = terminal;
+    }
+
     /// How many file-system accesses were refused, with the first path, if
     /// any were.
     pub(crate) fn denied_file_access(&self) -> Option<(u32, &[u8])> {
@@ -677,6 +685,13 @@ impl<'a> DefaultHost<'a> {
                 marks:         ArenaVec::new_in(arena),
                 flushed:       0,
                 line_buffered: false,
+                scanned:       0,
+                line_end:      0,
+            },
+            input:         stdio::Input {
+                bytes:    ArenaVec::new_in(arena),
+                taken:    0,
+                terminal: false,
             },
             file_access:   false,
             denied_files:  0,

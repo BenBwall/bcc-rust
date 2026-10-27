@@ -737,24 +737,82 @@ int fclose(FILE *); FILE *freopen(const char *, const char *, FILE *);
             ),
         ] {
             let source = format!("{prelude}int main(void) {{ {body} return 0; }}\n");
-            let merged = temporary("merged-output.txt");
-            let file = std::fs::File::create(&merged).unwrap();
-            let status = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
-                .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
-                .args(flags)
-                .args(["--input", &source])
-                .stdout(file.try_clone().unwrap())
-                .stderr(file)
-                .status()
-                .unwrap();
-            assert_eq!(status.code(), Some(0), "{body}");
             assert_eq!(
-                std::fs::read_to_string(&merged).unwrap(),
+                interpret_merged(&source, flags, b""),
                 expected,
                 "{body} {flags:?}"
             );
-            std::fs::remove_file(merged).unwrap();
         }
+    }
+
+    /// glibc flushes a terminal's line-buffered stdout before input only
+    /// when a line-buffered (terminal) stdin has to be refilled: not when
+    /// stdin is a pipe, not while its buffer still holds the rest of a line,
+    /// and not once it has reached end-of-file, which stays set. The
+    /// expected text is what glibc programs print with stdout and stderr on
+    /// a pseudo-terminal or one pipe, and stdin a pipe or a pseudo-terminal
+    /// that receives the whole input as one line and then end-of-file.
+    #[test]
+    fn interpreter_flushes_terminal_stdout_when_terminal_stdin_refills() {
+        let prelude = "typedef struct _IO_FILE FILE; extern FILE *stdout, *stderr;
+int fputs(const char *, FILE *); int getchar(void);
+";
+        let stdout = "--interpret-terminal-stdout";
+        let stdin = "--interpret-terminal-stdin";
+        let once = "fputs(\"A\", stdout); getchar(); fputs(\"B\", stderr);";
+        for (body, flags, expected) in [
+            (once, &[stdout][..], "BA"),
+            (once, &[stdin][..], "BA"),
+            (once, &[stdout, stdin][..], "AB"),
+            (
+                "fputs(\"A\", stdout); getchar(); fputs(\"B\", stdout); getchar();
+  fputs(\"C\", stderr);",
+                &[stdout, stdin][..],
+                "ACB",
+            ),
+            (
+                "fputs(\"A\", stdout); getchar(); getchar(); getchar(); fputs(\"B\", stdout);
+  getchar(); fputs(\"C\", stderr); fputs(\"D\", stdout); getchar(); fputs(\"E\", stderr);",
+                &[stdout, stdin][..],
+                "ABCED",
+            ),
+        ] {
+            let source = format!("{prelude}int main(void) {{ {body} return 0; }}\n");
+            assert_eq!(
+                interpret_merged(&source, flags, b"xy\n"),
+                expected,
+                "{body} {flags:?}"
+            );
+        }
+    }
+
+    /// Interprets `source` with `flags` and `input` piped to its stdin, with
+    /// stdout and stderr both going to one file; what the file holds.
+    fn interpret_merged(source: &str, flags: &[&str], input: &[u8]) -> String {
+        use std::{
+            io::Write as _,
+            process::Stdio,
+        };
+        let merged = temporary("merged-output.txt");
+        let file = std::fs::File::create(&merged).unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
+            .args(flags)
+            .args(["--input", source])
+            .stdin(Stdio::piped())
+            .stdout(file.try_clone().unwrap())
+            .stderr(file)
+            .spawn()
+            .unwrap();
+        // One write, so that one `read` sees it whole as a terminal's would.
+        // A program that failed to compile has closed the pipe; its status
+        // tells.
+        _ = child.stdin.take().unwrap().write_all(input).ok();
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(0), "{source}");
+        let text = std::fs::read_to_string(&merged).unwrap();
+        std::fs::remove_file(merged).unwrap();
+        text
     }
 
     /// Using a closed stream is undefined: after `fclose(stdin)` or

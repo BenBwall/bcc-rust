@@ -31,6 +31,7 @@ int fgetc(FILE *);
 int ungetc(int, FILE *);
 int feof(FILE *);
 int ferror(FILE *);
+void clearerr(FILE *);
 int fseek(FILE *, long, int);
 long ftell(FILE *);
 void rewind(FILE *);
@@ -259,6 +260,39 @@ int main(void)
   rewind(file);
   ungetc('Z', file);
   printf("%ld %c\n", ftell(file), fgetc(file));
+  /* A seek that fails discards a byte pushed back apart from what was
+     read, but keeps one that steps back over the byte just read, and keeps
+     the end-of-file indicator. */
+  rewind(file);
+  ungetc('Z', file);
+  int failed = fseek(file, -1, 0);
+  printf("pushback %d %c ", failed, fgetc(file));
+  ungetc('Q', file);
+  failed = fseek(file, -1, 1);
+  printf("%d %c ", failed, fgetc(file));
+  ungetc('i', file);
+  failed = fseek(file, -100, 2);
+  printf("%d %c ", failed, fgetc(file));
+  fgetc(file);
+  ungetc('X', file);
+  fgetc(file);
+  ungetc('X', file);
+  failed = fseek(file, -1, 0);
+  printf("%d %c ", failed, fgetc(file));
+  ungetc('Y', file);
+  failed = fseek(file, 0, 7);
+  printf("%d %c\n", failed, fgetc(file));
+  while (fgetc(file) != -1)
+    ;
+  failed = fseek(file, -1000, 1);
+  printf("eof %d %d ", failed, !!feof(file));
+  /* End-of-file stays set until it is cleared, even once the file grows. */
+  FILE *more = fopen(name, "a");
+  fputs("!", more);
+  fclose(more);
+  int stuck = fgetc(file);
+  clearerr(file);
+  printf("%d %c\n", stuck, fgetc(file));
   fclose(file);
   /* "x" refuses an existing file instead of truncating it. */
   FILE *exclusive = fopen(name, "wx");

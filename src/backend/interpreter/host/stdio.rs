@@ -15,6 +15,13 @@
 //! flush is not modelled). [`Console`] records where each error write falls
 //! among those flushes.
 //!
+//! `stdin` reads through a buffer as glibc's does, one `read` of the
+//! process's standard input at a time ([`Input`]). glibc line-buffers a
+//! terminal's standard input and output, and flushes a line-buffered
+//! `stdout` only when a line-buffered input stream has to be refilled
+//! (`_IO_new_file_underflow` in `libio/fileops.c`): reading what the buffer
+//! still holds, or reading a pipe or file, flushes nothing.
+//!
 //! Host files are opt-in (`--interpret-allow-fs`): without it, `fopen`,
 //! `freopen` and `remove` fail as glibc does on `EACCES`, returning null or
 //! -1, and the host counts the refusal for the command line to note;
@@ -120,6 +127,16 @@ const TMPNAM_NAMES: u32 = 1_000_000;
 /// included.
 const MAX_STREAMS: usize = 64;
 
+/// glibc's `BUFSIZ`, the size of its buffer for a `stdin` that is not a
+/// terminal.
+const BUFSIZ: usize = 8192;
+
+/// The size of glibc's buffer for a terminal's `stdin`: the device's
+/// `st_blksize` (1024 on Linux), which glibc takes when it is below
+/// `BUFSIZ`. A refill reads at most this much, so a longer line takes
+/// several refills.
+const TERMINAL_BUFFER: usize = 1024;
+
 /// What the program wrote to the standard streams, in the order the
 /// command line shows it.
 pub(super) struct Console<'a> {
@@ -131,22 +148,76 @@ pub(super) struct Console<'a> {
     /// How much of the output buffer `fflush` has released.
     pub(super) flushed:       usize,
     /// Whether standard output is a terminal, which glibc line-buffers: each
-    /// newline releases what precedes it, and reading `stdin` releases all.
+    /// newline releases what precedes it, and refilling a terminal's `stdin`
+    /// releases all.
     pub(super) line_buffered: bool,
+    /// How much of the output buffer [`Console::released`] has searched for
+    /// newlines, and the end of the last one it found, so that a run looks
+    /// at each byte once however often it writes to `stderr`.
+    pub(super) scanned:       usize,
+    pub(super) line_end:      usize,
 }
 
 impl Console<'_> {
     /// How much of `output` has reached the terminal or pipe by now.
-    fn released(&self, output: &[u8]) -> usize {
-        let line = if self.line_buffered {
-            output
+    fn released(&mut self, output: &[u8]) -> usize {
+        if self.line_buffered {
+            // Formatted text moved out of the buffer leaves it shorter; it is
+            // never shorter than what was written before, but search it again
+            // rather than trust a stale position.
+            if output.len() < self.scanned {
+                (self.scanned, self.line_end) = (0, 0);
+            }
+            if let Some(at) = output[self.scanned..]
                 .iter()
                 .rposition(|&byte| byte == b'\n')
-                .map_or(0, |at| at + 1)
-        } else {
-            0
-        };
-        self.flushed.max(line).min(output.len())
+            {
+                self.line_end = self.scanned + at + 1;
+            }
+            self.scanned = output.len();
+        }
+        self.flushed.max(self.line_end).min(output.len())
+    }
+}
+
+/// glibc's buffer for `stdin`: what the last `read` of the process's
+/// standard input returned, and how much of it the program has taken.
+pub(super) struct Input<'a> {
+    pub(super) bytes:    super::ArenaVec<'a, u8>,
+    pub(super) taken:    usize,
+    /// Whether standard input is a terminal, which glibc line-buffers.
+    pub(super) terminal: bool,
+}
+
+impl Input<'_> {
+    /// The next byte of standard input, or `None` at its end. An empty buffer
+    /// is refilled by one `read`, which on a terminal returns at most a line;
+    /// refilling a terminal's buffer first releases a line-buffered `stdout`,
+    /// whose buffer holds `written` bytes.
+    fn next(&mut self, console: &mut Console<'_>, written: usize) -> std::io::Result<Option<u8>> {
+        if self.taken == self.bytes.len() {
+            if self.terminal && console.line_buffered {
+                console.flushed = written;
+            }
+            let size = if self.terminal {
+                TERMINAL_BUFFER
+            } else {
+                BUFSIZ
+            };
+            self.bytes.clear();
+            self.bytes.resize(size, 0);
+            self.taken = 0;
+            match std::io::stdin().lock().read(&mut self.bytes) {
+                | Ok(count) => self.bytes.truncate(count),
+                | Err(error) => {
+                    self.bytes.clear();
+                    return Err(error);
+                },
+            }
+        }
+        let byte = self.bytes.get(self.taken).copied();
+        self.taken += usize::from(byte.is_some());
+        Ok(byte)
     }
 }
 
@@ -160,14 +231,25 @@ pub(super) struct Streams {
 /// One stream's destination and state.
 #[derive(Default)]
 struct Stream {
-    target: Target,
+    target:       Target,
     /// The end-of-file and error indicators.
-    eof:    bool,
-    error:  bool,
+    eof:          bool,
+    error:        bool,
     /// A byte `ungetc` pushed back.
-    pushed: Option<u8>,
+    pushed:       Option<u8>,
+    /// The byte glibc's buffer holds just before the read position: the
+    /// last one read, unless it came from a separate pushback area or a
+    /// seek or write came after it. After a seek glibc's buffer can hold
+    /// the byte before the new position too (when that is not on a block
+    /// boundary), which the host does not model.
+    behind:       Option<u8>,
+    /// Whether `pushed` is the byte `behind`, which glibc's `ungetc` pushes
+    /// back by stepping its read position back over it instead of into a
+    /// separate pushback area. A failed seek discards the area but keeps the
+    /// step back (`_IO_seekoff_unlocked` in `libio/ioseekoff.c`).
+    stepped_back: bool,
     /// The memory object of a stream `fopen` made, freed by `fclose`.
-    object: Option<Pointer>,
+    object:       Option<Pointer>,
 }
 
 /// Where a stream's bytes go or come from.
@@ -370,10 +452,8 @@ impl DefaultHost<'_> {
                 if character & 0xFFFF_FFFF == EOF {
                     RuntimeValue::Int(EOF)
                 } else {
-                    let entry = &mut self.streams.entries[stream];
                     let byte = truncate_u8(character);
-                    entry.pushed = Some(byte);
-                    entry.eof = false;
+                    self.push_back(stream, byte);
                     RuntimeValue::Int(u128::from(byte))
                 }
             },
@@ -402,30 +482,39 @@ impl DefaultHost<'_> {
                     let offset = i64::try_from(offset).map_err(|_| UbKind::SignatureMismatch)?;
                     // A byte `ungetc` pushed back stands before the file
                     // position, so the current position is one less. A
-                    // negative start, an offset past the range and an
-                    // unknown `whence` fail, as `lseek` does (EINVAL).
+                    // negative start and an offset past the range fail, as
+                    // `lseek` does (EINVAL); glibc refuses an unknown
+                    // `whence` before it touches the stream.
                     let pushed = i64::from(self.streams.entries[stream].pushed.is_some());
                     match int(arg(2))? {
                         | 0 => u64::try_from(offset).ok().map(SeekFrom::Start),
                         | 1 => offset.checked_sub(pushed).map(SeekFrom::Current),
                         | 2 => Some(SeekFrom::End(offset)),
-                        | _ => None,
+                        | _ =>
+                            return Ok(HostReturn::Value(Some(RuntimeValue::int(Type::I32, EOF)))),
                     }
                 };
-                let Some(position) = position else {
-                    return Ok(HostReturn::Value(Some(RuntimeValue::int(Type::I32, EOF))));
-                };
                 let entry = &mut self.streams.entries[stream];
-                entry.pushed = None;
-                entry.eof = false;
-                if call.name == "rewind" {
-                    entry.error = false;
-                }
-                let moved = match &mut entry.target {
-                    | Target::File(file) => file.seek(position).is_ok(),
+                let moved = match (position, &mut entry.target) {
+                    | (Some(position), Target::File(file)) => file.seek(position).is_ok(),
                     | _ => false,
                 };
+                // C99 §7.19.9.2p5: a successful seek undoes `ungetc` and
+                // clears the end-of-file indicator. One that fails keeps
+                // the indicator, and glibc still discards a separate
+                // pushback area.
+                if moved {
+                    entry.eof = false;
+                    entry.behind = None;
+                }
+                if moved || !entry.stepped_back {
+                    entry.pushed = None;
+                }
                 if call.name == "rewind" {
+                    // glibc's `rewind` clears both indicators even when the
+                    // seek fails.
+                    entry.eof = false;
+                    entry.error = false;
                     return Ok(HostReturn::Value(None));
                 }
                 RuntimeValue::Int(if moved { 0 } else { EOF })
@@ -582,7 +671,10 @@ impl DefaultHost<'_> {
                 self.console.marks.push((released, end));
                 true
             },
-            | Target::File(file) => file.write_all(&self.output[before..]).is_ok(),
+            | Target::File(file) => {
+                entry.behind = None;
+                file.write_all(&self.output[before..]).is_ok()
+            },
             | Target::Input | Target::Closed => false,
         };
         entry.error |= !written;
@@ -600,29 +692,37 @@ impl DefaultHost<'_> {
 
     /// Reads one byte from `stream`, setting its end-of-file or error
     /// indicator when there is none.
+    /// C99: §7.19.7.1 paragraphs 2-3, p. 296; PDF p. 308.
     pub(super) fn read(&mut self, stream: usize) -> Option<u8> {
         let entry = &mut self.streams.entries[stream];
         if let Some(byte) = entry.pushed.take() {
+            entry.behind = entry.stepped_back.then_some(byte);
             return Some(byte);
         }
-        let mut byte = [0];
+        // A set end-of-file indicator fails the read without reading, as
+        // glibc's `_IO_EOF_SEEN` does.
+        if entry.eof {
+            return None;
+        }
         let read = match &mut entry.target {
-            | Target::File(file) => file.read(&mut byte),
-            | Target::Input => {
-                // glibc flushes line-buffered output before reading input.
-                if self.console.line_buffered {
-                    self.console.flushed = self.output.len();
-                }
-                std::io::stdin().lock().read(&mut byte)
+            | Target::File(file) => {
+                let mut byte = [0];
+                file.read(&mut byte)
+                    .map(|count| (count == 1).then_some(byte[0]))
             },
+            | Target::Input => self.input.next(&mut self.console, self.output.len()),
             | _ => {
                 entry.error = true;
                 return None;
             },
         };
+        entry.behind = None;
         match read {
-            | Ok(1) => Some(byte[0]),
-            | Ok(_) => {
+            | Ok(Some(byte)) => {
+                entry.behind = Some(byte);
+                Some(byte)
+            },
+            | Ok(None) => {
                 entry.eof = true;
                 None
             },
@@ -636,6 +736,8 @@ impl DefaultHost<'_> {
     /// Pushes `byte` back onto `stream`, as `ungetc` does.
     pub(super) fn push_back(&mut self, stream: usize, byte: u8) {
         let entry = &mut self.streams.entries[stream];
+        entry.stepped_back = entry.behind == Some(byte);
+        entry.behind = None;
         entry.pushed = Some(byte);
         entry.eof = false;
     }
@@ -811,7 +913,10 @@ fn write_to(
             console.marks.push((released, console.errors.len()));
             true
         },
-        | Target::File(file) => file.write_all(bytes).is_ok(),
+        | Target::File(file) => {
+            entry.behind = None;
+            file.write_all(bytes).is_ok()
+        },
         | Target::Input | Target::Closed => false,
     };
     entry.error |= !written;
@@ -821,6 +926,7 @@ fn write_to(
 #[cfg(test)]
 mod tests {
     use super::{
+        Console,
         DefaultHost,
         TMPNAM_NAMES,
     };
@@ -860,5 +966,37 @@ mod tests {
         let last = name(&mut host, &mut memory).unwrap();
         assert!(last.ends_with(b"bcc999999"), "{last:?}");
         assert_eq!(name(&mut host, &mut memory), None);
+    }
+
+    /// A line-buffered stdout searches each byte of the output buffer for a
+    /// newline once, however often the program writes to stderr: these
+    /// 200 000 writes look at 3.2 MB in all, where searching the whole
+    /// buffer at each would look at hundreds of gigabytes and run for
+    /// minutes.
+    #[test]
+    fn line_buffered_release_searches_each_byte_once() {
+        let arena = Bump::new();
+        let mut console = Console {
+            errors:        ArenaVec::new_in(&arena),
+            marks:         ArenaVec::new_in(&arena),
+            flushed:       0,
+            line_buffered: true,
+            scanned:       0,
+            line_end:      0,
+        };
+        let mut output = ArenaVec::new_in(&arena);
+        let (mut line_end, mut previous) = (0, 0);
+        for write in 0..200_000 {
+            output.extend_from_slice(b"no newline here.");
+            if write % 50_000 == 0 {
+                output.extend_from_slice(b"\n tail");
+                previous = line_end;
+                line_end = output.len() - 5;
+            }
+            assert_eq!(console.released(&output), line_end, "write {write}");
+            assert_eq!(console.scanned, output.len());
+        }
+        // A buffer cut short before its last newline is searched again.
+        assert_eq!(console.released(&output[..line_end - 1]), previous);
     }
 }
