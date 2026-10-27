@@ -1898,9 +1898,19 @@ interpreter: inline assembly, which only compiled code can run"; a program
 that never reaches its assembly still runs. Differential tests do not
 generate assembly.
 
-**Native back end.** Not supported in this change: a module with `asm` is
-refused with "not yet supported by the native back end: the `asm`
-instruction".
+**Native back end** (`backend/native/isel/asm.rs`). Selection fixes each
+register operand to a physical register (the constraint's, or a free one
+of its class, most constrained operand first with backtracking; never `%rsp`, `%rbp` or the spill scratch registers
+`%r10`, `%r11`, `%xmm14` and `%xmm15`; a memory operand in a frame object or
+at a defined symbol needs none), copies the inputs in, and emits one
+`MInst::InlineAsm` that reads the input registers and writes the outputs
+and clobbers, so the allocator and frame treat it as they treat a call. The
+listing writes the substituted template between `#APP` and `#NO_APP`; the
+direct object encoder cannot read it, so such a module is assembled by the
+bundled clang and `--native-object` refuses it. Operand modifiers outside `b h w k q V z a x`
+(registers), `a H` (memory) and `c P p a n` (immediates) are refused, as is
+a clobber of `%rsp` or `%rbp`; see
+[docs/design/native-backend.md](docs/design/native-backend.md).
 
 Evidence: `semantic_analysis/tests/assembly.rs` (locations, template pieces,
 clobbers, every fault, goto jumps), `ir/tests/inline_asm.rs` (round trip,
@@ -1908,4 +1918,8 @@ builder, verifier rules, template pieces), `lowering/tests/assembly.rs`, and
 `tests/integration/inline_asm.rs`, which runs `rdtsc`, `cpuid`, `+r`,
 named, immediate, memory, matching, widened matching, flag, SSE, `%h`,
 register clobber, early clobber, global memory, `memory` barrier, `%=` and
-`asm goto` operands through LLVM at O0, at O2 and after the bcc optimizer.
+`asm goto` operands through LLVM at O0, at O2 and after the bcc optimizer,
+and through the native back end with and without the bcc optimizer;
+`backend/native/tests/inline_asm.rs` checks register choice, template
+substitution, saved registers, flag outputs, fully spilled functions and
+the native refusals.

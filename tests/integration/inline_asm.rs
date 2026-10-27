@@ -1,7 +1,8 @@
-//! GNU assembly statements inside functions, compiled and run on the host:
-//! `rdtsc`, `cpuid`, register, memory, immediate, matching and flag
-//! operands, clobbers, a memory barrier and `asm goto`. The interpreter
-//! refuses to run assembly.
+//! GNU assembly statements inside functions, compiled and run on the host
+//! through LLVM and the native back end: `rdtsc`, `cpuid`, register,
+//! memory, immediate, matching and flag operands, clobbers, a memory barrier
+//! and `asm goto`. Direct native objects and the interpreter refuse
+//! assembly.
 
 #[cfg(test)]
 #[expect(
@@ -193,7 +194,7 @@ int main(void) {
     }
 
     #[test]
-    fn llvm_programs_run_every_operand_kind() {
+    fn programs_run_every_operand_kind_on_both_back_ends() {
         let Some(target) = host() else {
             eprintln!("skipping: the host is not an x86-64 target bcc supports");
             return;
@@ -202,6 +203,8 @@ int main(void) {
             &["--backend=llvm"][..],
             &["--backend=llvm", "-O2"][..],
             &["--backend=llvm", "--opt=bcc"][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
         ] {
             let executable = temporary("inline-asm.exe");
             let built = bcc(
@@ -268,8 +271,8 @@ int main(void) {
 
     /// An initialized local incremented through `+m` is read by the
     /// statement (Clang's `=*m,*m`), so optimization keeps its initial
-    /// value: the program returns 15 at O2, through LLVM's and bcc's
-    /// optimizers.
+    /// value: the program returns 15 through LLVM at O2 and the native
+    /// back end, with and without bcc's optimizer.
     #[test]
     fn optimized_update_memory_operands_are_read() {
         let source = "__attribute__((noinline)) int f(void) { int m = 5; __asm__(\"addl $10, %0\" \
@@ -290,8 +293,87 @@ int main(void) {
         let Some(target) = host() else {
             return;
         };
-        for flags in [&["-O2"][..], &["-O2", "--opt=bcc"][..]] {
+        for flags in [
+            &["-O2"][..],
+            &["-O2", "--opt=bcc"][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
             let executable = temporary("inline-asm-update.exe");
+            let built = bcc(
+                source,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{flags:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    /// The native listing writes the substituted template between `#APP`
+    /// and `#NO_APP`; direct objects cannot encode it, so they are refused
+    /// on request and the listing is assembled otherwise.
+    #[test]
+    fn native_listings_carry_the_template_and_direct_objects_refuse_it() {
+        let source = "int f(int x) { __asm__(\"addl $1, %0\" : \"+r\"(x)); return x; }";
+        let output = bcc(
+            source,
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--backend=native",
+                "--emit=asm",
+            ],
+        );
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let listing = text(&output.stdout);
+        assert!(listing.contains("#APP\n\taddl $1, %"), "{listing}");
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+        ] {
+            let object = temporary("inline-asm-direct.o");
+            let refused = bcc(
+                source,
+                &[
+                    target,
+                    "--backend=native",
+                    "--native-object",
+                    "-c",
+                    "-o",
+                    object.to_str().unwrap(),
+                ],
+            );
+            assert_eq!(refused.status.code(), Some(1), "{target}");
+            assert!(
+                text(&refused.stderr).contains("--native-object cannot encode inline assembly"),
+                "{target}: {}",
+                text(&refused.stderr)
+            );
+            assert!(!object.exists(), "{target}");
+        }
+    }
+
+    /// The native back end assigns the most constrained operand first: the
+    /// `Q` input takes `%rax`, which the unrestricted early-clobber output
+    /// leaves to it, as GCC does. LLVM's fast register allocator, which
+    /// Clang uses at O0 too, reports "inline assembly requires more
+    /// registers than available" for this statement, so LLVM runs it at O2.
+    #[test]
+    fn constrained_operands_find_registers() {
+        let source = "__attribute__((noinline)) int constrained(int x) { int out; __asm__(\"movl \
+                      %1, %0\" : \"=&r\"(out) : \"Q\"(x) : \"rcx\", \"rdx\", \"rbx\"); return \
+                      out; }\nint main(void) { return constrained(7) != 7; }\n";
+        let Some(target) = host() else {
+            eprintln!("skipping: the host is not an x86-64 target bcc supports");
+            return;
+        };
+        for flags in [
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+            &["--backend=llvm", "-O2"][..],
+        ] {
+            let executable = temporary("inline-asm-constrained.exe");
             let built = bcc(
                 source,
                 &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),

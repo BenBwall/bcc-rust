@@ -3,6 +3,7 @@
 
 mod allocation;
 mod end_to_end;
+mod inline_asm;
 pub(crate) mod object;
 pub(crate) mod object_coff;
 mod operands;

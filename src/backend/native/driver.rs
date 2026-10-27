@@ -53,16 +53,20 @@ pub(crate) enum RequestedWriter {
 /// encoder refuses, as every Windows listing was assembled before direct COFF
 /// objects became the default, and Linux assembles, since direct ELF objects
 /// stay opt-in. The encoder reads only the emitter's own vocabulary, so a
-/// module with file-scope assembly, which is arbitrary assembler input, takes
-/// the assembler by default and is refused when direct objects are requested.
+/// module with file-scope or inline assembly, which is arbitrary assembler
+/// input, takes the assembler by default and is refused when direct objects
+/// are requested.
 pub(crate) fn object_writer(
     module: &Module<'_>,
     target: Target,
     requested: Option<RequestedWriter>,
 ) -> Result<ObjectWriter, NativeError<'static>> {
-    let encodable = module.module_asm().is_empty();
+    let encodable = module.module_asm().is_empty() && !module.has_inline_asm();
     match requested {
-        | Some(RequestedWriter::Direct) if !encodable => Err(NativeError::ObjectModuleAsm),
+        | Some(RequestedWriter::Direct) if !module.module_asm().is_empty() =>
+            Err(NativeError::ObjectModuleAsm),
+        | Some(RequestedWriter::Direct) if module.has_inline_asm() =>
+            Err(NativeError::ObjectInlineAsm),
         | Some(RequestedWriter::Direct) => Ok(ObjectWriter::Direct),
         | None if encodable && matches!(target, Target::WindowsGnu | Target::WindowsMsvc) =>
             Ok(ObjectWriter::DirectOrAssembler),
@@ -134,19 +138,18 @@ pub(crate) fn assemble(
     target: Target,
     kind: OutputKind,
 ) -> io::Result<()> {
-    // The direct encoder refuses file-scope assembly, so such listings are
-    // only assembled.
+    // The direct encoder refuses file-scope and inline assembly, so such
+    // listings are only assembled.
     #[cfg(test)]
-    if matches!(target, Target::LinuxGnu | Target::LinuxMusl)
-        && !text.contains(super::emit::MODULE_ASM_START)
-    {
+    let encodable = !text.contains(super::emit::MODULE_ASM_START)
+        && !text.contains(super::emit::INLINE_ASM_START);
+    #[cfg(test)]
+    if matches!(target, Target::LinuxGnu | Target::LinuxMusl) && encodable {
         super::tests::object::equivalent(text)?;
         return build_object(text, out_path, target, kind);
     }
     #[cfg(test)]
-    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc)
-        && !text.contains(super::emit::MODULE_ASM_START)
-    {
+    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) && encodable {
         super::tests::object_coff::equivalent(text, target)?;
         return build_object(text, out_path, target, kind);
     }

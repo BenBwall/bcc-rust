@@ -380,6 +380,9 @@ pub(crate) enum Construct {
     /// values where a second return finds them.
     /// C99: §7.13.2.1 paragraph 3, p. 244; PDF p. 256.
     ReturnsTwice,
+    /// Inline assembly the back end cannot place, named by the reason.
+    /// GNU extension: GCC manual, "Extended Asm".
+    InlineAsm(&'static str),
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -388,6 +391,7 @@ impl fmt::Display for Unsupported<'_> {
         match self.construct {
             | Construct::Type(ty) => write!(f, "{ty} values")?,
             | Construct::Opcode(opcode) => write!(f, "the `{opcode}` instruction")?,
+            | Construct::InlineAsm(reason) => write!(f, "inline assembly with {reason}")?,
             | Construct::WideSwitch => write!(f, "a switch on an i128 value")?,
             | Construct::WideByValue => write!(f, "an i128 passed by value on Win64")?,
             | Construct::RegisterResult(ty) =>

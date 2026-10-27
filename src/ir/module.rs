@@ -280,6 +280,12 @@ impl<'ir> Module<'ir> {
         self.inline_asm.get(asm)
     }
 
+    /// Whether any function has inline assembly: the module has an `asm`
+    /// descriptor.
+    pub(crate) fn has_inline_asm(&self) -> bool {
+        !self.inline_asm.is_empty()
+    }
+
     /// The file-scope assembly blocks in source order.
     pub(crate) fn module_asm(&self) -> &[&'ir str] {
         &self.asm_blocks

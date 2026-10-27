@@ -314,6 +314,14 @@ pub(crate) enum NativeError<'m> {
          listing with clang"
     )]
     ObjectModuleAsm,
+    /// `--native-object` encodes only the emitter's own listing; inline
+    /// assembly writes its template into it. Without the flag such a module
+    /// is assembled, on every target.
+    #[error(
+        "--native-object cannot encode inline assembly; omit it to assemble the native listing \
+         with clang"
+    )]
+    ObjectInlineAsm,
 }
 
 impl<'m> From<Unsupported<'m>> for NativeError<'m> {
