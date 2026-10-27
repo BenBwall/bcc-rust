@@ -60,9 +60,12 @@ pub(crate) struct AsmFacts<'tu> {
 /// GNU extension: GCC manual, "Extended Asm" (the assembler template),
 /// "Generic Operand Modifiers" and "x86 Operand Modifiers".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(
-    variant_size_differences,
-    reason = "Text borrows its slice of the template; the pieces live once per statement."
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        variant_size_differences,
+        reason = "Text borrows its slice of the template; the pieces live once per statement."
+    )
 )]
 pub(crate) enum AsmPiece<'tu> {
     /// Literal text; `%%`, `%{`, `%|` and `%}` are already unescaped.

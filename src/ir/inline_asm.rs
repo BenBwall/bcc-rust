@@ -324,9 +324,12 @@ impl AsmConstraint {
 
 /// A piece of a template in LLVM's syntax.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "Text borrows its slice of the template; pieces are iterated, never stored."
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        variant_size_differences,
+        reason = "Text borrows its slice of the template; pieces are iterated, never stored."
+    )
 )]
 pub(crate) enum TemplatePiece<'t> {
     Text(&'t str),
