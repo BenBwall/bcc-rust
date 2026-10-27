@@ -18,10 +18,12 @@
 //! macro and trigraph options.
 //!
 //! An argument that starts with `/` is an option only if clang-cl knows it
-//! (`known::clang_cl_option`): clang-cl reads any other as a path, on every
-//! host, so `/tmp/a.c` is a source. `cl` on Windows, where paths do not
-//! start with `/`, warns about it as an unknown option; elsewhere the `cl`
-//! personality reads it as clang-cl does. Both read every argument after
+//! (`known::clang_cl_option`), which is decided before any option is
+//! translated: clang-cl reads any other as a path, on every host, so
+//! `/tmp/a.c` is a source. `cl` on Windows, where paths do not start with
+//! `/`, warns about it as an unknown option; elsewhere the `cl` personality
+//! reads it as clang-cl does, except for the few `cl` options clang-cl does
+//! not know (`/Zf`, `/analyze`). Both read every argument after
 //! `--` as an input there, for a path that clang-cl would read as an option
 //! (`/Users/a.c` is `/U`).
 
@@ -95,6 +97,19 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         };
+        // Whether the argument is an option at all is decided first, so no
+        // handler below that matches a prefix reads a path.
+        let known = known::clang_cl_option(option);
+        if slash_paths
+            && text.starts_with('/')
+            && known.is_none()
+            && (clang_cl || !is_cl_only_option(option))
+        {
+            // clang-cl's option parser reads an argument that starts with
+            // `/` and matches no option as an input file.
+            state.sources.push(Source::new(argument, false));
+            continue;
+        }
         if option == "?" || option == "help" {
             return Ok(Plan::print(help(&invocation.name)));
         }
@@ -103,39 +118,40 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             clang_options.push(clang.into());
             continue;
         }
-        if !state.option(invocation, option, &mut arguments) {
-            let known = known::clang_cl_option(option);
-            if known.is_none() && slash_paths && text.starts_with('/') {
-                // clang-cl's option parser reads an argument that starts
-                // with `/` and matches no option as an input file.
-                state.sources.push(Source::new(argument, false));
-            } else if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
-                // clang-cl also takes Clang's options; bcc reads most of them.
-                state.bcc.push(argument.into());
+        let remaining = arguments.len();
+        if state.option(invocation, option, &mut arguments) {
+            // The bare name of an option clang-cl reads with the next
+            // argument as its value (`/Fp: x.pch`) takes it, also where bcc
+            // ignores the option.
+            if known == Some(ClOption::TakesNext) && arguments.len() == remaining {
+                _ = arguments.next();
+            }
+        } else if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
+            // clang-cl also takes Clang's options; bcc reads most of them.
+            state.bcc.push(argument.into());
+        } else {
+            // An option clang-cl knows takes its value from the next
+            // argument after its bare name (`/imsvc /usr/include`), which
+            // is then no input.
+            let mut text = text.to_owned();
+            if known == Some(ClOption::TakesNext)
+                && let Some(value) = arguments.next()
+            {
+                text.push(' ');
+                text.push_str(&value.to_string_lossy());
+            }
+            if clang_cl {
+                invocation.warning(format_args!(
+                    "unknown argument ignored in clang-cl: '{text}'"
+                ));
             } else {
-                // An option clang-cl knows takes its value from the next
-                // argument after its bare name (`/imsvc /usr/include`), which
-                // is then no input.
-                let mut text = text.to_owned();
-                if known == Some(ClOption::TakesNext)
-                    && let Some(value) = arguments.next()
-                {
-                    text.push(' ');
-                    text.push_str(&value.to_string_lossy());
-                }
-                if clang_cl {
-                    invocation.warning(format_args!(
-                        "unknown argument ignored in clang-cl: '{text}'"
-                    ));
-                } else {
-                    super::print(
-                        &format!(
-                            "{} : Command line warning D9002 : ignoring unknown option '{text}'\n",
-                            invocation.name
-                        ),
-                        true,
-                    );
-                }
+                super::print(
+                    &format!(
+                        "{} : Command line warning D9002 : ignoring unknown option '{text}'\n",
+                        invocation.name
+                    ),
+                    true,
+                );
             }
         }
     }
@@ -363,6 +379,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     link.push(executable.into());
     plan.steps.push(Step::Link(link));
     Ok(plan)
+}
+
+/// Whether `option` is one of `cl`'s own options that clang-cl does not
+/// know, which the `cl` personality keeps reading as options where paths
+/// start with `/` (clang-cl reads `/Zf` as a file).
+fn is_cl_only_option(option: &str) -> bool {
+    matches!(option, "Qpar-" | "Qspectre-" | "Zf" | "analyze") || option.starts_with("analyze:")
 }
 
 /// The status `cl` exits with after any error, its own or a compiler's;

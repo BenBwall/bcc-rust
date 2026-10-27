@@ -847,6 +847,43 @@ mod tests {
             "cl : Command line warning D9024 : unrecognized source file type '/bogus', object \
              file assumed\ncl : Command line warning D9027 : source file '/bogus' ignored\n"
         );
+        // Whether an argument is an option is decided before bcc reads it,
+        // so no option bcc matches by a prefix reads a path.
+        let analyze = absolute("analyzeme.c");
+        assert!(!directory.path("analyzeme.c").exists());
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/c", &analyze, &plain]);
+        assert_eq!(clang_cl.status.code(), Some(1));
+        assert_eq!(
+            stderr(&clang_cl),
+            format!("clang-cl: error: no such file or directory: '{analyze}'\n")
+        );
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", &analyze, &plain]);
+        assert_eq!(cl.status.code(), Some(2));
+        assert!(stderr(&cl).contains("fatal error C1083"), "{}", stderr(&cl));
+        // `cl`'s own options that clang-cl does not know stay options there.
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "/Zf", "/analyze", &plain]);
+        succeeds(&cl);
+        assert_eq!(stderr(&cl), "");
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "/Zf", &plain]);
+        assert_eq!(
+            stderr(&clang_cl),
+            "clang-cl: error: no such file or directory: '/Zf'\n"
+        );
+        // A bare option clang-cl reads with the next argument takes it, also
+        // where bcc ignores the option, but `/Fo` takes its value joined.
+        let pch = absolute("missing/x.pch");
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            let output = directory.bcc(mode, &["/nologo", "/Zs", "/Fp:", &pch, &plain]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+        }
+        let object = absolute("missing/x.obj");
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/c", &plain, "/Fo", &object]);
+        assert_eq!(clang_cl.status.code(), Some(1));
+        assert_eq!(
+            stderr(&clang_cl),
+            format!("clang-cl: error: no such file or directory: '{object}'\n")
+        );
         // The value of an option clang-cl knows and bcc does not is no input.
         let clang_cl = directory.bcc(
             "--clang-cl-mode",

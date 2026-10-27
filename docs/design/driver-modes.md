@@ -434,9 +434,12 @@ clang-cl knows (`personality/options/clang-cl.list`, frozen from its
 `Options.td` by `scripts/update_driver_options.py --options-td`):
 
 - A flag matches only its whole name and an option with a value by the
-  name the argument starts with, so `/tmp/a.c`, `/home/me/a.c` and
-  `/nologox` are inputs, while `/nologo` stays the option even if a file
-  of that name exists.
+  name the argument starts with, so `/tmp/a.c`, `/home/me/a.c`,
+  `/nologox` and `/analyzeme.c` are inputs, while `/nologo` stays the
+  option even if a file of that name exists. This is decided before bcc
+  reads the option, so none of its own spellings reads a path; the `cl`
+  personality alone also keeps the `cl` options clang-cl does not know
+  (`/Zf`, `/Qpar-`, `/Qspectre-`, `/analyze` and `/analyze:...`).
 - A path that starts with an option taking a joined value is that option,
   as in clang-cl: `/Users/me/a.c` is `/U` with `sers/me/a.c`, `/Data/a.c`
   `/D`, and `/workspace/a.c` `/w`. `--` ends the options: every argument
@@ -446,9 +449,11 @@ clang-cl knows (`personality/options/clang-cl.list`, frozen from its
 - Options with paths read them joined or, where clang-cl does, from the
   next argument: `/Fo/tmp/out/`, `/Fo: /tmp/a.obj`, `/I/usr/include`,
   `/I /usr/include`, `/Fe/tmp/a.exe`, `/Fa/tmp/a.asm`, `/Fi/tmp/a.i`. The
-  bare name of an option clang-cl knows and bcc does not, which takes its
-  value from the next argument (`/imsvc /usr/include`), keeps that
-  argument from being read as an input.
+  bare name of an option clang-cl reads with its value in the next
+  argument takes that argument, also where bcc ignores the option or does
+  not know it (`/Fp: /tmp/a.pch`, `/imsvc /usr/include`), so it is no
+  input. `/Fo` takes its value joined only: in `/Fo /tmp/a.obj`, as in
+  clang-cl, `/tmp/a.obj` is an input.
 - A missing input is reported as each compiler reports one: clang-cl's
   `no such file or directory: '/tmp/missing.c'`, also for an input for the
   linker that starts with `/` (a mistyped option: `/Brepo` draws `; did you
