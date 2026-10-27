@@ -3,17 +3,15 @@
 //! decreasing priority, ties in reverse registration order. This is the order
 //! the ELF `.init_array`/`.fini_array` and MinGW `.ctors`/`.dtors` runtimes
 //! give the entries LLVM emits for bundled Clang. Destructors run after main
-//! returns and after `exit`, but not after `abort`.
+//! returns and after `exit`, among the exit handlers (`exit.rs`), but not
+//! after `abort`, `quick_exit` or `_Exit`.
 //! C99: §5.1.2.2.3, p. 13; PDF p. 25; §7.20.4.3p2-5, pp. 315-316;
 //! PDF pp. 327-328. GNU extension: GCC manual, "Common Function Attributes",
 //! constructor/destructor.
 //! <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 
 use super::{
-    Host,
     Machine,
-    Outcome,
-    Termination,
     Trap,
 };
 use crate::{
@@ -28,11 +26,19 @@ use crate::{
     },
 };
 
+/// The destructors in run order, the first `unprioritized` of them those
+/// without a priority (65535), which the ELF `.fini_array` runs before
+/// crtbegin's `__do_global_dtors_aux` and the prioritized ones after it.
+pub(super) struct Destructors<'a> {
+    pub(super) functions:     ArenaVec<'a, FuncId>,
+    pub(super) unprioritized: usize,
+}
+
 /// The constructors and the destructors of `module`, each in run order.
 pub(super) fn order<'a>(
     module: &Module<'_>,
     arena: &'a Bump,
-) -> (ArenaVec<'a, FuncId>, ArenaVec<'a, FuncId>) {
+) -> (ArenaVec<'a, FuncId>, Destructors<'a>) {
     let mut constructors = ArenaVec::new_in(arena);
     let mut destructors = ArenaVec::new_in(arena);
     for init in module.init_functions() {
@@ -52,7 +58,17 @@ pub(super) fn order<'a>(
         result.extend(list.iter().map(|&(_, func)| func));
         result
     };
-    (functions(constructors), functions(destructors))
+    let unprioritized = destructors
+        .iter()
+        .take_while(|&&(priority, _)| priority == u16::MAX)
+        .count();
+    (
+        functions(constructors),
+        Destructors {
+            functions: functions(destructors),
+            unprioritized,
+        },
+    )
 }
 
 impl Machine<'_, '_, '_> {
@@ -61,30 +77,5 @@ impl Machine<'_, '_, '_> {
     pub(super) fn enter_function(&mut self, func: FuncId) -> Result<(), Trap> {
         let module = self.module;
         self.enter(module.function(module.function_definition(func)).name, &[])
-    }
-
-    /// Runs `destructors` after the program ended with `ended`, keeping its
-    /// termination unless a destructor exits or aborts.
-    pub(super) fn finish(
-        &mut self,
-        destructors: &[FuncId],
-        ended: Outcome,
-        host: &mut dyn Host,
-    ) -> Result<Outcome, Trap> {
-        let mut last = ended;
-        // `exit` ends the program from inside its frames; their automatic
-        // objects no longer exist when destructors run.
-        self.unwind();
-        for &func in destructors {
-            self.enter_function(func)?;
-            last = self.run(host)?;
-            if !matches!(last.termination, Termination::Returned(_)) {
-                return Ok(last);
-            }
-        }
-        Ok(Outcome {
-            termination: ended.termination,
-            ..last
-        })
     }
 }

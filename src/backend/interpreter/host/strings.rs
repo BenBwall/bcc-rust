@@ -14,6 +14,7 @@ use super::{
     DefaultHost,
     HostCall,
     HostReturn,
+    errno,
     integer,
     string_length,
 };
@@ -59,6 +60,14 @@ pub(super) const FUNCTIONS: &[&str] = &[
     "strtoul",
     "strtoll",
     "strtoull",
+    "__isoc23_strtol",
+    "__isoc23_strtoul",
+    "__isoc23_strtoll",
+    "__isoc23_strtoull",
+    "strtod",
+    "strtof",
+    "strtold",
+    "atof",
     "isalnum",
     "isalpha",
     "isblank",
@@ -322,22 +331,50 @@ impl DefaultHost<'_> {
                 found
             },
             | "atoi" | "atol" | "atoll" => {
-                let parsed = parse_integer(memory, arg(0), 10)?;
-                RuntimeValue::Int(parsed.signed(true, 64).0)
+                // glibc's `atoi` is `(int) strtol (s, NULL, 10)`, so a value
+                // past `long` sets ERANGE even there.
+                let parsed = parse_integer(memory, arg(0), 10, false)?;
+                let (value, clamped) = parsed.signed(true, 64);
+                if clamped {
+                    self.set_errno(memory, errno::ERANGE)?;
+                }
+                RuntimeValue::Int(value)
             },
-            | "strtol" | "strtoul" | "strtoll" | "strtoull" => {
+            | "strtol" | "strtoul" | "strtoll" | "strtoull" | "__isoc23_strtol"
+            | "__isoc23_strtoul" | "__isoc23_strtoll" | "__isoc23_strtoull" => {
+                // glibc refuses a base outside 2 to 36 (other than 0) with
+                // EINVAL, before it reads the string or stores the end.
                 let base = sext(Type::I32, integer(arg(2))?);
                 if base != 0 && !(2..=36).contains(&base) {
-                    return Err(Fault::Unsupported(Unsupported::FormatConversion));
+                    self.set_errno(memory, errno::EINVAL)?;
+                    return Ok(HostReturn::Value(
+                        call.result.map(|ty| RuntimeValue::int(ty, 0)),
+                    ));
                 }
-                let parsed = parse_integer(memory, arg(0), u32::try_from(base).unwrap_or(10))?;
+                // glibc's C23 forms, which `<stdlib.h>` selects under
+                // `_GNU_SOURCE` or C23, also read a `0b` prefix.
+                let binary = call.name.starts_with("__isoc23_");
+                let base = u32::try_from(base).unwrap_or(10);
+                let parsed = parse_integer(memory, arg(0), base, binary)?;
                 if arg(1) != RuntimeValue::NULL {
                     let end = at(memory, arg(0), parsed.consumed);
                     memory.store(Type::Ptr, end, arg(1), Align::BYTE)?;
                 }
                 let bits = call.result.map_or(64, Type::bits);
-                let signed = matches!(call.name, "strtol" | "strtoll");
-                RuntimeValue::Int(parsed.signed(signed, bits).0)
+                let signed = !call.name.contains("strtou");
+                let (value, clamped) = parsed.signed(signed, bits);
+                if clamped {
+                    self.set_errno(memory, errno::ERANGE)?;
+                }
+                RuntimeValue::Int(value)
+            },
+            | "strtod" | "strtof" | "strtold" | "atof" => {
+                let end = if call.name == "atof" {
+                    RuntimeValue::NULL
+                } else {
+                    arg(1)
+                };
+                self.string_to_float(call, arg(0), end, memory)?
             },
             | "tolower" | "toupper" => {
                 let value = sext(Type::I32, integer(arg(0))?);
@@ -376,8 +413,60 @@ impl DefaultHost<'_> {
         })))
     }
 
+    /// `strtod`, `strtof` and `strtold`, and `atof` (`strtod` without an
+    /// end pointer): the host's C library converts the string, as glibc
+    /// does on GNU/Linux (including hexadecimal, `inf`, `nan(...)` and its
+    /// payload, and a prefix that stops before a dangling exponent), and the
+    /// `ERANGE` it sets for a result that overflows or underflows passes to
+    /// the program. `long double` is the target's: x87 decoded from the
+    /// host's carrier, or binary64 on Microsoft targets.
+    /// C99: §7.20.1.3 paragraphs 2-10, pp. 308-310; PDF pp. 320-322.
+    fn string_to_float(
+        &mut self,
+        call: HostCall<'_>,
+        string: RuntimeValue,
+        end: RuntimeValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<RuntimeValue, Fault> {
+        use crate::{
+            float_parsing,
+            x87::X87,
+        };
+        self.text.clear();
+        memory.read_c_string(string, &mut self.text)?;
+        self.text.push(0);
+        let text = &self.text[..];
+        let ((value, consumed), code) = super::math::native::with_errno(|| match call.result {
+            | Some(Type::F32) => {
+                let (value, consumed) = float_parsing::host_strtof(text);
+                (Some(RuntimeValue::F32(value)), consumed)
+            },
+            | Some(Type::F80) => {
+                let (value, consumed) = float_parsing::host_strtold(text);
+                let value = value
+                    .x87_parts()
+                    .and_then(|parts| float_parsing::bits::constant_parts(parts, Type::F80))
+                    .map(|bits| RuntimeValue::F80(X87::from_bits(bits)));
+                (value, consumed)
+            },
+            | _ => {
+                let (value, consumed) = float_parsing::host_strtod(text);
+                (Some(RuntimeValue::F64(value)), consumed)
+            },
+        });
+        let value = value.ok_or(Fault::Unsupported(Unsupported::WideFloat))?;
+        if end != RuntimeValue::NULL {
+            let stop = memory.ptr_add(string, RuntimeValue::Int(consumed as u128), true);
+            memory.store(Type::Ptr, stop, end, Align::BYTE)?;
+        }
+        if code != 0 {
+            self.set_errno(memory, code)?;
+        }
+        Ok(value)
+    }
+
     /// The target's `wchar_t`.
-    fn wide_type(&self) -> Type {
+    pub(super) fn wide_type(&self) -> Type {
         if matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc) {
             Type::I16
         } else {
@@ -596,18 +685,27 @@ impl DefaultHost<'_> {
 /// An integer `strtol` read: its sign, its magnitude (saturated past
 /// `u64`), whether it overflowed `u64`, and how many bytes it consumed
 /// (zero when no digits were found).
-struct ParsedInteger {
-    negative:  bool,
-    magnitude: u128,
-    overflow:  bool,
-    consumed:  u64,
+pub(super) struct ParsedInteger {
+    pub(super) negative:  bool,
+    pub(super) magnitude: u128,
+    pub(super) overflow:  bool,
+    pub(super) consumed:  u64,
 }
 
 impl ParsedInteger {
+    /// Appends a digit in `base`, saturating past `u64`.
+    pub(super) fn push_digit(&mut self, base: u32, digit: u32) {
+        self.magnitude = self.magnitude * u128::from(base) + u128::from(digit);
+        if self.magnitude > u128::from(u64::MAX) {
+            self.overflow = true;
+            self.magnitude = u128::from(u64::MAX);
+        }
+    }
+
     /// The value as `bits`-bit two's complement, clamped as `strtol` (signed)
     /// or `strtoul` (unsigned, a negative value negated) clamps it, and
     /// whether it was clamped.
-    fn signed(&self, signed: bool, bits: u32) -> (u128, bool) {
+    pub(super) fn signed(&self, signed: bool, bits: u32) -> (u128, bool) {
         let mask = u128::MAX >> (128 - bits);
         if signed {
             let maximum = mask >> 1;
@@ -640,6 +738,7 @@ fn parse_integer(
     memory: &Memory<'_>,
     string: RuntimeValue,
     base: u32,
+    binary: bool,
 ) -> Result<ParsedInteger, Fault> {
     let byte = |offset: u64| -> Result<u8, Fault> {
         let at = memory.ptr_add(string, RuntimeValue::Int(u128::from(offset)), true);
@@ -662,10 +761,19 @@ fn parse_integer(
             && matches!(byte(position + 1)?, b'x' | b'X')
             && byte(position + 2)?.is_ascii_hexdigit())
     };
+    let binary_prefix = |position: u64| -> Result<bool, Fault> {
+        Ok(byte(position)? == b'0'
+            && matches!(byte(position + 1)?, b'b' | b'B')
+            && matches!(byte(position + 2)?, b'0' | b'1'))
+    };
     let base = match base {
         | 0 | 16 if hex_prefix(position)? => {
             position += 2;
             16
+        },
+        | 0 | 2 if binary && binary_prefix(position)? => {
+            position += 2;
+            2
         },
         | 0 if byte(position)? == b'0' => 8,
         | 0 => 10,
@@ -688,11 +796,7 @@ fn parse_integer(
         if digit >= base {
             break;
         }
-        parsed.magnitude = parsed.magnitude * u128::from(base) + u128::from(digit);
-        if parsed.magnitude > u128::from(u64::MAX) {
-            parsed.overflow = true;
-            parsed.magnitude = u128::from(u64::MAX);
-        }
+        parsed.push_digit(base, digit);
         position += 1;
     }
     parsed.consumed = if position == start { 0 } else { position };

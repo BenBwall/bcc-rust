@@ -1,9 +1,17 @@
 //! `printf`'s format interpretation, shared by every formatted-output host
 //! function: flags, field width and precision (from digits or `*`), length
-//! modifiers, and the conversions `d i u o x X c s p e E f F g G a A %`.
-//! Integers and strings are formatted here; floating conversions in
-//! `floating.rs`. Output follows glibc where C leaves a choice, such as
-//! `(nil)` for a null `%p` on GNU/Linux.
+//! modifiers, and the conversions `d i u o x X c s p e E f F g G a A %`,
+//! with `%lc` and `%ls` for wide characters. Integers and strings are
+//! formatted here; floating conversions in `floating.rs`. Output follows
+//! glibc where C leaves a choice, such as `(nil)` for a null `%p` on
+//! GNU/Linux.
+//!
+//! The wide forms (`wprintf` and its relatives) run the same engine over a
+//! wide format, producing UTF-8, which the caller converts for its stream
+//! or stores as wide characters: there `%s` and `%c` convert multibyte
+//! characters with the locale, and field widths and precisions count wide
+//! characters. A character the locale cannot convert fails the call with
+//! `EILSEQ`, after what it formatted before it.
 //!
 //! C99: §7.19.6.1 paragraphs 3-9, pp. 274-280; PDF pp. 286-292.
 
@@ -59,6 +67,40 @@ impl DefaultHost<'_> {
     ) -> Result<(), Fault> {
         self.scratch.clear();
         memory.read_c_string(format, &mut self.scratch)?;
+        self.wide_format = false;
+        self.format(args, memory)
+    }
+
+    /// As [`DefaultHost::printf`] for the wide format at `format`, appending
+    /// UTF-8 and counting widths and precisions in wide characters.
+    /// C99: §7.24.2.1 paragraphs 3-9, pp. 349-355; PDF pp. 361-367.
+    pub(super) fn wide_printf(
+        &mut self,
+        format: RuntimeValue,
+        args: &mut FormatArguments<'_>,
+        memory: &Memory<'_>,
+    ) -> Result<(), Fault> {
+        self.scratch.clear();
+        let wide = self.wide_type();
+        let size = u64::from(wide.bytes());
+        let align = Align::from_bytes(size).expect("a power of two");
+        for index in 0.. {
+            let at = memory.ptr_add(format, RuntimeValue::Int(u128::from(index * size)), true);
+            let character = integer(memory.load(wide, at, align)?)?;
+            if character == 0 {
+                break;
+            }
+            let character = u32::try_from(character).unwrap_or(u32::MAX);
+            super::locale::encode_for_stream(true, character, &mut self.scratch);
+        }
+        self.wide_format = true;
+        let result = self.format(args, memory);
+        self.wide_format = false;
+        result
+    }
+
+    /// Runs the format in `self.scratch`.
+    fn format(&mut self, args: &mut FormatArguments<'_>, memory: &Memory<'_>) -> Result<(), Fault> {
         let mut position = 0;
         while position < self.scratch.len() {
             let byte = self.scratch[position];
@@ -134,21 +176,29 @@ impl DefaultHost<'_> {
                 self.output.push(b'%');
                 continue;
             }
-            self.conversion(conversion, length, long_double, spec, args, memory)?;
+            let wide = ells == 1 && matches!(conversion, b'c' | b's');
+            if !self.conversion(conversion, length, long_double, wide, spec, args, memory)? {
+                // glibc stops at a character it cannot convert.
+                self.format_error = true;
+                break;
+            }
         }
         Ok(())
     }
 
-    /// Formats one conversion and pads it into the output.
+    /// Formats one conversion and pads it into the output; `wide` for `%lc`
+    /// and `%ls`. Whether every character converted.
+    #[expect(clippy::too_many_arguments, reason = "One conversion's parsed parts.")]
     fn conversion(
         &mut self,
         conversion: u8,
         length: u32,
         long_double: bool,
+        wide: bool,
         mut spec: Spec,
         args: &mut FormatArguments<'_>,
         memory: &Memory<'_>,
-    ) -> Result<(), Fault> {
+    ) -> Result<bool, Fault> {
         let class = match conversion {
             // MSVC's `long double` is binary64, passed as a `double` is.
             | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A'
@@ -156,6 +206,8 @@ impl DefaultHost<'_> {
                 ArgumentClass::LongDouble,
             | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' => ArgumentClass::Double,
             | b'p' | b's' => ArgumentClass::Pointer,
+            // `wint_t` is promoted to `int` on every target.
+            | b'c' if wide => ArgumentClass::Integer(32),
             | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'c' => ArgumentClass::Integer(length),
             | _ => return Err(Fault::Unsupported(Unsupported::FormatConversion)),
         };
@@ -218,9 +270,38 @@ impl DefaultHost<'_> {
                     spec.zero = false;
                 }
             },
+            | b'c' if wide => {
+                spec.zero = false;
+                let character = u32::try_from(integer(arg)? & 0xFFFF_FFFF).expect("masked");
+                if !super::locale::encode(
+                    self.wide_format || self.locale.utf8(),
+                    character,
+                    &mut self.text,
+                ) {
+                    return Ok(false);
+                }
+            },
             | b'c' => {
                 spec.zero = false;
-                self.text.push(truncate_u8(integer(arg)?));
+                let byte = truncate_u8(integer(arg)?);
+                // A wide format converts the byte as `btowc` does.
+                if self.wide_format && super::locale::decode(self.locale.utf8(), &[byte]).is_none()
+                {
+                    return Ok(false);
+                }
+                self.text.push(byte);
+            },
+            | b's' if wide => {
+                spec.zero = false;
+                if !self.wide_string(arg, spec.precision, memory)? {
+                    return Ok(false);
+                }
+            },
+            | b's' if self.wide_format => {
+                spec.zero = false;
+                if !self.multibyte_string(arg, spec.precision, memory)? {
+                    return Ok(false);
+                }
             },
             | b's' => {
                 spec.zero = false;
@@ -275,8 +356,108 @@ impl DefaultHost<'_> {
                 }
             },
         }
-        spec.pad(&mut self.output, &self.text, prefix);
-        Ok(())
+        // A wide format's field width counts wide characters.
+        let units = if self.wide_format {
+            self.text
+                .iter()
+                .filter(|&&byte| byte & 0xC0 != 0x80)
+                .count()
+        } else {
+            self.text.len()
+        };
+        spec.pad(&mut self.output, &self.text, units, prefix);
+        Ok(true)
+    }
+
+    /// `%ls`: the wide string at `string`, converted as `wcrtomb` converts
+    /// it (to UTF-8 in a wide format) into `self.text`. A precision limits
+    /// the bytes written, without a partial character, or in a wide format
+    /// the characters; the array need not hold a null within it. Whether
+    /// every character converted.
+    /// C99: §7.19.6.1 paragraph 8, p. 278; PDF p. 290 (`l` with `s`).
+    fn wide_string(
+        &mut self,
+        string: RuntimeValue,
+        precision: Option<usize>,
+        memory: &Memory<'_>,
+    ) -> Result<bool, Fault> {
+        let wide = self.wide_type();
+        let size = u64::from(wide.bytes());
+        let align = Align::from_bytes(size).expect("a power of two");
+        let utf8 = self.wide_format || self.locale.utf8();
+        let limit = precision.unwrap_or(usize::MAX);
+        for (characters, index) in (0..).enumerate() {
+            if (self.wide_format && characters == limit)
+                || (!self.wide_format && self.text.len() == limit)
+            {
+                break;
+            }
+            let at = memory.ptr_add(string, RuntimeValue::Int(u128::from(index * size)), true);
+            let character = integer(memory.load(wide, at, align)?)?;
+            if character == 0 {
+                break;
+            }
+            let before = self.text.len();
+            if !super::locale::encode(
+                utf8,
+                u32::try_from(character).unwrap_or(u32::MAX),
+                &mut self.text,
+            ) {
+                return Ok(false);
+            }
+            if !self.wide_format && self.text.len() > limit {
+                self.text.truncate(before);
+                break;
+            }
+        }
+        Ok(true)
+    }
+
+    /// `%s` in a wide format: the multibyte string at `string`, converted
+    /// as `mbrtowc` converts it, into `self.text` as UTF-8, with a precision
+    /// counting wide characters. Whether every character converted.
+    /// C99: §7.24.2.1 paragraph 8, pp. 352-353; PDF pp. 364-365.
+    fn multibyte_string(
+        &mut self,
+        string: RuntimeValue,
+        precision: Option<usize>,
+        memory: &Memory<'_>,
+    ) -> Result<bool, Fault> {
+        let utf8 = self.locale.utf8();
+        let limit = precision.unwrap_or(usize::MAX);
+        let mut offset = 0_u64;
+        let mut characters = 0;
+        let mut sequence = [0_u8; 4];
+        while characters < limit {
+            let byte = |offset: u64| -> Result<u8, Fault> {
+                let at = memory.ptr_add(string, RuntimeValue::Int(u128::from(offset)), true);
+                Ok(truncate_u8(integer(memory.load(
+                    Type::I8,
+                    at,
+                    Align::BYTE,
+                )?)?))
+            };
+            let first = byte(offset)?;
+            if first == 0 {
+                break;
+            }
+            // A sequence the string's null cuts short is an encoding error;
+            // nothing past the null is read.
+            let length = super::locale::sequence_length(utf8, first);
+            for (index, slot) in sequence.iter_mut().enumerate().take(length) {
+                *slot = byte(offset + index as u64)?;
+                if *slot == 0 {
+                    return Ok(false);
+                }
+            }
+            let Some((_, length)) = super::locale::decode(utf8, &sequence[..length]) else {
+                return Ok(false);
+            };
+            self.text.extend_from_slice(&sequence[..length]);
+            offset += length as u64;
+            characters += 1;
+        }
+        Ok(true)
     }
 
     /// The decimal digits at `position` in the format, advancing past them.
@@ -318,8 +499,15 @@ impl Spec {
     /// after it for `-`, with zeros after its first `prefix` bytes (a sign
     /// or base prefix) for `0`, else with spaces before it.
     /// C99: §7.19.6.1 paragraph 6, pp. 275-276; PDF pp. 287-288.
-    fn pad(self, output: &mut crate::util::bump::ArenaVec<'_, u8>, body: &[u8], prefix: usize) {
-        let padding = self.width.saturating_sub(body.len());
+    /// `units` is the body's length in the units the width counts.
+    fn pad(
+        self,
+        output: &mut crate::util::bump::ArenaVec<'_, u8>,
+        body: &[u8],
+        units: usize,
+        prefix: usize,
+    ) {
+        let padding = self.width.saturating_sub(units);
         if self.left {
             output.extend_from_slice(body);
             output.extend(std::iter::repeat_n(b' ', padding));

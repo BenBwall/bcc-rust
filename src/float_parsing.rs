@@ -45,6 +45,12 @@ pub(crate) use complex::{
     complex_f32,
     complex_f64,
 };
+#[cfg(feature = "native")]
+pub(crate) use conversion::{
+    host_strtod,
+    host_strtof,
+    host_strtold,
+};
 pub(crate) use conversion::{
     string_to_binary64_long_double,
     string_to_double,

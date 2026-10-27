@@ -693,6 +693,22 @@ impl Memory<'_> {
         }
     }
 
+    /// The size of the live heap allocation `pointer` points to the start
+    /// of, as `realloc` needs it; anything else is undefined, as for `free`.
+    ///
+    /// C99: §7.20.3.4 paragraphs 2-3, p. 314; PDF p. 326.
+    pub(crate) fn heap_size(&self, pointer: RuntimeValue) -> Result<u64, Fault> {
+        let RuntimeValue::Ptr(pointer) = pointer else {
+            return Err(UbKind::PoisonInHostCall.into());
+        };
+        let provenance = pointer.provenance.ok_or(UbKind::InvalidFree)?;
+        match self.live_object(provenance) {
+            | Some(object) if object.kind == ObjectKind::Heap && object.base == pointer.address =>
+                Ok(object.size as u64),
+            | _ => Err(UbKind::InvalidFree.into()),
+        }
+    }
+
     /// Writes `bytes` at the start of a fresh object and zeros after them,
     /// as a global's initializer does.
     pub(crate) fn initialize(&mut self, pointer: Pointer, bytes: &[u8]) {

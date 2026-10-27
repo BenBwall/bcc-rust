@@ -188,6 +188,10 @@ pub(crate) enum UbKind {
     /// or one whose function has returned since.
     /// C99: §7.13.2.1 paragraph 2, p. 244; PDF p. 256.
     InvalidJmpBuf,
+    /// A byte input/output function on a wide-oriented stream, or a wide
+    /// character one on a byte-oriented stream.
+    /// C99: §7.19.2 paragraph 5, p. 265; PDF p. 277.
+    StreamOrientation,
 }
 
 impl fmt::Display for UbKind {
@@ -224,6 +228,9 @@ impl fmt::Display for UbKind {
             | Self::InvalidComparison => "a qsort or bsearch comparison function of the wrong type",
             | Self::InvalidJmpBuf =>
                 "longjmp to an environment that no active setjmp invocation saved",
+            | Self::StreamOrientation =>
+                "a byte stream function on a wide-oriented stream, or a wide one on a \
+                 byte-oriented stream",
         })
     }
 }
@@ -231,8 +238,8 @@ impl fmt::Display for UbKind {
 /// Something the interpreter does not implement.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Unsupported {
-    /// An `f80` or `f128` library function the host does not compute
-    /// exactly.
+    /// An `f80` or `f128` library function the host does not compute as
+    /// glibc does.
     WideFloat,
     /// An object larger than [`Limits::max_object_size`] or than memory.
     ///
@@ -253,8 +260,12 @@ pub(crate) enum Unsupported {
     /// Inline assembly, whose machine code the interpreter cannot run.
     /// GNU extension: GCC manual, "Extended Asm".
     InlineAsm,
-    /// A `longjmp` out of a function `qsort` or `bsearch` called.
+    /// A `longjmp` out of a function `qsort` or `bsearch` called, or out of
+    /// an exit handler or destructor.
     CallbackEscape,
+    /// An exit handler the program does not define, such as a library
+    /// function.
+    HostExitHandler,
 }
 
 impl fmt::Display for Unsupported {
@@ -269,7 +280,9 @@ impl fmt::Display for Unsupported {
             | Self::ReturnsTwice => "a returns-twice function other than setjmp",
             | Self::InlineAsm =>
                 "inline assembly, which only compiled code can run; compile it with -o instead",
-            | Self::CallbackEscape => "a longjmp out of a qsort or bsearch comparison",
+            | Self::CallbackEscape =>
+                "a longjmp out of a qsort or bsearch comparison or an exit handler",
+            | Self::HostExitHandler => "an exit handler the program does not define",
         })
     }
 }

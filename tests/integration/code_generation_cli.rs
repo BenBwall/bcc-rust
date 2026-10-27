@@ -946,6 +946,17 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         }
     }
 
+    /// `tests/fixtures/programs/long_double_math.c` passes values of every
+    /// x87 encoding class through the transcendental `long double` libm
+    /// functions and prints the result bits: the interpreter, which runs
+    /// glibc's algorithms with the processor computing `f2xm1`, `fyl2x`,
+    /// `fyl2xp1` and `fpatan`, must print what the program built against
+    /// glibc prints on the same processor.
+    #[test]
+    fn long_double_transcendentals_match_glibc_bit_for_bit() {
+        interpreter_matches_glibc("long_double_math.c", &[]);
+    }
+
     /// `%Lf` reads the target's `long double` from a `va_list` after ABI
     /// lowering: an x87 value in the System V overflow area, a reference to
     /// one in a MinGW slot, and an inline binary64 in an MSVC slot.
@@ -1081,6 +1092,26 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         interpreter_writes("scanf_cases_modern_glibc.c", &[], &expected, "");
     }
 
+    /// `tests/fixtures/programs/long_double_modern_glibc.c` raises
+    /// non-canonical x87 bases to the powers -3 to 3, which glibc 2.43's
+    /// rewritten `powl` computes differently from 2.39: the interpreter
+    /// follows 2.43, so it must write the checked-in `.expected` output on
+    /// any glibc, and a host with glibc 2.43 or later must still write it
+    /// too.
+    #[test]
+    fn long_double_powers_match_modern_glibc() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let expected =
+            std::fs::read_to_string(fixture_program("long_double_modern_glibc.expected")).unwrap();
+        if host_glibc_version() >= (2, 43) {
+            let glibc = glibc_output("long_double_modern_glibc.c");
+            assert_eq!(text(&glibc.stdout), expected, "glibc");
+        }
+        interpreter_writes("long_double_modern_glibc.c", &[], &expected, "");
+    }
+
     /// `tests/fixtures/programs/stdio_modern_glibc.c` runs the stdio cases
     /// glibc changed after 2.39: flushing streams that read (2.42:
     /// `fflush(NULL)` gives back what they read ahead, `fflush` drops a
@@ -1108,6 +1139,131 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
             &expected,
             errors,
         );
+    }
+
+    /// `tests/fixtures/programs/errno_cases.c` prints every `strerror`
+    /// message, both `strerror_r` forms and `perror`, and the `errno` of
+    /// failing conversions (C23 binary prefixes included), allocations,
+    /// stream and file operations and math functions in each precision:
+    /// the interpreter must print what glibc prints.
+    #[test]
+    fn errno_and_its_messages_match_glibc() {
+        interpreter_matches_glibc("errno_cases.c", &["--interpret-allow-fs"]);
+    }
+
+    /// `tests/fixtures/programs/wide_stdio.c` uses wide streams, `fwide`,
+    /// `swprintf`, the `wscanf` family and `%lc`/`%ls` in the narrow
+    /// functions, in the "C" locale and in "C.UTF-8": the interpreter must
+    /// print what glibc prints.
+    #[test]
+    fn wide_streams_match_glibc() {
+        interpreter_matches_glibc("wide_stdio.c", &["--interpret-allow-fs"]);
+    }
+
+    /// `tests/fixtures/programs/exit_handlers.c` ends in each way glibc
+    /// offers: the `atexit` and `on_exit` handlers in reverse order around
+    /// the destructors, then the streams written out, for a return from
+    /// `main` and for `exit`, also when a handler exits again; the
+    /// `at_quick_exit` handlers and nothing written out for `quick_exit`;
+    /// nothing at all for `_Exit` and `_exit`.
+    #[test]
+    fn exit_functions_end_programs_as_glibc_does() {
+        for mode in 0..=7 {
+            merged_mode_matches_glibc("exit_handlers.c", mode);
+        }
+    }
+
+    /// `tests/fixtures/programs/stdio_buffering.c` sets the buffering of the
+    /// standard streams and a file in each way `setvbuf`, `setbuf`,
+    /// `setbuffer` and `setlinebuf` can: the output reaching one file must
+    /// interleave as glibc's does, and the file's contents and `ftell` must
+    /// agree at each step.
+    #[test]
+    fn stream_buffering_modes_match_glibc() {
+        for mode in 0..=12 {
+            merged_mode_matches_glibc("stdio_buffering.c", mode);
+        }
+    }
+
+    /// A byte function on a wide-oriented stream, or a wide one on a
+    /// byte-oriented stream, is undefined and traps.
+    #[test]
+    fn mixing_byte_and_wide_functions_on_a_stream_traps() {
+        let prelude = "typedef struct _IO_FILE FILE; extern FILE *stdout; typedef int wchar_t;
+int printf(const char *, ...); int wprintf(const wchar_t *, ...);
+unsigned fputwc(wchar_t, FILE *); int fputc(int, FILE *);
+";
+        for body in [
+            "wprintf(L\"wide\"); printf(\"narrow\");",
+            "printf(\"narrow\"); fputwc(L'w', stdout);",
+            "fputwc(L'w', stdout); fputc('n', stdout);",
+        ] {
+            let source = format!("{prelude}int main(void) {{ {body} return 0; }}\n");
+            let output = bcc(&source, &["--interpret"]);
+            assert_eq!(output.status.code(), Some(70), "{body}");
+            assert!(
+                text(&output.stderr).contains("wide-oriented stream"),
+                "{body}: {}",
+                text(&output.stderr)
+            );
+        }
+    }
+
+    /// Builds a fixture with clang against glibc, with `MODE` defined to
+    /// `mode` and `PATH` to a temporary file, and checks that the
+    /// interpreter, under both optimization settings, writes the same text
+    /// to stdout and stderr sharing one file, exits with the same status,
+    /// and leaves the same contents at `PATH`. GNU/Linux hosts only.
+    fn merged_mode_matches_glibc(fixture: &str, mode: u32) {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source = fixture_program(fixture);
+        let path = temporary("mode-file.txt");
+        let defines = [
+            format!("-DMODE={mode}"),
+            format!("-DPATH=\"{}\"", path.display()),
+        ];
+        let reference = temporary("mode-reference.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .arg(&source)
+            .args(["-std=c99", "-O0", "-fno-builtin", "-w", "-lm", "-o"])
+            .arg(&reference)
+            .args(&defines)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        // Runs `program` with stdout and stderr in one file: its status,
+        // what the file holds, and what it left at `PATH`.
+        let run = |program: &mut Command| {
+            let merged = temporary("mode-output.txt");
+            let mut shell = Command::new("sh");
+            _ = shell
+                .args(["-c", "exec \"$@\" > \"$0\" 2>&1"])
+                .arg(&merged)
+                .arg(program.get_program())
+                .args(program.get_args());
+            let status = run_native(&mut shell).unwrap().status.code();
+            let output = std::fs::read_to_string(&merged).unwrap();
+            std::fs::remove_file(&merged).unwrap();
+            let file = std::fs::read_to_string(&path).unwrap_or_default();
+            _ = std::fs::remove_file(&path).ok();
+            (status, output, file)
+        };
+        let expected = run(&mut Command::new(&reference));
+        std::fs::remove_file(reference).unwrap();
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command
+                .arg(&source)
+                .args(["--interpret", optimize, "--interpret-allow-fs"])
+                .args(&defines);
+            assert_eq!(
+                run(&mut command),
+                expected,
+                "{fixture} MODE={mode} {optimize}"
+            );
+        }
     }
 
     /// Builds a fixture with clang against glibc and checks that the
@@ -1394,10 +1550,11 @@ FILE *fopen(const char *, const char *); FILE *freopen(const char *, const char 
     }
 
     /// `%lf` stores a `double` on every target, Win64's 32-bit `long`
-    /// notwithstanding; the wide conversions and `long double` input (`%Lf`,
-    /// and `%llf` and `%qf`, which glibc reads alike) are refused rather than
-    /// run as byte or `double` conversions; and a wide-string length whose byte
-    /// size overflows is out of bounds rather than a short copy.
+    /// notwithstanding; `long double` input (`%Lf`, and `%llf` and `%qf`,
+    /// which glibc reads alike) is refused rather than run as a `double`
+    /// conversion (the wide conversions run, as `wide_streams_match_glibc`
+    /// checks); and a wide-string length whose byte size overflows is out
+    /// of bounds rather than a short copy.
     #[test]
     fn scanf_lengths_and_wide_sizes_follow_the_conversion() {
         let source = "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
@@ -1420,7 +1577,7 @@ int main(void) { double d = 0; long l = 0; float f = 0;
             );
             assert_eq!(text(&output.stdout), "3 2.5 -7 0.25\n", "{target}");
         }
-        for conversion in ["%lc", "%ls", "%l[a]", "%Lf", "%llf", "%qf"] {
+        for conversion in ["%Lf", "%llf", "%qf"] {
             let source = format!(
                 "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
 int main(void) {{ long double buffer[4]; return sscanf(\"a\", \"{conversion}\", buffer); }}
@@ -1469,25 +1626,33 @@ int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return 
         assert!(stderr.contains("out-of-bounds access"), "{stderr}");
     }
 
-    /// The interpreter computes the exact x87 `long double` functions and
-    /// refuses the transcendental ones, whose glibc results it cannot
-    /// reproduce bit for bit.
+    /// The interpreter computes the x87 `long double` functions, including
+    /// the transcendental ones on an x86-64 host, and refuses those it does
+    /// not implement, such as `tgammal`.
     #[test]
-    fn host_math_runs_exact_x87_functions_and_refuses_transcendentals() {
+    fn host_math_runs_x87_functions_and_refuses_the_rest() {
         for target in [
             "--target=x86_64-w64-windows-gnu",
             "--target=x86_64-unknown-linux-gnu",
         ] {
-            for source in [
+            let mut sources = vec![
                 "long double fabsl(long double); int main(void) { return fabsl(-1.5L)!=1.5L; }",
                 "float nexttowardf(float,long double); int main(void) { return \
                  nexttowardf(1.0f,2.0L)<=1.0f; }",
-            ] {
+                "long double sinl(long double); int main(void) { return sinl(1.0L) <= 0.84L; }",
+            ];
+            if cfg!(target_arch = "x86_64") {
+                sources.push(
+                    "long double expl(long double); int main(void) { return expl(1.0L) <= 2.718L; \
+                     }",
+                );
+            }
+            for source in sources {
                 let output = bcc(source, &["--interpret", target]);
                 assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
             }
             let output = bcc(
-                "long double sinl(long double); int main(void) { return sinl(1.0L) > 0; }",
+                "long double tgammal(long double); int main(void) { return tgammal(3.0L) > 0; }",
                 &["--interpret", target],
             );
             assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));

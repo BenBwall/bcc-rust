@@ -3,7 +3,9 @@
 //! The interpreter hands such a call to a [`Host`] by name. [`DefaultHost`]
 //! implements the part of the C library that test programs use to report
 //! results, manage memory and handle strings and files, and captures their
-//! output in arena buffers. `stdio.rs` holds the streams and files,
+//! output in arena buffers. `errno.rs` holds `errno` and its messages,
+//! `locale.rs` the locale and its character conversions, `stdio.rs` the
+//! streams and files (with the wide character functions in `stdio/wide.rs`),
 //! `printf.rs` and `scanf.rs` formatted input and output, `strings.rs` the
 //! string, wide-string, character and conversion functions, `math.rs`,
 //! `quad.rs` (glibc's `_Float128` functions) and `complex.rs` the numeric
@@ -23,7 +25,9 @@ mod scanf;
 // Library families
 mod checked;
 mod complex;
+mod errno;
 mod library;
+mod locale;
 mod math;
 mod quad;
 mod stdio;
@@ -92,6 +96,11 @@ pub(crate) trait Host {
     /// streams hold.
     /// C99: §7.20.4.3 paragraph 4, p. 315; PDF p. 327.
     fn at_exit(&mut self) {}
+
+    /// Ends the program at once, after `_Exit`, `_exit` or `quick_exit`:
+    /// what the host's streams hold is lost, as the C library loses it.
+    /// C99: §7.20.4.4 paragraph 2, p. 316; PDF p. 328.
+    fn at_immediate_exit(&mut self) {}
 }
 
 /// A call the host is asked to run.
@@ -138,36 +147,48 @@ pub(crate) enum HostReturn {
 /// C99: §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251 (real math).
 /// C99: §7.4.1.8, p. 183; PDF p. 195 (`isprint` in the initial C locale).
 pub(crate) struct DefaultHost<'a> {
-    allocator:     &'a Bump,
-    output:        ArenaVec<'a, u8>,
+    allocator:       &'a Bump,
+    output:          ArenaVec<'a, u8>,
     /// What the program wrote to `stderr`, and where it falls among the
     /// flushes of `stdout`.
-    console:       stdio::Console<'a>,
+    console:         stdio::Console<'a>,
     /// Whether the program may open, create and remove host files.
-    file_access:   bool,
+    file_access:     bool,
     /// How many file-system accesses were refused, and the first path.
-    denied_files:  u32,
-    denied_path:   ArenaVec<'a, u8>,
+    denied_files:    u32,
+    denied_path:     ArenaVec<'a, u8>,
     /// The open streams.
-    streams:       stdio::Streams<'a>,
+    streams:         stdio::Streams<'a>,
     /// A file name being passed to the host's file system.
-    path:          ArenaVec<'a, u8>,
+    path:            ArenaVec<'a, u8>,
     /// `tmpnam`'s static buffer, once made.
-    tmpnam_buffer: Option<Pointer>,
+    tmpnam_buffer:   Option<Pointer>,
+    /// The program's `errno` object, once made.
+    errno:           Option<Pointer>,
+    /// `strerror`'s message strings, by code, once made, and its buffer
+    /// for an unknown code.
+    messages:        [Option<Pointer>; errno::MESSAGE_COUNT],
+    unknown_message: Option<Pointer>,
+    /// The program's locale.
+    locale:          locale::Locale,
+    /// Whether the format being run is a wide one, and whether a conversion
+    /// met a character the locale cannot convert, which fails the call.
+    wide_format:     bool,
+    format_error:    bool,
     /// glibc's character tables, by `strings::ctype_table` slot, once made.
-    ctype:         [Option<Pointer>; 3],
+    ctype:           [Option<Pointer>; 3],
     /// Where `strtok` continues.
-    strtok:        RuntimeValue,
-    scratch:       ArenaVec<'a, u8>,
-    text:          ArenaVec<'a, u8>,
+    strtok:          RuntimeValue,
+    scratch:         ArenaVec<'a, u8>,
+    text:            ArenaVec<'a, u8>,
     /// Digit space for floating conversions.
-    floating:      floating::Scratch<'a>,
+    floating:        floating::Scratch<'a>,
     /// The width of `long` in bits, which `printf`'s `l` modifier reads.
-    long_width:    u32,
+    long_width:      u32,
     /// The target's existing long double representation (f64 or unsupported
     /// f80).
-    long_double:   Type,
-    target:        Target,
+    long_double:     Type,
+    target:          Target,
 }
 
 impl Host for DefaultHost<'_> {
@@ -187,8 +208,41 @@ impl Host for DefaultHost<'_> {
         // Standard output written by any function follows a `freopen`; a
         // function that writes it implicitly fails when that write does.
         let before = self.output.len();
-        let result = self.dispatch(call, memory);
-        if self.redirect_output(before, call.name) || implicit_stream(call.name) != Some(1) {
+        let mut result = self.dispatch(call, memory);
+        let redirected = self.redirect_output(before, call.name);
+        // What remains past `before` went to the captured standard output;
+        // a `printf` that met a character it could not convert discards
+        // what its staging area held.
+        let kind = stdio::written_by(call.name);
+        if self.format_error && kind == stdio::Written::Formatted {
+            let kept = self
+                .console
+                .output
+                .put_failed_formatted(&self.output, before);
+            self.output.truncate(kept);
+        } else {
+            self.console.output.put(&self.output, before, kind);
+        }
+        // A stream operation that failed passes its `errno` on.
+        if let Some(code) = self.streams.take_errno()
+            && result.is_ok()
+            && let Err(fault) = self.set_errno(memory, code)
+        {
+            result = Err(fault);
+        }
+        // A formatting function fails with EILSEQ on a character the locale
+        // cannot convert, after writing what came before it.
+        if std::mem::take(&mut self.format_error) && result.is_ok() {
+            self.set_errno(memory, errno::EILSEQ)?;
+            result = result.map(|value| match value {
+                | HostReturn::Value(Some(RuntimeValue::Int(_))) => HostReturn::Value(
+                    call.result
+                        .map(|ty| RuntimeValue::int(ty, (-1_i32).cast_unsigned().into())),
+                ),
+                | value => value,
+            });
+        }
+        if redirected || implicit_stream(call.name) != Some(1) {
             return result;
         }
         result.map(|value| match value {
@@ -202,6 +256,15 @@ impl Host for DefaultHost<'_> {
 
     fn at_exit(&mut self) {
         let _ = self.flush_all();
+    }
+
+    fn at_immediate_exit(&mut self) {
+        // Only what standard output already released reaches the command
+        // line; files keep only what was written out.
+        let released = self.console.released(&self.output);
+        self.output.truncate(released);
+        let written = self.console.error.flushed;
+        self.console.errors.truncate(written);
     }
 }
 
@@ -218,25 +281,41 @@ impl DefaultHost<'_> {
             check_signature(call, self.long_width, self.long_double)?;
         } else if let Some(signature) = library::signature(call.name) {
             let windows = matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc);
-            library::check(call, signature, self.long_width, windows)?;
+            library::check(call, signature, self.long_width, self.long_double, windows)?;
         }
-        // Using a closed standard stream is undefined even without naming it.
+        // Using a closed standard stream is undefined even without naming it,
+        // and a byte function on a wide-oriented stream is undefined.
         if let Some(stream) = implicit_stream(call.name) {
             let _ = self.standard(stream)?;
+        }
+        if let Some(stream) = self.byte_stream(call, memory)?
+            && self.is_wide(stream)
+        {
+            return Err(UbKind::StreamOrientation.into());
         }
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
             return result;
         }
-        if let Some(value) = math::call(
+        if let Some(result) = math::call(
             call,
             memory,
             self.long_double,
             self.long_width,
             &mut self.text,
         ) {
-            return value.map(|value| HostReturn::Value(Some(value)));
+            let (value, code) = result?;
+            if code != 0 {
+                self.set_errno(memory, code)?;
+            }
+            return Ok(HostReturn::Value(Some(value)));
         }
         if let Some(result) = self.checked(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.errno_functions(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.locale_functions(call, memory) {
             return result;
         }
         if let Some(result) = self.stdio(call, memory) {
@@ -288,7 +367,7 @@ impl DefaultHost<'_> {
                 RuntimeValue::Int(count as u128)
             },
             | "sscanf" | "__isoc99_sscanf" | "fscanf" | "__isoc99_fscanf" | "scanf"
-            | "__isoc99_scanf" => {
+            | "__isoc99_scanf" | "__isoc23_sscanf" | "__isoc23_fscanf" | "__isoc23_scanf" => {
                 let fixed = if call.name.ends_with("_scanf") || call.name == "scanf" {
                     1
                 } else {
@@ -306,15 +385,54 @@ impl DefaultHost<'_> {
                 };
                 let mut values =
                     FormatArguments::Values(args.get(fixed..).unwrap_or_default().iter());
-                let count = self.scanf(input, arg(fixed - 1), &mut values, memory)?;
+                let dialect = if call.name.starts_with("__isoc23_") {
+                    scanf::Dialect::C23
+                } else {
+                    scanf::Dialect::C99
+                };
+                let count = self.scanf(input, arg(fixed - 1), &mut values, memory, dialect)?;
                 RuntimeValue::int(Type::I32, u128::from(count.cast_unsigned()))
             },
-            | "malloc" => allocate(memory, integer(arg(0))?, false)?,
-            | "calloc" => {
-                let size = integer(arg(0))?.checked_mul(integer(arg(1))?);
-                match size {
-                    | Some(size) => allocate(memory, size, true)?,
+            | "malloc" | "calloc" => {
+                let size = if call.name == "malloc" {
+                    Some(integer(arg(0))?)
+                } else {
+                    integer(arg(0))?.checked_mul(integer(arg(1))?)
+                };
+                let pointer = match size {
+                    | Some(size) => allocate(memory, size, call.name == "calloc")?,
                     | None => RuntimeValue::NULL,
+                };
+                // C99 leaves errno to the implementation; glibc's
+                // allocators set ENOMEM when they fail.
+                if pointer == RuntimeValue::NULL {
+                    self.set_errno(memory, errno::ENOMEM)?;
+                }
+                pointer
+            },
+            | "realloc" => {
+                // glibc: a null pointer allocates, a zero size frees and
+                // returns null, and a failed allocation leaves the old one
+                // alone and sets ENOMEM.
+                let (old, size) = (arg(0), integer(arg(1))?);
+                if old != RuntimeValue::NULL && size == 0 {
+                    memory.free_heap(old)?;
+                    RuntimeValue::NULL
+                } else {
+                    let kept = if old == RuntimeValue::NULL {
+                        0
+                    } else {
+                        memory.heap_size(old)?
+                    };
+                    let pointer = allocate(memory, size, false)?;
+                    if pointer == RuntimeValue::NULL {
+                        self.set_errno(memory, errno::ENOMEM)?;
+                    } else if old != RuntimeValue::NULL {
+                        let count = u128::from(kept).min(size);
+                        memory.copy(pointer, old, RuntimeValue::Int(count), Align::BYTE, false)?;
+                        memory.free_heap(old)?;
+                    }
+                    pointer
                 }
             },
             | "free" => {
@@ -416,9 +534,9 @@ impl DefaultHost<'_> {
 /// C99: §7.19.6.8-§7.19.6.13, pp. 292-294; PDF pp. 304-306.
 pub(crate) fn va_list_operand(name: &str) -> Option<usize> {
     match name {
-        | "vprintf" => Some(1),
-        | "vfprintf" | "vsprintf" => Some(2),
-        | "vsnprintf" => Some(3),
+        | "vprintf" | "vwprintf" => Some(1),
+        | "vfprintf" | "vsprintf" | "vfwprintf" => Some(2),
+        | "vsnprintf" | "vswprintf" => Some(3),
         | _ => checked::va_list_operand(name),
     }
 }
@@ -572,7 +690,26 @@ impl DefaultHost<'_> {
     /// Treats standard output as a terminal, which glibc line-buffers rather
     /// than fully buffering as for a pipe or file.
     pub(crate) fn set_terminal_output(&mut self, terminal: bool) {
-        self.console.line_buffered = terminal;
+        if terminal {
+            self.console.output.mode = stdio::Mode::Line;
+            self.console.output.block = stdio::TERMINAL_BUFFER;
+        } else {
+            self.console.output.mode = stdio::Mode::Full;
+        }
+    }
+
+    /// The buffer sizes glibc would give standard output and error, from
+    /// their descriptors' `st_blksize` (4096 for a Linux pipe); `BUFSIZ`
+    /// otherwise.
+    pub(crate) fn set_console_blocks(&mut self, output: Option<usize>, errors: Option<usize>) {
+        let size = |block: Option<usize>| match block {
+            | Some(block) if block > 0 && block < stdio::BUFSIZ => block,
+            | _ => stdio::BUFSIZ,
+        };
+        if self.console.output.mode != stdio::Mode::Line {
+            self.console.output.block = size(output);
+        }
+        self.console.error.block = size(errors);
     }
 
     /// Treats standard input as a terminal, which glibc line-buffers:
@@ -608,6 +745,9 @@ impl DefaultHost<'_> {
         if output < self.output.len() {
             write(Channel::Output, &self.output[output..])?;
         }
+        if errors < self.console.errors.len() {
+            write(Channel::Errors, &self.console.errors[errors..])?;
+        }
         Ok(())
     }
 }
@@ -623,8 +763,11 @@ pub(crate) enum Channel {
 /// `FILE *` argument.
 fn implicit_stream(name: &str) -> Option<usize> {
     match name {
-        | "printf" | "puts" | "putchar" | "vprintf" | "__printf_chk" | "__vprintf_chk" => Some(1),
-        | "getchar" | "scanf" | "__isoc99_scanf" => Some(0),
+        | "printf" | "puts" | "putchar" | "vprintf" | "__printf_chk" | "__vprintf_chk"
+        | "putwchar" | "wprintf" | "vwprintf" => Some(1),
+        | "getchar" | "scanf" | "__isoc99_scanf" | "__isoc23_scanf" | "getwchar" | "wscanf"
+        | "__isoc99_wscanf" | "__isoc23_wscanf" => Some(0),
+        | "perror" => Some(2),
         | _ => None,
     }
 }
@@ -701,33 +844,37 @@ impl<'a> DefaultHost<'a> {
     /// A host whose output and scratch space live in `arena`.
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            allocator:     arena,
-            output:        ArenaVec::new_in(arena),
-            console:       stdio::Console {
-                errors:        ArenaVec::new_in(arena),
-                marks:         ArenaVec::new_in(arena),
-                flushed:       0,
-                line_buffered: false,
-                scanned:       0,
-                line_end:      0,
+            allocator:       arena,
+            output:          ArenaVec::new_in(arena),
+            console:         stdio::Console {
+                errors: ArenaVec::new_in(arena),
+                marks:  ArenaVec::new_in(arena),
+                output: stdio::Channel::new(stdio::Mode::Full),
+                error:  stdio::Channel::new(stdio::Mode::Unbuffered),
             },
-            file_access:   false,
-            denied_files:  0,
-            denied_path:   ArenaVec::new_in(arena),
-            streams:       stdio::Streams::new_in(arena),
-            path:          ArenaVec::new_in(arena),
-            tmpnam_buffer: None,
-            ctype:         [None; 3],
-            strtok:        RuntimeValue::NULL,
-            scratch:       ArenaVec::new_in(arena),
-            text:          ArenaVec::new_in(arena),
-            floating:      floating::Scratch {
+            file_access:     false,
+            denied_files:    0,
+            denied_path:     ArenaVec::new_in(arena),
+            streams:         stdio::Streams::new_in(arena),
+            path:            ArenaVec::new_in(arena),
+            tmpnam_buffer:   None,
+            errno:           None,
+            messages:        [None; errno::MESSAGE_COUNT],
+            unknown_message: None,
+            locale:          locale::Locale::new(),
+            wide_format:     false,
+            format_error:    false,
+            ctype:           [None; 3],
+            strtok:          RuntimeValue::NULL,
+            scratch:         ArenaVec::new_in(arena),
+            text:            ArenaVec::new_in(arena),
+            floating:        floating::Scratch {
                 integer:     ArenaVec::new_in(arena),
                 significant: ArenaVec::new_in(arena),
             },
-            long_width:    64,
-            long_double:   Type::F80,
-            target:        Target::LinuxGnu,
+            long_width:      64,
+            long_double:     Type::F80,
+            target:          Target::LinuxGnu,
         }
     }
 

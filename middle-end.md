@@ -1314,32 +1314,113 @@ exceptions masked): exact integer arithmetic rounded once, pseudo-denormals
 as valid operands, unnormals and pseudo-NaNs as invalid operands that give the
 negative "real indefinite" NaN, and the processor's NaN propagation. A test
 compares it with the host's x87 unit on random encodings of every class. The
-host computes the `long double` functions whose glibc results are exact or
-correctly rounded (rounding to integers, `sqrtl`, `fmodl`, `remainderl`,
-glibc's `remquol` algorithm, scaling, decomposition, neighbours, `nanl`)
-and refuses the transcendental ones and `fmal`. `printf` formats every
+host computes the `long double` functions as glibc's x86-64 versions do,
+bit for bit: the exact ones (rounding to integers, `sqrtl`, `fmodl`,
+`remainderl`, glibc's `remquol` algorithm, scaling, decomposition,
+neighbours, `nanl`) and the ports of glibc's C code (`sinl`, `cosl` and
+`tanl` with their argument reduction, `asinl`, the hyperbolic functions,
+`erfl`, `erfcl`, `cbrtl`, `hypotl`, and `fmal` correctly rounded) on the
+x87 model. The exponentials, logarithms, `powl` and the arctangents follow
+glibc's assembly language, whose `f2xm1`, `fyl2x`, `fyl2xp1` and `fpatan`
+results come from the processor's microcode: those four instructions run
+on the host's own x87 unit, so the results match glibc on the same
+processor (they may differ between processor makers, as glibc's do), and a
+host without an x87 unit refuses those functions. The return values of
+glibc's SVID wrappers apply (`NAN` for `asinl`, `acosl` and the logarithms
+of out-of-domain arguments). `lgammal` and `tgammal` are refused.
+`src/backend/interpreter/host/math/extended/tests.rs` compares every
+function with the test binary's glibc on random encodings (skipping, on a
+glibc before 2.43, the `powl` cases its commit 1b657c53c21a changed), and
+`tests/fixtures/programs/long_double_math.c` with a program built against
+glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
+bases to small integer powers) on which glibc 2.39 and 2.43 differ. `printf` formats every
 conversion of `double` and `long double` exactly, digit for digit as glibc
-does, with halfway cases to even. Guest errno and floating-environment APIs
-remain outside the host implementation.
+does, with halfway cases to even. The floating-environment APIs remain
+outside the host implementation.
+
+`errno` is one `int` in the program's memory, which glibc's `<errno.h>`
+reaches through `__errno_location` (`host/errno.rs`). The host functions set
+it where glibc's do: allocation failures (`ENOMEM`, `realloc` included),
+`strtol` and its C23 `__isoc23_` forms (`ERANGE`, `EINVAL` for a bad base),
+`strtod`, `strtof`, `strtold` and `atof` (the host's C library converts and
+reports `ERANGE`), `scanf`'s integer conversions, which clamp as `strtol`
+does, every stream and file failure (`EACCES` for a refused access, `EBADF`,
+`EINVAL`, `EMFILE`, `EILSEQ`, and the host system's codes for reads, writes,
+seeks and opens), and the math functions under glibc's `math_errhandling`
+(`MATH_ERRNO | MATH_ERREXCEPT`): the host's libm reports its own `errno` for
+`float` and `double`, with the positive `NAN` glibc's dynamic SVID wrappers
+return for `acos`, `asin`, `log10` and `tgamma` domain errors, and
+`host/math/extended_errno.rs` applies glibc's wrapper rules to the x87
+functions, and `host/quad.rs` those of glibc's `_Float128` wrappers to the
+binary128 ones (`strtof128` reporting `ERANGE` for an overflow or, as
+glibc's `round_and_return` decides with x86's tininess after rounding, a
+tiny inexact value). `strerror`, the GNU `strerror_r`, the XSI `__xpg_strerror_r` that
+glibc's headers select without `_GNU_SOURCE`, and `perror` give glibc's
+Linux messages, "Unknown error N" for other codes.
+
+A normal end runs the `atexit` and `on_exit` handlers in reverse order of
+registration, with the destructors where glibc's dynamic linker registered
+its own handler (after every handler `main` or a constructor registered),
+calls a handler registered meanwhile next (an `atexit` handler a destructor
+registers runs from crtbegin's `__cxa_finalize`, between the destructors
+without a priority and the prioritized ones), continues the list with the
+new status when a handler or destructor calls `exit`, and then writes out
+the streams (`exit.rs`). The handlers run on top of the frames that called
+`exit`, whose automatic objects stay live; only a return from `main` ends
+its frame first. `quick_exit` runs the
+`at_quick_exit` handlers and `_Exit` and `_exit` nothing; both lose what the
+streams hold, `stdout` included, as glibc does. A handler must be a function
+the program defines, of its registration's type, checked when it is
+registered. `abort` is unchanged: no handlers, no write-out, and the command
+line still shows all of `stdout`.
 
 The host's C library also covers streams and files: `stdin`, `stdout` and
 `stderr` are objects holding pointers to stream objects the program cannot
 access, and a stream used after `fclose` (or a failed `freopen`) traps, even
-when `printf` or `getchar` uses it implicitly. The command line forwards
-`stdout` and `stderr` in glibc's order for a pipe: `stderr` at once, `stdout`
-at each `fflush` and at exit. Host files are opt-in: with
-`--interpret-allow-fs`, `fopen` (including C11's exclusive `x`), `freopen` and
-`remove` act on the host's file system (unbuffered, without `errno`);
-without it they fail as glibc does for a permission error, the command line
-notes the refusal, and `tmpnam` names files without looking at the file
-system. It provides the `fprintf`, `vprintf`,
-`vfprintf`, `vsprintf` and `vsnprintf` family and glibc's `__printf_chk` forms,
-`sscanf`/`fscanf`/`scanf` with glibc's failure rules (not the wide
-conversions or `long double` input), string search and
+when `printf` or `getchar` uses it implicitly. Every stream, the captured
+`stdout` and `stderr` included, keeps glibc's buffer state
+(`host/stdio/stream.rs`, `host/stdio/console.rs`): a buffer of the
+descriptor's `st_blksize` (4096 for a pipe), written out when a byte finds it
+full, when a block does not fit (whole buffers' worth going straight
+through), after each newline when line-buffered, at once when unbuffered,
+and at `fflush`, seeks, reads, `fclose` and a normal end; `printf` writes
+through glibc's 128-byte staging area when the put area has no room.
+`setvbuf`, `setbuf`, `setbuffer` and `setlinebuf` set the mode and the
+buffer size, with glibc's mode constants (or the Windows runtimes' on
+Windows targets). The command line replays `stdout` and `stderr` in the
+order a shared pipe or file would have received them. Host files are
+opt-in: with `--interpret-allow-fs`, `fopen` (including C11's exclusive
+`x`), `freopen` and `remove` act on the host's file system; without it they
+fail as glibc does for a permission error (`EACCES`), the command line notes
+the refusal, and `tmpnam` names files without looking at the file system.
+It provides the `fprintf`, `vprintf`, `vfprintf`, `vsprintf` and
+`vsnprintf` family and glibc's `__printf_chk` forms, with `%lc` and `%ls`;
+`sscanf`/`fscanf`/`scanf` with glibc's failure rules, the wide conversions
+and the C23 `__isoc23_` forms' `%b` and `0b` prefixes (not `long double`
+input); the wide streams (`host/stdio/wide.rs`): `fwide`, `fputwc`,
+`fputws`, `fgetwc`, `fgetws`, `ungetwc`, the `wprintf` family with
+`swprintf`, and the `wscanf` family through the narrow engines, with a
+byte function on a wide-oriented stream (or the reverse) trapping as
+undefined; `setlocale` for glibc's "C" and "C.UTF-8" locales
+(`host/locale.rs`; the empty name selects "C", as an environment without
+locale variables does), whose `LC_CTYPE` decides how wide streams and
+`%lc`/`%ls` convert: in "C" a wide stream writes `?` for a character beyond
+ASCII and reads such a byte as `EILSEQ`, and in "C.UTF-8" both are UTF-8; a
+stream keeps the conversion of the locale it was oriented in. A wide
+stream has glibc's wide put area, as many wide characters as the byte
+buffer holds bytes (a quarter as many in a `setvbuf` buffer), whose
+write-outs convert and write all it holds, and a wide pushback area that
+`ungetwc` fills with the characters themselves. The `wscanf` family reads
+whole characters, matches scansets by character and converts what `%c`,
+`%s` and `%[` store with the current locale (`EILSEQ` when it cannot); a
+`printf` or `wprintf` that meets a character it cannot convert keeps what
+it wrote into the put area and discards its 128-unit staging area. The
+`wscanf` family's field widths count the UTF-8 bytes of a character beyond
+ASCII. It also provides string search and
 concatenation, `strtol` and its relatives, the "C" locale's character classes
 including the tables glibc's `<ctype.h>` reads through `__ctype_b_loc`, the
 wide-string basics at the target's `wchar_t` width, and `conj`, `cproj`,
-`cabs` and `carg`. `qsort` and `bsearch` run in the machine: each comparison
+`cabs` and `carg` (which set no `errno`). `qsort` and `bsearch` run in the machine: each comparison
 pushes the comparison function's frame and steps until it returns, so its
 instructions count against the step limit and a trap inside it names it.
 `qsort` follows glibc's stable merge sort call for call, including its

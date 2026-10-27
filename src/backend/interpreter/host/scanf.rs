@@ -10,8 +10,14 @@
 //! glibc does even after a suppressed conversion). A numeric field that
 //! stops after a prefix such as a sign, `0x`, `1e`, `nan(` or `infin` is a
 //! matching failure, the prefix consumed. White space is the "C" locale's,
-//! `\v` included. The wide forms `%lc`, `%ls` and `%l[` and `long double`
-//! input (`%Lf`) are not implemented and trap as unsupported.
+//! `\v` included. `%lc`, `%ls` and `%l[` store wide characters, converting
+//! the multibyte input with the locale; `long double` input (`%Lf`) is not
+//! implemented and traps as unsupported.
+//!
+//! The `wscanf` family reads wide characters ([`Input::Wide`]) with the same
+//! engine: the format and each input character are taken as their UTF-8
+//! bytes, so a field width counts characters for ASCII input, and the
+//! characters a call reads ahead go back to a wide stream when it ends.
 //!
 //! C99: §7.19.6.2 paragraphs 3-14, pp. 282-288; PDF pp. 294-300.
 
@@ -39,15 +45,60 @@ use crate::{
 
 /// Where a `scanf` call reads.
 #[derive(Clone, Copy)]
-#[expect(
-    variant_size_differences,
-    reason = "A short-lived cursor; boxing the string position would allocate."
-)]
 pub(super) enum Input {
     /// The C string at `pointer`, from byte `offset`.
     String { pointer: RuntimeValue, offset: u64 },
     /// The stream with this table index.
     Stream(usize),
+    /// Wide characters, taken byte by byte in UTF-8: the bytes of the
+    /// character being read and those pushed back, the next one last.
+    Wide {
+        source:  WideSource,
+        pending: [u8; 8],
+        held:    u8,
+    },
+}
+
+/// Where the `wscanf` family reads wide characters.
+#[derive(Clone, Copy)]
+#[expect(
+    variant_size_differences,
+    reason = "A short-lived cursor; boxing the string position would allocate."
+)]
+pub(super) enum WideSource {
+    /// The wide string at `pointer`, from element `index`.
+    String { pointer: RuntimeValue, index: u64 },
+    /// The wide-oriented stream with this table index.
+    Stream(usize),
+}
+
+impl Input {
+    /// Wide characters from the wide string at `pointer`.
+    pub(super) const fn wide_string(pointer: RuntimeValue) -> Self {
+        Self::Wide {
+            source:  WideSource::String { pointer, index: 0 },
+            pending: [0; 8],
+            held:    0,
+        }
+    }
+
+    /// Wide characters from the stream `stream`.
+    pub(super) const fn wide_stream(stream: usize) -> Self {
+        Self::Wide {
+            source:  WideSource::Stream(stream),
+            pending: [0; 8],
+            held:    0,
+        }
+    }
+}
+
+/// Which `scanf` a call runs: the C99 forms (`__isoc99_scanf` and the
+/// plain names) or glibc's C23 forms (`__isoc23_scanf`, which `<stdio.h>`
+/// selects under `_GNU_SOURCE` or C23), which add `%b` and the `0b` prefix.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Dialect {
+    C99,
+    C23,
 }
 
 /// Why a directive failed.
@@ -83,9 +134,14 @@ impl DefaultHost<'_> {
         format: RuntimeValue,
         args: &mut FormatArguments<'_>,
         memory: &mut Memory<'_>,
+        dialect: Dialect,
     ) -> Result<i32, Fault> {
         let mut directives = super::ArenaVec::new_in(self.allocator);
-        memory.read_c_string(format, &mut directives)?;
+        if matches!(input, Input::Wide { .. }) {
+            self.wide_format_bytes(format, &mut directives, memory)?;
+        } else {
+            memory.read_c_string(format, &mut directives)?;
+        }
         if let Input::Stream(stream) = input {
             self.orient(stream);
         }
@@ -155,15 +211,25 @@ impl DefaultHost<'_> {
                 text: super::ArenaVec::new_in(self.allocator),
             };
             let result = match conversion {
-                | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' => {
+                | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'b' => {
                     let base = match conversion {
                         | b'd' | b'u' => 10,
                         | b'i' => 0,
                         | b'o' => 8,
+                        | b'b' if dialect == Dialect::C23 => 2,
+                        | b'b' => return Err(Fault::Unsupported(Unsupported::FormatConversion)),
                         | _ => 16,
                     };
-                    self.scan_integer(&mut input, &mut field, base, memory)?
-                        .map(|value| {
+                    let signed = matches!(conversion, b'd' | b'i');
+                    let scanned =
+                        self.scan_integer(&mut input, &mut field, base, signed, dialect, memory)?;
+                    scanned
+                        .map(|(value, clamped)| {
+                            // glibc converts with `strtol` or `strtoul`, which
+                            // clamp a value out of range and set ERANGE.
+                            if clamped {
+                                self.set_errno(memory, super::errno::ERANGE)?;
+                            }
                             if !suppress {
                                 store_integer(memory, destination, value, size)?;
                             }
@@ -172,6 +238,7 @@ impl DefaultHost<'_> {
                         .transpose()?
                 },
                 | b'c' | b's' | b'[' => {
+                    let set_start = position;
                     let (set, negated) = if conversion == b'[' {
                         Self::scanset(&directives, &mut position)
                     } else {
@@ -182,36 +249,108 @@ impl DefaultHost<'_> {
                     } else {
                         width
                     };
-                    let mut count = 0;
+                    // `%lc`, `%ls` and `%l[` store each character as a
+                    // `wchar_t`, converted from its multibyte form; the wide
+                    // functions read whole wide characters, match a scanset
+                    // by character, and convert what `%c`, `%s` and `%[`
+                    // store with the locale (`wcrtomb`).
+                    let wide = (length == Length::Long).then(|| self.wide_type());
+                    let wide_input = matches!(input, Input::Wide { .. });
+                    let utf8 = wide_input || self.locale.utf8();
+                    let whole = wide_input || wide.is_some();
+                    let mut ranges = super::ArenaVec::new_in(self.allocator);
+                    if wide_input && conversion == b'[' {
+                        Self::wide_scanset(&directives, set_start, &mut ranges);
+                    }
+                    let element = wide.unwrap_or(Type::I8);
+                    let (mut count, mut stored) = (0, 0_u64);
                     let mut ended = false;
+                    let mut unconverted = false;
+                    let mut converted = super::ArenaVec::new_in(self.allocator);
                     while count < width {
-                        let Some(byte) = self.next(&mut input, memory)? else {
+                        let Some(first) = self.next(&mut input, memory)? else {
                             ended = true;
                             break;
                         };
-                        let accepted = match conversion {
-                            | b'c' => true,
-                            | b's' => !is_space(byte),
-                            | _ => set[usize::from(byte)] != negated,
+                        let mut sequence = [first, 0, 0, 0];
+                        let mut length = 1;
+                        if whole {
+                            length = super::locale::sequence_length(utf8, first);
+                            for (index, slot) in
+                                sequence.iter_mut().enumerate().take(length).skip(1)
+                            {
+                                let Some(byte) = self.next(&mut input, memory)? else {
+                                    length = index;
+                                    break;
+                                };
+                                *slot = byte;
+                            }
+                        }
+                        let character = if whole {
+                            super::locale::decode(utf8, &sequence[..length])
+                                .map(|(character, _)| character)
+                        } else {
+                            Some(u32::from(first))
+                        };
+                        let accepted = match (conversion, character) {
+                            | (b'c', _) | (_, None) => true,
+                            | (b's', Some(character)) =>
+                                !u8::try_from(character).is_ok_and(is_space),
+                            | (_, Some(character)) if wide_input =>
+                                ranges
+                                    .iter()
+                                    .any(|&(low, high)| (low..=high).contains(&character))
+                                    != negated,
+                            | _ => set[usize::from(first)] != negated,
                         };
                         if !accepted {
-                            self.unread(&mut input, byte);
+                            for &byte in sequence[..length].iter().rev() {
+                                self.unread(&mut input, byte);
+                            }
+                            break;
+                        }
+                        let Some(character) = character else {
+                            unconverted = true;
+                            break;
+                        };
+                        converted.clear();
+                        if wide.is_some() || !whole {
+                            converted.push(0);
+                        } else if !suppress
+                            && !super::locale::encode(self.locale.utf8(), character, &mut converted)
+                        {
+                            unconverted = true;
                             break;
                         }
                         if !suppress {
-                            let at = memory.ptr_add(
-                                destination,
-                                RuntimeValue::Int(u128::from(count)),
-                                true,
-                            );
-                            memory.store(
-                                Type::I8,
-                                RuntimeValue::Int(u128::from(byte)),
-                                at,
-                                Align::BYTE,
-                            )?;
+                            for (index, &byte) in converted.iter().enumerate() {
+                                let value = if wide.is_some() || !whole {
+                                    character
+                                } else {
+                                    u32::from(byte)
+                                };
+                                let at = memory.ptr_add(
+                                    destination,
+                                    RuntimeValue::Int(
+                                        u128::from(stored + index as u64)
+                                            * u128::from(element.bytes()),
+                                    ),
+                                    true,
+                                );
+                                memory.store(
+                                    element,
+                                    RuntimeValue::int(element, u128::from(value)),
+                                    at,
+                                    Align::BYTE,
+                                )?;
+                            }
                         }
+                        stored += converted.len() as u64;
                         count += 1;
+                    }
+                    if unconverted {
+                        self.set_errno(memory, super::errno::EILSEQ)?;
+                        break Some(Failure::Matching);
                     }
                     consumed += count;
                     // `%c` needs all its characters; `%[` and `%s` at least
@@ -224,9 +363,12 @@ impl DefaultHost<'_> {
                         });
                     }
                     if conversion != b'c' && !suppress {
-                        let at =
-                            memory.ptr_add(destination, RuntimeValue::Int(u128::from(count)), true);
-                        memory.store(Type::I8, RuntimeValue::Int(0), at, Align::BYTE)?;
+                        let at = memory.ptr_add(
+                            destination,
+                            RuntimeValue::Int(u128::from(stored) * u128::from(element.bytes())),
+                            true,
+                        );
+                        memory.store(element, RuntimeValue::int(element, 0), at, Align::BYTE)?;
                     }
                     Some(())
                 },
@@ -259,10 +401,48 @@ impl DefaultHost<'_> {
             }
             assigned = assigned.saturating_add(i32::from(!suppress));
         };
+        // What a wide stream's call read ahead goes back to it.
+        if let Input::Wide {
+            source: WideSource::Stream(stream),
+            pending,
+            held,
+        } = input
+        {
+            let mut ahead = [0; 8];
+            for (slot, &byte) in ahead
+                .iter_mut()
+                .zip(pending[..usize::from(held)].iter().rev())
+            {
+                *slot = byte;
+            }
+            self.push_back_wide(stream, &ahead[..usize::from(held)]);
+        }
         Ok(match failure {
             | Some(Failure::Input) if assigned == 0 => -1,
             | _ => assigned,
         })
+    }
+
+    /// The wide format at `format` as UTF-8 bytes.
+    fn wide_format_bytes(
+        &self,
+        format: RuntimeValue,
+        out: &mut super::ArenaVec<'_, u8>,
+        memory: &Memory<'_>,
+    ) -> Result<(), Fault> {
+        let wide = self.wide_type();
+        let size = u64::from(wide.bytes());
+        let align = Align::from_bytes(size).expect("a power of two");
+        for index in 0.. {
+            let at = memory.ptr_add(format, RuntimeValue::Int(u128::from(index * size)), true);
+            let character = integer(memory.load(wide, at, align)?)?;
+            if character == 0 {
+                break;
+            }
+            let character = u32::try_from(character).unwrap_or(u32::MAX);
+            super::locale::encode_for_stream(true, character, out);
+        }
+        Ok(())
     }
 
     /// The length modifier at `position`, advancing past it.
@@ -288,7 +468,7 @@ impl DefaultHost<'_> {
     fn store_size(&self, conversion: u8, length: Length) -> Result<u32, Fault> {
         let unsupported = Err(Fault::Unsupported(Unsupported::FormatConversion));
         Ok(match conversion {
-            | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'n' => match length {
+            | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'b' | b'n' => match length {
                 | Length::Char => 1,
                 | Length::Short => 2,
                 | Length::None => 4,
@@ -303,6 +483,8 @@ impl DefaultHost<'_> {
                 | _ => return unsupported,
             },
             | b'c' | b's' | b'[' if length == Length::None => 1,
+            // `%lc`, `%ls` and `%l[` store `wchar_t`.
+            | b'c' | b's' | b'[' if length == Length::Long => self.wide_type().bytes(),
             | _ => return unsupported,
         })
     }
@@ -320,6 +502,45 @@ impl DefaultHost<'_> {
                 Ok(Some(byte))
             },
             | Input::Stream(stream) => Ok(self.read(*stream)),
+            | Input::Wide {
+                source,
+                pending,
+                held,
+            } => {
+                if *held == 0 {
+                    let character = match source {
+                        | WideSource::String { pointer, index } => {
+                            let wide = self.wide_type();
+                            let size = u128::from(wide.bytes());
+                            let at = memory.ptr_add(
+                                *pointer,
+                                RuntimeValue::Int(u128::from(*index) * size),
+                                true,
+                            );
+                            let align =
+                                Align::from_bytes(u64::from(wide.bytes())).expect("a power of two");
+                            let character = integer(memory.load(wide, at, align)?)?;
+                            if character == 0 {
+                                return Ok(None);
+                            }
+                            *index += 1;
+                            u32::try_from(character).unwrap_or(u32::MAX)
+                        },
+                        | WideSource::Stream(stream) => match self.read_wide(*stream) {
+                            | Some(character) => character,
+                            | None => return Ok(None),
+                        },
+                    };
+                    let mut bytes = super::ArenaVec::new_in(self.allocator);
+                    super::locale::encode_for_stream(true, character, &mut bytes);
+                    for &byte in bytes.iter().rev() {
+                        pending[usize::from(*held)] = byte;
+                        *held += 1;
+                    }
+                }
+                *held -= 1;
+                Ok(Some(pending[usize::from(*held)]))
+            },
         }
     }
 
@@ -328,6 +549,10 @@ impl DefaultHost<'_> {
         match input {
             | Input::String { offset, .. } => *offset -= 1,
             | Input::Stream(stream) => self.push_back(*stream, byte),
+            | Input::Wide { pending, held, .. } => {
+                pending[usize::from(*held)] = byte;
+                *held += 1;
+            },
         }
     }
 
@@ -389,6 +614,42 @@ impl DefaultHost<'_> {
         (set, negated)
     }
 
+    /// The characters a wide `[` conversion starting at `position` accepts,
+    /// as ranges of wide characters, by the same reading as [`Self::scanset`]
+    /// applied to the characters of the format's UTF-8.
+    fn wide_scanset(
+        directives: &[u8],
+        mut position: usize,
+        ranges: &mut super::ArenaVec<'_, (u32, u32)>,
+    ) {
+        let at = |position: usize| {
+            super::locale::decode(true, &directives[position..])
+                .unwrap_or((u32::from(directives[position]), 1))
+        };
+        position += usize::from(directives.get(position) == Some(&b'^'));
+        let mut previous = None;
+        if let Some(&first @ (b']' | b'-')) = directives.get(position) {
+            ranges.push((u32::from(first), u32::from(first)));
+            previous = Some(u32::from(first));
+            position += 1;
+        }
+        while position < directives.len() {
+            let (character, length) = at(position);
+            position += length;
+            if character == u32::from(b']') {
+                break;
+            }
+            let next = (position < directives.len()).then(|| at(position).0);
+            match (previous, next) {
+                | (Some(low), Some(high))
+                    if character == u32::from(b'-') && high != u32::from(b']') && low <= high =>
+                    ranges.push((low, high)),
+                | _ => ranges.push((character, character)),
+            }
+            previous = Some(character);
+        }
+    }
+
     /// Takes the next byte into `field` if it satisfies `accept` and the
     /// width allows it.
     fn take(
@@ -437,30 +698,43 @@ impl DefaultHost<'_> {
         Ok(true)
     }
 
-    /// An integer as `strtol` reads it with `base`, within the field width;
-    /// `None` (a matching failure) when no digit follows the sign and
-    /// prefix, including a `0x` with no hexadecimal digit after it.
+    /// An integer as `strtol` (`signed`) or `strtoul` reads it with `base`,
+    /// within the field width: its 64-bit value, clamped as those functions
+    /// clamp it, and whether it was; `None` (a matching failure) when no
+    /// digit follows the sign and prefix, including a `0x` with no
+    /// hexadecimal digit after it. The C23 forms also read a `0b` prefix in
+    /// bases 0 and 2.
     fn scan_integer(
         &mut self,
         input: &mut Input,
         field: &mut Field<'_>,
         base: u32,
+        signed: bool,
+        dialect: Dialect,
         memory: &Memory<'_>,
-    ) -> Result<Option<u128>, Fault> {
+    ) -> Result<Option<(u128, bool)>, Fault> {
         let negative =
             self.take(input, field, memory, |byte| byte == b'+' || byte == b'-')? == Some(b'-');
         let mut base = base;
         let mut digits = 0_u64;
-        if matches!(base, 0 | 16)
+        let binary = dialect == Dialect::C23 && matches!(base, 0 | 2);
+        if (matches!(base, 0 | 16) || binary)
             && self
                 .take(input, field, memory, |byte| byte == b'0')?
                 .is_some()
         {
-            if self
-                .take(input, field, memory, |byte| byte == b'x' || byte == b'X')?
-                .is_some()
+            if base != 2
+                && self
+                    .take(input, field, memory, |byte| byte == b'x' || byte == b'X')?
+                    .is_some()
             {
                 base = 16;
+            } else if binary
+                && self
+                    .take(input, field, memory, |byte| byte == b'b' || byte == b'B')?
+                    .is_some()
+            {
+                base = 2;
             } else {
                 digits = 1;
                 if base == 0 {
@@ -471,23 +745,20 @@ impl DefaultHost<'_> {
         if base == 0 {
             base = 10;
         }
-        let mut value = 0_u128;
+        let mut parsed = super::strings::ParsedInteger {
+            negative,
+            magnitude: 0,
+            overflow: false,
+            consumed: 0,
+        };
         while let Some(byte) = self.take(input, field, memory, |byte: u8| {
             char::from(byte).is_digit(base)
         })? {
             let digit = char::from(byte).to_digit(base).expect("an accepted digit");
-            value = value
-                .wrapping_mul(u128::from(base))
-                .wrapping_add(u128::from(digit));
+            parsed.push_digit(base, digit);
             digits = digits.saturating_add(1);
         }
-        Ok((digits > 0).then(|| {
-            if negative {
-                value.wrapping_neg()
-            } else {
-                value
-            }
-        }))
+        Ok((digits > 0).then(|| parsed.signed(signed, 64)))
     }
 
     /// A floating number as `strtod` reads it, within the field width:

@@ -36,7 +36,8 @@
 //!   `va_start`, `va_arg`, `va_copy` and `va_end`; `nonlocal.rs` `setjmp` and
 //!   `longjmp`; `callbacks.rs` `qsort` and `bsearch`, which call back into the
 //!   program. `main.rs` supplies writable arguments for hosted C entry;
-//!   `startup.rs` orders and runs constructors and destructors around it.
+//!   `startup.rs` orders and runs constructors and destructors around it, and
+//!   `exit.rs` the exit functions and the handlers they run.
 //! - Semantics of values: `value.rs` defines runtime values and pointers;
 //!   `arithmetic.rs` the arithmetic, comparisons and conversions; `memory.rs`
 //!   objects, loads, stores, copies and provenance.
@@ -57,6 +58,7 @@
 // Execution
 pub(crate) mod callbacks;
 mod execute;
+pub(crate) mod exit;
 mod machine;
 mod main;
 mod nonlocal;
@@ -125,7 +127,6 @@ pub(crate) use value::{
 
 use crate::{
     ir::{
-        FuncId,
         Module,
         Type,
     },
@@ -197,18 +198,21 @@ pub(crate) fn run_main_with_limits(
     exit(&mut machine, &destructors, outcome, host)
 }
 
-/// Ends a program that returned from `main` or called `exit`: the
-/// destructors run, and then the host ends it normally.
+/// Ends a program that returned from `main` or called an exit function:
+/// the exit handlers and destructors run as its ending asks, and then the
+/// host ends it normally, writing out its streams, or at once.
 fn exit(
     machine: &mut Machine<'_, '_, '_>,
-    destructors: &[FuncId],
+    destructors: &startup::Destructors<'_>,
     outcome: Outcome,
     host: &mut dyn Host,
 ) -> Result<Outcome, Trap> {
     let outcome = machine.finish(destructors, outcome, host)?;
-    // A destructor that aborts ends the program abnormally after all.
-    if outcome.termination != Termination::Aborted {
-        host.at_exit();
+    // A handler that aborts ends the program abnormally after all.
+    match (outcome.termination, machine.ending()) {
+        | (Termination::Aborted, _) => {},
+        | (_, exit::Ending::Normal) => host.at_exit(),
+        | (_, exit::Ending::Quick | exit::Ending::Immediate) => host.at_immediate_exit(),
     }
     Ok(outcome)
 }
@@ -294,4 +298,6 @@ struct Machine<'m, 'ir, 'a> {
     /// While a C library function runs a comparison function: the frame
     /// depth its frame returns to, then the value it returned.
     callback:       Option<callbacks::Callback>,
+    /// The exit handlers and how the program is ending.
+    exit:           exit::Exit<'a>,
 }

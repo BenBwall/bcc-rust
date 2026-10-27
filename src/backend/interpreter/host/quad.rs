@@ -9,6 +9,15 @@
 //! leading white space, a sign, then `inf`/`infinity`, `nan` with an
 //! optional `(n-char-sequence)`, or a decimal or hexadecimal significand
 //! with an optional exponent, and rounds it once to nearest.
+//!
+//! The functions set `errno` as glibc's `_Float128` wrappers do (glibc 2.39
+//! and 2.43 agree): `sqrtf128` of a negative number and `fmodf128` of an
+//! infinity or by zero (neither a NaN) are domain errors (`EDOM`);
+//! `ldexpf128` and `scalbnf128` of a finite nonzero number that overflows
+//! or underflows to zero, `fdimf128` that overflows, and `strtof128` of a
+//! value that overflows or underflows (is tiny and inexact) are
+//! range errors (`ERANGE`), the underflow as glibc's `round_and_return`
+//! decides it. The others set none.
 //! C99: §7.20.1.3, pp. 307-310; PDF pp. 319-322 (the `strtod` family, which
 //! TS 18661-3 extends to `strtof128`); §7.12.6-§7.12.12, pp. 223-238;
 //! PDF pp. 235-250. `strfromf128` is TS 18661-3's (C23 §7.24.1.3).
@@ -33,7 +42,10 @@ use super::{
     integer,
 };
 use crate::{
-    binary128::Binary128,
+    binary128::{
+        Binary128,
+        Class,
+    },
     float_parsing::ParseFloatError,
     ir::Align,
     translation_phases::preprocessing::FloatTokenType,
@@ -89,8 +101,13 @@ impl DefaultHost<'_> {
             | Some(RuntimeValue::F128(bits)) => Ok(Binary128::from_bits(*bits)),
             | _ => Err(Fault::from(UbKind::SignatureMismatch)),
         };
+        let mut range_error = false;
         let value = match call.name {
-            | "strtof128" => self.strtof128(args[0], args[1], memory)?,
+            | "strtof128" => {
+                let (value, out_of_range) = self.strtof128(args[0], args[1], memory)?;
+                range_error = out_of_range;
+                value
+            },
             | "strfromf128" => {
                 let count = self.strfromf128(args, quad(3)?, memory)?;
                 return Ok(HostReturn::Value(Some(RuntimeValue::int(
@@ -140,28 +157,37 @@ impl DefaultHost<'_> {
             },
             | _ => unreachable!("{} is not a binary128 function", call.name),
         };
+        let code = if range_error {
+            super::errno::ERANGE
+        } else {
+            errno(call.name, quad(0).ok(), quad(1).ok(), value)
+        };
+        if code != 0 {
+            self.set_errno(memory, code)?;
+        }
         Ok(HostReturn::Value(Some(RuntimeValue::F128(value.to_bits()))))
     }
 
     /// `strtof128(nptr, endptr)`: the value of the longest prefix of `nptr`
     /// that forms a floating number, storing where it ends in `*endptr`
-    /// (or `nptr` itself when there is none) unless `endptr` is null.
+    /// (or `nptr` itself when there is none) unless `endptr` is null, and
+    /// whether it is a range error.
     /// C99: §7.20.1.3 paragraphs 2-10, pp. 307-309; PDF pp. 319-321.
     fn strtof128(
         &mut self,
         string: RuntimeValue,
         end: RuntimeValue,
         memory: &mut Memory<'_>,
-    ) -> Result<Binary128, Fault> {
+    ) -> Result<(Binary128, bool), Fault> {
         self.text.clear();
         memory.read_c_string(string, &mut self.text)?;
         self.scratch.clear();
-        let (value, consumed) = scan(&self.text, &mut self.scratch, self.allocator);
+        let (value, consumed, out_of_range) = scan(&self.text, &mut self.scratch, self.allocator);
         if end != RuntimeValue::NULL {
             let stop = memory.ptr_add(string, RuntimeValue::Int(consumed as u128), true);
             memory.store(Type::Ptr, stop, end, Align::BYTE)?;
         }
-        Ok(value)
+        Ok((value, out_of_range))
     }
 
     /// `strfromf128(str, n, format, fp)`: `fp` formatted by `format`, which
@@ -237,14 +263,46 @@ fn minimum_maximum(minimum: bool, x: Binary128, y: Binary128) -> Binary128 {
     }
 }
 
+/// The `errno` glibc's binary128 function `name` sets for the arguments
+/// `x` and `y` (where it has them) and its `result`, or zero.
+/// C99: §7.12.1 paragraphs 2-4, pp. 214-215; PDF pp. 226-227.
+fn errno(name: &str, x: Option<Binary128>, y: Option<Binary128>, result: Binary128) -> i32 {
+    use super::errno::{
+        EDOM,
+        ERANGE,
+    };
+    let finite = |value: Binary128| matches!(value.class(), Class::Zero | Class::Finite { .. });
+    let infinite = |value: Binary128| value.class() == Class::Infinite;
+    let less_than_zero = |value: Binary128| {
+        value
+            .compare(Binary128::zero(false))
+            .is_some_and(Ordering::is_lt)
+    };
+    match (name, x, y) {
+        | ("sqrtf128", Some(x), _) if less_than_zero(x) => EDOM,
+        | ("fmodf128", Some(x), Some(y))
+            if (infinite(x) || y.is_zero()) && !x.is_nan() && !y.is_nan() =>
+            EDOM,
+        | ("ldexpf128" | "scalbnf128", Some(x), _)
+            if finite(x) && !x.is_zero() && (!finite(result) || result.is_zero()) =>
+            ERANGE,
+        | ("fdimf128", Some(x), Some(y)) if infinite(result) && !infinite(x) && !infinite(y) =>
+            ERANGE,
+        | _ => 0,
+    }
+}
+
 /// The value of the longest prefix of `text` that `strtod` reads as a
-/// floating number, and how many bytes it takes (zero when there is
-/// none). `spelling` is scratch space for the significand and exponent.
+/// floating number, how many bytes it takes (zero when there is none), and
+/// whether glibc reports it as a range error: an overflow, or an underflow
+/// (a tiny value, by x86's tininess after rounding, that the result does not
+/// hold exactly). `spelling` is scratch space for the significand and
+/// exponent.
 fn scan(
     text: &[u8],
     spelling: &mut crate::util::bump::ArenaVec<'_, u8>,
     arena: &crate::util::bump::Bump,
-) -> (Binary128, usize) {
+) -> (Binary128, usize, bool) {
     let mut index = text
         .iter()
         .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r'))
@@ -258,10 +316,10 @@ fn scan(
         rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix)
     };
     if starts_with(b"infinity") {
-        return (Binary128::infinity(negative), index + 8);
+        return (Binary128::infinity(negative), index + 8, false);
     }
     if starts_with(b"inf") {
-        return (Binary128::infinity(negative), index + 3);
+        return (Binary128::infinity(negative), index + 3, false);
     }
     if starts_with(b"nan") {
         let mut end = index + 3;
@@ -280,6 +338,7 @@ fn scan(
         return (
             Binary128::nan(true, u128::from(payload)).with_sign(negative),
             end,
+            false,
         );
     }
     let hex = (starts_with(b"0x"))
@@ -293,7 +352,7 @@ fn scan(
     };
     let length = significand_length(&text[start..], radix_hex);
     if length == 0 {
-        return (Binary128::zero(false), 0);
+        return (Binary128::zero(false), 0, false);
     }
     let mut end = start + length;
     spelling.extend_from_slice(if hex { b"0x" } else { b"" });
@@ -320,11 +379,12 @@ fn scan(
     }
     spelling.push(b'q');
     let spelling = std::str::from_utf8(spelling).unwrap_or("");
-    let value = match crate::binary128::parse(spelling, arena) {
-        | Ok(value) | Err(ParseFloatError::OutOfRange(FloatTokenType::Float128(value), _)) => value,
-        | Err(_) => Binary128::zero(false),
+    let (value, out_of_range) = match crate::binary128::parse_reporting_underflow(spelling, arena) {
+        | Ok((value, underflow)) => (value, underflow),
+        | Err(ParseFloatError::OutOfRange(FloatTokenType::Float128(value), _)) => (value, true),
+        | Err(_) => (Binary128::zero(false), false),
     };
-    (value.with_sign(negative), end)
+    (value.with_sign(negative), end, out_of_range)
 }
 
 /// The length of the significand at the start of `text`: digits of the
