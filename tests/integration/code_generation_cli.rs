@@ -1001,6 +1001,58 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
         interpreter_matches_glibc("host_library.c", &["--interpret-allow-fs"]);
     }
 
+    /// `tests/fixtures/programs/stdio_writes.c` checks when writes reach a
+    /// file (held in the stream's buffer until it fills, `fflush`,
+    /// `fflush(NULL)` in glibc's stream order, `fclose`, `freopen`, a seek or
+    /// a read), how a failing write surfaces, `ftell` with bytes held, and
+    /// `fgets` without room leaving the stream unoriented: the interpreter
+    /// must write what the program built against glibc 2.39 to 2.43 writes.
+    #[test]
+    fn stdio_writes_match_glibc() {
+        interpreter_matches_glibc("stdio_writes.c", &["--interpret-allow-fs"]);
+    }
+
+    /// At a normal end, after `main` returns or the program calls `exit`,
+    /// glibc writes out what every stream holds, the most recently opened
+    /// first; `abort`, even from a destructor, writes out nothing. The
+    /// expected file contents are what glibc programs leave.
+    #[test]
+    fn interpreter_writes_out_streams_at_exit_in_glibc_order() {
+        let path = temporary("exit-order.txt");
+        let path_text = path.to_str().unwrap().replace('\\', "/");
+        for (ending, expected) in [
+            ("return 0;", "Abcdef"),
+            ("exit(0);", "Abcdef"),
+            ("abort();", "abcdef"),
+            (
+                "return 0; } __attribute__((destructor)) static void end(void) { abort();",
+                "abcdef",
+            ),
+        ] {
+            std::fs::write(&path, "abcdef").unwrap();
+            let source = format!(
+                "typedef struct _IO_FILE FILE; FILE *fopen(const char *, const char *);
+int fputc(int, FILE *); void exit(int); void abort(void);
+int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
+  FILE *second = fopen(\"{path_text}\", \"r+\"); fputc('A', first); fputc('B', second);
+  {ending} }}
+"
+            );
+            let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+            assert!(
+                matches!(output.status.code(), Some(0 | 134)),
+                "{ending}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                expected,
+                "{ending}"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// `tests/fixtures/programs/scanf_cases.c` runs the `sscanf` edge cases
     /// that glibc 2.39 to 2.43 agree on: matching and input failures,
     /// suppression, widths, scansets, white space and every form of floating
@@ -1027,6 +1079,35 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
             assert_eq!(text(&glibc.stdout), expected, "glibc");
         }
         interpreter_writes("scanf_cases_modern_glibc.c", &[], &expected, "");
+    }
+
+    /// `tests/fixtures/programs/stdio_modern_glibc.c` runs the stdio cases
+    /// glibc changed after 2.39: flushing streams that read (2.42:
+    /// `fflush(NULL)` gives back what they read ahead, `fflush` drops a
+    /// pushback area) and a seek on an oriented stream without a buffer
+    /// (2.41: it counts and drops the pushback area). The interpreter
+    /// follows 2.43, so it must write the checked-in `.expected` output (and
+    /// the redirected `stdout` case's report on stderr) on any glibc, and a
+    /// host with glibc 2.43 or later must still write it too.
+    #[test]
+    fn stdio_matches_modern_glibc() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let expected =
+            std::fs::read_to_string(fixture_program("stdio_modern_glibc.expected")).unwrap();
+        let errors = "stdout 0 0 a\n";
+        if host_glibc_version() >= (2, 43) {
+            let glibc = glibc_output("stdio_modern_glibc.c");
+            assert_eq!(text(&glibc.stdout), expected, "glibc");
+            assert_eq!(text(&glibc.stderr), errors, "glibc");
+        }
+        interpreter_writes(
+            "stdio_modern_glibc.c",
+            &["--interpret-allow-fs"],
+            &expected,
+            errors,
+        );
     }
 
     /// Builds a fixture with clang against glibc and checks that the
@@ -1182,24 +1263,101 @@ int fclose(FILE *); FILE *freopen(const char *, const char *, FILE *);
             ),
         ] {
             let source = format!("{prelude}int main(void) {{ {body} return 0; }}\n");
-            let merged = temporary("merged-output.txt");
-            let file = std::fs::File::create(&merged).unwrap();
-            let status = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
-                .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
-                .args(flags)
-                .args(["--input", &source])
-                .stdout(file.try_clone().unwrap())
-                .stderr(file)
-                .status()
-                .unwrap();
-            assert_eq!(status.code(), Some(0), "{body}");
             assert_eq!(
-                std::fs::read_to_string(&merged).unwrap(),
+                interpret_merged(&source, flags, b""),
                 expected,
                 "{body} {flags:?}"
             );
-            std::fs::remove_file(merged).unwrap();
         }
+    }
+
+    /// glibc flushes a terminal's line-buffered stdout before input only
+    /// when a line-buffered (terminal) stdin has to be refilled: not when
+    /// stdin is a pipe, not while its buffer still holds the rest of a line,
+    /// and not once it has reached end-of-file, which stays set. The
+    /// expected text is what glibc programs print with stdout and stderr on
+    /// a pseudo-terminal or one pipe, and stdin a pipe or a pseudo-terminal
+    /// that receives the whole input as one line and then end-of-file.
+    #[test]
+    fn interpreter_flushes_terminal_stdout_when_terminal_stdin_refills() {
+        let prelude = "typedef struct _IO_FILE FILE; extern FILE *stdout, *stderr;
+int fputs(const char *, FILE *); int getchar(void);
+";
+        let stdout = "--interpret-terminal-stdout";
+        let stdin = "--interpret-terminal-stdin";
+        let once = "fputs(\"A\", stdout); getchar(); fputs(\"B\", stderr);";
+        for (body, flags, expected) in [
+            (once, &[stdout][..], "BA"),
+            (once, &[stdin][..], "BA"),
+            (once, &[stdout, stdin][..], "AB"),
+            (
+                "fputs(\"A\", stdout); getchar(); fputs(\"B\", stdout); getchar();
+  fputs(\"C\", stderr);",
+                &[stdout, stdin][..],
+                "ACB",
+            ),
+            (
+                "fputs(\"A\", stdout); getchar(); getchar(); getchar(); fputs(\"B\", stdout);
+  getchar(); fputs(\"C\", stderr); fputs(\"D\", stdout); getchar(); fputs(\"E\", stderr);",
+                &[stdout, stdin][..],
+                "ABCED",
+            ),
+        ] {
+            let source = format!("{prelude}int main(void) {{ {body} return 0; }}\n");
+            assert_eq!(
+                interpret_merged(&source, flags, b"xy\n"),
+                expected,
+                "{body} {flags:?}"
+            );
+        }
+        // An `fread` of at least the terminal's 1024-byte buffer reads the
+        // line straight into the array, without a refill to flush before;
+        // a smaller one refills.
+        let mut line = vec![b'x'; 1023];
+        line.push(b'\n');
+        for (size, expected) in [(1024, "BA"), (1023, "AB")] {
+            let source = format!(
+                "{prelude}typedef unsigned long size_t; size_t fread(void *, size_t, size_t, FILE \
+                 *);
+extern FILE *stdin;
+int main(void) {{ static char buffer[1024]; fputs(\"A\", stdout);
+  fread(buffer, 1, {size}, stdin); fputs(\"B\", stderr); return 0; }}\n"
+            );
+            assert_eq!(
+                interpret_merged(&source, &[stdout, stdin], &line),
+                expected,
+                "fread {size}"
+            );
+        }
+    }
+
+    /// Interprets `source` with `flags` and `input` piped to its stdin, with
+    /// stdout and stderr both going to one file; what the file holds.
+    fn interpret_merged(source: &str, flags: &[&str], input: &[u8]) -> String {
+        use std::{
+            io::Write as _,
+            process::Stdio,
+        };
+        let merged = temporary("merged-output.txt");
+        let file = std::fs::File::create(&merged).unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
+            .args(flags)
+            .args(["--input", source])
+            .stdin(Stdio::piped())
+            .stdout(file.try_clone().unwrap())
+            .stderr(file)
+            .spawn()
+            .unwrap();
+        // One write, so that one `read` sees it whole as a terminal's would.
+        // A program that failed to compile has closed the pipe; its status
+        // tells.
+        _ = child.stdin.take().unwrap().write_all(input).ok();
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(0), "{source}");
+        let text = std::fs::read_to_string(&merged).unwrap();
+        std::fs::remove_file(merged).unwrap();
+        text
     }
 
     /// Using a closed stream is undefined: after `fclose(stdin)` or
@@ -1288,10 +1446,14 @@ int main(void) { double d = 1, e = 1; unsigned long long bits;
   printf(\"%d %a %llx %d\\n\", n, d, bits, fseek(stdin, -9223372036854775807L - 1, 1));
   return 0; }
 ";
-        let output = bcc(
-            source,
-            &["--interpret", "--target=x86_64-unknown-linux-gnu"],
-        );
+        // stdin is a pipe, which cannot seek; glibc's seek on /dev/null
+        // would succeed.
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
+            .args(["--input", source])
+            .stdin(std::process::Stdio::piped())
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
         assert_eq!(text(&output.stdout), "2 0x0p+0 7fffffffffffffff -1\n");
         let source = "typedef int wchar_t; wchar_t *wmemcpy(wchar_t *, const wchar_t *, unsigned \

@@ -86,6 +86,9 @@ impl DefaultHost<'_> {
     ) -> Result<i32, Fault> {
         let mut directives = super::ArenaVec::new_in(self.allocator);
         memory.read_c_string(format, &mut directives)?;
+        if let Input::Stream(stream) = input {
+            self.orient(stream);
+        }
         let mut assigned: i32 = 0;
         let mut consumed: u64 = 0;
         let mut position = 0;

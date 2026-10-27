@@ -194,6 +194,7 @@ pub(super) fn generate_code<'tu>(
             options.interpret_step_limit,
             options.interpret_allow_fs,
             options.interpret_terminal_stdout || io::stdout().is_terminal(),
+            options.interpret_terminal_stdin || io::stdin().is_terminal(),
         )),
     }
 }
@@ -269,6 +270,10 @@ pub(super) struct CodeGeneration {
     /// even when it is not one (for tests).
     #[arg(long, hide = true, requires = "interpret")]
     pub(super) interpret_terminal_stdout: bool,
+    /// Buffer the interpreted program's stdin by lines, as for a terminal,
+    /// even when it is not one (for tests).
+    #[arg(long, hide = true, requires = "interpret")]
+    pub(super) interpret_terminal_stdin: bool,
     /// Build an executable at PATH through the bundled clang (an object with
     /// -c, assembly with -S, preprocessed source with -E).
     #[arg(short = 'o', long = "output", value_name = "PATH", group = "back_end", group = "generation",
@@ -565,6 +570,7 @@ fn interpret(
     steps: Option<u64>,
     allow_fs: bool,
     terminal: bool,
+    terminal_input: bool,
 ) -> i32 {
     let arena = Bump::new();
     let mut host = DefaultHost::for_target(&arena, target);
@@ -573,6 +579,7 @@ fn interpret(
     }
     // glibc line-buffers a terminal's stdout and fully buffers a pipe's.
     host.set_terminal_output(terminal);
+    host.set_terminal_input(terminal_input);
     let mut limits = interpreter::Limits::default();
     if let Some(steps) = steps {
         limits.steps = steps;

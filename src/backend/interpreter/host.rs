@@ -83,6 +83,13 @@ pub(crate) trait Host {
     fn standard_stream(&self, _name: &str) -> Option<u32> {
         None
     }
+
+    /// Ends the program normally, after `main` returns or the program calls
+    /// `exit` and the destructors have run, but not after `abort` or a
+    /// trap: as the C library does then, the host writes out what its
+    /// streams hold.
+    /// C99: §7.20.4.3 paragraph 4, p. 315; PDF p. 327.
+    fn at_exit(&mut self) {}
 }
 
 /// A call the host is asked to run.
@@ -140,7 +147,7 @@ pub(crate) struct DefaultHost<'a> {
     denied_files:  u32,
     denied_path:   ArenaVec<'a, u8>,
     /// The open streams.
-    streams:       stdio::Streams,
+    streams:       stdio::Streams<'a>,
     /// A file name being passed to the host's file system.
     path:          ArenaVec<'a, u8>,
     /// `tmpnam`'s static buffer, once made.
@@ -175,11 +182,24 @@ impl Host for DefaultHost<'_> {
     }
 
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
-        // Standard output written by any function follows a `freopen`.
+        // Standard output written by any function follows a `freopen`; a
+        // function that writes it implicitly fails when that write does.
         let before = self.output.len();
         let result = self.dispatch(call, memory);
-        self.redirect_output(before);
-        result
+        if self.redirect_output(before, call.name) || implicit_stream(call.name) != Some(1) {
+            return result;
+        }
+        result.map(|value| match value {
+            | HostReturn::Value(Some(RuntimeValue::Int(_))) => HostReturn::Value(
+                call.result
+                    .map(|ty| RuntimeValue::int(ty, (-1_i32).cast_unsigned().into())),
+            ),
+            | value => value,
+        })
+    }
+
+    fn at_exit(&mut self) {
+        let _ = self.flush_all();
     }
 }
 
@@ -550,6 +570,12 @@ impl DefaultHost<'_> {
         self.console.line_buffered = terminal;
     }
 
+    /// Treats standard input as a terminal, which glibc line-buffers:
+    /// refilling its buffer flushes a terminal's stdout.
+    pub(crate) fn set_terminal_input(&mut self, terminal: bool) {
+        self.streams.set_terminal_input(terminal);
+    }
+
     /// How many file-system accesses were refused, with the first path, if
     /// any were.
     pub(crate) fn denied_file_access(&self) -> Option<(u32, &[u8])> {
@@ -677,11 +703,13 @@ impl<'a> DefaultHost<'a> {
                 marks:         ArenaVec::new_in(arena),
                 flushed:       0,
                 line_buffered: false,
+                scanned:       0,
+                line_end:      0,
             },
             file_access:   false,
             denied_files:  0,
             denied_path:   ArenaVec::new_in(arena),
-            streams:       stdio::Streams::default(),
+            streams:       stdio::Streams::new_in(arena),
             path:          ArenaVec::new_in(arena),
             tmpnam_buffer: None,
             ctype:         [None; 3],
