@@ -123,9 +123,12 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
 }
 
 #[derive(Clone, Copy)]
-#[expect(
-    variant_size_differences,
-    reason = "Leave saves two arena scope marks on the explicit stack."
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        variant_size_differences,
+        reason = "Leave saves two arena scope marks on the explicit stack."
+    )
 )]
 enum Visit {
     Enter { block: Block },

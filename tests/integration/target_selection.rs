@@ -60,7 +60,9 @@ mod tests {
                 String::from_utf8_lossy(&reference.stderr)
             );
             let actual = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
-                .args(["--target", triple, "-std=c11", probe])
+                // Only the resource headers, as for Clang: compiling for the
+                // host, bcc would otherwise read the host's C library.
+                .args(["--target", triple, "-std=c11", "-nostdlibinc", probe])
                 .output()
                 .unwrap();
             let diagnostics = String::from_utf8_lossy(&actual.stderr);

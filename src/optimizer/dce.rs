@@ -176,6 +176,7 @@ fn has_side_effects(data: &InstData) -> bool {
         | InstData::MemoryRange { .. }
         | InstData::Call { .. }
         | InstData::CallIndirect { .. }
+        | InstData::InlineAsm { .. }
         | InstData::Unary {
             opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
             ..

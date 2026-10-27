@@ -109,6 +109,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 | (_, RuntimeValue::Poison)
                 | (Type::F32, RuntimeValue::F32(_))
                 | (Type::F64, RuntimeValue::F64(_))
+                | (Type::F80, RuntimeValue::F80(_))
                 | (Type::F128, RuntimeValue::F128(_))
                 | (Type::Ptr, RuntimeValue::Ptr(_)) => arg,
                 | _ => return Err(Trap::BadEntry(EntryError::Arguments)),
@@ -205,6 +206,17 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         if returns_twice {
             return Err(Fault::Unsupported(Unsupported::ReturnsTwice));
         }
+        if super::callbacks::FUNCTIONS.contains(&callee.name) && host.provides(callee.name) {
+            return match self.library_callback(callee.name, host)? {
+                | Ok(value) => {
+                    if let (Some(result), Some(value)) = (result, value) {
+                        self.set(result, value);
+                    }
+                    Ok(None)
+                },
+                | Err(termination) => Ok(Some(termination)),
+            };
+        }
         let va_list = match self.host_va_list(callee.name)? {
             | Some(convention) => HostVaList::Target(convention),
             | None if va_list_operand(callee.name).is_some() =>
@@ -250,7 +262,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
     /// including host functions and unused parameters. A complex descriptor
     /// represents a scalar value: only its meaningful component bytes are
     /// covered. Ordinary aggregate pointers constrain only the address.
-    fn check_arguments(&self, signature: Signature<'_>) -> Result<(), Fault> {
+    pub(super) fn check_arguments(&self, signature: Signature<'_>) -> Result<(), Fault> {
         for (index, &arg) in self.arguments.iter().enumerate() {
             self.check_argument(signature, index, arg)?;
         }
@@ -298,7 +310,11 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
     /// variadic arguments, and allocating its stack slots and private byval
     /// copies. C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83 (parameter
     /// assignment).
-    fn push_frame(&mut self, func: FuncId, caller_value: Option<Value>) -> Result<(), Fault> {
+    pub(super) fn push_frame(
+        &mut self,
+        func: FuncId,
+        caller_value: Option<Value>,
+    ) -> Result<(), Fault> {
         if self.frames.len() >= self.limits.stack_depth {
             return Err(Fault::StackDepthLimit);
         }
@@ -439,6 +455,13 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             }
         }
         let frame = self.pop_frame();
+        // A comparison function `qsort` called hands its value back to it.
+        if let Some(super::callbacks::Callback::Waiting(floor)) = self.callback
+            && self.frames.len() == floor
+        {
+            self.callback = Some(super::callbacks::Callback::Returned(value));
+            return Ok(None);
+        }
         if self.frames.is_empty() {
             return Ok(Some(Termination::Returned(value)));
         }
@@ -511,6 +534,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             | Fault::Unsupported(what) => Trap::Unsupported(what, location),
             | Fault::StackDepthLimit => Trap::StackDepthLimit(location),
             | Fault::UnknownGlobal(global) => Trap::UnknownGlobal(global, location),
+            | Fault::Nested(trap) => trap,
             | Fault::UnknownFunction => {
                 let body = self.body(location.func);
                 let callee = match *body.inst(location.inst) {
@@ -653,6 +677,29 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
                 globals.push(pointer);
                 continue;
             }
+            // The C library's `stdin`, `stdout` and `stderr` hold pointers
+            // to the host's stream objects.
+            if global.init.is_none()
+                && global.size >= 8
+                && let Some(stream) = host.standard_stream(global.name)
+            {
+                let fail = |_| Trap::BadEntry(EntryError::GlobalTooLarge);
+                let file = memory.standard_stream(stream).map_err(fail)?;
+                let pointer = memory
+                    .allocate(ObjectKind::Global, global.size, global.align)
+                    .map_err(fail)?;
+                memory.initialize(pointer, &[]);
+                memory
+                    .store(
+                        Type::Ptr,
+                        RuntimeValue::Ptr(file),
+                        RuntimeValue::Ptr(pointer),
+                        Align::BYTE,
+                    )
+                    .map_err(fail)?;
+                globals.push(pointer);
+                continue;
+            }
             let kind = if global.init.is_none() {
                 ObjectKind::UnresolvedGlobal(id)
             } else if global.constant {
@@ -733,6 +780,7 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             steps: 0,
             activations: 0,
             timestamp: 0,
+            callback: None,
         })
     }
 }

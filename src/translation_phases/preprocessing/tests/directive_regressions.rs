@@ -1041,3 +1041,81 @@ fn unknown_stdc_pragma_is_a_warning_and_preserves_the_following_declaration() {
         },
     );
 }
+
+/// The identifiers and integers `source` preprocesses to, spelled.
+fn spellings(source: &str) -> Vec<String> {
+    with_tokens_of(source, "<directive-test>", |tokens, context| {
+        assert!(
+            context.take_pending_errors().is_empty(),
+            "{source:?} reported errors"
+        );
+        tokens
+            .iter()
+            .map(|token| match token.kind {
+                | TokenType::Integer(IntegerTokenType::Int(value)) => value.to_string(),
+                | _ => context.string_cache.at(token.contents).to_owned(),
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn push_and_pop_macro_restore_definitions_in_stack_order() {
+    // GCC manual, "Push/Pop Macro Pragmas": each pop restores the state of
+    // the matching push, including "not defined".
+    assert_eq!(
+        spellings(
+            "#define X 1\nX\n#pragma push_macro(\"X\")\n#undef X\n#define X 2\nX\n#pragma \
+             push_macro(\"X\")\n#undef X\nX\n#pragma pop_macro(\"X\")\nX\n#pragma \
+             pop_macro(\"X\")\nX\n"
+        ),
+        ["1", "2", "X", "2", "1"]
+    );
+    // A name that was not a macro becomes undefined again, and a function-
+    // like definition comes back whole.
+    assert_eq!(
+        spellings(
+            "#pragma push_macro(\"Y\")\n#define Y 3\nY\n#pragma pop_macro(\"Y\")\nY\n#define F(a) \
+             a a\n#pragma push_macro(\"F\")\n#undef F\nF(4)\n#pragma pop_macro(\"F\")\nF(5)\n"
+        ),
+        ["3", "Y", "F", "(", "4", ")", "5", "5"]
+    );
+}
+
+#[test]
+fn push_and_pop_macro_ignore_unmatched_and_malformed_operands() {
+    // Clang and GCC ignore a pop without a push, and an operand that is not
+    // `("name")`, keeping the following line intact.
+    assert_eq!(
+        spellings(
+            "#define Z 6\n#pragma pop_macro(\"Z\")\nZ\n#pragma push_macro(Z)\n#pragma \
+             push_macro(\"Z\"\n#pragma push_macro\nZ\n_Pragma(\"push_macro(\\\"Z\\\")\")\n#undef \
+             Z\n_Pragma(\"pop_macro(\\\"Z\\\")\") Z\n"
+        ),
+        ["6", "6", "6"]
+    );
+}
+
+#[test]
+fn push_and_pop_macro_name_identifiers_beyond_ascii() {
+    // GCC and Clang restore `café`; a name is identified by its canonical
+    // spelling, as for the identifier `café`, and `$` where accepted.
+    assert_eq!(
+        spellings(
+            "#define café 1\n#pragma push_macro(\"café\")\n#undef café\n#define café \
+             2\ncafé\n#pragma pop_macro(\"café\")\ncafé\n#define caf\\u00e9x 3\n#pragma \
+             push_macro(\"caféx\")\n#undef caféx\n#pragma pop_macro(\"caféx\")\ncaféx\n#define $d \
+             4\n#pragma push_macro(\"$d\")\n#undef $d\n#define $d 5\n#pragma \
+             pop_macro(\"$d\")\n$d\n"
+        ),
+        ["2", "1", "3", "4"]
+    );
+    // An operand that does not spell one identifier is ignored.
+    assert_eq!(
+        spellings(
+            "#define N 7\n#pragma push_macro(\"N \")\n#pragma push_macro(\"9N\")\n#pragma \
+             push_macro(\"\")\n#undef N\n#define N 8\n#pragma pop_macro(\"N\")\nN\n"
+        ),
+        ["8"]
+    );
+}

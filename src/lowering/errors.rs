@@ -75,7 +75,12 @@ pub(crate) enum Construct {
     Vector,
     VariableLengthArray,
     LabelAddress,
+    /// MSVC `__asm` blocks.
     InlineAssembly,
+    /// A GNU `asm` operand in a register class or of a type lowering does
+    /// not implement: x87, MMX and register pairs, `__int128`, aggregates in
+    /// registers, or an immediate address with an offset.
+    InlineAssemblyOperand,
     /// A file-scope assembly template with NUL or bytes that are not
     /// UTF-8, which Clang accepts.
     FileScopeAssembly,
@@ -92,6 +97,9 @@ pub(crate) enum Construct {
     SelectionDeclaration,
     Extension,
     CompoundLiteralStorage,
+    /// An automatic object or compound literal of 4 GiB or more, beyond the
+    /// IR's 32-bit stack slot sizes.
+    LargeAutomaticObject,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -140,7 +148,9 @@ impl Construct {
             | Self::Vector => "vector types",
             | Self::VariableLengthArray => "variable length arrays",
             | Self::LabelAddress => "label addresses",
-            | Self::InlineAssembly => "inline assembly",
+            | Self::InlineAssembly => "MSVC inline assembly",
+            | Self::InlineAssemblyOperand =>
+                "inline assembly operands of this register class or type",
             | Self::FileScopeAssembly =>
                 "file-scope assembly templates containing NUL or bytes that are not UTF-8",
             | Self::AssemblerLabel => "assembler labels",
@@ -153,6 +163,7 @@ impl Construct {
             | Self::Initializer => "this initializer",
             | Self::SelectionDeclaration => "declarations in selection statements",
             | Self::Extension => "this extension",
+            | Self::LargeAutomaticObject => "automatic objects of 4 GiB or more",
             | Self::CompoundLiteralStorage =>
                 "compound literals with static or thread storage duration",
         }

@@ -7,7 +7,41 @@ use super::{
 };
 use crate::translation_phases::ErrorSeverity;
 
+/// How diagnostics are printed, which `--diagnostic-format` and the driver
+/// personalities select: bcc's annotated snippets, Clang's and GCC's
+/// `file:line:col: error: message` lines with the snippet (Clang adds the
+/// error and warning counts), MSVC's `file(line,col): error: message`, or
+/// TCC's `file:line: error: message`.
+/// The wording and the snippets are bcc's in every format.
+/// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 leaves the form of a
+/// diagnostic implementation-defined.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub(crate) enum DiagnosticFormat {
+    #[default]
+    Bcc,
+    Clang,
+    Gcc,
+    /// `cl.exe`'s location format, with the column for `/diagnostics:column`
+    /// (the default here, as clang-cl writes it) and the snippet for
+    /// `/diagnostics:caret`.
+    Msvc {
+        column: bool,
+        caret:  bool,
+    },
+    /// TCC's `file:line: error: message`, without a snippet.
+    Tcc,
+}
+
 impl CompilerConfiguration {
+    pub(crate) const fn with_diagnostic_format(mut self, format: DiagnosticFormat) -> Self {
+        self.diagnostic_format = format;
+        self
+    }
+
+    pub(crate) const fn diagnostic_format(self) -> DiagnosticFormat {
+        self.diagnostic_format
+    }
+
     /// Specific group options override global -Werror regardless of order.
     /// Parent group options update their children at the same argv position.
     pub(crate) fn with_warning_option(
@@ -174,6 +208,9 @@ diagnostic_groups! {
     /// A `#pragma` that names nothing bcc knows.
     UnknownPragmas => Some("unknown-pragmas"), Ignored, false;
     UnknownStdcPragma => Some("unknown-pragmas"), Warning, false;
+    /// A `\` before a character that begins no escape sequence; Clang's
+    /// extension warning, which `-pedantic-errors` promotes.
+    UnknownEscapeSequence => Some("unknown-escape-sequence"), Warning, true;
     UnknownWarningOption => Some("unknown-warning-option"), Warning, false;
     /// An attribute name unavailable in its spelling on the selected target.
     UnknownAttributes => Some("unknown-attributes"), Warning, false;

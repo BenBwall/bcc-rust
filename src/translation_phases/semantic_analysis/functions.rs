@@ -2939,6 +2939,13 @@ pub(super) fn function_derivation<'tu>(
     declarator: Declarator<'tu>,
     scratch: &Bump,
 ) -> Option<&'tu DirectDeclarator<'tu>> {
+    #[cfg_attr(
+        target_pointer_width = "32",
+        expect(
+            variant_size_differences,
+            reason = "A declarator is two slices; with 32-bit pointers a reference is small."
+        )
+    )]
     enum Step<'tu> {
         Declarator(Declarator<'tu>),
         Direct(&'tu DirectDeclarator<'tu>),

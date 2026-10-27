@@ -4,7 +4,8 @@
 //! a pointer, so it must live in memory rather than in SSA values. Semantic
 //! analysis retained a record for every expression it typed, so one linear
 //! scan over those records finds every `&` operand in the unit without
-//! walking any syntax tree. Arrays and structures, whose elements are
+//! walking any syntax tree; the memory operands of `asm` statements are
+//! addressed too. Arrays and structures, whose elements are
 //! addressed implicitly, live in memory whatever this finds.
 //! C99: §6.5.3.2 paragraph 3, pp. 78-79; PDF pp. 90-91.
 
@@ -14,7 +15,10 @@ use crate::{
             ExpressionType,
             UnaryOperator,
         },
-        semantic_analysis::SemanticTranslationUnit,
+        semantic_analysis::{
+            AsmOperandKind,
+            SemanticTranslationUnit,
+        },
     },
     util::bump::{
         ArenaSet,
@@ -77,6 +81,19 @@ pub(super) fn find<'a>(
             && let Some(binding) = operand.binding
         {
             _ = taken.insert(binding);
+        }
+    }
+    // A memory operand of inline assembly is addressed by the assembly.
+    // GNU extension: GCC manual, "Extended Asm".
+    for statement in sema.assembly.iter() {
+        for operand in statement.operands {
+            if operand.kind == AsmOperandKind::Memory
+                && let Some(designation) = sema.designation(operand.expression)
+                && matches!(designation.leaf.kind, ExpressionType::Identifier(_))
+                && let Some(binding) = designation.binding
+            {
+                _ = taken.insert(binding);
+            }
         }
     }
     // A GNU cleanup function receives its variable's address on every exit.

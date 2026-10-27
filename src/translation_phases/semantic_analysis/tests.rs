@@ -11,12 +11,14 @@ use super::{
 };
 use crate::translation_phases::TranslationError;
 
+mod assembly;
 mod atomics;
 mod attributes;
 mod bit_field_alignment;
 mod bit_field_results;
 mod builtin_names;
 mod checked_builtins;
+mod compound_literal_statics;
 mod control_facts;
 mod correspondence;
 mod diagnostic_parity;
@@ -26,6 +28,7 @@ mod float128;
 mod fortify;
 mod initializer_plans;
 mod int128;
+mod interchange_floats;
 mod labels_as_values;
 mod library_modes;
 mod math_builtins;

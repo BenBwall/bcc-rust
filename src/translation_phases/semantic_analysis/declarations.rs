@@ -100,6 +100,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None
                 }
             },
+            | S::Extended(super::ExtendedType::InterchangeFloat { format, complex }) => {
+                use super::InterchangeFloat as F;
+                let target = self.context.configuration.target();
+                let real = match format {
+                    | F::Float32 => Some(Scalar::Float32),
+                    | F::Float64 => Some(Scalar::Float64),
+                    | F::Float32x => Some(Scalar::Float32x),
+                    // GCC's `_Float128` and `__float128` are one type.
+                    | F::Float128 => target.float128_type().then_some(Scalar::Float128),
+                    | F::Float64x =>
+                        (!target.layout().long_double_is_double()).then_some(Scalar::Float64x),
+                };
+                if real.is_none() {
+                    self.error(
+                        SemanticErrorKind::UnsupportedInterchangeFloat,
+                        source,
+                        None,
+                        None,
+                    );
+                }
+                real.map(|real| if *complex { real.complex_type() } else { real })
+            },
             | S::Float => Some(Scalar::Float),
             | S::Double => Some(Scalar::Double),
             | S::LongDouble => Some(Scalar::LongDouble),
@@ -173,7 +195,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.values.push(ty);
                 if define {
                     let attributes = self.layout_attribute_chain(s.attributes);
-                    self.types.tags[tag].packed.set(attributes.packed);
+                    // GCC's `-fpack-struct` packs every structure and union
+                    // as the `packed` attribute does.
+                    self.types.tags[tag]
+                        .packed
+                        .set(attributes.packed || self.context.configuration.pack_structures());
                     self.types.tags[tag].alignment.set(attributes.alignment);
                     let before = self
                         .pack_alignments

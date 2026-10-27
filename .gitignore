@@ -7,6 +7,8 @@
 # Proptest failure seeds are tracked; proptest names each file after its test's
 # source path. Turn a shrunk case into a named regression test when it is fixed.
 !/proptest-regressions/**/*.txt
+# The site embeds the precomputed compiler outputs in web/pipeline/.
+!/web/pipeline/**/*.txt
 **/.DS_Store
 *.out
 flamegraph.svg

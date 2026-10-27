@@ -1,8 +1,9 @@
 //! C99 real math aliases and infinity/NaN constructors. Contracts cover each
-//! float, double and long-double signature; the back ends use the C libm ABI.
-//! Existing fabs/floor contracts stay in `library`; copysign and classification
-//! retain their scalar operations. GNU extension: GCC "Library Builtins" and
-//! "Other Builtins", <https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html>.
+//! float, double and long-double signature, and the infinity and NaN
+//! constructors cover the `_FloatN` types too; the back ends use the C libm
+//! ABI. Existing fabs/floor contracts stay in `library`; copysign and
+//! classification retain their scalar operations. GNU extension: GCC "Library
+//! Builtins" and "Other Builtins", <https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html>.
 //! C99: §7.12p3-5, pp. 212-213; PDF pp. 224-225 (math constants);
 //! §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251 (real math families).
 
@@ -21,7 +22,10 @@ use super::{
     SyntaxForm,
     TypeRule,
 };
-use crate::target::Scalar as S;
+use crate::{
+    configuration::Feature,
+    target::Scalar as S,
+};
 
 pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     descriptor(Id::LibraryAcos, "__builtin_acos", "acos", DoubleUnary),
@@ -213,6 +217,38 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         S::Float,
         false,
     ),
+    interchange_constant_descriptor(
+        Id::HugeValf32,
+        "__builtin_huge_valf32",
+        None,
+        Float32Nullary,
+        S::Float32,
+        false,
+    ),
+    interchange_constant_descriptor(
+        Id::HugeValf32x,
+        "__builtin_huge_valf32x",
+        None,
+        Float32xNullary,
+        S::Float32x,
+        false,
+    ),
+    interchange_constant_descriptor(
+        Id::HugeValf64,
+        "__builtin_huge_valf64",
+        None,
+        Float64Nullary,
+        S::Float64,
+        false,
+    ),
+    interchange_constant_descriptor(
+        Id::HugeValf64x,
+        "__builtin_huge_valf64x",
+        None,
+        Float64xNullary,
+        S::Float64x,
+        false,
+    ),
     constant_descriptor(
         Id::HugeVall,
         "__builtin_huge_vall",
@@ -261,6 +297,38 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         None,
         FloatNullary,
         S::Float,
+        false,
+    ),
+    interchange_constant_descriptor(
+        Id::Inff32,
+        "__builtin_inff32",
+        None,
+        Float32Nullary,
+        S::Float32,
+        false,
+    ),
+    interchange_constant_descriptor(
+        Id::Inff32x,
+        "__builtin_inff32x",
+        None,
+        Float32xNullary,
+        S::Float32x,
+        false,
+    ),
+    interchange_constant_descriptor(
+        Id::Inff64,
+        "__builtin_inff64",
+        None,
+        Float64Nullary,
+        S::Float64,
+        false,
+    ),
+    interchange_constant_descriptor(
+        Id::Inff64x,
+        "__builtin_inff64x",
+        None,
+        Float64xNullary,
+        S::Float64x,
         false,
     ),
     constant_descriptor(
@@ -441,6 +509,38 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         Some("nanf"),
         FloatNan,
         S::Float,
+        true,
+    ),
+    interchange_constant_descriptor(
+        Id::LibraryNanf32,
+        "__builtin_nanf32",
+        Some("nanf32"),
+        Float32Nan,
+        S::Float32,
+        true,
+    ),
+    interchange_constant_descriptor(
+        Id::LibraryNanf32x,
+        "__builtin_nanf32x",
+        Some("nanf32x"),
+        Float32xNan,
+        S::Float32x,
+        true,
+    ),
+    interchange_constant_descriptor(
+        Id::LibraryNanf64,
+        "__builtin_nanf64",
+        Some("nanf64"),
+        Float64Nan,
+        S::Float64,
+        true,
+    ),
+    interchange_constant_descriptor(
+        Id::LibraryNanf64x,
+        "__builtin_nanf64x",
+        Some("nanf64x"),
+        Float64xNan,
+        S::Float64x,
         true,
     ),
     constant_descriptor(
@@ -712,6 +812,28 @@ const fn constant_descriptor(
     }
 }
 
+/// A constant builtin of an interchange or extended floating type, which
+/// exists where the type's keyword does.
+/// GNU extension: GCC manual, "Other Builtins", `__builtin_huge_valfN`,
+/// `__builtin_inffN` and `__builtin_nanfN`.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+const fn interchange_constant_descriptor(
+    id: Id,
+    spelling: &'static str,
+    library: Option<&'static str>,
+    contract: Contract,
+    scalar: S,
+    nan: bool,
+) -> BuiltinDescriptor {
+    BuiltinDescriptor {
+        availability: Availability {
+            feature: Some(Feature::InterchangeFloatTypes),
+            naming:  NamingPolicy::Reserved,
+        },
+        ..constant_descriptor(id, spelling, library, contract, scalar, nan)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Contract {
     signature: Signature,
@@ -762,6 +884,14 @@ contract!(FloatLongLongResult, T::Scalar(S::LongLong); T::Scalar(S::Float));
 contract!(FloatNan, T::Scalar(S::Float); T::Pointer(S::Char, true));
 contract!(FloatNexttoward, T::Scalar(S::Float); T::Scalar(S::Float), T::Scalar(S::LongDouble));
 contract!(LongDoubleNullary, T::Scalar(S::LongDouble); );
+contract!(Float32Nullary, T::Scalar(S::Float32); );
+contract!(Float32Nan, T::Scalar(S::Float32); T::Pointer(S::Char, true));
+contract!(Float32xNullary, T::Scalar(S::Float32x); );
+contract!(Float32xNan, T::Scalar(S::Float32x); T::Pointer(S::Char, true));
+contract!(Float64Nullary, T::Scalar(S::Float64); );
+contract!(Float64Nan, T::Scalar(S::Float64); T::Pointer(S::Char, true));
+contract!(Float64xNullary, T::Scalar(S::Float64x); );
+contract!(Float64xNan, T::Scalar(S::Float64x); T::Pointer(S::Char, true));
 contract!(LongDoubleUnary, T::Scalar(S::LongDouble); T::Scalar(S::LongDouble));
 contract!(LongDoubleBinary, T::Scalar(S::LongDouble); T::Scalar(S::LongDouble), T::Scalar(S::LongDouble));
 contract!(LongDoubleTernary, T::Scalar(S::LongDouble); T::Scalar(S::LongDouble), T::Scalar(S::LongDouble), T::Scalar(S::LongDouble));

@@ -182,15 +182,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => Scalar::Int,
                 };
                 info.ty = self.types.scalar(scalar);
-                let mut value = i128::from(value.target_value(&self.types.target));
-                if matches!(
-                    e.kind,
-                    E::Constant(Constant::Char(CharacterTokenType::Char(_)))
-                ) && self.types.target.char_signed
-                    && (128..=255).contains(&value)
-                {
-                    value -= 256;
-                }
+                let value = i128::from(value.target_value(&self.types.target));
                 let (bits, signed) = self
                     .integer_type(info.ty)
                     .expect("character type is integer");
@@ -237,15 +229,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::ImaginaryFloat(_) => Scalar::ComplexFloat,
                     | FloatTokenType::ImaginaryDouble(_) => Scalar::ComplexDouble,
                     | FloatTokenType::ImaginaryLongDouble(_) => Scalar::ComplexLongDouble,
+                    | FloatTokenType::Float32(_) => Scalar::Float32,
+                    | FloatTokenType::Float64(_) => Scalar::Float64,
+                    | FloatTokenType::Float32x(_) => Scalar::Float32x,
+                    | FloatTokenType::Float64x(_) => Scalar::Float64x,
                     | _ => {
                         self.retain_expression(info);
                         return;
                     },
                 });
                 info.floating = Some(Floating::real(match value {
-                    | FloatTokenType::Float(value) => LongDouble::from_double(f64::from(value)),
-                    | FloatTokenType::Double(value) => LongDouble::from_double(value.get()),
-                    | FloatTokenType::LongDouble(value) => value,
+                    | FloatTokenType::Float(value) | FloatTokenType::Float32(value) =>
+                        LongDouble::from_double(f64::from(value)),
+                    | FloatTokenType::Double(value)
+                    | FloatTokenType::Float64(value)
+                    | FloatTokenType::Float32x(value) => LongDouble::from_double(value.get()),
+                    | FloatTokenType::LongDouble(value) | FloatTokenType::Float64x(value) => value,
                     | _ => LongDouble::ZERO,
                 }));
                 info.floating = match value {

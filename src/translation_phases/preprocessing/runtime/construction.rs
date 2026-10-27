@@ -146,6 +146,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,
                     deprecated_macros: ArenaMap::with_hasher_in(FxBuildHasher, pp),
+                    pushed_macros: ArenaVec::new_in(pp),
                     lexed_files,
                     file_frames,
                     command_line_file,

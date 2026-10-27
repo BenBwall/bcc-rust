@@ -59,6 +59,11 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     ),
     // GCC's signaling NaN of type double, folded like `__builtin_nan`.
     math128(Id::Nans, "__builtin_nans", S::Double, 1, true, false),
+    // GCC's signaling NaNs of the interchange and extended types.
+    interchange_math128(Id::Nansf32, "__builtin_nansf32", S::Float32),
+    interchange_math128(Id::Nansf32x, "__builtin_nansf32x", S::Float32x),
+    interchange_math128(Id::Nansf64, "__builtin_nansf64", S::Float64),
+    interchange_math128(Id::Nansf64x, "__builtin_nansf64x", S::Float64x),
     math128(
         Id::HugeValf128,
         "__builtin_huge_valf128",
@@ -108,6 +113,16 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         true,
     ),
 ];
+
+/// GCC's `__builtin_nansfN`: a signaling NaN of an interchange or extended
+/// type, which exists where the type's keyword does.
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+const fn interchange_math128(id: Id, spelling: &'static str, result: S) -> BuiltinDescriptor {
+    let mut descriptor = math128(id, spelling, result, 1, true, false);
+    descriptor.availability.feature = Some(Feature::InterchangeFloatTypes);
+    descriptor
+}
 
 const fn math128(
     id: Id,

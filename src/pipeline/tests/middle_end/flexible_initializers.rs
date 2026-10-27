@@ -111,3 +111,37 @@ fn flexible_array_initializers_match_native_execution() {
         assert_eq!(run_native(&executable).0, 0, "{}", arm.name);
     }
 }
+
+/// A flexible array member of a structure rvalue (a call, comma or
+/// assignment result) designates an array at its offset in the temporary;
+/// it decays without a size to copy (gcc.c-torture/compile/pr16566-*.c).
+/// The GNU nested form in `touch` is only lowered, since the temporary has
+/// no elements to access.
+/// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.5.2.3p3, p. 73; PDF p. 85.
+const RVALUE_MEMBERS: &str = "
+struct A { int n; int x[]; };
+struct C { int i; struct S *tab[]; };
+struct S { struct C c; };
+static struct A make(int n) { struct A a = { n }; return a; }
+static void touch(struct S *x) {
+    if (x) { touch(((void)1, x->c).tab[0]); ((void)1, x->c).tab[0] = 0; }
+}
+int main(void) {
+    struct A a = { 3 }, b = { 5 };
+    struct A *p = &b;
+    if (((void)0, a).x == 0 || make(7).x == 0 || (*p = a).x == 0) return 1;
+    if (((void)0, a).n != 3 || make(7).n != 7 || p->n != 3) return 2;
+    touch(0);
+    return 0;
+}
+";
+
+#[test]
+fn flexible_array_members_of_rvalues_decay_in_all_stages() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for (optimize, profile) in STAGES {
+            let actual = with_module(RVALUE_MEMBERS, target, optimize, profile, interpret);
+            assert_eq!(actual.0, 0, "{target:?} {optimize} {profile:?}");
+        }
+    }
+}

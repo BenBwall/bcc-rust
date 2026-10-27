@@ -146,7 +146,7 @@ pp	InvalidCharacterInHeaderName	pp-invalid-character-in-header-name.c	rendered
 pp	InvalidBinaryIntegerLiteral	pp-invalid-binary-integer-literal.c	rendered
 pp	InvalidDecimalFloatLiteral	pp-invalid-decimal-float-literal.c	rendered
 pp	InvalidDecimalIntegerLiteral	pp-invalid-decimal-integer-literal.c	rendered
-pp	InvalidEscapeSequence	pp-invalid-escape-sequence.c	rendered
+pp	UnknownEscapeSequence	pp-unknown-escape-sequence.c	rendered
 pp	InvalidHexEscapeSequence	pp-invalid-hex-escape-sequence.c	rendered
 pp	InvalidHexadecimalFloatLiteral	pp-invalid-hexadecimal-float-literal.c	rendered
 pp	InvalidHexadecimalIntegerLiteral	pp-invalid-hexadecimal-integer-literal.c	rendered

@@ -1,5 +1,6 @@
-//! Messages between the page's engine proxy (`engine.rs`) and the engine
-//! Worker (`bin/engine_worker.rs`). Both ends are built from this crate, and
+//! Messages between the page's Worker proxy (`engine.rs`) and its two
+//! Workers, the abstract machine (`bin/engine_worker.rs`) and the compiler
+//! (`bin/compiler_worker.rs`). All ends are built from this crate, and
 //! messages cross as plain JavaScript values through `serde_wasm_bindgen`.
 
 use serde::{
@@ -7,7 +8,10 @@ use serde::{
     Serialize,
 };
 
-use crate::snapshot::Snapshot;
+use crate::{
+    pipeline::Compilation,
+    snapshot::Snapshot,
+};
 
 /// A page-to-Worker request; the Worker answers each with [`Reply::Done`].
 #[derive(Debug, Deserialize, Serialize)]
@@ -18,10 +22,22 @@ pub struct Request {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Command {
-    /// Compile new source, replacing the current program.
+    /// Compile new source for the abstract machine, replacing the current
+    /// program; answered with a [`Answer::Snapshot`].
     Load(String),
     /// Execute one operation of the current program.
     Step,
+    /// Run bcc's real compiler over `source`, at `-O2` when `optimize`;
+    /// answered by the compiler Worker with [`Answer::Compiled`] (see
+    /// `explorer.rs`).
+    Compile { source: String, optimize: bool },
+}
+
+/// A Worker's answer to one request.
+#[derive(Debug, Deserialize, Serialize)]
+pub enum Answer {
+    Snapshot(Box<Snapshot>),
+    Compiled(Box<Compilation>),
 }
 
 /// A Worker-to-page message.
@@ -32,6 +48,6 @@ pub enum Reply {
     Ready,
     Done {
         id:     u32,
-        result: Result<Box<Snapshot>, String>,
+        result: Result<Answer, String>,
     },
 }

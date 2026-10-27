@@ -301,6 +301,93 @@ int main(void) {
         expected: 15,
     },
     Program {
+        // GNU casts of a structure or union to its own type give its value.
+        name:     "same_type_aggregate_casts",
+        source:   "struct S { int a, b; } s = {1, 2};
+union U { int i; float f; } u = {5};
+typedef struct S T;
+static struct S get(void) { return (struct S)s; }
+int main(void) {
+  struct S t = (struct S)s;
+  const struct S cs = {3, 4};
+  T v = (T)cs;
+  union U w = (union U)u;
+  return (t.b == 2) + (v.a == 3) * 2 + (((struct S)get()).a == 1) * 4 + (w.i == 5) * 8
+       + (sizeof((struct S)s) == 8) * 16;
+}",
+        expected: 31,
+    },
+    Program {
+        // GNU and MSVC `#pragma push_macro` / `pop_macro`.
+        name:     "push_and_pop_macro",
+        source:   "#define VALUE 1
+#pragma push_macro(\"VALUE\")
+#undef VALUE
+#define VALUE 20
+static int inner(void) { return VALUE; }
+#pragma pop_macro(\"VALUE\")
+int main(void) { return inner() + VALUE; }",
+        expected: 21,
+    },
+    Program {
+        // GNU `\\e` (ESC) and a conditional with one void alternative.
+        name:     "gnu_escape_and_one_void_conditional",
+        source:   "static int calls;
+static void note(void) { calls++; }
+int main(void) {
+  int i = 1;
+  i ? note() : (void)0;
+  i ? (note(), 5) : (void)0;
+  !i ? 7 : note();
+  i ?: note();
+  0 ?: note();
+  return calls * 10 + \"\\e\"[0] + '\\E' - 27;
+}",
+        expected: 67,
+    },
+    Program {
+        // GNU constant compound literals initializing static structures,
+        // members, array elements and a block-scope static.
+        name:     "constant_compound_literal_statics",
+        source:   "struct s { int a, b; const char *n; };
+static int x = 4;
+struct s whole = (struct s){1, 2, \"x\"};
+struct w { struct s inner; int *p; } member = { ((struct s){.b = 3}), &x };
+struct s array[2] = { (struct s){5}, [1] = (struct s){.a = 6, .n = \"yz\"} };
+static int local(void) { static struct s kept = (struct s){7, 8}; return kept.a + kept.b; }
+int main(void) {
+  return whole.a + whole.b + whole.n[0] - 'x' + member.inner.b + *member.p + array[0].a
+       + array[1].a + array[1].n[1] - 'z' + local();
+}",
+        expected: 36,
+    },
+    Program {
+        // GNU scalar compound literals of a static object's own type.
+        name:     "scalar_compound_literal_statics",
+        source:   "static int g = 9;
+static int i = (int){3};
+static double d = ((double){2.5});
+static char ch = (char){300};
+static int braces = (int){{6}};
+static int *p = (int *){&g};
+static _Bool b = (_Bool){2};
+static int local(void) { static long w = (long){7}; return (int)w; }
+int main(void) { return i + (int)(d * 2) + ch + braces + *p + b + local(); }",
+        expected: 75,
+    },
+    Program {
+        // A scalar compound literal of a static bit-field's type converts to
+        // that type and then truncates to the field's width.
+        name:     "scalar_compound_literal_bit_fields",
+        source:   "static struct S { unsigned x:4; int y:3; _Bool b:1; unsigned z:5; } s =
+  {(unsigned){3}, (int){-2}, (_Bool){5}, ((unsigned){0x2b})};
+static struct S t = {.z = (unsigned){{7}}};
+int main(void) {
+  return s.x + (s.y == -2) * 4 + s.b * 8 + (s.z == 11) * 16 + (t.z == 7) * 32;
+}",
+        expected: 63,
+    },
+    Program {
         name:     "old_style_definition",
         source:   "int scale(x, k) char x; int k; { return x * k; }
 int main(void) { return scale(7, 6); }",

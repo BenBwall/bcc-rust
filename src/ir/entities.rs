@@ -87,6 +87,8 @@ entities! {
     GlobalId => "global";
     /// An interned call signature of a module.
     SigId => "sig";
+    /// An inline assembly descriptor of a module.
+    AsmId => "asm";
 }
 
 /// A strict-aliasing access tag: an index into a per-module table of type

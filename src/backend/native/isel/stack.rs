@@ -82,9 +82,10 @@ impl Selector<'_, '_, '_> {
                 src:   Operand::Reg(bytes),
             });
             self.emit(MInst::Call {
-                callee:   Callee::Symbol(SymbolRef::Runtime(probe)),
-                uses:     PRegSet::of(&[PReg::Rax]),
-                clobbers: PRegSet::of(&[PReg::R10, PReg::R11]),
+                callee:        Callee::Symbol(SymbolRef::Runtime(probe)),
+                uses:          PRegSet::of(&[PReg::Rax]),
+                clobbers:      PRegSet::of(&[PReg::R10, PReg::R11]),
+                returns_twice: false,
             });
         }
         let rsp = Reg::Phys(PReg::Rsp);

@@ -170,6 +170,51 @@ pub(crate) enum KeywordTokenType {
     Float128,
     BuiltinConvertVector,
     BuiltinBitCast,
+    Float32,
+    Float64,
+    /// `_Float128`; `Float128` is GNU `__float128`.
+    InterchangeFloat128,
+    Float32x,
+    Float64x,
+}
+
+/// The `_FloatN` and `_FloatNx` keywords bcc provides: the binary
+/// interchange types `_Float32`, `_Float64` and `_Float128`, and the extended
+/// types `_Float32x` and `_Float64x`.
+/// C23: §H.2.2 paragraph 3, p. 553; PDF p. 566; §H.2.4 paragraph 2, p. 554;
+/// PDF p. 567.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum InterchangeFloat {
+    Float32,
+    Float64,
+    Float128,
+    Float32x,
+    Float64x,
+}
+
+impl InterchangeFloat {
+    /// The format a type keyword names.
+    pub(crate) const fn from_keyword(keyword: KeywordTokenType) -> Option<Self> {
+        Some(match keyword {
+            | KeywordTokenType::Float32 => Self::Float32,
+            | KeywordTokenType::Float64 => Self::Float64,
+            | KeywordTokenType::InterchangeFloat128 => Self::Float128,
+            | KeywordTokenType::Float32x => Self::Float32x,
+            | KeywordTokenType::Float64x => Self::Float64x,
+            | _ => return None,
+        })
+    }
+
+    /// The keyword as written in C source.
+    pub(crate) const fn spelling(self) -> &'static str {
+        match self {
+            | Self::Float32 => "_Float32",
+            | Self::Float64 => "_Float64",
+            | Self::Float128 => "_Float128",
+            | Self::Float32x => "_Float32x",
+            | Self::Float64x => "_Float64x",
+        }
+    }
 }
 
 /// A `punctuator`. Digraphs map to the punctuators they behave as (§6.4.6
@@ -261,6 +306,14 @@ pub(crate) enum FloatTokenType {
     ImaginaryLongDouble(LongDouble),
     Float128(crate::binary128::Binary128),
     ImaginaryFloat128(crate::binary128::Binary128),
+    /// `_Float32`, `_Float64`, `_Float32x` and `_Float64x` constants, with
+    /// the values of the standard types whose representation they share;
+    /// an `f128` constant is [`Self::Float128`].
+    /// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573.
+    Float32(f32),
+    Float64(Packed<f64>),
+    Float32x(Packed<f64>),
+    Float64x(LongDouble),
 }
 
 /// A `character-constant` and its value.
@@ -411,6 +464,10 @@ impl FloatTokenType {
             | Self::ImaginaryFloat(_) => "float _Complex",
             | Self::ImaginaryDouble(_) => "double _Complex",
             | Self::ImaginaryLongDouble(_) => "long double _Complex",
+            | Self::Float32(_) => "_Float32",
+            | Self::Float64(_) => "_Float64",
+            | Self::Float32x(_) => "_Float32x",
+            | Self::Float64x(_) => "_Float64x",
         }
     }
 }
@@ -434,12 +491,23 @@ impl LiteralEncoding {
 }
 
 impl CharacterTokenType {
-    /// Interpret a wide code unit in the target's `wchar_t` representation.
-    /// Narrow preprocessing values retain the existing implementation choice.
-    /// C99: §6.4.4.4p11, p. 61; PDF p. 73; §6.10.1p4, p. 148; PDF p. 160.
+    /// The value of the constant under `target`: a wide code unit in the
+    /// representation of `wchar_t`, and a one-byte narrow constant as a
+    /// plain `char` converted to `int`, so negative where `char` is signed
+    /// (`'\xff'` is -1), in `#if` (§6.10.1p4) as in phase 7. Other
+    /// constants keep their stored value.
+    /// C99: §6.4.4.4p10-11, p. 61; PDF p. 73; §6.10.1p4, p. 148; PDF p. 160.
     pub(crate) fn target_value(self, target: &crate::target::TargetLayout) -> i64 {
         let Self::WideChar(unit) = self else {
-            return self.into();
+            let value = self.into();
+            return if matches!(self, Self::Char(_))
+                && target.char_signed
+                && (128..=255).contains(&value)
+            {
+                value - 256
+            } else {
+                value
+            };
         };
         let (bits, signed) = target.integer(target.wchar_t).unwrap();
         let value = i64::from(unit & (u32::MAX >> (32 - bits)));
@@ -663,6 +731,11 @@ impl KeywordTokenType {
         Self::Float128,
         Self::BuiltinConvertVector,
         Self::BuiltinBitCast,
+        Self::Float32,
+        Self::Float64,
+        Self::InterchangeFloat128,
+        Self::Float32x,
+        Self::Float64x,
     ];
 
     /// Classifies an identifier after preprocessing has finished. It is an
@@ -798,6 +871,17 @@ impl KeywordTokenType {
                 | Self::Float128 => (
                     configuration.accepts(Feature::Float128),
                     Some(Feature::Float128.origin()),
+                ),
+                // Reserved identifiers that glibc declares as typedefs for
+                // compilers it does not know to provide them, as for the
+                // Clang identity.
+                | Self::Float32
+                | Self::Float64
+                | Self::InterchangeFloat128
+                | Self::Float32x
+                | Self::Float64x => (
+                    configuration.accepts(Feature::InterchangeFloatTypes),
+                    Some(Feature::InterchangeFloatTypes.origin()),
                 ),
                 | Self::Int128 => (
                     configuration.accepts(Feature::Int128),
@@ -990,6 +1074,11 @@ impl KeywordTokenType {
             | Self::Leave => "__leave",
             | Self::MsAsm => "__asm",
             | Self::Pragma => "__pragma",
+            | Self::Float32 => "_Float32",
+            | Self::Float64 => "_Float64",
+            | Self::InterchangeFloat128 => "_Float128",
+            | Self::Float32x => "_Float32x",
+            | Self::Float64x => "_Float64x",
         }
     }
 }
@@ -1146,11 +1235,11 @@ impl From<IntegerTokenType> for i128 {
 impl Display for FloatTokenType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            | Self::Float(v) => write!(f, "{v}"),
+            | Self::Float(v) | Self::Float32(v) => write!(f, "{v}"),
             | Self::ImaginaryFloat(v) => write!(f, "{v}i"),
-            | Self::Double(v) => write!(f, "{v}"),
+            | Self::Double(v) | Self::Float64(v) | Self::Float32x(v) => write!(f, "{v}"),
             | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
-            | Self::LongDouble(v) => write!(f, "{v}"),
+            | Self::LongDouble(v) | Self::Float64x(v) => write!(f, "{v}"),
             | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
             | Self::Float128(v) => write!(f, "{v}"),
             | Self::ImaginaryFloat128(v) => write!(f, "{v}i"),
@@ -1158,12 +1247,10 @@ impl Display for FloatTokenType {
     }
 }
 
-/// The stored value before target-wide signedness is applied. A one-byte
-/// narrow constant is
-/// never negative here, which C99 leaves implementation-defined (§6.10.1
-/// paragraph 4, p. 148; PDF p. 160). Whether plain `char` is signed in
-/// phase 7 (§6.2.5 paragraph 15, p. 35; PDF p. 47) is left to semantic
-/// analysis.
+/// The stored value before target-wide signedness is applied: a one-byte
+/// narrow constant is never negative here.
+/// [`CharacterTokenType::target_value`] applies whether plain `char` is
+/// signed (§6.2.5 paragraph 15, p. 35; PDF p. 47).
 impl From<CharacterTokenType> for i64 {
     fn from(v: CharacterTokenType) -> Self {
         match v {

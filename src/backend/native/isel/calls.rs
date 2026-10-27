@@ -61,6 +61,7 @@ use crate::{
         support::Construct,
     },
     ir::{
+        Entity,
         Extension,
         Inst,
         InstData,
@@ -472,6 +473,16 @@ impl Selector<'_, '_, '_> {
             }
         }
         self.call_sequence(callee, &passed, signature.variadic);
+        let twice = match data {
+            | InstData::Call { func, .. } => self.module.returns_twice(func),
+            | _ => self.indirect_returns_twice,
+        };
+        if twice
+            && let Some(MInst::Call { returns_twice, .. }) =
+                self.func.blocks[self.current.index()].insts.last_mut()
+        {
+            *returns_twice = true;
+        }
         let result = body.inst_result(inst);
         if let Some(result) = result
             && let ValueKind::Pair(low, high) = self.kind(result)
@@ -690,6 +701,7 @@ impl Selector<'_, '_, '_> {
             callee,
             uses,
             clobbers: self.conv.caller_saved,
+            returns_twice: false,
         });
     }
 

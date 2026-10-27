@@ -2,6 +2,7 @@
 //! poison: wrapping at every width, signed and unsigned forms.
 
 use super::*;
+use crate::x87::X87;
 
 /// The result of `opcode.ty flags v0, v1` on `a` and `b`.
 pub(super) fn binary(opcode: &str, ty: &str, a: u128, b: u128) -> RuntimeValue {
@@ -213,13 +214,172 @@ fn float_comparisons_handle_nan() {
     }
 }
 
+/// x87 `f80` values compute as the processor does: 1/3 rounds up in its
+/// last of 64 bits, stores keep all ten bytes, and conversions round to
+/// the narrower formats.
 #[test]
-fn wide_floats_are_unsupported() {
+fn extended_floats_compute_as_the_x87_unit_does() {
     let text = "\
-function @f() -> i32 external {
+function @f(ptr) -> f80 external {
+block0(v0: ptr):
+    v1 = fconst.f80 0x3FFF8000000000000000
+    v2 = iconst.i32 3
+    v3 = sitofp.f80 v2
+    v4 = fdiv.f80 v1, v3
+    store.f80 v4, v0, align 16
+    v5 = load.f80 v0, align 16
+    return v5
+}
+function @g() -> f80 external {
+    slot0 = stack_slot 16, align 16
 block0:
-    v0 = fconst.f80 0x3FFF8000000000000000
-    v1 = iconst.i32 0
+    v0 = stack_addr slot0
+    v1 = call @f(v0)
+    return v1
+}
+";
+    assert_eq!(
+        returned(text, "g"),
+        RuntimeValue::F80(X87::from_bits(0x3FFD_AAAA_AAAA_AAAA_AAAB))
+    );
+    let text = "\
+function @f() -> i64 external {
+block0:
+    v0 = fconst.f80 0x403EFFFFFFFFFFFFFFFF
+    v1 = fptoui.i64 v0
+    return v1
+}
+";
+    assert_eq!(returned(text, "f"), int(u128::from(u64::MAX)));
+    let text = "\
+function @f() -> f64 external {
+block0:
+    v0 = fconst.f80 0x3FFDAAAAAAAAAAAAAAAB
+    v1 = fptrunc.f64 v0
+    return v1
+}
+";
+    assert_eq!(returned(text, "f"), RuntimeValue::F64(1.0 / 3.0));
+    // An unnormal is an invalid operand: unordered with itself.
+    let text = "\
+function @f() -> i1 external {
+block0:
+    v0 = fconst.f80 0x3FFF4000000000000000
+    v1 = fcmp.f80 uno v0, v0
+    return v1
+}
+";
+    assert_eq!(returned(text, "f"), int(1));
+}
+
+/// `fptosi` and `fptoui` from x87 values give the truncated integer at the
+/// edges of every width and poison just past them; `sitofp` and `uitofp`
+/// from `i128` round ties to even.
+#[test]
+fn extended_integer_conversions_poison_just_outside_each_width() {
+    let convert = |op: &str, to: &str, value: X87| {
+        let text = format!(
+            "function @f() -> {to} external {{\nblock0:\n    v0 = fconst.f80 0x{:020X}\n    v1 = \
+             {op}.{to} v0\n    return v1\n}}\n",
+            value.to_bits()
+        );
+        returned(&text, "f")
+    };
+    let half = X87::from_f64(0.5);
+    for (to, bits) in [
+        ("i8", 8),
+        ("i16", 16),
+        ("i32", 32),
+        ("i64", 64),
+        ("i128", 128),
+    ] {
+        let minimum = 1_u128 << (bits - 1);
+        let mask = u128::MAX >> (128 - bits);
+        let at_minimum = X87::from_integer(true, minimum);
+        let below = X87::from_integer(true, minimum + if bits == 128 { 1 << 64 } else { 1 });
+        assert_eq!(convert("fptosi", to, at_minimum), int(minimum), "{to}");
+        assert_eq!(convert("fptosi", to, below), RuntimeValue::Poison, "{to}");
+        assert_eq!(
+            convert("fptosi", to, X87::from_integer(false, minimum)),
+            RuntimeValue::Poison,
+            "{to}"
+        );
+        assert_eq!(convert("fptoui", to, half.negate()), int(0), "{to}");
+        assert_eq!(
+            convert("fptoui", to, X87::from_integer(true, 1)),
+            RuntimeValue::Poison,
+            "{to}"
+        );
+        let top = if bits == 128 {
+            mask - ((1 << 64) - 1)
+        } else {
+            mask
+        };
+        assert_eq!(
+            convert("fptoui", to, X87::from_integer(false, top)),
+            int(top),
+            "{to}"
+        );
+        assert_eq!(
+            convert(
+                "fptoui",
+                to,
+                X87::from_integer(false, mask).add(X87::from_integer(false, 1))
+            ),
+            RuntimeValue::Poison,
+            "{to}"
+        );
+        if bits < 64 {
+            let maximum = X87::from_integer(false, minimum - 1).add(half);
+            assert_eq!(convert("fptosi", to, maximum), int(minimum - 1), "{to}");
+        }
+    }
+    let from = |op: &str, bits: u128| {
+        let text = format!(
+            "function @f() -> f80 external {{\nblock0:\n    v0 = iconst.i128 {}\n    v1 = \
+             {op}.f80 v0\n    return v1\n}}\n",
+            bits.cast_signed()
+        );
+        returned(&text, "f")
+    };
+    for (bits, signed, unsigned) in [
+        (
+            (1_u128 << 64) + 1,
+            X87::from_integer(false, 1 << 64),
+            X87::from_integer(false, 1 << 64),
+        ),
+        (
+            1 << 127,
+            X87::from_integer(true, 1 << 127),
+            X87::from_integer(false, 1 << 127),
+        ),
+        (
+            (1 << 127) + (3 << 63),
+            X87::from_integer(true, (1 << 127) - (3 << 63)),
+            X87::from_integer(false, (1 << 127) + (1 << 65)),
+        ),
+        (
+            u128::MAX,
+            X87::from_integer(true, 1),
+            X87::from_integer(false, u128::MAX),
+        ),
+    ] {
+        assert_eq!(from("sitofp", bits), RuntimeValue::F80(signed), "{bits:#x}");
+        assert_eq!(
+            from("uitofp", bits),
+            RuntimeValue::F80(unsigned),
+            "{bits:#x}"
+        );
+    }
+}
+
+#[test]
+fn binary128_arithmetic_is_unsupported() {
+    let text = "\
+function @f() -> f128 external {
+block0:
+    v0 = fconst.f128 0x3FFF0000000000000000000000000000
+    v1 = fadd.f128 v0, v0
     return v1
 }
 ";

@@ -23,6 +23,7 @@ use std::{
 use llvm_sys::{
     LLVMDLLStorageClass,
     LLVMDiagnosticSeverity,
+    LLVMInlineAsmDialect,
     LLVMIntPredicate,
     LLVMLinkage,
     LLVMOpcode,
@@ -92,6 +93,7 @@ use llvm_sys::{
         LLVMCreateEnumAttribute,
         LLVMCreateMemoryBufferWithMemoryRange,
         LLVMCreateMessage,
+        LLVMCreateStringAttribute,
         LLVMCreateTypeAttribute,
         LLVMDisposeBuilder,
         LLVMDisposeMemoryBuffer,
@@ -108,6 +110,7 @@ use llvm_sys::{
         LLVMGetDiagInfoSeverity,
         LLVMGetEnumAttributeKindForName,
         LLVMGetFirstFunction,
+        LLVMGetInlineAsm,
         LLVMGetIntrinsicDeclaration,
         LLVMGetNamedFunction,
         LLVMGetNamedGlobalAlias,
@@ -1370,6 +1373,33 @@ impl<'id> Session<'id> {
         )
     }
 
+    /// An AT&T inline assembly callee of type `ty` with LLVM's template and
+    /// constraint syntax.
+    pub(super) fn inline_asm(
+        &self,
+        ty: Ty<'id>,
+        template: &str,
+        constraints: &str,
+        side_effects: bool,
+    ) -> Val<'id> {
+        // SAFETY: LLVM reads the two counted strings during the call; the
+        // function type belongs to this live session by the type system.
+        let raw = unsafe {
+            LLVMGetInlineAsm(
+                ty.0,
+                template.as_ptr().cast(),
+                template.len(),
+                constraints.as_ptr().cast(),
+                constraints.len(),
+                i32::from(side_effects),
+                0,
+                LLVMInlineAsmDialect::LLVMInlineAsmDialectATT,
+                0,
+            )
+        };
+        Val(raw, PhantomData)
+    }
+
     pub(super) fn intrinsic(&self, name: &str, overloads: &[Ty<'id>]) -> (Val<'id>, Ty<'id>) {
         // SAFETY: The intrinsic lookup reads the counted name.
         let id = unsafe { LLVMLookupIntrinsicID(name.as_ptr().cast(), name.len()) };
@@ -1419,6 +1449,28 @@ impl<'id> Session<'id> {
             unsafe {
                 LLVMAddAttributeAtIndex(value.0, index, attribute);
             }
+        }
+    }
+
+    /// Adds the string attribute `key`=`value` to the function `function`.
+    pub(super) fn string_attribute(&self, function: Val<'id>, key: &str, value: &str) {
+        let key_length = u32::try_from(key.len()).expect("attribute key fits in u32");
+        let value_length = u32::try_from(value.len()).expect("attribute value fits in u32");
+        // SAFETY: The counted key and value are valid while LLVM copies them
+        // into the context.
+        let attribute = unsafe {
+            LLVMCreateStringAttribute(
+                self.context,
+                key.as_ptr().cast(),
+                key_length,
+                value.as_ptr().cast(),
+                value_length,
+            )
+        };
+        // SAFETY: The type system ties the function to this live session;
+        // the function index addresses its function attributes.
+        unsafe {
+            LLVMAddAttributeAtIndex(function.0, u32::MAX, attribute);
         }
     }
 

@@ -14,6 +14,9 @@ use super::{
 };
 
 pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
+    if name == "lock" {
+        return locked(args);
+    }
     let mut code = Code {
         bytes: [0; 15],
         len:   0,
@@ -23,6 +26,7 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
     match name {
         | "retq" | "callq" | "jmpq" => code.control_transfer(name, args, a)?,
         | "ud2" => code.raw(&[0x0F, 0x0B])?,
+        | "mfence" => code.raw(&[0x0F, 0xAE, 0xF0])?,
         | "int3" => code.byte(0xCC)?,
         | "cltd" => code.byte(0x99)?,
         | "cqto" => code.raw(&[0x48, 0x99])?,
@@ -332,6 +336,26 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
                 code.integer(a.imm()?, 1)?;
             }
         },
+        // `xchg`, `xadd` and `cmpxchg` of a register into memory.
+        | name if ["xchg", "xadd", "cmpxchg"].contains(&&name[..name.len() - 1]) => {
+            let bits = width(name)?;
+            let opcode: &[u8] = match (&name[..name.len() - 1], bits == 8) {
+                | ("xchg", true) => &[0x86],
+                | ("xchg", false) => &[0x87],
+                | ("xadd", true) => &[0x0F, 0xC0],
+                | ("xadd", false) => &[0x0F, 0xC1],
+                | (_, true) => &[0x0F, 0xB0],
+                | (_, false) => &[0x0F, 0xB1],
+            };
+            code.rm(
+                if bits == 16 { &[0x66] } else { &[] },
+                bits == 64,
+                bits == 8,
+                opcode,
+                a.reg()?,
+                b,
+            )?;
+        },
         | name if name.starts_with("bswap") => {
             let r = a.reg()?;
             code.rex(width(name)? == 64, 0, 0, r, false)?;
@@ -491,6 +515,37 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
     Ok(code)
 }
 
+/// A `lock`-prefixed instruction: a read-modify-write of a memory
+/// destination, `xadd`, `cmpxchg`, or `add`, `sub`, `and`, `or` and `xor`
+/// (Intel SDM Volume 2, "LOCK—Assert LOCK# Signal Prefix"). Legacy
+/// prefixes may come in any order; the prefix goes after an operand-size
+/// prefix, where the assembler puts it.
+fn locked(args: &str) -> Result<Code<'_>> {
+    let (name, rest) = args
+        .split_once(char::is_whitespace)
+        .ok_or(Error("lock prefix without an instruction"))?;
+    let stem = name
+        .get(..name.len().saturating_sub(1))
+        .ok_or(Error("unknown locked instruction"))?;
+    if !matches!(
+        stem,
+        "xadd" | "cmpxchg" | "add" | "sub" | "and" | "or" | "xor"
+    ) {
+        return Err(Error("unknown locked instruction"));
+    }
+    let rest = rest.trim_start();
+    if !matches!(operands(name, rest)?[1], Operand::Mem { .. }) {
+        return Err(Error("a locked instruction needs a memory destination"));
+    }
+    let mut code = instruction(name, rest)?;
+    let at = code.bytes[..usize::from(code.len)]
+        .iter()
+        .take_while(|&&byte| byte == 0x66)
+        .count();
+    code.insert(at, 0xF0)?;
+    Ok(code)
+}
+
 fn operands<'a>(name: &str, args: &'a str) -> Result<[Operand<'a>; 3]> {
     if !name.is_ascii() {
         return Err(Error("unknown machine instruction"));
@@ -563,7 +618,7 @@ fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
                     .map_err(|_| Error("return adjustment exceeds 16 bits"))?;
                 Ok(())
             },
-        | "ud2" | "int3" | "cltd" | "cqto" => form(&[]),
+        | "ud2" | "int3" | "cltd" | "cqto" | "mfence" => form(&[]),
         | "callq" | "jmpq" =>
             if args.starts_with('*') {
                 form(&[Rm(64)])
@@ -665,6 +720,7 @@ fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
                 | "neg" | "idiv" | "div" | "mul" => form(&[Rm(bits)]),
                 | "bswap" if matches!(bits, 32 | 64) => form(&[Reg(bits)]),
                 | "bsr" | "bsf" if bits != 8 => form(&[Rm(bits), Reg(bits)]),
+                | "xchg" | "xadd" | "cmpxchg" => form(&[Reg(bits), Mem]),
                 | "add" | "or" | "adc" | "sbb" | "and" | "sub" | "xor" | "cmp" | "test" => {
                     if matches!(a, Operand::Imm(_)) {
                         form(&[Imm, Rm(bits)])
@@ -754,6 +810,22 @@ pub(super) struct Fixup<'a> {
 }
 
 impl<'a> Code<'a> {
+    /// Inserts a prefix byte at `at`, among the legacy prefixes before
+    /// any REX prefix, opcode or fixup.
+    fn insert(&mut self, at: usize, byte: u8) -> Result<()> {
+        let len = usize::from(self.len);
+        if len >= self.bytes.len() {
+            return Err(Error("instruction exceeds 15 bytes"));
+        }
+        self.bytes.copy_within(at..len, at + 1);
+        self.bytes[at] = byte;
+        self.len += 1;
+        if let Some(fixup) = &mut self.fixup {
+            fixup.at += 1;
+        }
+        Ok(())
+    }
+
     fn rm(
         &mut self,
         prefix: &[u8],

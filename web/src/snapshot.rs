@@ -11,18 +11,20 @@ use serde::{
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
-    pub step:                 usize,
-    pub status:               String,
-    pub location:             Option<Range>,
-    #[serde(default)]
-    pub event:                String,
-    pub stack:                Vec<Frame>,
-    pub objects:              Vec<Object>,
-    pub effects:              Vec<String>,
-    #[serde(default)]
-    pub sequence_explanation: String,
-    pub diagnostic:           Option<Diagnostic>,
-    pub return_value:         Option<Value>,
+    pub step:         usize,
+    pub status:       String,
+    /// The next operation, or the faulting one.
+    pub location:     Option<Range>,
+    /// What the last completed operation did.
+    pub event:        StepEvent,
+    /// The full expression being evaluated, with the values known so far.
+    pub tree:         Option<Tree>,
+    /// Active calls, innermost first.
+    pub stack:        Vec<Frame>,
+    pub objects:      Vec<Object>,
+    pub effects:      Vec<String>,
+    pub diagnostic:   Option<Diagnostic>,
+    pub return_value: Option<Value>,
 }
 
 impl Snapshot {
@@ -30,6 +32,59 @@ impl Snapshot {
     pub fn can_step(&self) -> bool {
         matches!(self.status.as_str(), "ready" | "running")
     }
+}
+
+/// The last completed operation, explained.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepEvent {
+    /// The engine's rule name, such as `lvalue_conversion`.
+    pub kind:           String,
+    /// `evaluate`, `convert`, `memory`, `lifetime`, `control`, `call` or
+    /// `fault`; it selects the colour.
+    pub category:       String,
+    pub title:          String,
+    pub explanation:    String,
+    pub clauses:        Vec<Clause>,
+    /// The exact source the operation evaluated.
+    pub range:          Option<Range>,
+    /// Objects the operation created, read, wrote or ended.
+    pub objects:        Vec<usize>,
+    pub sequence_point: bool,
+}
+
+/// A cited paragraph of the C standard.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct Clause {
+    /// Clause and paragraph, such as `6.5.16.1p2`.
+    pub id:       String,
+    pub title:    String,
+    pub gloss:    String,
+    pub citation: String,
+}
+
+/// A full expression's tree. Nodes are listed children first; the root is
+/// last.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Tree {
+    pub function: String,
+    pub nodes:    Vec<TreeNode>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TreeNode {
+    pub label:    String,
+    /// Indices into [`Tree::nodes`].
+    pub children: Vec<usize>,
+    /// The value or designated object, once evaluated.
+    pub value:    Option<String>,
+    /// Whether `value` names a designated object (an lvalue).
+    pub lvalue:   bool,
+    /// The last completed operation evaluated this node.
+    pub active:   bool,
+    /// The object an identifier names, for colour coding.
+    pub object:   Option<String>,
+    pub range:    Option<Range>,
 }
 
 /// A source range in 1-based lines and UTF-16 editor columns.
@@ -57,24 +112,26 @@ pub struct Position {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Frame {
-    pub depth: usize,
-    pub name:  String,
-    #[serde(default)]
-    pub label: String,
+    pub id:      usize,
+    pub depth:   usize,
+    pub name:    String,
+    /// The source of the call this frame is waiting on.
+    pub waiting: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Object {
-    pub id:      usize,
-    pub name:    String,
-    #[serde(rename = "type", default)]
-    pub ty:      String,
-    #[serde(default)]
-    pub storage: String,
-    pub alive:   bool,
-    #[serde(default)]
-    pub scope:   String,
-    pub value:   Value,
+    pub id:        usize,
+    pub name:      String,
+    #[serde(rename = "type")]
+    pub ty:        String,
+    pub storage:   String,
+    pub alive:     bool,
+    pub frame_id:  usize,
+    /// The owning function, or empty once its frame has returned.
+    pub function:  String,
+    pub parameter: bool,
+    pub value:     Value,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -91,42 +148,36 @@ pub enum Value {
     Pointer {
         target:   Option<usize>,
         offset:   i32,
-        #[serde(default)]
         one_past: bool,
-        #[serde(default)]
         ended:    bool,
-        text:     Option<String>,
     },
 }
 
 /// A terminal diagnostic, or a site-level error shown in the same place.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Diagnostic {
-    pub kind:     Option<String>,
-    #[serde(default)]
-    pub title:    String,
-    #[serde(default)]
-    pub message:  String,
-    #[serde(default)]
-    pub citation: String,
-    #[serde(default)]
-    pub detail:   String,
+    pub kind:    Option<String>,
+    pub title:   String,
+    pub message: String,
+    pub clause:  Option<Clause>,
+    /// A note when no clause applies (a prototype limit, a site error).
+    pub note:    String,
 }
 
 impl Diagnostic {
     pub fn kind_label(&self) -> &'static str {
         match self.kind.as_deref() {
-            | Some("undefined_behavior") => "UNDEFINED BEHAVIOR · EXECUTION STOPPED",
-            | Some("indeterminate") => "INDETERMINATE VALUE · POLICY STOP",
-            | Some("unsupported") => "OUTSIDE THE SUPPORTED SUBSET",
-            | Some("syntax") => "COMPILATION DIAGNOSTIC",
-            | Some("limit") => "RESOURCE LIMIT · EXECUTION STOPPED",
-            | _ => "PROGRAM DIAGNOSTIC",
+            | Some("undefined_behavior") => "Undefined behavior",
+            | Some("indeterminate") => "Indeterminate value",
+            | Some("unsupported") => "Outside the supported subset",
+            | Some("syntax") => "Compilation diagnostic",
+            | Some("limit") => "Resource limit",
+            | _ => "Program diagnostic",
         }
     }
 }
 
-pub fn status_label(status: &str) -> String {
+pub fn status_label(status: &str) -> &str {
     match status {
         | "ready" => "Ready",
         | "running" => "Paused",
@@ -136,5 +187,4 @@ pub fn status_label(status: &str) -> String {
         | "limit" => "Resource limit",
         | other => other,
     }
-    .to_owned()
 }

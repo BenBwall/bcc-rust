@@ -8,15 +8,20 @@
 //! source and syntax output. The driver preprocesses and parses that source,
 //! reports diagnostics, and prints the declaration tree.
 //!
-//! Read [`run`], then [`Cli`], [`Cli::configuration`], and
-//! [`output::print_parser_output`]. Token output starts at
-//! [`output::print_preprocessor_output`], and code generation (`--emit`,
+//! Read [`run`], then [`Cli`], [`driver::run`], [`Cli::configuration`], and
+//! [`output::print_parser_output`]. The driver runs one job per input up to
+//! the stage `-E`, `-S`, `-c` or `-o` selects, then links. Token output
+//! starts at [`output::print_preprocessor_output`], preprocessed text at
+//! [`preprocessed::print_preprocessed`], and code generation (`--emit`,
 //! `--interpret`, `-o`) at [`code_generation::generate_code`].
 //!
 //! Files by role:
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
-//! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`,
-//!   `output_file.rs`.
+//! - Jobs and linking: `driver.rs`.
+//! - Driver personalities (`--gcc-mode`, `--msvc-mode`, ...): `personality.rs`.
+//! - Output: `output.rs`, `preprocessed.rs`, `output_file.rs`; the token view
+//!   and the diagnostic reporter it shares with the explorer live in
+//!   `pipeline/views.rs` and `diagnostics/reporter.rs`.
 //! - Code generation: `code_generation.rs`.
 //! - Measurement entry points: `measured.rs`.
 //! - CLI fixtures: `tests.rs`.
@@ -30,17 +35,18 @@ mod arguments;
 mod errors;
 mod search;
 
+// Jobs and driver personalities
+mod driver;
+mod personality;
+
 // Output and diagnostic reporting
 mod code_generation;
-mod diagnostic_reporter;
 mod output;
 mod output_file;
-mod token;
+mod preprocessed;
 
 // Measurements
 mod measured;
-
-use std::path::Path;
 
 use arguments::{
     CliInput,
@@ -54,33 +60,25 @@ use arguments::{
 };
 use clap::{
     ColorChoice,
+    CommandFactory as _,
+    FromArgMatches as _,
     Parser,
 };
 use code_generation::{
     CodeGeneration,
-    generate_code,
     print_default_passes,
 };
+use driver::DriverOptions;
 pub use errors::MainError;
 pub use measured::{
     CompileStep,
     compile_file_measured,
     compile_file_with_arguments_measured,
 };
-use output::{
-    CliOutput,
-    print_parser_output,
-    print_preprocessor_output,
-};
+use output::CliOutput;
 use search::CliHeaderSearch;
-pub(crate) use token::describe_token;
 
-use crate::{
-    configuration::LanguageMode,
-    headers::HeaderSearch,
-    translation_phases::Context,
-    util::bump::Bump,
-};
+use crate::configuration::LanguageMode;
 
 /// Runs the compiler on the command line's arguments and returns the
 /// process's exit status. The inspection views exit with zero after
@@ -94,17 +92,37 @@ pub fn run() -> Result<i32, MainError> {
 
 /// Address space reserved for the compilation worker's stack. Pages are
 /// committed only as recursion touches them, so the size costs no memory.
-const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
+pub(crate) const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
 
-/// Keeps all compilation arenas, phases and output on the same thread.
+/// Keeps all compilation arenas, phases and output on the same thread. A
+/// driver personality (`--gcc-mode`, or an executable named `gcc`)
+/// translates the command line into bcc's before it runs.
+#[expect(
+    clippy::disallowed_types,
+    reason = "The OS hands argv over as owned strings."
+)]
 fn run_on_current_thread() -> Result<i32, MainError> {
-    let arguments = normalize_language_arguments(std::env::args_os())?;
+    let mut arguments: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    match personality::select(&mut arguments) {
+        | Some(personality) => personality::run(personality, arguments, run_arguments),
+        | None => run_arguments(arguments),
+    }
+}
+
+/// Runs bcc's own command line, `argv[0]` first.
+#[expect(
+    clippy::disallowed_types,
+    reason = "The OS hands argv over as owned strings."
+)]
+fn run_arguments(arguments: Vec<std::ffi::OsString>) -> Result<i32, MainError> {
+    let arguments = normalize_language_arguments(arguments)?;
     // Clap would demand an input for this flag, so it is answered before
     // parsing; the declaration below only documents it in `--help`.
     if arguments.len() == 2 && arguments[1] == "--print-default-passes" {
         return Ok(print_default_passes());
     }
-    let args = Cli::try_parse_from(arguments)?;
+    let matches = Cli::command().try_get_matches_from(arguments)?;
+    let args = Cli::from_arg_matches(&matches)?;
     if args.report_unknown_warning_options() {
         return Ok(1);
     }
@@ -122,84 +140,11 @@ fn run_on_current_thread() -> Result<i32, MainError> {
         code_generation::report_stderr(format_args!("error: {conflict}"));
         return Ok(1);
     }
-    let tu = Bump::new();
-    let (input_string, source_filename): (&str, &Path) =
-        match (&args.input.input, &args.input.input_file) {
-            | (Some(input), None) => (tu.alloc_str(input), Path::new("<input>")),
-            | (None, Some(input_file)) => match tu.read_to_str_lossy(input_file) {
-                | Ok(text) => (text, input_file),
-                | Err(source) =>
-                    return Err(MainError::OpenInputFileError {
-                        path: input_file.clone(),
-                        source,
-                    }),
-            },
-            | _ => unreachable!("clap requires exactly one input source"),
-        };
-    if let (Some(input), Some(output)) = (&args.input.input_file, &args.code_generation.output_path)
-    {
-        let same_file = output_file::is_input(input, output).map_err(|source| {
-            MainError::InspectOutputFileError {
-                path: output.clone(),
-                source,
-            }
-        })?;
-        if same_file {
-            return Err(MainError::OutputIsInput {
-                input:  input.clone(),
-                output: output.clone(),
-            });
-        }
-    }
-    let directories = args.search.directories();
-    let search = HeaderSearch {
-        quote:    tu.alloc_slice_fill_iter(directories.quote.iter().map(AsRef::as_ref)),
-        angled:   tu.alloc_slice_fill_iter(directories.angled.iter().map(AsRef::as_ref)),
-        system:   tu.alloc_slice_fill_iter(directories.system.iter().map(AsRef::as_ref)),
-        resource: directories.resource,
-        after:    tu.alloc_slice_fill_iter(directories.after.iter().map(AsRef::as_ref)),
-    };
-    let configuration = args.configuration();
-    let mut context = Context::with_configuration(&tu, configuration);
-    args.configure_preprocessing(&mut context);
-
-    context.configuration = context
-        .configuration
-        .with_repeated_specifier_warnings(!args.no_repeated_specifier_warnings);
-
-    if args.output.tokens {
-        print_preprocessor_output(&mut context, source_filename, input_string, search);
-    } else if args.code_generation.requested() {
-        let status = generate_code(
-            &mut context,
-            source_filename,
-            input_string,
-            search,
-            &args.code_generation,
-        );
-        // The failed compile job owns its requested object, even if it never
-        // opened it. A front-end failure in link mode owns only a temporary
-        // object; preserve the final executable as Clang does.
-        if status != 0
-            && args.code_generation.object
-            && let Some(output) = &args.code_generation.output_path
-        {
-            output_file::remove_failed_object(output, &tu);
-        }
-        return Ok(status);
-    } else {
-        print_parser_output(
-            &mut context,
-            source_filename,
-            input_string,
-            search,
-            &args.output.parser,
-        );
-    }
-    Ok(0)
+    driver::run(&args, &matches)
 }
 
 #[derive(Parser)]
+#[command(group(clap::ArgGroup::new("generation").multiple(true)))]
 #[command(author, version, about, long_about, color = ColorChoice::Always,
     after_help = "Preprocessing: -D NAME[=VALUE] or -DNAME[=VALUE], -U NAME or -UNAME, -include FILE.\nDefinitions default to 1. -D/-U run in order before forced includes.")]
 #[expect(
@@ -243,9 +188,21 @@ struct Cli {
     output: CliOutput,
     #[command(flatten)]
     code_generation: CodeGeneration,
+    #[command(flatten)]
+    driver: DriverOptions,
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,
+    /// Claim this compiler in the predefined identity macros: the pinned
+    /// Clang (the default), GCC 14.2, MSVC 19.33, clang-cl, or TCC 0.9.27.
+    /// The driver personalities select their own.
+    #[arg(long, value_enum, value_name = "COMPILER", default_value = "clang")]
+    compiler_identity: arguments::Identity,
+    /// Print diagnostics as bcc's annotated snippets (the default), in
+    /// Clang's or GCC's `file:line:col:` form, or in MSVC's `file(line,col):`
+    /// form (also accepts Clang -fdiagnostics-format=FORMAT).
+    #[arg(long, value_enum, value_name = "FORMAT", default_value = "bcc")]
+    diagnostic_format: arguments::Format,
     /// Suppress all warning diagnostics (GCC -w).
     #[arg(short = 'w', long)]
     suppress_warnings: bool,

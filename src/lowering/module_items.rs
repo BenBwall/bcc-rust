@@ -155,6 +155,9 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// that the LLVM back end emits as `available_externally` bodies
     /// ([`Unit::lower_plain_inline_bodies`]).
     plain_inline: ArenaSet<'a, usize>,
+    /// Symbols whose entity names a visibility, which `-fvisibility=`
+    /// leaves alone.
+    pub(super) explicit_visibility: ArenaSet<'a, Symbol>,
     /// The definitions whose bodies use `__builtin_va_arg_pack ()` or its
     /// length, by entity identity, as for `private_bodies`.
     pub(super) pack_functions: ArenaMap<'a, StringCacheId, &'tu FunctionRecord<'tu>>,
@@ -529,9 +532,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Clang expand it there (MinGW-w64's `FORCEINLINE` `intsafe.h`
     /// functions, which no library defines). Its body becomes an internal
     /// function that direct calls name and the inliner expands; its address
-    /// stays the external symbol's. A body with inline assembly, which
-    /// lowering cannot translate, keeps calling the external definition
-    /// instead, as MinGW-w64's `intrin-impl.h` expects.
+    /// stays the external symbol's. A body with inline assembly keeps
+    /// calling the external definition instead, as MinGW-w64's
+    /// `intrin-impl.h` expects: there the library's definition is the
+    /// assembly's own.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125 (a call to an inline
     /// function may use the inline or the external definition).
     /// GNU extension: GCC manual, "Common Function Attributes",
@@ -1026,6 +1030,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     types::target_type(types, data.ty).and_then(|element| types.layout(element));
                 match element {
                     | Some(_) => (0, align?),
+                    // An object declared with a structure, union, enumeration
+                    // or void type that this translation unit never
+                    // completes is only referenced, never defined, so its
+                    // address is all lowering needs.
+                    // C99 §6.2.5p22, p. 36; PDF p. 48.
+                    | None if !matches!(types.kind(data.ty), TypeKind::Array(..)) =>
+                        (0, Align::BYTE),
                     | None =>
                         return Err(types::layout(types, data.ty).err().unwrap_or(
                             LoweringErrorKind::MissingFact("an object type has no layout"),
@@ -1335,6 +1346,14 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 usize::try_from(member.offset.checked_add(array.size)?).ok()
             })
             .map_or(length, |written| written.max(length));
+        // The initializer's bytes are held as one dense image, so an object
+        // of 4 GiB or more is refused rather than exhausting memory.
+        if u32::try_from(written).is_err() {
+            return Err(LoweringError::unsupported(
+                Construct::StaticInitializer,
+                initializer.source_vectors,
+            ));
+        }
         let mut bytes = ArenaVec::with_capacity_in(written, tables);
         bytes.resize(written, 0_u8);
         let mut relocations = ArenaVec::new_in(tables);
@@ -1375,11 +1394,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     discard(&mut relocations, offset, offset + size as u64);
                     bytes[start..start + count].copy_from_slice(&string[..count]);
                 },
-                | Leaf::Copy { expression, .. } =>
-                    return Err(LoweringError::unsupported(
-                        Construct::StaticInitializer,
-                        expression.source_vectors,
-                    )),
+                | Leaf::Copy {
+                    offset,
+                    ty,
+                    expression,
+                    ..
+                } => self.static_copy(&mut bytes, &mut relocations, offset, ty, expression)?,
                 | Leaf::Replicate {
                     offset,
                     size,
@@ -1407,6 +1427,100 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // Native storage emission consumes the final addresses in order.
         relocations.sort_unstable_by_key(|relocation| relocation.offset);
         Ok((bytes, relocations))
+    }
+
+    /// Writes the structure or union a compound literal of its type gives a
+    /// static object: the bytes and addresses of the literal's own
+    /// initializer, as if it were written in braces. Semantic analysis
+    /// accepts no other expression here.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6p10, p. 96;
+    /// PDF p. 108.
+    fn static_copy(
+        &mut self,
+        bytes: &mut [u8],
+        relocations: &mut ArenaVec<'_, Relocation>,
+        offset: u64,
+        ty: TypeId,
+        mut expression: &'tu Expression<'tu>,
+    ) -> Result<(), LoweringError> {
+        let unsupported =
+            || LoweringError::unsupported(Construct::StaticInitializer, expression.source_vectors);
+        let literal = loop {
+            match expression.kind {
+                | ExpressionType::Parenthesized { expression: inner } => expression = inner,
+                | ExpressionType::CompoundLiteral { initializer, .. } => break initializer,
+                | _ => return Err(unsupported()),
+            }
+        };
+        let size = types::layout(&self.sema.types, ty)
+            .map_err(|kind| at(kind, expression.source_vectors))?
+            .size;
+        let literal_ty = self
+            .sema
+            .expression_info(expression)
+            .ok_or_else(unsupported)?
+            .ty;
+        let (literal_bytes, literal_relocations) =
+            self.static_bytes(literal_ty, size, literal, None)?;
+        let start = index(offset, expression)?;
+        bytes[start..start + literal_bytes.len()].copy_from_slice(&literal_bytes);
+        discard(relocations, offset, offset + size);
+        for relocation in literal_relocations {
+            insert(
+                relocations,
+                Relocation {
+                    offset: relocation.offset + offset,
+                    ..relocation
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// The initializer and type of `expression` when it is a parenthesized
+    /// compound literal.
+    fn whole_compound_literal(
+        &self,
+        mut expression: &'tu Expression<'tu>,
+    ) -> Option<(&'tu Initializer<'tu>, TypeId)> {
+        loop {
+            match expression.kind {
+                | ExpressionType::Parenthesized { expression: inner } => expression = inner,
+                | ExpressionType::CompoundLiteral { initializer, .. } =>
+                    return Some((initializer, self.sema.expression_info(expression)?.ty)),
+                | _ => return None,
+            }
+        }
+    }
+
+    /// Merges into a static bit-field the value a scalar compound literal
+    /// of its type gives it: the literal's own initializer, converted to
+    /// its type, lowered as a static object and read back. Semantic analysis
+    /// accepts the literal only when it is of the field's declared type.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.7.2.1
+    /// paragraph 9, p. 102; PDF p. 114 (bit-field values); §6.6p10, p. 96;
+    /// PDF p. 108.
+    fn static_bit_field_literal(
+        &mut self,
+        bytes: &mut [u8],
+        start: usize,
+        field: BitFieldBits,
+        literal: &'tu Initializer<'tu>,
+        literal_ty: TypeId,
+    ) -> Result<(), LoweringError> {
+        let source = literal.source_vectors;
+        let unsupported = || LoweringError::unsupported(Construct::StaticInitializer, source);
+        let size = types::layout(&self.sema.types, literal_ty)
+            .map_err(|kind| at(kind, source))?
+            .size;
+        let (literal_bytes, literal_relocations) =
+            self.static_bytes(literal_ty, size, literal, None)?;
+        if !literal_relocations.is_empty() || literal_bytes.len() > 16 {
+            return Err(unsupported());
+        }
+        let mut value = [0; 16];
+        value[..literal_bytes.len()].copy_from_slice(&literal_bytes);
+        merge_bit_field(bytes, start, field, i128::from_le_bytes(value)).ok_or_else(unsupported)
     }
 
     /// Writes one scalar leaf: an integer or floating constant converted to
@@ -1441,6 +1555,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // C99 §6.7.8p19: a later write replaces overlapping addresses,
         // including a scalar member that overwrites only part of a pointer.
         discard(relocations, offset, offset + written);
+        if let Some(field) = bit_field
+            && let Some((literal, literal_ty)) = self.whole_compound_literal(expression)
+        {
+            return self.static_bit_field_literal(bytes, start, field, literal, literal_ty);
+        }
         let integer = info.integer.filter(|_| {
             representation == Repr::Pointer
                 || !matches!(
@@ -2016,6 +2135,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             private_bodies: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             plain_inline: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            explicit_visibility: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             pack_functions,
             pack_copies: ArenaVec::new_in(tables),
             pack_copy_index: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),

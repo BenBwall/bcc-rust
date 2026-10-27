@@ -261,6 +261,11 @@ impl<'ir> Module<'ir> {
                         self.display_signature(sig)
                     )
                 },
+                | InstData::InlineAsm { asm, args } => write!(
+                    f,
+                    " {}",
+                    self.display_inline_asm(asm, body.value_list(args))
+                ),
                 | InstData::Jump { dest } => write!(f, " {}", display_block_call(body, dest)),
                 | InstData::Brif {
                     cond,
@@ -363,6 +368,56 @@ impl<'ir> Module<'ir> {
         fmt::from_fn(move |f| match self.get_signature(sig) {
             | Some(signature) => write!(f, "{}", display_signature(signature)),
             | None => write!(f, "{sig}"),
+        })
+    }
+
+    /// An `asm` instruction's operands after the opcode:
+    /// `sideeffect "template" (out "r" i32 v1, in "m" i8 bytes 16 v2)
+    /// clobber(memory, rcx)`, or the bare handle of a missing descriptor.
+    fn display_inline_asm<'a>(
+        &'a self,
+        asm: super::AsmId,
+        values: &'a [super::Value],
+    ) -> impl fmt::Display + 'a {
+        fmt::from_fn(move |f| {
+            let Some(descriptor) = self.get_inline_asm(asm) else {
+                return write!(f, "{asm}({})", display_values(values));
+            };
+            if descriptor.side_effects {
+                f.write_str("sideeffect ")?;
+            }
+            write!(f, "{} (", display_asm_text(descriptor.template))?;
+            for (index, operand) in descriptor.operands.iter().enumerate() {
+                if index != 0 {
+                    f.write_str(", ")?;
+                }
+                let role = if operand.output { "out" } else { "in" };
+                let early = if operand.early_clobber { "&" } else { "" };
+                write!(f, "{role} \"{early}{}\" {}", operand.constraint, operand.ty)?;
+                if operand.bytes != operand.ty.bytes() {
+                    write!(f, " bytes {}", operand.bytes)?;
+                }
+                match values.get(index) {
+                    | Some(value) => write!(f, " {value}")?,
+                    | None => f.write_str(" <missing>")?,
+                }
+            }
+            for value in values.iter().skip(descriptor.operands.len()) {
+                write!(f, ", {value}")?;
+            }
+            f.write_char(')')?;
+            if descriptor.clobbers != super::AsmClobbers::default() {
+                f.write_str(" clobber(")?;
+                let mut separator = "";
+                let mut result = Ok(());
+                descriptor.clobbers.names(|name| {
+                    result = result.and_then(|()| write!(f, "{separator}{name}"));
+                    separator = ", ";
+                });
+                result?;
+                f.write_char(')')?;
+            }
+            Ok(())
         })
     }
 

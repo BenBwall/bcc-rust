@@ -3,7 +3,7 @@ name = "bcc-web"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99.0"
-description = "Static Leptos site for the bcc C abstract machine"
+description = "Static Leptos site for the bcc C abstract machine and compiler pipeline"
 license-file = "../LICENSE"
 publish = false
 
@@ -26,6 +26,13 @@ name = "engine-worker"
 path = "src/bin/engine_worker.rs"
 required-features = ["worker"]
 
+# The compiler Web Worker: bcc's compiler, loaded only when the page first
+# compiles.
+[[bin]]
+name = "compiler-worker"
+path = "src/bin/compiler_worker.rs"
+required-features = ["compiler"]
+
 # Native build-time renderer run by Trunk's post_build hook.
 [[bin]]
 name = "prerender"
@@ -35,11 +42,13 @@ required-features = ["ssr"]
 [features]
 hydrate = ["leptos/hydrate", "dep:console_error_panic_hook"]
 ssr = ["leptos/ssr"]
-worker = ["dep:bcc-rust", "dep:console_error_panic_hook"]
+worker = ["dep:bcc-rust", "bcc-rust/abstract-machine", "dep:console_error_panic_hook"]
+compiler = ["dep:bcc-rust", "bcc-rust/explorer", "dep:console_error_panic_hook"]
 
 [dependencies]
-# The browser execution engine only; no native compiler or LLVM.
-bcc-rust = { path = "..", default-features = false, features = ["abstract-machine"], optional = true }
+# Never the native compiler or LLVM: `worker` enables the abstract machine and
+# `compiler` the pure-Rust compiler behind `bcc_rust::explorer`.
+bcc-rust = { path = "..", default-features = false, optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 futures-channel = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
@@ -50,9 +59,9 @@ serde-wasm-bindgen = "0.6"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
-    "Blob", "DedicatedWorkerGlobalScope", "Document", "Element", "ErrorEvent", "File", "FileList", "HtmlElement", "HtmlInputElement",
-    "HtmlTextAreaElement", "MessageEvent", "ScrollIntoViewOptions", "ScrollLogicalPosition",
-    "Window", "Worker", "WorkerOptions", "WorkerType",
+    "Blob", "console", "DedicatedWorkerGlobalScope", "Document", "DomRect", "Element", "ErrorEvent", "File", "FileList",
+    "HtmlDivElement", "HtmlElement", "HtmlInputElement", "KeyboardEvent", "MediaQueryList", "MessageEvent", "NodeList",
+    "Storage", "Url", "Window", "Worker", "WorkerOptions", "WorkerType",
 ] }
 
 [profile.release]

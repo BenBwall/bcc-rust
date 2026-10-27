@@ -255,7 +255,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         summary | self.action_effects(e)
     }
 
-    /// Cast type-site actions: evaluated typeof operands and new bounds.
+    /// Cast and compound literal type-site actions: evaluated typeof
+    /// operands and new bounds.
     /// GNU extension: GCC Typeof; C99 §6.7.5.2p5, p. 117; PDF p. 129.
     fn action_effects(&self, e: &'tu Expression<'tu>) -> EffectSet {
         let Some(site) = self.expression_actions.get(&identity(e)) else {

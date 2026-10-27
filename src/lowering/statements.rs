@@ -519,7 +519,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.draft.switch_to(block);
                 self.tasks.push(labeled_child(range.statement));
             },
-            | S::Asm(_) | S::MsAsm(_) =>
+            | S::Asm(_) => self.assembly(statement, source)?,
+            | S::MsAsm(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::InlineAssembly,
                     source,
@@ -856,7 +857,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .terminate_and_continue_dead(Terminator::Jump(edge));
     }
 
-    fn label_block(&mut self, label: LabelId) -> Block {
+    pub(super) fn label_block(&mut self, label: LabelId) -> Block {
         if let Some(&block) = self.labels.get(&label) {
             return block;
         }
@@ -1206,8 +1207,11 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 let ty = representation
                     .value_type()
                     .ok_or_else(|| LoweringError::missing("a result has no value type", source))?;
-                Some(
-                    if self
+                // A `main` whose result is not compatible with `int` returns
+                // an unspecified status, so it gets no implicit zero.
+                // C99 §5.1.2.2.3p1, p. 13; PDF p. 25.
+                let main_zero = matches!(representation, Repr::Int { .. })
+                    && self
                         .record
                         .binding
                         .and_then(|binding| self.unit.sema.function_policy(binding))
@@ -1215,13 +1219,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                             LoweringError::missing("function end policy is not retained", source)
                         })?
                         .end
-                        == crate::translation_phases::semantic_analysis::FunctionEnd::MainZero
-                    {
-                        self.iconst(ty, 0)
-                    } else {
-                        self.draft.poison(ty)
-                    },
-                )
+                        == crate::translation_phases::semantic_analysis::FunctionEnd::MainZero;
+                Some(if main_zero {
+                    self.iconst(ty, 0)
+                } else {
+                    self.draft.poison(ty)
+                })
             },
         };
         self.draft

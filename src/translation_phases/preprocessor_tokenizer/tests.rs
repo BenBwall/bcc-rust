@@ -16,12 +16,12 @@ use super::{
     TokenSource,
 };
 use crate::{
-    cli::describe_token,
     diagnostics::{
         ColorChoice as RenderColor,
         Renderer,
         ToDiagnostic,
     },
+    pipeline::describe_token,
     translation_phases::{
         Context,
         GetPosition,

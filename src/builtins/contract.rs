@@ -31,6 +31,20 @@ pub(crate) struct Availability {
     pub(crate) naming:  NamingPolicy,
 }
 
+impl Availability {
+    /// Whether the configuration accepts the builtin's feature, so that it
+    /// exists at all: `__builtin_inff32` only where `_Float32` is a type.
+    pub(crate) const fn accepted(
+        self,
+        configuration: crate::configuration::CompilerConfiguration,
+    ) -> bool {
+        match self.feature {
+            | Some(feature) => configuration.accepts(feature),
+            | None => true,
+        }
+    }
+}
+
 /// Every entry applies to all four current x86-64 targets. Reserved aliases
 /// keep their contracts in freestanding mode; ordinary library lookup is
 /// hosted.

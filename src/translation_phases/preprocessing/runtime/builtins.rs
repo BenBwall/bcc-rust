@@ -14,6 +14,7 @@ use std::{
     path::Path,
 };
 
+#[cfg(feature = "native")]
 use chrono::Local;
 
 use super::super::{
@@ -272,10 +273,17 @@ impl<'pp> TranslationTimestamp<'pp> {
     ///
     /// A pinned value stands in for the actual time of translation that
     /// C99 §6.10.8p1 names; that is GCC's and Clang's choice too.
+    ///
+    /// Builds without the native host (the explorer's WebAssembly build)
+    /// have no clock, so they spell the Unix epoch instead of the local time.
     fn new(pp: &'pp Bump, source_date_epoch: Option<i64>) -> Self {
+        #[cfg(feature = "native")]
+        let now = || Local::now().naive_local();
+        #[cfg(not(feature = "native"))]
+        let now = || chrono::DateTime::UNIX_EPOCH.naive_utc();
         let time = source_date_epoch
             .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
-            .map_or_else(|| Local::now().naive_local(), |time| time.naive_utc());
+            .map_or_else(now, |time| time.naive_utc());
         let mut date = ArenaString::new_in(pp);
         let mut clock = ArenaString::new_in(pp);
         write!(date, "{}", time.format("%b %e %Y")).expect("arena formatting cannot fail");

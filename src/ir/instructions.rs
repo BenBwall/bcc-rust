@@ -14,6 +14,7 @@ use bitflags::bitflags;
 use super::{
     entities::{
         AccessTag,
+        AsmId,
         BlockLabel,
         ConstId,
         FuncId,
@@ -164,6 +165,12 @@ pub(crate) enum InstData {
         sig:  SigId,
         args: ValueList,
     },
+    /// Inline assembly: the module's descriptor `asm` with one value per
+    /// descriptor operand. GNU extension: GCC "Extended Asm".
+    InlineAsm {
+        asm:  AsmId,
+        args: ValueList,
+    },
     Jump {
         dest: BlockCall,
     },
@@ -215,6 +222,7 @@ impl InstData {
             | Self::Store { .. } => Opcode::Store,
             | Self::Call { .. } => Opcode::Call,
             | Self::CallIndirect { .. } => Opcode::CallIndirect,
+            | Self::InlineAsm { .. } => Opcode::InlineAsm,
             | Self::Jump { .. } => Opcode::Jump,
             | Self::Brif { .. } => Opcode::Brif,
             | Self::Switch { .. } => Opcode::Switch,
@@ -390,6 +398,8 @@ named! {
         Fill = "fill",
         Call = "call",
         CallIndirect = "call_indirect",
+        /// Inline assembly; see `inline_asm.rs`.
+        InlineAsm = "asm",
         VaStart = "va_start",
         VaArg = "va_arg",
         VaArgAggregate = "va_arg_aggregate",
@@ -497,6 +507,7 @@ impl Opcode {
                 | Self::Fill
                 | Self::Call
                 | Self::CallIndirect
+                | Self::InlineAsm
                 | Self::VaStart
                 | Self::VaCopy
                 | Self::VaEnd

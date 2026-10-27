@@ -555,11 +555,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let complex_type = |ty: TypeId| {
                     matches!(
                         self.types.nodes[ty.index],
-                        TypeKind::Scalar(
-                            Scalar::ComplexFloat
-                                | Scalar::ComplexDouble
-                                | Scalar::ComplexLongDouble
-                        )
+                        TypeKind::Scalar(s) if s.complex()
                     )
                 };
                 let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
@@ -676,6 +672,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_some()
         {
             lt.unqualified()
+        } else if let Some(void) = [lt, rt]
+            .into_iter()
+            .find(|ty| matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void)))
+        {
+            // GCC and Clang give a conditional with one void alternative
+            // void type, discarding the other alternative's value.
+            // GNU extension to C99 §6.5.15p3, p. 90; PDF p. 102.
+            self.context.report_extension(
+                crate::configuration::Feature::OneVoidConditional,
+                "conditional expression with only one void alternative",
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+            );
+            void
         } else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
         };
@@ -1035,6 +1044,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let from = self.converted(operand);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             let ty = self.types.recovery_type(&[target, from]);
+            return Self::expression_result(e, ty);
+        }
+        // GNU: a structure or union cast to its own type is its value, an
+        // rvalue, as GCC accepts it ("ISO C forbids casting nonscalar to
+        // the same type" under -pedantic); C99 §6.5.4p2 requires a scalar
+        // type otherwise.
+        if let TypeKind::Tag(id) = self.types.nodes[self.types.non_atomic(target).index]
+            && self.types.tags[id].kind != TagKind::Enum
+            && self
+                .types
+                .composite(
+                    self.types.non_atomic(target).unqualified(),
+                    self.types.non_atomic(from).unqualified(),
+                )
+                .is_some()
+        {
+            // The parser already reported a cast spelled `(union ...)`.
+            if !matches!(e.kind, ExpressionType::Cast { target_type: type_name, .. } if matches!(type_name.declaration_specifiers.type_specifiers, super::super::super::parsing::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == super::super::super::parsing::declaration_syntax::StructOrUnion::Union))
+            {
+                self.context.report_extension(
+                    crate::configuration::Feature::SameTypeCasts,
+                    "cast of a structure or union to its own type",
+                    e.source_vectors,
+                );
+            }
+            let ty = self.types.non_atomic(target).unqualified();
+            self.convert(operand.expression, ty, ConversionKind::Assignment);
             return Self::expression_result(e, ty);
         }
         if let TypeKind::Tag(id) = self.types.nodes[target.index]
@@ -1504,15 +1540,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.integer_type(ty).is_some()
             || matches!(
                 self.types.nodes[ty.index],
-                TypeKind::Scalar(
-                    Scalar::Float | Scalar::Double | Scalar::LongDouble | Scalar::Float128
-                )
+                TypeKind::Scalar(s) if s.floating() && !s.complex()
             )
     }
 
     /// Classifies arithmetic and pointer types as scalar types.
     /// C99: §6.2.5 paragraph 21, p. 36; PDF p. 48.
-    fn scalar_type(&self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn scalar_type(&self, ty: TypeId) -> bool {
         self.arithmetic(ty) || self.pointer_target(ty).is_some() || self.nullptr_type(ty)
     }
 
@@ -1703,6 +1737,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info
         };
         let (ty, kind) = self.value_conversion(info);
+        // C99 §6.3.2.1p2, p. 46; PDF p. 58: an incomplete structure, union
+        // or enumeration lvalue has no value to load.
+        if matches!(kind, Some(ConversionKind::Lvalue))
+            && let TypeKind::Tag(id) = self.types.nodes[ty.index]
+            && !self.types.tags[id].complete.get()
+        {
+            self.error(
+                SemanticErrorKind::IncompleteValue,
+                info.expression.source_vectors,
+                None,
+                None,
+            );
+            return self.types.unknown();
+        }
         if let Some(kind) = kind {
             self.convert(info.expression, ty, kind);
         }
@@ -1810,38 +1858,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let (Some(ls), Some(rs)) = (ls, rs) else {
             return self.types.unknown();
         };
-        let float_rank = |s| match s {
-            | Scalar::Float | Scalar::ComplexFloat => 1,
-            | Scalar::Double | Scalar::ComplexDouble => 2,
-            | Scalar::LongDouble | Scalar::ComplexLongDouble => 3,
-            | Scalar::Float128 | Scalar::ComplexFloat128 => 4,
-            | _ => 0,
-        };
+        // C23 §H.4.3p1: within one precision, an interchange type is
+        // chosen over a standard type, and that over an extended type.
+        let long_double_is_double = self.types.target.long_double_is_double();
+        let float_rank = |s: Scalar| s.floating_rank(long_double_is_double);
         let rank = float_rank(ls).max(float_rank(rs));
-        let complex = matches!(
-            ls,
-            Scalar::ComplexFloat
-                | Scalar::ComplexDouble
-                | Scalar::ComplexLongDouble
-                | Scalar::ComplexFloat128
-        ) || matches!(
-            rs,
-            Scalar::ComplexFloat
-                | Scalar::ComplexDouble
-                | Scalar::ComplexLongDouble
-                | Scalar::ComplexFloat128
-        );
+        let complex = ls.complex() || rs.complex();
         let scalar = if rank != 0 {
-            match (rank, complex) {
-                | (1, false) => Scalar::Float,
-                | (2, false) => Scalar::Double,
-                | (4, false) => Scalar::Float128,
-                | (_, false) => Scalar::LongDouble,
-                | (1, true) => Scalar::ComplexFloat,
-                | (2, true) => Scalar::ComplexDouble,
-                | (4, true) => Scalar::ComplexFloat128,
-                | (_, true) => Scalar::ComplexLongDouble,
+            let real = if float_rank(ls) >= float_rank(rs) {
+                ls
+            } else {
+                rs
             }
+            .real_type();
+            if complex { real.complex_type() } else { real }
         } else {
             let rank = |s| match s {
                 | Scalar::Long | Scalar::UnsignedLong => 2,
@@ -1905,41 +1935,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let ty = self.types.scalar(scalar).with_alignment(alignment);
         // C99 §6.3.1.8p1: common real precision does not change type domain.
-        let complex_scalar = |s| {
-            matches!(
-                s,
-                Scalar::ComplexFloat
-                    | Scalar::ComplexDouble
-                    | Scalar::ComplexLongDouble
-                    | Scalar::ComplexFloat128
-            )
-        };
         let real = if complex {
-            self.types.scalar(match rank {
-                | 1 => Scalar::Float,
-                | 2 => Scalar::Double,
-                | 4 => Scalar::Float128,
-                | _ => Scalar::LongDouble,
-            })
+            self.types.scalar(scalar.real_type())
         } else {
             ty
         };
         self.convert(
             left.expression,
-            if complex && !complex_scalar(ls) {
-                real
-            } else {
-                ty
-            },
+            if complex && !ls.complex() { real } else { ty },
             ConversionKind::Arithmetic,
         );
         self.convert(
             right.expression,
-            if complex && !complex_scalar(rs) {
-                real
-            } else {
-                ty
-            },
+            if complex && !rs.complex() { real } else { ty },
             ConversionKind::Arithmetic,
         );
         ty
@@ -2091,6 +2099,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // keyword is disabled; it stays an opaque reserved name there.
             let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name))
                 .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
+                .filter(|descriptor| descriptor.availability.accepted(self.context.configuration))
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
             if let Some(descriptor) = descriptor
                 && descriptor.type_rule == crate::builtins::TypeRule::X86Signature

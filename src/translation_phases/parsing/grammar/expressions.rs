@@ -246,18 +246,18 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         ) = token.kind
         {
             if keyword == KeywordTokenType::Alignof {
-                if KeywordTokenType::classify(token.contents, self.context.configuration)
-                    .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu))
-                {
-                    self.consume_token();
-                    self.parse_countof_or_alignof(
-                        e,
-                        KeywordTokenType::Alignof,
-                        token.source_vectors,
-                    )?;
-                    return Some(false);
+                // GCC takes the operand of every spelling as `__alignof__`'s:
+                // a parenthesized type name or a unary expression. The
+                // parsed operand, a compound literal included, decides
+                // whether an ISO spelling took an expression.
+                self.consume_token();
+                self.parse_countof_or_alignof(e, KeywordTokenType::Alignof, token.source_vectors)?;
+                if e.operands.last().is_some_and(|operand| {
+                    matches!(operand.expression.kind, ExpressionType::AlignofExpr(_))
+                }) {
+                    report_alignof_expression(self, token);
                 }
-                report_alignof_expression(self, token);
+                return Some(false);
             }
             let kind = if keyword == KeywordTokenType::Generic {
                 ModernKind::Generic
@@ -374,11 +374,35 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             | TokenType::Identifier => ExpressionType::Identifier(Identifier::from_token(token)),
             | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
             | TokenType::Float(value) => {
-                if matches!(
+                let binary128 = matches!(
                     value,
                     FloatTokenType::Float128(_) | FloatTokenType::ImaginaryFloat128(_)
-                ) {
+                );
+                // `f128` names `_Float128`, the type `q` names.
+                let interchange_binary128 = binary128
+                    && self
+                        .context
+                        .string_cache
+                        .at(token.contents)
+                        .trim_end_matches('\0')
+                        .ends_with("128");
+                if binary128 && !interchange_binary128 {
                     self.extension(Feature::Float128, "binary128 floating constant", token);
+                }
+                if interchange_binary128
+                    || matches!(
+                        value,
+                        FloatTokenType::Float32(_)
+                            | FloatTokenType::Float64(_)
+                            | FloatTokenType::Float32x(_)
+                            | FloatTokenType::Float64x(_)
+                    )
+                {
+                    self.extension(
+                        Feature::InterchangeFloatTypes,
+                        "_FloatN floating constant suffix",
+                        token,
+                    );
                 }
                 ExpressionType::Constant(Constant::Float(value))
             },
@@ -1811,26 +1835,21 @@ impl<'p> CallState<'_, 'p> {
     }
 }
 
-/// Diagnoses `_Alignof` or `alignof` applied to a parenthesized
-/// expression, which GCC and Clang accept from `__alignof__`. The
-/// standard spellings take only a type name.
-/// C11: §6.5.3 paragraph 1, p. 88; PDF p. 106. Extension: GNU.
+/// Diagnoses `_Alignof` or `alignof` applied to an expression, which GCC
+/// and Clang accept from `__alignof__`, parenthesized or not (GCC also
+/// without parentheses after the standard spellings), a compound literal
+/// included. The standard spellings take only a parenthesized type name.
+/// The caller reports once the operand is parsed.
+/// C11: §6.5.3 paragraph 1, p. 88; PDF p. 106. Extension: GNU, GCC manual,
+/// "Determining the Alignment of Functions, Types or Variables",
+/// <https://gcc.gnu.org/onlinedocs/gcc/Alignment.html>.
 pub(in crate::translation_phases::parsing) fn report_alignof_expression(
     parser: &mut Parser<'_, '_, '_>,
     keyword: Token,
 ) {
     let gnu_spelling = KeywordTokenType::classify(keyword.contents, parser.context.configuration)
         .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu));
-    let expression = parser.cursor.following().is_some_and(|x| {
-        matches!(
-            x.kind,
-            TokenType::Operator(OperatorTokenType::OpeningParenthesis)
-        )
-    }) && parser
-        .cursor
-        .lookahead(1)
-        .is_some_and(|x| !parser.type_name_starter(x));
-    if gnu_spelling || !expression || parser.pedantic_suppression != 0 {
+    if gnu_spelling || parser.pedantic_suppression != 0 {
         return;
     }
     let spelling = if parser

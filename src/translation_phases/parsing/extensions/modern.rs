@@ -6,6 +6,7 @@
 //! children are §6.7.6, p. 122; PDF p. 134 and §6.5, pp. 67-94;
 //! PDF pp. 79-106. Evaluation and type constraints belong to later analysis.
 
+pub(crate) use crate::translation_phases::preprocessing::InterchangeFloat;
 use crate::{
     translation_phases::{
         SourceVectors,
@@ -60,6 +61,12 @@ pub(crate) enum ExtendedType<'tu> {
         signedness: Option<bool>,
     },
     Float128 {
+        complex: bool,
+    },
+    /// A binary interchange or extended floating type, real or complex.
+    /// C23: §H.5.1 paragraph 1, p. 560; PDF p. 573.
+    InterchangeFloat {
+        format:  InterchangeFloat,
         complex: bool,
     },
 }

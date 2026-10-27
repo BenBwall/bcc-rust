@@ -66,6 +66,18 @@ impl<'d> Diagnostic<'d> {
         }
     }
 
+    /// The segments of the range the diagnostic is about, empty when it has
+    /// no place.
+    pub(crate) fn primary_segments<'a>(&self, context: &'a Context<'_>) -> &'a [SourceVector]
+    where
+        'd: 'a,
+    {
+        self.labels
+            .iter()
+            .find(|label| label.primary)
+            .map_or(&[], |label| label.source.vectors(context))
+    }
+
     /// Adds a related range given as explicit segments.
     pub(crate) fn secondary_segments(
         mut self,

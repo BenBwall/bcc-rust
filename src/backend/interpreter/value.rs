@@ -6,17 +6,23 @@
 
 use std::num::NonZeroU32;
 
-use crate::ir::Type;
+use crate::{
+    ir::Type,
+    x87::X87,
+};
 
 /// The contents of one SSA value.
 ///
-/// An `Int` of type `iN` always has its bits above `N` clear. `f128`
-/// representations can be transported; arithmetic and `f80` remain unsupported.
+/// An `Int` of type `iN` always has its bits above `N` clear. `f80` values
+/// compute as the x87 unit does; `f128` representations can be transported,
+/// but their arithmetic remains unsupported.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum RuntimeValue {
     Int(u128),
     F32(f32),
     F64(f64),
+    /// An x87 double-extended value; moves keep every one of its 80 bits.
+    F80(X87),
     /// IEEE binary128 bits; moves and bitcasts preserve every bit.
     F128(u128),
     Ptr(Pointer),
@@ -38,6 +44,7 @@ impl RuntimeValue {
             | Self::Int(bits) => ty.is_int() && bits & !ty.mask() == 0,
             | Self::F32(_) => matches!(ty, Type::F32),
             | Self::F64(_) => matches!(ty, Type::F64),
+            | Self::F80(_) => matches!(ty, Type::F80),
             | Self::F128(_) => matches!(ty, Type::F128),
             | Self::Ptr(_) => matches!(ty, Type::Ptr),
             | Self::Poison => true,
@@ -55,6 +62,7 @@ impl RuntimeValue {
         match ty {
             | Type::F32 => Self::F32(0.0),
             | Type::F64 => Self::F64(0.0),
+            | Type::F80 => Self::F80(X87::zero(false)),
             | Type::F128 => Self::F128(0),
             | Type::Ptr => Self::NULL,
             | _ => Self::Int(0),

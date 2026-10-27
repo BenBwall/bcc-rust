@@ -21,7 +21,8 @@ use crate::util::{
 };
 
 /// Applies translation phases 1 and 2 to a whole buffer: trigraphs are
-/// replaced, line endings become `'\n'`, and line splices are deleted. The
+/// replaced, line endings become `'\n'`, and, with `splices`, line splices
+/// are deleted (already preprocessed input keeps them, as GCC reads it). The
 /// returned remaps record every place where spliced and original offsets stop
 /// advancing together. A buffer that needs changes is copied into `scratch`.
 /// C99: §5.1.1.2p1-2, pp. 9-10; PDF pp. 21-22; trigraph mapping §5.2.1.1p1,
@@ -30,6 +31,7 @@ pub(super) fn splice<'a>(
     source: &'a str,
     scratch: &'a Bump,
     trigraphs: bool,
+    splices: bool,
 ) -> (&'a str, &'a [Remap]) {
     let bytes = source.as_bytes();
     let mut special = byte_scan::find_phase2_special(bytes);
@@ -58,7 +60,7 @@ pub(super) fn splice<'a>(
                 text.push('\n');
                 1
             },
-            | [b'\\', after @ ..] => match line_ending_length(after) {
+            | [b'\\', after @ ..] if splices => match line_ending_length(after) {
                 | Some(ending) => {
                     remaps.push(Remap {
                         clean: text.len(),
@@ -70,6 +72,10 @@ pub(super) fn splice<'a>(
                     text.push('\\');
                     1
                 },
+            },
+            | [b'\\', ..] => {
+                text.push('\\');
+                1
             },
             | [b'?', b'?', third, after @ ..]
                 if trigraphs && let Some(replacement) = trigraph_replacement(*third) =>

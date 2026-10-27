@@ -295,6 +295,48 @@ impl<'a> Liveness<'a> {
         FixedRanges { ranges }
     }
 
+    /// The virtual registers live across a call that may return twice, as
+    /// a set. A second return resumes after the call with the callee-saved
+    /// registers as they were at the first (`longjmp` restores them), but
+    /// with memory as the program left it, so such a value must keep a spill
+    /// slot of its own: coalescing would let another register's later
+    /// definitions overwrite it. C99: §7.13.2.1 paragraph 3, p. 244; PDF
+    /// p. 256.
+    pub(super) fn live_across_returns_twice(
+        &self,
+        func: &MFunction<'_>,
+        arena: &'a Bump,
+    ) -> ArenaVec<'a, u64> {
+        let mut across = ArenaVec::with_capacity_in(self.words, arena);
+        across.resize(self.words, 0_u64);
+        let mut live = ArenaVec::with_capacity_in(self.words, arena);
+        for (block, data) in func.blocks.iter().enumerate() {
+            let calls = |inst: &MInst| {
+                matches!(
+                    inst,
+                    MInst::Call {
+                        returns_twice: true,
+                        ..
+                    }
+                )
+            };
+            if !data.insts.iter().any(calls) {
+                continue;
+            }
+            live.clear();
+            live.extend_from_slice(self.out(block));
+            for inst in data.insts.iter().rev() {
+                if calls(inst) {
+                    for (word, &bits) in across.iter_mut().zip(live.iter()) {
+                        *word |= bits;
+                    }
+                }
+                transfer(&mut { *inst }, &mut live);
+            }
+        }
+        across
+    }
+
     /// The live-in set of `block`.
     pub(super) fn live_in(&self, block: usize) -> &[u64] {
         &self.live_in[block * self.words..(block + 1) * self.words]
@@ -326,7 +368,7 @@ fn transfer(inst: &mut MInst, live: &mut [u64]) {
     });
 }
 
-fn contains(set: &[u64], vreg: VReg) -> bool {
+pub(super) fn contains(set: &[u64], vreg: VReg) -> bool {
     set[vreg.index() / 64] & (1 << (vreg.index() % 64)) != 0
 }
 

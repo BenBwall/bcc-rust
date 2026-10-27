@@ -11,13 +11,15 @@
 //! capability refusals. `entities` completes linked entities, symbol requests
 //! and function policy after attribute and definition finalization.
 //! `initializer_plans` retains the subobject placement the current-object
-//! checker accepted for each initializer. Regions
+//! checker accepted for each initializer. `assembly` retains each checked
+//! GNU `asm` statement's template, operand locations and clobbers. Regions
 //! distinguish lexical scope, VM declaration protection, GNU cleanup
 //! declarations and GNU block expressions; transitions are compact parent-chain
 //! runs, never ancestor lists. C99: §6.2.1, pp. 29-30; PDF pp. 41-42; §6.2.4p6,
 //! p. 32; PDF p. 44; §6.8.4-6.8.6, pp. 133-139; PDF pp. 145-151.
 
 pub(super) mod ancestry;
+mod assembly;
 mod bounds;
 pub(super) mod builder;
 mod builtin_instances;
@@ -33,6 +35,7 @@ pub(super) mod resolved;
 mod sizes;
 mod symbols;
 
+pub(crate) use assembly::*;
 pub(crate) use builtin_instances::{
     BuiltinCallFacts,
     BuiltinOperand,

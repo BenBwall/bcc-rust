@@ -10,8 +10,9 @@
 //! the value in its caller that receives its result. Returning pops the
 //! frame, frees its slots and stores the result into the caller.
 //!
-//! Values are integers of each width (as masked `u128` bits), `f32` and
-//! `f64`, pointers with provenance, and poison, following the IR's LLVM-like
+//! Values are integers of each width (as masked `u128` bits), `f32`, `f64`
+//! and x87 `f80` (computed bit for bit by `crate::x87`), pointers with
+//! provenance, and poison, following the IR's LLVM-like
 //! rules exactly: violated `nsw`, `nuw`, `exact` or `inbounds` facts give
 //! poison, poison propagates, and branching on poison, dividing by it or
 //! using it as an address traps as undefined behaviour. Memory is a set of
@@ -33,7 +34,8 @@
 //! - Execution: `machine.rs` loads a module and moves between frames and
 //!   blocks; `execute.rs` dispatches one instruction; `varargs.rs` implements
 //!   `va_start`, `va_arg`, `va_copy` and `va_end`; `nonlocal.rs` `setjmp` and
-//!   `longjmp`. `main.rs` supplies writable arguments for hosted C entry;
+//!   `longjmp`; `callbacks.rs` `qsort` and `bsearch`, which call back into the
+//!   program. `main.rs` supplies writable arguments for hosted C entry;
 //!   `startup.rs` orders and runs constructors and destructors around it.
 //! - Semantics of values: `value.rs` defines runtime values and pointers;
 //!   `arithmetic.rs` the arithmetic, comparisons and conversions; `memory.rs`
@@ -44,8 +46,8 @@
 //! - `text.rs` runs textual IR for tests; `tests.rs` and `tests/` exercise the
 //!   interpreter.
 //!
-//! Limits: `f80` values and `f128` arithmetic trap as unsupported; `f128`
-//! representations support constants, loads, stores, freeze and bitcasts.
+//! Limits: `f128` arithmetic traps as unsupported; `f128` representations
+//! support constants, loads, stores, freeze and bitcasts.
 //! `inttoptr` maps an address to the live object containing it, a deterministic
 //! stand-in for a full provenance model. Declared globals without an
 //! initializer have unresolved addresses; accessing their data traps.
@@ -53,6 +55,7 @@
 //! storage.
 
 // Execution
+pub(crate) mod callbacks;
 mod execute;
 mod machine;
 mod main;
@@ -87,6 +90,7 @@ mod tests;
 mod text;
 
 pub(crate) use host::{
+    Channel,
     DefaultHost,
     Host,
     HostCall,
@@ -210,24 +214,27 @@ impl Machine<'_, '_, '_> {
     /// Executes an entered program until it terminates or traps.
     fn run(&mut self, host: &mut dyn Host) -> Result<Outcome, Trap> {
         loop {
-            if self.limits.steps != 0 && self.steps == self.limits.steps {
-                return Err(Trap::StepLimit);
-            }
-            // Unlimited execution must not overflow its observation counter.
-            self.steps = self.steps.saturating_add(1);
-            let (location, inst) = self.fetch();
-            match self.execute(inst, host) {
-                | Ok(None) => {},
-                | Ok(Some(termination)) =>
-                    return Ok(Outcome {
-                        termination,
-                        steps: self.steps,
-                        #[cfg(test)]
-                        memory_cells: self.memory.backing_cells(),
-                    }),
-                | Err(fault) => return Err(self.trap(fault, location)),
+            if let Some(termination) = self.step(host)? {
+                return Ok(Outcome {
+                    termination,
+                    steps: self.steps,
+                    #[cfg(test)]
+                    memory_cells: self.memory.backing_cells(),
+                });
             }
         }
+    }
+
+    /// Executes one instruction, saying whether the program ended.
+    fn step(&mut self, host: &mut dyn Host) -> Result<Option<Termination>, Trap> {
+        if self.limits.steps != 0 && self.steps == self.limits.steps {
+            return Err(Trap::StepLimit);
+        }
+        // Unlimited execution must not overflow its observation counter.
+        self.steps = self.steps.saturating_add(1);
+        let (location, inst) = self.fetch();
+        self.execute(inst, host)
+            .map_err(|fault| self.trap(fault, location))
     }
 }
 
@@ -267,4 +274,7 @@ struct Machine<'m, 'ir, 'a> {
     activations:    u64,
     /// The last value `read_timestamp` produced.
     timestamp:      u64,
+    /// While a C library function runs a comparison function: the frame
+    /// depth its frame returns to, then the value it returned.
+    callback:       Option<callbacks::Callback>,
 }

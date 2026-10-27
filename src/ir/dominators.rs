@@ -7,7 +7,9 @@
 //! dominator to the intersection of its processed predecessors' dominators,
 //! and repeat until nothing changes. The intersection walks two blocks up the
 //! tree by their post-order numbers until they meet. The post-order itself
-//! comes from a depth-first search on an explicit stack.
+//! comes from a depth-first search on an explicit stack. A depth-first walk
+//! of the finished tree numbers each block on entry and exit, so a dominance
+//! query compares two intervals instead of walking up the tree.
 
 use super::{
     Body,
@@ -32,6 +34,9 @@ pub(crate) struct DominatorTree<'s> {
     rpo_numbers:        ArenaVec<'s, u32>,
     /// Each reachable block's immediate dominator; the entry's is itself.
     idoms:              ArenaVec<'s, Block>,
+    /// Each reachable block's preorder number in the dominator tree, and
+    /// the largest number among the blocks it dominates.
+    intervals:          ArenaVec<'s, (u32, u32)>,
 }
 
 const UNREACHABLE: u32 = u32::MAX;
@@ -89,10 +94,12 @@ impl<'s> DominatorTree<'s> {
                 }
             }
         }
+        let intervals = tree_intervals(&reverse_post_order, &idoms, scratch);
         Self {
             reverse_post_order,
             rpo_numbers,
             idoms,
+            intervals,
         }
     }
 
@@ -110,14 +117,9 @@ impl<'s> DominatorTree<'s> {
         if !self.is_reachable(a) || !self.is_reachable(b) {
             return false;
         }
-        let target = self.rpo_numbers[a.index()];
-        let mut block = b;
-        // Dominators precede the blocks they dominate in reverse post-order,
-        // so the walk up the tree stops once it passes `a`'s number.
-        while self.rpo_numbers[block.index()] > target {
-            block = self.idoms[block.index()];
-        }
-        block == a
+        // `a` dominates exactly the blocks numbered within its subtree.
+        let (first, last) = self.intervals[a.index()];
+        (first..=last).contains(&self.intervals[b.index()].0)
     }
 
     pub(crate) fn is_reachable(&self, block: Block) -> bool {
@@ -143,6 +145,58 @@ fn intersect(idoms: &[Block], rpo_numbers: &[u32], mut a: Block, mut b: Block) -
         }
     }
     a
+}
+
+/// Numbers the dominator tree in preorder: each reachable block gets its own
+/// number and the largest number in its subtree. Children are gathered by
+/// counting, so the walk is linear in the number of blocks.
+fn tree_intervals<'s>(
+    reverse_post_order: &[Block],
+    idoms: &[Block],
+    scratch: &'s Bump,
+) -> ArenaVec<'s, (u32, u32)> {
+    let blocks = idoms.len();
+    let mut intervals = ArenaVec::with_capacity_in(blocks, scratch);
+    intervals.resize(blocks, (0, 0));
+    let Some((&entry, rest)) = reverse_post_order.split_first() else {
+        return intervals;
+    };
+    // `starts[p]..starts[p + 1]` indexes the children of block `p`.
+    let mut starts = ArenaVec::with_capacity_in(blocks + 1, scratch);
+    starts.resize(blocks + 1, 0_u32);
+    for &block in rest {
+        starts[idoms[block.index()].index() + 1] += 1;
+    }
+    for index in 0..blocks {
+        starts[index + 1] += starts[index];
+    }
+    let mut filled = ArenaVec::with_capacity_in(blocks, scratch);
+    filled.extend_from_slice(&starts[..blocks]);
+    let mut children = ArenaVec::with_capacity_in(rest.len(), scratch);
+    children.resize(rest.len(), entry);
+    for &block in rest {
+        let parent = idoms[block.index()].index();
+        children[filled[parent] as usize] = block;
+        filled[parent] += 1;
+    }
+    let mut next = 0_u32;
+    let mut stack: ArenaVec<'_, (Block, u32)> = ArenaVec::new_in(scratch);
+    intervals[entry.index()].0 = next;
+    stack.push((entry, starts[entry.index()]));
+    while let Some(top) = stack.last_mut() {
+        let (block, child) = *top;
+        if child < starts[block.index() + 1] {
+            top.1 += 1;
+            let child = children[child as usize];
+            next += 1;
+            intervals[child.index()].0 = next;
+            stack.push((child, starts[child.index()]));
+        } else {
+            intervals[block.index()].1 = next;
+            _ = stack.pop();
+        }
+    }
+    intervals
 }
 
 /// The blocks reachable from block 0 in reverse post-order, by a depth-first

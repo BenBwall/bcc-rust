@@ -363,8 +363,10 @@ int main(void) { pthread_t threads[4]; for(int i=0;i<4;i++) if(pthread_create(&t
     }
 }
 
+/// The native back end compiles the compare-exchange loop lowering makes of
+/// an `_Atomic` increment into `lock cmpxchg` (`isel/atomic.rs`).
 #[test]
-fn native_backend_truthfully_refuses_atomic_execution() {
+fn native_backend_compiles_atomic_execution() {
     with_atomic_module(
         "_Atomic int x; int main(void) { return x++; }",
         Target::LinuxGnu,
@@ -372,10 +374,9 @@ fn native_backend_truthfully_refuses_atomic_execution() {
         Profile::PostAbi,
         |module, _| {
             let mut assembly = String::new();
-            let error =
-                crate::backend::native::emit_assembly(module, Target::LinuxGnu, &mut assembly)
-                    .unwrap_err();
-            assert!(error.to_string().contains("atomic"), "{error}");
+            crate::backend::native::emit_assembly(module, Target::LinuxGnu, &mut assembly)
+                .unwrap_or_else(|error| panic!("{error}\n{module}"));
+            assert!(assembly.contains("\tlock cmpxchgl\t"), "{assembly}");
         },
     );
 }

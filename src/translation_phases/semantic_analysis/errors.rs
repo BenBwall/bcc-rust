@@ -56,6 +56,8 @@ pub(crate) enum SemanticErrorKind {
     PragmaPackPopNameAlignment,
     PragmaPackUnterminated,
     PragmaPackShow(u32),
+    /// `-fpack-struct` packs every structure, so a pack pragma does nothing.
+    PragmaPackIgnored,
     /// C99: §7.15p3, p. 249; PDF p. 261.
     InvalidVaList,
     /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
@@ -235,6 +237,11 @@ pub(crate) enum SemanticErrorKind {
     InvalidCast,
     /// C99: §6.5.3.4p1, p. 80; PDF p. 92.
     InvalidSizeof,
+    /// An lvalue of incomplete structure, union or enumeration type used
+    /// for its value. C99 leaves the behavior undefined; GCC and Clang
+    /// reject it, and there is no value to load.
+    /// C99: §6.3.2.1p2, p. 46; PDF p. 58.
+    IncompleteValue,
     /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
     InvalidMemberAccess,
     /// C99: §6.5.2.2p1, p. 71; PDF p. 83.
@@ -384,6 +391,11 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Floating Types".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
     UnsupportedFloat128,
+    /// `_Float128` needs binary128 and `_Float64x` a format wider than
+    /// binary64, which the target lacks.
+    /// C23: implementation-defined extended types, §H.2.4 paragraph 2,
+    /// p. 554; PDF p. 567.
+    UnsupportedInterchangeFloat,
     /// GCC Other Builtins: `choose_expr` requires an integer constant.
     /// GNU extension: GCC manual, "Other Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
@@ -445,6 +457,9 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "x86 Built-in Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     InvalidImmediate,
+    /// GNU extension: GCC manual, "Extended Asm"; C99 §J.5.10, p. 514;
+    /// PDF p. 526.
+    InvalidAsm(super::assembly::AsmFault),
     /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
     /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
     /// ignored). GNU extension: GCC manual, "Attribute Syntax".
@@ -594,8 +609,10 @@ impl SemanticErrorKind {
             | Self::PragmaPackPopEmpty
             | Self::PragmaPackPopNameAlignment
             | Self::PragmaPackUnterminated
-            | Self::PragmaPackShow(_) => "packing directive",
-            | Self::UnsupportedFloat128 => "unsupported floating type",
+            | Self::PragmaPackShow(_)
+            | Self::PragmaPackIgnored => "packing directive",
+            | Self::UnsupportedFloat128 | Self::UnsupportedInterchangeFloat =>
+                "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
@@ -607,6 +624,7 @@ impl SemanticErrorKind {
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
+            | Self::InvalidAsm(fault) => fault.label(),
             | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
             | Self::AmbiguousOverload => "ambiguous overload",
@@ -675,6 +693,7 @@ impl SemanticErrorKind {
             | Self::InvalidAssignment => "value cannot be assigned to this type",
             | Self::InvalidCast => "invalid conversion",
             | Self::InvalidSizeof => "operand has no size",
+            | Self::IncompleteValue => "value of incomplete type",
             | Self::InvalidMemberAccess => "no such member",
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
@@ -871,6 +890,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::DllAttributeOnRedeclaration
                     | crate::configuration::DiagnosticGroup::InconsistentDllimport
                     | crate::configuration::DiagnosticGroup::UnknownStdcPragma
+                    | crate::configuration::DiagnosticGroup::UnknownEscapeSequence
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
                     | crate::configuration::DiagnosticGroup::InitializerOverrides
@@ -885,6 +905,7 @@ impl SemanticErrorKind {
             | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
             | Self::PragmaPackUnterminated => ("unterminated '#pragma pack(push, ...)' at end of file", "restore the saved packing state with #pragma pack(pop)"),
             | Self::PragmaPackShow(_) => ("current #pragma pack alignment value", "GCC/MSVC packing state at this directive"),
+            | Self::PragmaPackIgnored => ("'#pragma pack' has no effect with '-fpack-struct' - ignored", "GCC packs every structure under -fpack-struct without a value"),
             | Self::BuiltinRequiresHeader => (
                 "this builtin's prototype needs the FILE type of <stdio.h>",
                 "GNU extension: the checked stream builtin takes a FILE pointer; Clang rejects its use until FILE is declared",
@@ -945,6 +966,11 @@ impl SemanticErrorKind {
                 "__builtin_choose_expr requires an integer constant expression",
                 "GCC Other Builtins: __builtin_choose_expr selects its second or third operand \
                  using an integer constant expression, preserving the selected type",
+            ),
+            | Self::UnsupportedInterchangeFloat => (
+                "this floating type is not supported on this target",
+                "C23 Annex H: _Float128 needs binary128 and _Float64x a format wider than \
+                 binary64; this target's long double is binary64 and it has no binary128 type",
             ),
             | Self::UnsupportedFloat128 => (
                 "__float128 is not supported on this target",
@@ -1010,6 +1036,7 @@ impl SemanticErrorKind {
                 "Clang Language Extensions: shufflevector requires matching vectors and constant \
                  indices; convertvector requires equal lane counts",
             ),
+            | Self::InvalidAsm(fault) => fault.explanation(),
             | Self::InvalidImmediate => (
                 "invalid intrinsic immediate operand",
                 "Clang x86 intrinsics: the immediate operand must be an integer constant \
@@ -1277,6 +1304,10 @@ impl SemanticErrorKind {
                 "size query requires a complete object type and no bit-field",
                 "C99 §6.5.3.4p1: sizeof cannot be applied to function, incomplete or bit-field \
                  types",
+            ),
+            | Self::IncompleteValue => (
+                "value of an object requires a complete type",
+                "C99 §6.3.2.1p2: an lvalue of incomplete non-array type has no value to convert to",
             ),
             | Self::InvalidMemberAccess => (
                 "member access requires a declared record member",
@@ -1892,6 +1923,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PragmaPackPopNameAlignment
                 | SemanticErrorKind::PragmaPackUnterminated
                 | SemanticErrorKind::PragmaPackShow(_)
+                | SemanticErrorKind::PragmaPackIgnored
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::MissingReturnValueWarning
                 | SemanticErrorKind::PredefinedOutsideFunction

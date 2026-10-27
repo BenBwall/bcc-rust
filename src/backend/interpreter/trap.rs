@@ -20,7 +20,7 @@ pub(crate) enum Trap {
     /// The program did something the IR leaves undefined.
     UndefinedBehavior(UbKind, Location),
     /// The program used something the interpreter does not implement, such
-    /// as `f80` arithmetic.
+    /// as `f128` arithmetic.
     Unsupported(Unsupported, Location),
     /// The program called a declared function that neither the module nor
     /// the host defines.
@@ -176,6 +176,14 @@ pub(crate) enum UbKind {
     PoisonInHostCall,
     /// `printf` ran out of arguments for its conversions.
     MissingFormatArgument,
+    /// A stream argument that is not an open `FILE`, such as one already
+    /// closed.
+    /// C99: §7.19.3 paragraph 4, p. 264; PDF p. 276.
+    InvalidStream,
+    /// A comparison function of `qsort` or `bsearch` whose type is not
+    /// `int (const void *, const void *)`, or one the host defines.
+    /// C99: §7.20.5 paragraph 2, p. 318; PDF p. 330.
+    InvalidComparison,
     /// `longjmp` with a buffer that holds no environment `setjmp` saved,
     /// or one whose function has returned since.
     /// C99: §7.13.2.1 paragraph 2, p. 244; PDF p. 256.
@@ -212,6 +220,8 @@ impl fmt::Display for UbKind {
             | Self::VaArgTypeMismatch => "va_arg of the wrong type",
             | Self::PoisonInHostCall => "poison passed to a host function",
             | Self::MissingFormatArgument => "printf has too few arguments",
+            | Self::InvalidStream => "a stream argument that is not an open FILE",
+            | Self::InvalidComparison => "a qsort or bsearch comparison function of the wrong type",
             | Self::InvalidJmpBuf =>
                 "longjmp to an environment that no active setjmp invocation saved",
         })
@@ -221,7 +231,8 @@ impl fmt::Display for UbKind {
 /// Something the interpreter does not implement.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Unsupported {
-    /// An `f80` or `f128` value.
+    /// `f128` arithmetic, or an `f80` library function the host does not
+    /// compute exactly.
     WideFloat,
     /// An object larger than [`Limits::max_object_size`] or than memory.
     ///
@@ -229,31 +240,36 @@ pub(crate) enum Unsupported {
     ObjectSize,
     /// More objects or addresses than the interpreter can number.
     AddressSpace,
-    /// A `printf` conversion other than those the default host implements.
+    /// A `printf` or `scanf` conversion other than those the default host
+    /// implements.
     FormatConversion,
     /// A field width over the host's bounded padding limit.
     FormatWidth,
     /// A post-ABI `va_start` in a module without a supported target.
     VaListTarget,
-    /// A variadic argument wider than a Win64 slot, which the target would
-    /// pass by reference.
-    WideVariadic,
     /// A function that may return twice other than the `setjmp` family,
     /// such as `vfork` or one declared GNU `returns_twice`.
     ReturnsTwice,
+    /// Inline assembly, whose machine code the interpreter cannot run.
+    /// GNU extension: GCC manual, "Extended Asm".
+    InlineAsm,
+    /// A `longjmp` out of a function `qsort` or `bsearch` called.
+    CallbackEscape,
 }
 
 impl fmt::Display for Unsupported {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            | Self::WideFloat => "f80 and f128 values",
+            | Self::WideFloat => "f128 arithmetic or an f80 library function",
             | Self::ObjectSize => "an object larger than the size limit",
             | Self::AddressSpace => "more objects than the interpreter can address",
-            | Self::FormatConversion => "a printf conversion the host does not implement",
+            | Self::FormatConversion => "a printf or scanf conversion the host does not implement",
             | Self::FormatWidth => "a printf field width larger than the size limit",
             | Self::VaListTarget => "a target va_list in a module without a known target",
-            | Self::WideVariadic => "a Win64 variadic argument wider than eight bytes",
             | Self::ReturnsTwice => "a returns-twice function other than setjmp",
+            | Self::InlineAsm =>
+                "inline assembly, which only compiled code can run; compile it with -o instead",
+            | Self::CallbackEscape => "a longjmp out of a qsort or bsearch comparison",
         })
     }
 }
@@ -291,10 +307,6 @@ impl fmt::Display for EntryError {
 /// A trap before the main loop knows where it happened; `Machine::trap`
 /// adds the location.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "An unresolved-object fault carries the global ID needed to name its symbol."
-)]
 pub(crate) enum Fault {
     Ub(UbKind),
     Unsupported(Unsupported),
@@ -303,6 +315,9 @@ pub(crate) enum Fault {
     /// The module declares the object but supplies no storage for it.
     UnknownGlobal(GlobalId),
     StackDepthLimit,
+    /// A trap inside a function the C library called back, such as a
+    /// `qsort` comparison, which already knows its location.
+    Nested(Trap),
 }
 
 impl From<UbKind> for Fault {

@@ -460,13 +460,20 @@ mod tests {
              helper(void){return rt();}int f(void){static int(*p)(void)=helper;return 0;} int \
              main(void){return f();}",
         );
+        // The native back end compiles returns-twice calls, so a retained
+        // helper that makes one is emitted.
         let used_native_helper = bcc(
             "int rt(void) __attribute__((returns_twice));int rt(void){return 0;} static int \
              helper(void){return rt();}int f(void){static int(*p)(void) \
              __attribute__((used))=helper;return 0;}int main(void){return f();}",
             &["--backend=native", "--emit=asm"],
         );
-        assert!(!used_native_helper.status.success());
+        assert!(
+            used_native_helper.status.success(),
+            "{}",
+            text(&used_native_helper.stderr)
+        );
+        assert!(text(&used_native_helper.stdout).contains("callq\trt"));
         let used_helper = bcc(
             "int g; static void helper(void){g=__builtin_ia32_rdtsc();} void f(void){static void \
              (*p)(void) __attribute__((used))=helper;} int main(void){f();return 0;}",

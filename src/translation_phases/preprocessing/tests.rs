@@ -145,7 +145,7 @@ fn adjacent_string_diagnostics_remain_in_source_order() {
             errors,
             [
                 TranslationError::Preprocessing(PreprocessorError {
-                    error_type: PreprocessorErrorType::InvalidEscapeSequence,
+                    error_type: PreprocessorErrorType::UnknownEscapeSequence('q'),
                     ..
                 }),
                 TranslationError::Preprocessing(PreprocessorError {

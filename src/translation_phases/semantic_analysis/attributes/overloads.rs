@@ -379,17 +379,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     TypeKind::Scalar(Scalar::ComplexLongDouble | Scalar::ComplexFloat128)
                 )
             );
-            let complex = |ty| {
-                matches!(
-                    ty,
-                    TypeKind::Scalar(
-                        Scalar::ComplexFloat
-                            | Scalar::ComplexDouble
-                            | Scalar::ComplexLongDouble
-                            | Scalar::ComplexFloat128
-                    )
-                )
-            };
+            let complex = |ty| matches!(ty, TypeKind::Scalar(s) if s.complex());
             rank.push(if promotion || floating_promotion {
                 1
             } else if complex(from_scalar) != complex(to_scalar)

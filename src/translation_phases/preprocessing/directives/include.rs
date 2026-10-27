@@ -281,8 +281,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         None
     }
 
-    /// The file `path` names in `directory`, interned, when it exists there.
-    /// The resource directory holds exactly the embedded headers.
+    /// The file `path` names in `directory`, interned, when it exists there
+    /// in the context's file system. The resource directory holds exactly
+    /// the embedded headers.
     pub(in crate::translation_phases::preprocessing) fn probe_header(
         &mut self,
         directory: &Path,
@@ -297,8 +298,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         // before the next one, so a lookup leaves nothing there.
         let mut buffer = ArenaVec::new_in(self.scratch);
         let candidate = join_path(&mut buffer, directory, path);
-        candidate
-            .is_file()
+        self.context
+            .file_exists(candidate)
             .then(|| self.context.intern_source_file(candidate))
     }
 
@@ -326,9 +327,21 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         is_system_header: bool,
         start: Option<usize>,
     ) -> Option<(u32, Option<usize>)> {
+        // As in GCC, a header included from a system header is one, however
+        // it is found: the directive's own position decides, so a line
+        // marker with flag 3 or `#pragma GCC system_header` before it counts.
+        let directive_system = operand.length() != 0
+            && self
+                .context
+                .in_system_header(self.context.expansion_location(operand));
         let found = if path.is_absolute() {
-            path.is_file()
-                .then(|| (self.context.intern_source_file(path), None))
+            self.context.file_exists(path).then(|| {
+                let index = self.context.intern_source_file(path);
+                if directive_system {
+                    self.context.mark_system_header(index, 0);
+                }
+                (index, None)
+            })
         } else {
             let places = self.header_search_places(including_file, is_system_header, start);
             let mut found = None;
@@ -336,12 +349,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 if let Some(index) = self.probe_header(directory, path) {
                     // As in GCC, a header found through a system directory
                     // is a system header, and so is one found beside a
-                    // system header.
-                    let system = if let Some(search_index) = search_index {
-                        self.context.is_system_include_directory(search_index)
-                    } else {
-                        self.context.has_system_header_part(including_file)
-                    };
+                    // system header or included from one.
+                    let system = directive_system
+                        || if let Some(search_index) = search_index {
+                            self.context.is_system_include_directory(search_index)
+                        } else {
+                            self.context.has_system_header_part(including_file)
+                        };
                     if system {
                         self.context.mark_system_header(index, 0);
                     }

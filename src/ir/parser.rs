@@ -36,6 +36,12 @@ use super::{
         Value,
     },
     function::StackSlotData,
+    inline_asm::{
+        AsmClobbers,
+        AsmConstraint,
+        AsmOperand,
+        InlineAsm,
+    },
     instructions::{
         Align,
         BlockCall,
@@ -994,6 +1000,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                     args: self.builder.value_list(&args),
                 }
             },
+            | Opcode::InlineAsm => self.inline_asm()?,
             | Opcode::Jump => InstData::Jump {
                 dest: self.block_call()?,
             },
@@ -1035,6 +1042,75 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             },
             | Opcode::Unreachable => InstData::Unreachable,
             | _ => unreachable!("every opcode has an arm above"),
+        })
+    }
+
+    /// `[sideeffect] "template" (out|in "constraint" type [bytes N] value,
+    /// ...) [clobber(name, ...)]`: adds the descriptor to the module.
+    fn inline_asm(&mut self) -> Result<InstData, ParseError<'t>> {
+        let side_effects = self.cursor.eat(TokenKind::Ident("sideeffect"));
+        let token = self.cursor.next();
+        let template = token.asm_text(self.scratch)?;
+        self.cursor.expect(TokenKind::LParen, "`(`")?;
+        let mut operands = ArenaVec::new_in(self.scratch);
+        let mut values = ArenaVec::new_in(self.scratch);
+        while !self.cursor.eat(TokenKind::RParen) {
+            if !operands.is_empty() {
+                self.cursor.expect(TokenKind::Comma, "`,` or `)`")?;
+            }
+            let role = self.cursor.next();
+            let output = match role.kind {
+                | TokenKind::Ident("out") => true,
+                | TokenKind::Ident("in") => false,
+                | _ => return Err(role.expected("`out` or `in`")),
+            };
+            let (token, text) = self.cursor.string()?;
+            let (early_clobber, text) = match text.strip_prefix('&') {
+                | Some(rest) => (true, rest),
+                | None => (false, text),
+            };
+            let constraint =
+                AsmConstraint::parse(text).ok_or_else(|| token.expected("an asm constraint"))?;
+            let ty = self.cursor.ty()?;
+            let bytes = if self.cursor.eat(TokenKind::Ident("bytes")) {
+                let (token, bytes) = self.cursor.unsigned()?;
+                u32::try_from(bytes).map_err(|_| token.expected("a byte count"))?
+            } else {
+                ty.bytes()
+            };
+            operands.push(AsmOperand {
+                output,
+                early_clobber,
+                constraint,
+                ty,
+                bytes,
+            });
+            values.push(self.value()?);
+        }
+        let mut clobbers = AsmClobbers::default();
+        if self.cursor.eat(TokenKind::Ident("clobber")) {
+            self.cursor.expect(TokenKind::LParen, "`(`")?;
+            let mut first = true;
+            while !self.cursor.eat(TokenKind::RParen) {
+                if !first {
+                    self.cursor.expect(TokenKind::Comma, "`,` or `)`")?;
+                }
+                first = false;
+                let token = self.cursor.next();
+                if !matches!(token.kind, TokenKind::Ident(name) if clobbers.add(name)) {
+                    return Err(token.expected("a clobbered register"));
+                }
+            }
+        }
+        let asm = InlineAsm {
+            template,
+            operands: &operands,
+            clobbers,
+            side_effects,
+        };
+        Ok(InstData::InlineAsm {
+            asm:  self.builder.add_inline_asm(&asm),
+            args: self.builder.value_list(&values),
         })
     }
 

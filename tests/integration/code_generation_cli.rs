@@ -150,6 +150,100 @@ int main(void) {
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// `-funsigned-char` makes plain `char` unsigned in every phase, with
+    /// the resource `<limits.h>` following it; `-fsigned-char` restores the
+    /// target's signed `char`, and the last flag wins.
+    #[test]
+    fn unsigned_char_flag_reaches_limits_folding_and_lowering() {
+        let source = "#include <limits.h>\nstatic int f(char x) { return x; }\nint main(void) { \
+                      char d = -1; return (d > 0) + (f((char)0x80) == 128) * 2 + (CHAR_MIN == 0) \
+                      * 4 + (CHAR_MAX == 255) * 8 + ('\\xff' == 255) * 16; }\n";
+        for (flags, expected) in [
+            (&["-funsigned-char"][..], 31),
+            (&["-fno-signed-char"], 31),
+            (&["-funsigned-char", "-fsigned-char"], 0),
+            (&[], 0),
+        ] {
+            let result = bcc(
+                source,
+                &[&["-ffreestanding", "--interpret"][..], flags].concat(),
+            );
+            assert_eq!(
+                result.status.code(),
+                Some(expected),
+                "{flags:?}: {}",
+                text(&result.stderr)
+            );
+        }
+    }
+
+    /// `-ffloatn-types` makes `_Float32`, `_Float64` and `_Float32x`
+    /// distinct types that compute in binary32 and binary64, with their
+    /// constant suffixes and GCC's infinity builtins (C23 Annex H).
+    #[test]
+    fn floatn_types_lower_with_their_standard_representations() {
+        let source = "int main(void) {\n  _Float32 a = 1.5f32; _Float64 b = 2.25f64; _Float32x c \
+                      = 0.5f32x;\n  float f = a * 2;\n  _Float64 sum = a + b + c;\n  if (sum != \
+                      4.25 || f != 3.0f || _Generic(a + f, _Float32: 0, default: 1)) return 1;\n  \
+                      if (!(__builtin_inff32() > 1e38f32)) return 2;\n  _Complex _Float32 z = a; \
+                      return (int)(__real__ z * 4) + (int)sizeof c;\n}\n";
+        let result = bcc(source, &["-ffloatn-types", "--interpret"]);
+        assert_eq!(result.status.code(), Some(14), "{}", text(&result.stderr));
+        let rejected = bcc(source, &["--interpret"]);
+        assert_eq!(
+            rejected.status.code(),
+            Some(1),
+            "{}",
+            text(&rejected.stderr)
+        );
+    }
+
+    /// An unknown escape sequence stands for its character after a
+    /// warning in every mode, as GCC and Clang do: `-pedantic-errors` makes
+    /// it an error, and its `unknown-escape-sequence` group controls it.
+    #[test]
+    fn unknown_escape_sequences_warn_and_use_the_character() {
+        let source = "int main(void) { return '\\j' == 'j' && sizeof \"\\%\" == 2 ? 7 : 1; }\n";
+        for flags in [
+            &["--interpret"][..],
+            &["--interpret", "-std=c11"],
+            &["--interpret", "-std=gnu17", "-pedantic"],
+        ] {
+            let result = bcc(source, flags);
+            assert_eq!(
+                result.status.code(),
+                Some(7),
+                "{flags:?}: {}",
+                text(&result.stderr)
+            );
+            let stderr = text(&result.stderr);
+            assert!(
+                stderr.contains("warning: unknown escape sequence `\\j`")
+                    && stderr.contains("[-Wunknown-escape-sequence]"),
+                "{flags:?}: {stderr}"
+            );
+        }
+        for flags in [
+            &["--interpret", "-pedantic-errors"][..],
+            &["--interpret", "-Werror=unknown-escape-sequence"],
+        ] {
+            let result = bcc(source, flags);
+            assert_eq!(result.status.code(), Some(1), "{flags:?}");
+            assert!(
+                text(&result.stderr).contains("error: unknown escape sequence `\\j`"),
+                "{flags:?}: {}",
+                text(&result.stderr)
+            );
+        }
+        let quiet = bcc(source, &["--interpret", "-Wno-unknown-escape-sequence"]);
+        assert_eq!(quiet.status.code(), Some(7));
+        assert!(
+            !text(&quiet.stderr).contains("warning"),
+            "{}",
+            text(&quiet.stderr)
+        );
+    }
+
     /// Presenting as GCC (GCC's version macros, no Clang ones), glibc
     /// chooses its GCC `_FORTIFY_SOURCE` wrappers, which forward their
     /// anonymous arguments with `__builtin_va_arg_pack ()` and count them
@@ -273,8 +367,9 @@ int main(void) {
     /// parameter, which only expanding the `always_inline` call answers:
     /// bcc answers it after inlining, so overflowing `memcpy`, `strcpy`,
     /// `read` and `snprintf` calls abort with glibc's "buffer overflow
-    /// detected" under both GCC and Clang identity, on both back ends and
-    /// at both optimization levels, while calls that fit run.
+    /// detected" under both GCC and Clang identity and with `--gcc-mode`,
+    /// on both back ends and at both optimization levels, while calls that
+    /// fit run.
     #[test]
     fn glibc_fortify_wrappers_check_object_sizes_after_inlining() {
         if host() != Some("x86_64-unknown-linux-gnu")
@@ -331,19 +426,39 @@ int main(int argc, char **argv) {
 }
 "#;
         let executable = temporary("fortify-sizes.exe");
+        let check = |label: &str| {
+            let fits = run_native(Command::new(&executable).arg("k")).unwrap();
+            assert_eq!(
+                (fits.status.code(), text(&fits.stdout).as_str()),
+                (Some(0), "de xyz\n"),
+                "{label}: {}",
+                text(&fits.stderr)
+            );
+            for case in ["m", "s", "r", "n", "p"] {
+                let output = run_native(Command::new(&executable).arg(case)).unwrap();
+                assert!(
+                    !output.status.success()
+                        && text(&output.stderr).contains("buffer overflow detected"),
+                    "{label} {case}: {:?} {}",
+                    output.status,
+                    text(&output.stderr)
+                );
+            }
+        };
+        let options = [
+            ["--opt=none", "--backend=llvm"],
+            ["--opt=bcc", "--backend=llvm"],
+            ["--opt=none", "--backend=native"],
+            ["--opt=bcc", "--backend=native"],
+        ];
         for identity in [&[][..], &gcc[..]] {
-            for options in [
-                &["--opt=none"][..],
-                &["--opt=bcc"][..],
-                &["--opt=none", "--backend=native"][..],
-                &["--opt=bcc", "--backend=native"][..],
-            ] {
+            for options in options {
                 let built = bcc(
                     source,
                     &[
                         &headers[..],
                         identity,
-                        options,
+                        &options[..],
                         &["-o", executable.to_str().unwrap()],
                     ]
                     .concat(),
@@ -353,25 +468,35 @@ int main(int argc, char **argv) {
                     "{identity:?} {options:?}: {}",
                     text(&built.stderr)
                 );
-                let fits = run_native(Command::new(&executable).arg("k")).unwrap();
-                assert_eq!(
-                    (fits.status.code(), text(&fits.stdout).as_str()),
-                    (Some(0), "de xyz\n"),
-                    "{identity:?} {options:?}: {}",
-                    text(&fits.stderr)
-                );
-                for case in ["m", "s", "r", "n", "p"] {
-                    let output = run_native(Command::new(&executable).arg(case)).unwrap();
-                    assert!(
-                        !output.status.success()
-                            && text(&output.stderr).contains("buffer overflow detected"),
-                        "{identity:?} {options:?} {case}: {:?} {}",
-                        output.status,
-                        text(&output.stderr)
-                    );
-                }
+                check(&format!("{identity:?} {options:?}"));
             }
         }
+        // The GCC personality, whose glibc wrappers forward argument packs.
+        let file = temporary("fortify-sizes.c");
+        std::fs::write(&file, source).unwrap();
+        for [optimizer, backend] in options {
+            let built = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([
+                    "--gcc-mode",
+                    "-D_FORTIFY_SOURCE=2",
+                    "-O2",
+                    "-Xbcc",
+                    optimizer,
+                ])
+                .args(["-Xbcc", backend, "-o"])
+                .arg(&executable)
+                .arg(&file)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            assert!(
+                built.status.success(),
+                "--gcc-mode {optimizer} {backend}: {}",
+                text(&built.stderr)
+            );
+            check(&format!("--gcc-mode {optimizer} {backend}"));
+        }
+        std::fs::remove_file(file).unwrap();
         std::fs::remove_file(executable).unwrap();
     }
 
@@ -492,7 +617,7 @@ int main(int argc, char **argv) { char a[4]; return (argc > 1 ? g(a, \"x\") : f(
                         __attribute__((always_inline))\n";
         let member = "\
 INLINE unsigned long f(struct S *p) { char *q = &p->a[1]; return QUERY(q, MODE); }
-int main(void) { struct S s; return f(&s); }
+int main(void) { struct S s; return f(&s) & 255; }
 ";
         let forwarded = "\
 INLINE unsigned long g(char *q) { return __builtin_object_size(q, 1) + (__builtin_object_size(q, \
@@ -502,13 +627,13 @@ int main(void) { struct S s; return f(&s) & 0xff; }
 ";
         let written = "\
 INLINE unsigned long f(char *p) { p = &((struct S *)p)->b[1]; return __builtin_object_size(p, 1); }
-int main(void) { char buf[16]; return f(buf); }
+int main(void) { char buf[16]; return f(buf) & 255; }
 ";
         // Written through its address (#151 review round 2).
         let through_address = "\
 INLINE unsigned long f(char *p) { char **q = &p; *q = &((struct S *)p)->a[1]; return \
                                __builtin_object_size(p, 3); }
-int main(void) { struct S s; return f((char *)&s); }
+int main(void) { struct S s; return f((char *)&s) & 255; }
 ";
         // A dynamic query of one of two objects (round 2): GCC selects 4 at
         // run time; bcc answers unknown, never the larger 16. The static
@@ -785,21 +910,486 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         }
     }
 
+    /// `tests/fixtures/programs/long_double_encodings.c` builds every x87
+    /// encoding class from raw bytes, including unnormals, pseudo-denormals,
+    /// pseudo-infinities and pseudo-NaNs, and prints the bits the `long
+    /// double` libm functions give: the interpreter must print glibc's.
     #[test]
-    fn host_math_preserves_the_existing_gnu_long_double_execution_limit() {
-        for source in [
-            "long double fabsl(long double); int main(void) { return fabsl(-1.5L)!=1.5L; }",
-            "float nexttowardf(float,long double); int main(void) { return \
-             nexttowardf(1.0f,2.0L)>1.0f; }",
+    fn long_double_encodings_match_glibc_bit_for_bit() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs/long_double_encodings.c");
+        let source = source.to_str().unwrap();
+        let reference = temporary("long-double-encodings.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .args([source, "-std=c99", "-O0", "-fno-builtin", "-lm", "-o"])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(expected.status.code(), Some(0));
+        std::fs::remove_file(reference).unwrap();
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.args([source, "--interpret", optimize]);
+            let output = run_native(&mut command).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{optimize}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), text(&expected.stdout), "{optimize}");
+        }
+    }
+
+    /// `%Lf` reads the target's `long double` from a `va_list` after ABI
+    /// lowering: an x87 value in the System V overflow area, a reference to
+    /// one in a MinGW slot, and an inline binary64 in an MSVC slot.
+    #[test]
+    fn long_double_printf_reads_each_targets_variadic_representation() {
+        let source = "typedef __builtin_va_list va_list;
+int printf(const char *, ...);
+int __vsprintf_chk(char *, int, unsigned long long, const char *, va_list);
+int vprintf(const char *, va_list);
+static void show(const char *format, ...) {
+  va_list list; char text[64];
+  __builtin_va_start(list, format);
+  __vsprintf_chk(text, 1, sizeof text, format, list);
+  __builtin_va_end(list);
+  printf(\"%s\", text);
+  __builtin_va_start(list, format);
+  vprintf(format, list);
+  __builtin_va_end(list);
+}
+int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
+  show(\"%Lf %d %Lg %Le\\n\", x, 8, x * 2, x / 4); return 0; }
+";
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
         ] {
-            let output = bcc(source, &["--interpret", "--target=x86_64-w64-windows-gnu"]);
+            for optimize in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(source, &["--interpret", target, optimize]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{target} {optimize}: {}",
+                    text(&output.stderr)
+                );
+                assert_eq!(
+                    text(&output.stdout),
+                    "1.500000 7 1.500000 8 3 3.750000e-01\n1.500000 8 3 3.750000e-01\n",
+                    "{target} {optimize}"
+                );
+            }
+        }
+    }
+
+    /// `tests/fixtures/programs/host_library.c` exercises the host's streams
+    /// and files, `va_list` formatting, `scanf`, `qsort` and `bsearch` with
+    /// interpreted comparisons (tracing the elements glibc compares), and its
+    /// string, wide-string, character and conversion functions: with host
+    /// files allowed, the interpreter must write what the program built
+    /// against glibc writes, to stdout and to stderr.
+    #[test]
+    fn host_library_functions_match_glibc() {
+        interpreter_matches_glibc("host_library.c", &["--interpret-allow-fs"]);
+    }
+
+    /// `tests/fixtures/programs/scanf_cases.c` runs the `sscanf` edge cases
+    /// that glibc 2.39 to 2.43 agree on: matching and input failures,
+    /// suppression, widths, scansets, white space and every form of floating
+    /// input.
+    #[test]
+    fn scanf_edge_cases_match_glibc() {
+        interpreter_matches_glibc("scanf_cases.c", &[]);
+    }
+
+    /// `tests/fixtures/programs/scanf_cases_modern_glibc.c` runs the `sscanf`
+    /// cases that glibc 2.41 to 2.43 changed (NaN payloads, prefixes without
+    /// digits, field widths): the interpreter follows 2.43, so it must write
+    /// the checked-in `.expected` output on any glibc, and a host with glibc
+    /// 2.43 or later must still write it too.
+    #[test]
+    fn scanf_edge_cases_match_modern_glibc() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let expected =
+            std::fs::read_to_string(fixture_program("scanf_cases_modern_glibc.expected")).unwrap();
+        if host_glibc_version() >= (2, 43) {
+            let glibc = glibc_output("scanf_cases_modern_glibc.c");
+            assert_eq!(text(&glibc.stdout), expected, "glibc");
+        }
+        interpreter_writes("scanf_cases_modern_glibc.c", &[], &expected, "");
+    }
+
+    /// Builds a fixture with clang against glibc and checks that the
+    /// interpreter, with `flags`, writes the same stdout and stderr under
+    /// both optimization settings. GNU/Linux hosts only.
+    fn interpreter_matches_glibc(fixture: &str, flags: &[&str]) {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let expected = glibc_output(fixture);
+        interpreter_writes(
+            fixture,
+            flags,
+            &text(&expected.stdout),
+            &text(&expected.stderr),
+        );
+    }
+
+    /// What a fixture built with clang against the host's glibc writes.
+    fn glibc_output(fixture: &str) -> Output {
+        let source = fixture_program(fixture);
+        let reference = temporary("glibc-reference.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .arg(&source)
+            .args(["-std=c99", "-O0", "-fno-builtin", "-w", "-lm", "-o"])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let output = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(output.status.code(), Some(0));
+        std::fs::remove_file(reference).unwrap();
+        output
+    }
+
+    /// Checks that the interpreter, with `flags`, runs a fixture to exit
+    /// status 0 writing `stdout` and `stderr` under both optimization
+    /// settings.
+    fn interpreter_writes(fixture: &str, flags: &[&str], stdout: &str, stderr: &str) {
+        let source = fixture_program(fixture);
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command
+                .arg(&source)
+                .args(["--interpret", optimize])
+                .args(flags);
+            let output = run_native(&mut command).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{fixture} {optimize}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), stdout, "{fixture} {optimize}");
+            assert_eq!(text(&output.stderr), stderr, "{fixture} {optimize}");
+        }
+    }
+
+    /// The path of `tests/fixtures/programs/{fixture}`.
+    fn fixture_program(fixture: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs")
+            .join(fixture)
+    }
+
+    /// The host glibc's (major, minor) version, from
+    /// `getconf GNU_LIBC_VERSION` ("glibc 2.39").
+    fn host_glibc_version() -> (u32, u32) {
+        let output = Command::new("getconf")
+            .arg("GNU_LIBC_VERSION")
+            .output()
+            .unwrap();
+        let version = text(&output.stdout);
+        let (major, minor) = version
+            .trim()
+            .strip_prefix("glibc ")
+            .and_then(|version| version.split_once('.'))
+            .unwrap_or_else(|| panic!("glibc version {version:?}"));
+        let minor = minor.split('.').next().unwrap();
+        (major.parse().unwrap(), minor.parse().unwrap())
+    }
+
+    /// Host files are opt-in. Without `--interpret-allow-fs`, `fopen` in any
+    /// mode and `remove` fail as for a permission error, the file system is
+    /// untouched, and the interpreter notes the refusal; with it, they act.
+    #[test]
+    fn interpreter_file_access_is_opt_in() {
+        let path = temporary("file-access.txt");
+        std::fs::write(&path, "kept\n").unwrap();
+        let path_text = path.to_str().unwrap().replace('\\', "/");
+        let source = format!(
+            "typedef struct _IO_FILE FILE; int printf(const char *, ...);
+FILE *fopen(const char *, const char *); int fclose(FILE *); int remove(const char *);
+int fputs(const char *, FILE *);
+int main(void) {{ const char *name = \"{path_text}\";
+  FILE *read = fopen(name, \"r\"); FILE *write = fopen(name, \"w\");
+  printf(\"%d %d \", read != 0, write != 0);
+  if (write) {{ fputs(\"replaced\\n\", write); fclose(write); }}
+  if (read) fclose(read);
+  printf(\"%d\\n\", remove(name)); return 0; }}
+"
+        );
+        let output = bcc(&source, &["--interpret"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "0 0 -1\n");
+        let stderr = text(&output.stderr);
+        assert!(
+            stderr.contains("refused 3 host file accesses")
+                && stderr.contains("--interpret-allow-fs"),
+            "{stderr}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept\n");
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "1 1 0\n");
+        assert!(!text(&output.stderr).contains("refused"));
+        assert!(!path.exists());
+    }
+
+    /// stdout and stderr keep glibc's order when both go to one file. stderr
+    /// is unbuffered. stdout to a pipe or file appears at `fflush`, when it
+    /// is closed or reopened (even by a failed `freopen`), and at exit; a
+    /// terminal's stdout, which glibc line-buffers, also at each newline.
+    /// The expected text is what glibc programs print, through a pipe and
+    /// through a pseudo-terminal.
+    #[test]
+    fn interpreter_interleaves_stdout_and_stderr_as_glibc_buffers() {
+        let prelude = "typedef struct _IO_FILE FILE; extern FILE *stdout, *stderr;
+int fputs(const char *, FILE *); int fflush(FILE *); int puts(const char *);
+int fclose(FILE *); FILE *freopen(const char *, const char *, FILE *);
+";
+        let lines = "fputs(\"A\\n\", stdout); fputs(\"B\", stderr); fputs(\"C\", stdout);
+  fputs(\"D\", stderr); fputs(\"E\\n\", stdout);";
+        for (body, flags, expected) in [
+            (
+                "fputs(\"A\", stdout); fflush(stdout); fputs(\"B\", stderr); puts(\"C\");
+  fputs(\"D\", stderr); fflush(0); fputs(\"E\", stderr); fputs(\"F\", stdout);",
+                &[][..],
+                "ABDC\nEF",
+            ),
+            (lines, &[][..], "BDA\nCE\n"),
+            (lines, &["--interpret-terminal-stdout"][..], "A\nBDCE\n"),
+            (
+                "fputs(\"A\", stdout); fclose(stdout); fputs(\"B\", stderr);",
+                &[][..],
+                "AB",
+            ),
+            (
+                "fputs(\"A\", stdout); FILE *f = freopen(\"/nonexistent-bcc/x\", \"w\", stdout);
+  fputs(f ? \"F\" : \"B\", stderr);",
+                &["--interpret-allow-fs"][..],
+                "AB",
+            ),
+        ] {
+            let source = format!("{prelude}int main(void) {{ {body} return 0; }}\n");
+            let merged = temporary("merged-output.txt");
+            let file = std::fs::File::create(&merged).unwrap();
+            let status = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
+                .args(flags)
+                .args(["--input", &source])
+                .stdout(file.try_clone().unwrap())
+                .stderr(file)
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(0), "{body}");
+            assert_eq!(
+                std::fs::read_to_string(&merged).unwrap(),
+                expected,
+                "{body} {flags:?}"
+            );
+            std::fs::remove_file(merged).unwrap();
+        }
+    }
+
+    /// Using a closed stream is undefined: after `fclose(stdin)` or
+    /// `fclose(stdout)`, the functions that use them implicitly trap, and a
+    /// failed `freopen` closes its stream, whose stale pointer stays invalid
+    /// when a later `fopen` reuses its table slot.
+    #[test]
+    fn closed_streams_trap_even_when_used_implicitly() {
+        let path = temporary("reused-slot.txt");
+        let path_text = path.to_str().unwrap().replace('\\', "/");
+        let prelude = "typedef struct _IO_FILE FILE; extern FILE *stdin, *stdout;
+int fclose(FILE *); int getchar(void); int puts(const char *); int printf(const char *, ...);
+int scanf(const char *, ...) __asm__(\"__isoc99_scanf\"); int fputs(const char *, FILE *);
+FILE *fopen(const char *, const char *); FILE *freopen(const char *, const char *, FILE *);
+";
+        for body in [
+            "fclose(stdin); return getchar();".to_string(),
+            "int x; fclose(stdin); return scanf(\"%d\", &x);".to_string(),
+            "fclose(stdout); return puts(\"x\");".to_string(),
+            "fclose(stdout); return printf(\"x\");".to_string(),
+            format!(
+                "FILE *a = fopen(\"{path_text}\", \"w\"); FILE *b = \
+                 freopen(\"/nonexistent-bcc/x\", \"r\", a);
+  FILE *c = fopen(\"{path_text}\", \"r\"); if (b || !c) return 1; return fputs(\"stale\", a);"
+            ),
+        ] {
+            let source = format!("{prelude}int main(void) {{ {body} }}\n");
+            let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(70), "{body}: {stderr}");
+            assert!(stderr.contains("not an open FILE"), "{body}: {stderr}");
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// `%lf` stores a `double` on every target, Win64's 32-bit `long`
+    /// notwithstanding; the wide conversions and `long double` input (`%Lf`,
+    /// and `%llf` and `%qf`, which glibc reads alike) are refused rather than
+    /// run as byte or `double` conversions; and a wide-string length whose byte
+    /// size overflows is out of bounds rather than a short copy.
+    #[test]
+    fn scanf_lengths_and_wide_sizes_follow_the_conversion() {
+        let source = "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
+int printf(const char *, ...);
+int main(void) { double d = 0; long l = 0; float f = 0;
+  int n = sscanf(\"2.5 -7 0.25\", \"%lf %ld %f\", &d, &l, &f);
+  printf(\"%d %g %ld %g\\n\", n, d, l, (double)f); return 0; }
+";
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            let output = bcc(source, &["--interpret", target]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{target}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), "3 2.5 -7 0.25\n", "{target}");
+        }
+        for conversion in ["%lc", "%ls", "%l[a]", "%Lf", "%llf", "%qf"] {
+            let source = format!(
+                "int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
+int main(void) {{ long double buffer[4]; return sscanf(\"a\", \"{conversion}\", buffer); }}
+"
+            );
+            let output = bcc(&source, &["--interpret"]);
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(70), "{conversion}: {stderr}");
+            assert!(
+                stderr.contains("scanf conversion the host does not implement"),
+                "{stderr}"
+            );
+        }
+        // Guest-controlled exponents, payloads and offsets saturate or fail;
+        // they never overflow the interpreter's own arithmetic.
+        let source = "typedef struct _IO_FILE FILE; extern FILE *stdin;
+int sscanf(const char *, const char *, ...) __asm__(\"__isoc99_sscanf\");
+int printf(const char *, ...); int ungetc(int, FILE *); int fseek(FILE *, long, int);
+void *memcpy(void *, const void *, unsigned long);
+int main(void) { double d = 1, e = 1; unsigned long long bits;
+  int n = sscanf(\"0x0.0p-9223372036854775808 nan(18446744073709551616)\", \"%lf %lf\", &d, &e);
+  memcpy(&bits, &e, 8); ungetc('x', stdin);
+  printf(\"%d %a %llx %d\\n\", n, d, bits, fseek(stdin, -9223372036854775807L - 1, 1));
+  return 0; }
+";
+        let output = bcc(
+            source,
+            &["--interpret", "--target=x86_64-unknown-linux-gnu"],
+        );
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "2 0x0p+0 7fffffffffffffff -1\n");
+        let source = "typedef int wchar_t; wchar_t *wmemcpy(wchar_t *, const wchar_t *, unsigned \
+                      long);
+int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return b[0]; }
+";
+        let output = bcc(
+            source,
+            &["--interpret", "--target=x86_64-unknown-linux-gnu"],
+        );
+        let stderr = text(&output.stderr);
+        assert_eq!(output.status.code(), Some(70), "{stderr}");
+        assert!(stderr.contains("out-of-bounds access"), "{stderr}");
+    }
+
+    /// The interpreter computes the exact x87 `long double` functions and
+    /// refuses the transcendental ones, whose glibc results it cannot
+    /// reproduce bit for bit.
+    #[test]
+    fn host_math_runs_exact_x87_functions_and_refuses_transcendentals() {
+        for target in [
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-unknown-linux-gnu",
+        ] {
+            for source in [
+                "long double fabsl(long double); int main(void) { return fabsl(-1.5L)!=1.5L; }",
+                "float nexttowardf(float,long double); int main(void) { return \
+                 nexttowardf(1.0f,2.0L)<=1.0f; }",
+            ] {
+                let output = bcc(source, &["--interpret", target]);
+                assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+            }
+            let output = bcc(
+                "long double sinl(long double); int main(void) { return sinl(1.0L) > 0; }",
+                &["--interpret", target],
+            );
             assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));
             assert!(
-                text(&output.stderr).contains("f80"),
+                text(&output.stderr).contains("f80 library function"),
                 "{}",
                 text(&output.stderr)
             );
         }
+    }
+
+    /// `tests/fixtures/programs/long_double.c` prints x87 arithmetic,
+    /// conversions, comparisons, the exact `<math.h>` functions, `va_arg` and
+    /// every `printf` conversion of `long double`: the interpreter, bcc
+    /// through LLVM and bcc's native back end must print what the program
+    /// built by clang prints, digit for digit. glibc's formatting is the
+    /// reference, so this runs on GNU/Linux hosts.
+    #[test]
+    fn long_double_programs_match_native_output_on_every_arm() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/long_double.c");
+        let source = source.to_str().unwrap();
+        let reference = temporary("long-double-reference.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .args([source, "-std=c99", "-O0", "-fno-builtin", "-lm", "-o"])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(expected.status.code(), Some(0));
+        let expected = text(&expected.stdout);
+        std::fs::remove_file(reference).unwrap();
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.args([source, "--interpret", optimize]);
+            let output = run_native(&mut command).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{optimize}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), expected, "interpreter {optimize}");
+        }
+        let executable = temporary("long-double.exe");
+        for arm in [
+            &["--llvm-opt=O0"][..],
+            &["--opt=bcc", "--llvm-opt=O2"],
+            &["--backend=native"],
+            &["--opt=bcc", "--backend=native"],
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.arg(source).args(arm).arg("-o").arg(&executable);
+            let built = command.output().unwrap();
+            assert!(built.status.success(), "{arm:?}: {}", text(&built.stderr));
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(0), "{arm:?}");
+            assert_eq!(text(&output.stdout), expected, "{arm:?}");
+        }
+        std::fs::remove_file(executable).unwrap();
     }
 
     #[test]
@@ -859,8 +1449,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
 
     /// glibc's Clang path implements `fpclassify`, `isfinite`, `isnormal`,
     /// `isnan` and `isinf` with these builtins; MinGW's passes the frame
-    /// address to `_setjmp`. The interpreter has no x87 values, so `long
-    /// double` runs natively only.
+    /// address to `_setjmp`.
     #[test]
     fn classification_and_frame_address_builtins_run_in_both_back_ends() {
         let Some(target) = host() else {
@@ -896,7 +1485,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             source
         };
         for opt in ["--opt=none", "--opt=bcc"] {
-            let output = bcc(&program(false), &[&target, opt, "--interpret"]);
+            let output = bcc(
+                &program(!target.ends_with("msvc")),
+                &[&target, opt, "--interpret"],
+            );
             assert!(output.status.success(), "{opt}: {}", text(&output.stderr));
         }
         let executable = temporary("classify.exe");
@@ -913,11 +1505,86 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// C11 atomics under contention
+    /// (`tests/fixtures/programs/atomic_threads.c`): counters that only atomic
+    /// read-modify-writes keep exact, a compare-exchange loop, an `atomic_flag`
+    /// spin lock and a libatomic `__int128`, with one, four and eight threads,
+    /// through LLVM and the native back end. The driver links `-latomic` for
+    /// the `__int128`. The command line has no `-pthread` yet, so the test
+    /// needs a C library that holds the threads functions itself (glibc 2.34
+    /// and later, musl), which a probe link through the LLVM back end checks.
+    /// C11: §7.17.7, pp. 282-285; PDF pp. 300-303.
+    #[test]
+    fn atomic_counters_stay_exact_across_threads() {
+        if host() != Some("x86_64-unknown-linux-gnu")
+            || !Path::new("/usr/include/pthread.h").is_file()
+        {
+            eprintln!("skipping: no Linux host C library with pthreads");
+            return;
+        }
+        let host_flags = [
+            "--target=x86_64-unknown-linux-gnu",
+            "--idirafter",
+            "/usr/include/x86_64-linux-gnu",
+            "--idirafter",
+            "/usr/include",
+        ];
+        let probe = temporary("pthread-probe.exe");
+        let probed = bcc(
+            "#include <pthread.h>\nstatic void *f(void *p) { return p; }\nint main(void) { \
+             pthread_t t; if (pthread_create(&t, 0, f, 0)) return 1; return pthread_join(t, 0); }",
+            &[&host_flags[..], &["-o", probe.to_str().unwrap()]].concat(),
+        );
+        if !probed.status.success() && text(&probed.stderr).contains("undefined symbol: pthread_") {
+            eprintln!(
+                "skipping: the C library does not link pthreads without -pthread:\n{}",
+                text(&probed.stderr)
+            );
+            return;
+        }
+        assert!(probed.status.success(), "{}", text(&probed.stderr));
+        std::fs::remove_file(&probe).unwrap();
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/atomic_threads.c");
+        let executable = temporary("atomic-threads.exe");
+        let path = executable.to_str().unwrap();
+        for backend in [
+            &["--backend=llvm", "--llvm-opt=O0"][..],
+            &["--backend=llvm", "--opt=bcc", "--llvm-opt=O2"][..],
+            &["--backend=native", "--opt=none"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command
+                .arg(&source)
+                .args(host_flags)
+                .args(["-o", path])
+                .args(backend)
+                .env("NO_COLOR", "1");
+            let built = run_native(&mut command).unwrap();
+            assert!(
+                built.status.success(),
+                "{backend:?}: {}",
+                text(&built.stderr)
+            );
+            for threads in ["1", "4", "8"] {
+                let output = run_native(Command::new(&executable).arg(threads)).unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{backend:?} with {threads} threads: {}",
+                    text(&output.stdout)
+                );
+            }
+        }
+        std::fs::remove_file(&executable).unwrap();
+    }
+
     /// `setjmp` and `longjmp` (#50) from `tests/fixtures/programs/setjmp.c`:
     /// MinGW-w64's declarations, whose `setjmp` passes `mingw_getsp()`, in
     /// the interpreter for the Windows target; the host's `<setjmp.h>` in the
-    /// interpreter and in native executables built through LLVM. The native
-    /// back end refuses returns-twice calls rather than miscompile them.
+    /// interpreter and in native executables built through LLVM and through
+    /// the native back end.
     #[test]
     fn setjmp_and_longjmp_run_in_the_interpreter_and_natively() {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/setjmp.c");
@@ -980,24 +1647,18 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         }
         let executable = temporary("setjmp.exe");
         let path = executable.to_str().unwrap();
-        for opt in [&["--llvm-opt=O0"][..], &["--opt=bcc", "--llvm-opt=O2"][..]] {
+        for opt in [
+            &["--llvm-opt=O0"][..],
+            &["--opt=bcc", "--llvm-opt=O2"][..],
+            &["--backend=native", "--opt=none"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
             let built = compile(&[target, &["-o", path][..], opt].concat());
             assert!(built.status.success(), "{opt:?}: {}", text(&built.stderr));
             let output = run_native(&mut Command::new(&executable)).unwrap();
             assert_eq!(output.status.code(), Some(0), "{opt:?}");
         }
         std::fs::remove_file(&executable).unwrap();
-        let refused = compile(&[target, &["--backend=native", "-o", path][..]].concat());
-        assert!(!refused.status.success());
-        assert!(
-            text(&refused.stderr).contains(
-                "not yet supported by the native back end: a call to, or the address of, a \
-                 function that may return twice"
-            ),
-            "{}",
-            text(&refused.stderr)
-        );
-        assert!(!executable.exists());
     }
 
     #[test]
@@ -1499,7 +2160,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
                 false,
             ),
             (
-                "int main(void){__asm__(\"nop\");return 0;}",
+                "int main(void){__asm__(\"\" :: \"t\"(1.0L));return 0;}",
                 vec!["--emit=ir"],
                 1,
                 false,
@@ -1777,7 +2438,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
 
     #[test]
     fn unsupported_constructs_and_errors_fail_code_generation_only() {
-        let source = "int main(void) {\n  __asm__(\"nop\");\n  return 0;\n}\n";
+        let source = "int main(void) {\n  __asm__(\"\" :: \"t\"(1.0L));\n  return 0;\n}\n";
         for flags in [
             &["--interpret"][..],
             &["--emit=ir"][..],
@@ -1788,7 +2449,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             assert!(output.stdout.is_empty(), "{flags:?}");
             let stderr = text(&output.stderr);
             assert!(
-                stderr.contains("error: not yet supported by lowering: inline assembly"),
+                stderr.contains(
+                    "error: not yet supported by lowering: inline assembly operands of this \
+                     register class or type"
+                ),
                 "{stderr}"
             );
             assert!(stderr.contains("1 error generated."), "{stderr}");
@@ -1808,13 +2472,21 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     #[test]
     fn back_end_options_need_a_back_end() {
         for flags in [
-            &["-c"][..],
             &["--emit=ir", "--interpret"][..],
             &["--emit=ir", "--syntax-tree"][..],
+            &["-c", "--emit=ir"][..],
         ] {
             let output = bcc(SUM, flags);
             assert_eq!(output.status.code(), Some(2), "{flags:?}");
         }
+        // `-c` names its object after the input file, which `--input` lacks.
+        let output = bcc(SUM, &["-c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            text(&output.stderr).contains("give -o for --input or stdin"),
+            "{}",
+            text(&output.stderr)
+        );
     }
 
     /// The target the tests run on, if the LLVM back end supports it.
@@ -2178,6 +2850,10 @@ int main(void) { printf("main\n"); return zero; }
             ],
         );
         assert!(text(&asm.stdout).contains(".seh_proc\tmain"));
+        // Without --backend=native, --emit=asm prints LLVM's assembly.
+        let asm = bcc(SUM, &["--target=x86_64-unknown-linux-gnu", "--emit=asm"]);
+        assert!(asm.status.success(), "{}", text(&asm.stderr));
+        assert!(text(&asm.stdout).contains("main:"), "{}", text(&asm.stdout));
         for (flags, message) in [
             (
                 &["--native-object", "--emit=ir"][..],
@@ -2192,16 +2868,12 @@ int main(void) { printf("main\n"); return zero; }
                 "error: --native-object requires --backend=native",
             ),
             (
-                &["--emit=asm"][..],
-                "error: --emit=asm prints the native back end's assembly; add --backend=native",
-            ),
-            (
                 &["--backend=native", "--emit=llvm"][..],
                 "error: --emit=llvm prints LLVM IR, which --backend=native does not use",
             ),
             (
                 &["--backend=native", "--interpret"][..],
-                "error: --backend=native needs -o or --emit=asm; --interpret runs the IR",
+                "error: --backend=native needs -o, -c, -S or --emit=asm; --interpret runs the IR",
             ),
             (
                 &["--backend=native", "--emit=asm", "--llvm-opt=O2"][..],
@@ -2395,7 +3067,10 @@ int main(void) { printf("main\n"); return zero; }
             ("preprocessing", "#error deliberate failure\n"),
             ("parsing", "int value = ;\n"),
             ("semantics", "int value = not_declared;\n"),
-            ("lowering", "int value(void) { __asm__(\"\"); return 0; }\n"),
+            (
+                "lowering",
+                "int value(void) { __asm__(\"\" :: \"t\"(1.0L)); return 0; }\n",
+            ),
             (
                 "backend",
                 "static __attribute__((noinline,section(\".bss.fn\"))) int f(int x) { return x+1; \

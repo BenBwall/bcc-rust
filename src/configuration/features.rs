@@ -100,6 +100,18 @@ pub(crate) enum Feature {
     LabelsAsValues,
     LocalLabels,
     OmittedConditionalOperand,
+    /// A conditional expression whose alternatives are one void expression
+    /// and one of another type, giving the whole expression void type.
+    /// GNU extension to C99 §6.5.15 paragraph 3, p. 90; PDF p. 102; GCC
+    /// c/c-typeck.cc, `build_conditional_expr`.
+    OneVoidConditional,
+    /// A compound literal of a static structure or union's own type, with
+    /// only constant elements, as its initializer: its braced list
+    /// initializes the object as if written in its place.
+    /// GNU extension: GCC manual, "Compound Literals",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Compound-Literals.html>; extends
+    /// C99 §6.7.8 paragraph 4, p. 125; PDF p. 137.
+    ConstantCompoundLiteral,
     ZeroLengthArrays,
     Int128,
     AutoType,
@@ -119,6 +131,11 @@ pub(crate) enum Feature {
     ExtraSemicolons,
     NestedFunctions,
     ImaginaryConstants,
+    /// The `\e` and `\E` escape sequences for ESC (U+001B).
+    /// GNU extension: GCC manual, "The Character ESC in Constants",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Character-Escapes.html>; extends
+    /// C99 §6.4.4.4 paragraph 1, p. 59; PDF p. 71.
+    EscapeCharacter,
     DollarIdentifiers,
     NamedVariadicMacros,
     GnuVaArgs,
@@ -170,6 +187,21 @@ pub(crate) enum Feature {
     /// mode, as GCC and Clang do (Clang's `-Wpedantic`
     /// "forward references to 'enum' types").
     ForwardEnumReference,
+    /// A cast of a structure or union to its own type, which gives its
+    /// value. GNU extension to C99 §6.5.4 paragraph 2, p. 81; PDF p. 93,
+    /// which requires a scalar or void type; GCC c/c-typeck.cc,
+    /// `build_c_cast`, "ISO C forbids casting nonscalar to the same type".
+    SameTypeCasts,
+    /// The `_Float32`, `_Float64`, `_Float128`, `_Float32x` and `_Float64x`
+    /// keywords and their `f32`, `f64`, `f128`, `f32x` and `f64x` constant
+    /// suffixes. Accepted only where
+    /// [`CompilerConfiguration::interchange_float_types`](super::CompilerConfiguration::interchange_float_types)
+    /// selects them; GCC 7 and later accept them in every mode, as an
+    /// extension before C23.
+    /// C23: Annex H, §H.5.1 paragraph 1 and §H.5.2 paragraph 2, p. 560;
+    /// PDF p. 573. GCC manual, "Additional Floating Types",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>.
+    InterchangeFloatTypes,
 }
 
 impl Feature {
@@ -227,6 +259,7 @@ impl Feature {
             | Self::Constexpr
             | Self::Nullptr
             | Self::UnnamedDefinitionParameters
+            | Self::InterchangeFloatTypes
             | Self::WideEnumerators => FeatureOrigin::Standard(CStandard::C23),
 
             | Self::OctalPrefix
@@ -260,6 +293,8 @@ impl Feature {
             | Self::LabelsAsValues
             | Self::LocalLabels
             | Self::OmittedConditionalOperand
+            | Self::OneVoidConditional
+            | Self::ConstantCompoundLiteral
             | Self::ZeroLengthArrays
             | Self::Int128
             | Self::AutoType
@@ -273,6 +308,7 @@ impl Feature {
             | Self::ExtraSemicolons
             | Self::NestedFunctions
             | Self::ImaginaryConstants
+            | Self::EscapeCharacter
             | Self::DollarIdentifiers
             | Self::NamedVariadicMacros
             | Self::GnuVaArgs
@@ -292,6 +328,7 @@ impl Feature {
             | Self::MacroExpandedDefined
             | Self::QuotedHeaderBackslash
             | Self::VoidPointerArithmetic
+            | Self::SameTypeCasts
             | Self::ForwardEnumReference => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
@@ -388,6 +425,8 @@ impl Feature {
         Self::LabelsAsValues,
         Self::LocalLabels,
         Self::OmittedConditionalOperand,
+        Self::OneVoidConditional,
+        Self::ConstantCompoundLiteral,
         Self::ZeroLengthArrays,
         Self::Int128,
         Self::AutoType,
@@ -401,6 +440,7 @@ impl Feature {
         Self::ExtraSemicolons,
         Self::NestedFunctions,
         Self::ImaginaryConstants,
+        Self::EscapeCharacter,
         Self::DollarIdentifiers,
         Self::NamedVariadicMacros,
         Self::GnuVaArgs,
@@ -432,6 +472,8 @@ impl Feature {
         Self::UnnamedDefinitionParameters,
         Self::VoidPointerArithmetic,
         Self::ForwardEnumReference,
+        Self::SameTypeCasts,
+        Self::InterchangeFloatTypes,
     ];
 }
 

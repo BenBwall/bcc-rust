@@ -62,6 +62,15 @@ fn generation_is_deterministic() {
         let probes = probe.lines().count() - text.lines().count();
         assert_eq!(probes, 3 * text.matches("freeze").count(), "seed {seed}");
     }
+    // The sweeps check x87 arithmetic only if programs contain it.
+    let extended = (0..50)
+        .filter(|&seed| generate(seed, false).contains(".f80 "))
+        .count();
+    assert!(extended >= 10, "only {extended} of 50 programs use f80");
+    let wide = (0..50)
+        .filter(|&seed| generate(seed, false).contains(".i128 "))
+        .count();
+    assert!(wide >= 5, "only {wide} of 50 programs convert i128");
 }
 
 #[test]
@@ -163,7 +172,7 @@ fn native_backend_matches_the_interpreter_on_many_generated_programs() {
 
 /// Checks the first `cases` kept cases from `first` with the native back
 /// end, which must accept every one of them: the generator writes only
-/// integer, pointer, `f32` and `f64` code.
+/// integer, pointer, `f32`, `f64` and x87 `f80` code.
 fn check_native_backend_sweep(first: u64, cases: u64) {
     if cases == 0 {
         return;
@@ -258,6 +267,31 @@ fn noundef_poison_uses_the_existing_ub_oracle_rule() {
     assert!(matches!(trapped.result, Err(Trap::UndefinedBehavior(..))));
     assert!(trapped.refines(&defined).is_err());
     assert!((0..50).any(|seed| generate(seed, false).contains(" noundef")));
+}
+
+/// Generated programs exercise atomic read-modify-writes, compare-exchange
+/// and fences, so the sweeps compare every back end's atomics with the
+/// interpreter.
+#[test]
+fn generated_programs_exercise_atomics() {
+    let programs: Vec<String> = (0..100).map(|seed| generate(seed, false)).collect();
+    for operation in [
+        " load ",
+        " store ",
+        " compare_exchange ",
+        " nand ",
+        " umax ",
+        "_fence ",
+    ] {
+        let count = programs
+            .iter()
+            .filter(|text| {
+                text.lines()
+                    .any(|line| line.contains("atomic.") && line.contains(operation))
+            })
+            .count();
+        assert!(count >= 2, "{operation}: {count} of 100 programs");
+    }
 }
 
 /// The record slots give `sroa` structures to split in many programs.

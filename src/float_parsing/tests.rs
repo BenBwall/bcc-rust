@@ -89,3 +89,74 @@ fn range_errors_do_not_depend_on_errno() {
         );
     }
 }
+
+/// GCC's `__builtin_nans` constants, bit for bit: the quiet bit clear, the
+/// payload in the low fraction bits, and the bit below the quiet bit when
+/// the payload is zero. A narrowing conversion that loses the payload
+/// gives a quiet NaN instead of an infinity.
+#[test]
+fn signaling_nans_keep_their_format_and_payload() {
+    use crate::{
+        float_parsing::{
+            LongDouble,
+            bits::constant_bits,
+        },
+        ir::Type,
+    };
+    let bits = |payload, precision, ty| {
+        constant_bits(&LongDouble::signaling_nan(payload, precision), ty).unwrap()
+    };
+    assert_eq!(bits(0, 1, Type::F32), 0x7FA0_0000);
+    assert_eq!(bits(7, 1, Type::F32), 0x7F80_0007);
+    assert_eq!(bits(0, 2, Type::F64), 0x7FF4_0000_0000_0000);
+    assert_eq!(bits(5, 2, Type::F64), 0x7FF0_0000_0000_0005);
+    assert_eq!(bits(5, 2, Type::F32), 0x7FC0_0000);
+    if ffi::LONG_DOUBLE_VALUE_BYTES != 8 {
+        assert_eq!(bits(3, 3, Type::F80), 0x7FFF_8000_0000_0000_0003);
+        assert_eq!(bits(0, 3, Type::F80), 0x7FFF_A000_0000_0000_0000);
+    }
+    // Quiet NaNs keep their quiet bit and payload.
+    assert_eq!(
+        constant_bits(&LongDouble::quiet_nan(5, 2), Type::F64).unwrap(),
+        0x7FF8_0000_0000_0005
+    );
+}
+
+/// A binary64 carrier, as on hosts whose `long double` is 8 bytes (MSVC),
+/// decodes a signaling NaN without setting its quiet bit, so it converts to
+/// the same bits as the x87 carrier gives.
+#[test]
+fn binary64_carriers_keep_signaling_nans() {
+    use crate::{
+        float_parsing::{
+            LongDouble,
+            bits::constant_parts,
+        },
+        ir::Type,
+    };
+    let convert =
+        |bits: u64, ty| constant_parts(LongDouble::decode_x87(&bits.to_le_bytes()).unwrap(), ty);
+    // `__builtin_nansf32("7")` as the binary64 carrier holds it.
+    assert_eq!(
+        convert(0x7FF0_0000_0000_0000 | 7 << 29, Type::F32),
+        Some(0x7F80_0007)
+    );
+    assert_eq!(
+        convert(0x7FF4_0000_0000_0000, Type::F64),
+        Some(0x7FF4_0000_0000_0000)
+    );
+    assert_eq!(
+        convert(0x7FF0_0000_0000_0005, Type::F64),
+        Some(0x7FF0_0000_0000_0005)
+    );
+    // Quiet NaNs and infinities are unchanged.
+    assert_eq!(
+        convert(0x7FF8_0000_0000_0005, Type::F64),
+        Some(0x7FF8_0000_0000_0005)
+    );
+    assert_eq!(
+        convert(0xFFF0_0000_0000_0000, Type::F64),
+        Some(0xFFF0_0000_0000_0000)
+    );
+    assert_eq!(convert(0x7FF8_0000_0000_0000, Type::F32), Some(0x7FC0_0000));
+}

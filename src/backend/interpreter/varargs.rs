@@ -317,20 +317,23 @@ impl Machine<'_, '_, '_> {
                 Ok(VaBacking::SystemV { save, overflow })
             },
             | Convention::Win64 => {
-                // Microsoft x64, "Varargs": one 8-byte slot per argument.
+                // Microsoft x64, "Varargs": one 8-byte slot per argument; a
+                // wider scalar, such as MinGW's x87 `long double`, is passed
+                // by reference to a 16-aligned copy.
                 let slots =
                     self.frame_object(8 * frame.varargs_len as u64, Align::from_bytes(8).unwrap())?;
                 for (slot, index) in (start..end).enumerate() {
                     let (ty, value, _) = self.varargs[index];
+                    let slot = RuntimeValue::Ptr(offset(slots, 8 * slot as u64));
                     if ty.bytes() > 8 {
-                        return Err(Fault::Unsupported(Unsupported::WideVariadic));
+                        let copy = self.frame_object(16, Align::from_bytes(16).unwrap())?;
+                        self.memory
+                            .store(ty, value, RuntimeValue::Ptr(copy), Align::BYTE)?;
+                        self.memory
+                            .store(Type::Ptr, RuntimeValue::Ptr(copy), slot, Align::BYTE)?;
+                    } else {
+                        self.memory.store(ty, value, slot, Align::BYTE)?;
                     }
-                    self.memory.store(
-                        ty,
-                        value,
-                        RuntimeValue::Ptr(offset(slots, 8 * slot as u64)),
-                        Align::BYTE,
-                    )?;
                 }
                 Ok(VaBacking::Win64(slots))
             },

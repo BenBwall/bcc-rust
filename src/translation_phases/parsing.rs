@@ -103,6 +103,7 @@ use extensions::{
     msvc,
 };
 pub(crate) use gnu::{
+    Asm,
     Builtin,
     OffsetMember,
 };
@@ -117,6 +118,7 @@ pub(crate) use modern::{
     AttributeSyntax,
     ExtendedType,
     GenericSelection,
+    InterchangeFloat,
     SpecifierExtension,
     SpecifierExtensionKind,
     StaticAssertion,

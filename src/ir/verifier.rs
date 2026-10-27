@@ -922,6 +922,7 @@ impl Verifier<'_, '_, '_, '_> {
                         sig.as_u32(),
                     )),
                 },
+            | InstData::InlineAsm { asm, args } => checker.inline_asm(asm, args),
             | InstData::Jump { dest } => checker.edges(&[dest]),
             | InstData::Brif { cond, dests } => {
                 checker.operand(0, cond, Type::I1);
@@ -1040,6 +1041,54 @@ impl InstChecker<'_, '_, '_, '_, '_> {
     fn operands(&mut self, values: &[Value], expected: &[Type]) {
         for (index, (&value, &ty)) in values.iter().zip(expected).enumerate() {
             self.operand(index, value, ty);
+        }
+    }
+
+    /// Checks an `asm` instruction against its descriptor: one value per
+    /// operand, outputs first, each value of the type its location takes
+    /// (a `ptr` for outputs and memory), immediates that are constants, tied
+    /// inputs that match a register output, and a template whose operand
+    /// references exist.
+    /// GNU extension: GCC manual, "Extended Asm".
+    fn inline_asm(&mut self, asm: super::AsmId, args: super::ValueList) {
+        use super::AsmConstraint as C;
+        let Some(descriptor) = self.verifier.module.get_inline_asm(asm) else {
+            self.report(VerifierErrorKind::InvalidReference(
+                EntityKind::InlineAsm,
+                asm.as_u32(),
+            ));
+            return;
+        };
+        let values = self.verifier.body.value_list(args);
+        if values.len() != descriptor.operands.len() {
+            self.report(VerifierErrorKind::InlineAsm(
+                "the operand count differs from the descriptor's",
+            ));
+            return;
+        }
+        let body = self.verifier.body;
+        let constant = |value: Value| {
+            value.index() < body.value_count()
+                && matches!(body.value_def(value), ValueDef::Result(inst) if matches!(
+                    body.inst(inst),
+                    InstData::Const { opcode: Opcode::Iconst, .. }
+                        | InstData::GlobalAddr { .. }
+                        | InstData::FuncAddr { .. }
+                ))
+        };
+        descriptor.check(|rule| self.report(VerifierErrorKind::InlineAsm(rule)));
+        for (index, (operand, &value)) in descriptor.operands.iter().zip(values).enumerate() {
+            let expected = if operand.output || operand.constraint == C::Memory {
+                Type::Ptr
+            } else {
+                operand.ty
+            };
+            self.operand(index, value, expected);
+            if operand.constraint == C::Immediate && !operand.output && !constant(value) {
+                self.report(VerifierErrorKind::InlineAsm(
+                    "an immediate is not an iconst, global_addr or func_addr",
+                ));
+            }
         }
     }
 
@@ -1399,6 +1448,8 @@ pub(crate) enum VerifierErrorKind {
     },
     /// A `call_indirect` without a callee operand.
     MissingCallee,
+    /// An `asm` instruction breaks the descriptor rule named.
+    InlineAsm(&'static str),
     ReturnValue {
         expected: Option<Type>,
         found:    Option<Type>,
@@ -1541,6 +1592,7 @@ pub(crate) enum EntityKind {
     CaseList,
     BlockList,
     Label,
+    InlineAsm,
 }
 
 impl fmt::Display for VerifierError<'_> {
@@ -1638,6 +1690,7 @@ impl fmt::Display for VerifierErrorKind {
                 found,
             } => write!(f, "call argument {index} is {found}, expected {expected}"),
             | Self::MissingCallee => f.write_str("call_indirect has no callee"),
+            | Self::InlineAsm(rule) => write!(f, "invalid inline assembly: {rule}"),
             | Self::ReturnValue { expected, found } => write!(
                 f,
                 "the function returns {}, but the return gives {}",
@@ -1725,6 +1778,7 @@ impl fmt::Display for EntityKind {
             | Self::CaseList => "case list",
             | Self::BlockList => "block list",
             | Self::Label => "label",
+            | Self::InlineAsm => "inline assembly descriptor",
         })
     }
 }

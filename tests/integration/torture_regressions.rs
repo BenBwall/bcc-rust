@@ -164,7 +164,7 @@ mod tests {
             let source = format!("void f(void) {{ g({initializer}); }} int after;\n");
             let output = run(&source);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "{}", output.status);
+            assert_eq!(output.status.code(), Some(1), "{}", output.status);
             assert!(stderr.contains("error:"), "{stderr}");
             assert!(stderr.contains("declarator after"), "{stderr}");
             assert!(

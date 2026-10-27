@@ -26,10 +26,12 @@
 //! so cites the clause.
 
 // Code generation
+#[cfg(feature = "native")]
 pub(crate) mod llvm;
 pub(crate) mod native;
 
 // Reference execution
+#[cfg(feature = "native")]
 pub(crate) mod interpreter;
 
 // Differential tests

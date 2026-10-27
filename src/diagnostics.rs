@@ -14,6 +14,7 @@
 //! Files by role:
 //! - Diagnostic construction: `model.rs`.
 //! - Rendering and color: `render.rs`, `color.rs`.
+//! - Folding and ordering a compilation's diagnostics: `reporter.rs`.
 //! - Arena text and spelling: `formatting.rs`.
 //! - Test views and fixtures: `owned.rs`, `tests.rs`.
 //!
@@ -27,6 +28,7 @@ mod model;
 // Rendering
 mod color;
 mod render;
+mod reporter;
 
 // Text formatting
 mod formatting;
@@ -54,6 +56,7 @@ pub(crate) use owned::{
     OwnedDiagnostic,
     OwnedExplanation,
 };
+pub(crate) use reporter::DiagnosticReporter;
 
 use crate::{
     translation_phases::Context,

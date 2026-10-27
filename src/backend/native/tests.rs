@@ -3,6 +3,7 @@
 
 mod allocation;
 mod end_to_end;
+mod inline_asm;
 pub(crate) mod object;
 pub(crate) mod object_coff;
 mod operands;
@@ -118,6 +119,7 @@ fn with_allocation<R>(
         body,
         target,
         crate::target::TlsModel::default(),
+        module.returns_twice_escapes(),
         &scratch,
     )
     .unwrap();
@@ -147,6 +149,7 @@ fn check_corrupted(
         body,
         target,
         crate::target::TlsModel::default(),
+        module.returns_twice_escapes(),
         &scratch,
     )
     .unwrap();

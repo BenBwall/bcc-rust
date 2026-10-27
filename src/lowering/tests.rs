@@ -1,10 +1,12 @@
 //! Lowering tests: golden IR for each construct family (`golden.rs`),
 //! programs whose lowering must verify (`programs.rs`), floating-point and
 //! bit-field programs run in the interpreter and clang (`numeric_programs.rs`),
-//! the constant conversions (`floats.rs`), and the constructs
-//! lowering refuses (`refusals.rs`).
+//! the constant conversions (`floats.rs`), the constructs lowering refuses
+//! (`refusals.rs`), and valid incomplete-type and void-expression edge cases
+//! (`void_and_incomplete.rs`).
 
 mod argument_pack;
+mod assembly;
 mod call_diagnostics;
 mod complex;
 mod correspondence;
@@ -23,6 +25,7 @@ mod refusals;
 mod registry;
 mod resolved;
 mod review;
+mod void_and_incomplete;
 
 use std::path::Path;
 

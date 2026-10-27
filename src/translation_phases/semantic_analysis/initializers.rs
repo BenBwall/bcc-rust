@@ -27,6 +27,7 @@ use super::{
     BindingKind,
     Duration,
     FlexibleArray,
+    InitOperation,
     Linkage,
     ScopeKind,
     SemanticErrorKind,
@@ -232,11 +233,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
                             // C99 §6.7.8p13: a structure or union initialized
-                            // by an expression of its type is copied whole.
+                            // by an expression of its type is copied whole, as
+                            // is a static scalar's compound literal of its
+                            // type (GNU), whose bytes are the literal's own.
                             if matches!(
                                 self.types.nodes[self.types.non_atomic(target).index],
                                 TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
-                            ) {
+                            ) || (static_storage
+                                && !bit_field
+                                && self.whole_compound_literal(target, e).is_some())
+                            {
                                 plan.copy(e, destination, self.enclosing_unions(&site));
                             } else {
                                 plan.store(
@@ -246,7 +252,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                     site.scalar_source.unwrap_or(e.source_vectors),
                                 );
                             }
-                            if static_storage {
+                            if static_storage && !self.check_static_compound_literal(target, e) {
                                 self.check_static_initializer(target, info, e, bit_field);
                             }
                         },
@@ -729,6 +735,106 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// Checks `e` as the initializer of a static object of type `target`
+    /// when it is a compound literal of that type, which GCC accepts as if
+    /// its braced list were written in its place (Clang only for a
+    /// structure or union), and returns whether it was. A scalar literal
+    /// counts only as the whole initializer: GCC rejects `(int){3} + 1`. Each
+    /// value the literal's plan stores is checked against its destination as
+    /// the static object's own would be. A literal in a block is an automatic
+    /// object (§6.5.2.5p6), so neither it nor an array literal nested in it
+    /// gives an address constant (§6.6p9).
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6 paragraph
+    /// 10, p. 96; PDF p. 108 permits other forms of constant expression;
+    /// §6.5.2.5 paragraph 6, p. 75; PDF p. 87.
+    fn check_static_compound_literal(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
+        let Some(initializer) = self.whole_compound_literal(target, e) else {
+            return false;
+        };
+        self.context.report_extension(
+            crate::configuration::Feature::ConstantCompoundLiteral,
+            "compound literal as a constant initializer",
+            e.source_vectors,
+        );
+        self.check_static_plan(initializer);
+        true
+    }
+
+    /// The initializer of `e` when it is a (parenthesized) compound literal
+    /// that the object of type `target` copies: `target` is a structure or
+    /// union, or a scalar type compatible with the literal's, qualifiers
+    /// aside (GCC rejects `static double d = (int){3};`).
+    fn whole_compound_literal(
+        &mut self,
+        target: TypeId,
+        mut e: &'tu Expression<'tu>,
+    ) -> Option<&'tu Initializer<'tu>> {
+        let target = self.types.non_atomic(target);
+        let record = matches!(
+            self.types.nodes[target.index],
+            TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
+        );
+        let scalar = !record && self.scalar_type(target);
+        if !record && !scalar {
+            return None;
+        }
+        let initializer = loop {
+            match e.kind {
+                | ExpressionType::Parenthesized { expression } => e = expression,
+                | ExpressionType::CompoundLiteral { initializer, .. } => break initializer,
+                | _ => return None,
+            }
+        };
+        if scalar {
+            let literal = self.types.non_atomic(self.expression_info(e).ty);
+            _ = self
+                .types
+                .composite(target.unqualified(), literal.unqualified())?;
+        }
+        Some(initializer)
+    }
+
+    /// Applies [`Self::check_static_initializer`] to every value the plan
+    /// of a compound literal's `initializer` stores, and descends into the
+    /// compound literals it copies. A literal without a plan was rejected,
+    /// with its own diagnostics, or is unmodeled and refused by lowering.
+    fn check_static_plan(&mut self, initializer: &'tu Initializer<'tu>) {
+        let Some(&plan) = self.initializers.plan(initializer) else {
+            return;
+        };
+        for operation in plan.operations {
+            match *operation {
+                | InitOperation::Store {
+                    value,
+                    destination,
+                    bit_field,
+                    ..
+                } => {
+                    let e = plan.values[value.0 as usize].expression;
+                    let info = self.expression_info(e);
+                    self.check_static_initializer(destination.ty, info, e, bit_field.is_some());
+                },
+                | InitOperation::Copy {
+                    value, destination, ..
+                } => {
+                    let e = plan.values[value.0 as usize].expression;
+                    if let Some(nested) = self.whole_compound_literal(destination.ty, e) {
+                        self.check_static_plan(nested);
+                    } else {
+                        let info = self.expression_info(e);
+                        self.check_static_initializer(destination.ty, info, e, false);
+                    }
+                },
+                | InitOperation::Zero { .. }
+                | InitOperation::Select { .. }
+                | InitOperation::String { .. }
+                | InitOperation::Repeat { .. }
+                | InitOperation::EmptyScalar { .. }
+                | InitOperation::Unmodeled { .. } => {},
+            }
+        }
+    }
+
     /// The object type an initializer completes and the flexible array
     /// member it fills; `Err` holds the result to return without a plan,
     /// when the initializer left the type incomplete or too large.
@@ -768,11 +874,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         Ok(
             if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index] {
                 if count == 0 {
-                    return Err(if self.semantic_errors > before {
-                        (self.types.unknown(), None)
-                    } else {
-                        (ty, None)
-                    });
+                    if self.semantic_errors > before {
+                        return Err((self.types.unknown(), None));
+                    }
+                    // An empty list gives an array of unknown size no
+                    // elements: GCC and Clang complete it as a zero-length
+                    // array, which C forbids (C99 §6.7.5.2p1, p. 116; PDF
+                    // p. 128; N3220 §6.7.11p4).
+                    // GNU extension: GCC manual, "Arrays of Length Zero".
+                    self.context.report_extension(
+                        crate::configuration::Feature::ZeroLengthArrays,
+                        "zero-length array",
+                        initializer.source_vectors,
+                    );
                 }
                 // C99 §6.7.8p22, p. 127; PDF p. 139: completion produces an
                 // object type subject to the same size limit as a declared
