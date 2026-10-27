@@ -219,6 +219,42 @@ fn atomic_constraint_diagnostics_preserve_following_input() {
 }
 
 #[test]
+fn atomic_builtins_reject_incomplete_enumeration_pointees() {
+    // C99 §6.7.2.2p4, p. 105; PDF p. 117: an enumeration is incomplete until
+    // its closing brace, so there is no object to access (GCC agrees:
+    // gcc.dg/atomic-pr81231.c). A completed enumeration stays eligible.
+    with_configuration(
+        "enum E; void f(void) { __atomic_load_n((enum E *)0, 0); __atomic_load_n((enum X *)0, 0); \
+         __atomic_store_n((enum E *)0, 0, 0); } enum C { c }; enum C g(enum C *p) { return \
+         __atomic_load_n(p, 0); } int following;",
+        crate::configuration::CompilerConfiguration::new(
+            CStandard::C11,
+            crate::configuration::ExtensionPolicy::Allow,
+        ),
+        |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|e| matches!(
+                        e,
+                        TranslationError::Semantic(error)
+                            if error.kind == SemanticErrorKind::InvalidAtomicOperand
+                    ))
+                    .count(),
+                3,
+                "{errors:?}"
+            );
+            assert!(
+                unit.bindings
+                    .iter()
+                    .any(|b| context.string_cache.at(b.name.name) == "following")
+            );
+        },
+    );
+}
+
+#[test]
 fn atomic_availability_uses_existing_extension_policy() {
     use crate::configuration::{
         CompilerConfiguration,

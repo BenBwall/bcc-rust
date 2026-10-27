@@ -153,12 +153,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )
                 )
         } else {
+            // An incomplete type, such as an enumeration before its closing
+            // brace, has no size to access.
+            // C99 §6.2.5p1, p. 33; PDF p. 45; §6.7.2.2p4, p. 105; PDF p. 117.
             !atomic
-                && if builtin.generic {
-                    self.complete_object(value)
-                } else {
-                    integer || pointer || (builtin.family == Family::Gnu && floating)
-                }
+                && self.complete_object(value)
+                && (builtin.generic
+                    || integer
+                    || pointer
+                    || (builtin.family == Family::Gnu && floating))
         } && (!modifying || !object.qualifiers.contains(TypeQualifiers::CONST))
             && match operation {
                 | O::FetchAdd | O::FetchSub =>

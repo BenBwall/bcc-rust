@@ -443,6 +443,35 @@ fn typeof_vm_operands_execute_at_their_type_site() {
     }
 }
 
+/// Compound literal type names evaluate their typeof operands and bounds
+/// when the literal is evaluated (gcc.dg/vla-16.c), and a parameter's
+/// function result bounds are evaluated on entry (gcc.dg/pr108423-*.c).
+/// C99: §6.7.5.2p5, p. 117; PDF p. 129; §6.9.1p10, p. 142; PDF p. 154.
+const WRITTEN_SITE_BOUNDS: &[&str] = &[
+    "int a[1]; int main(void){int i=0; int (**p)[1]=&(__typeof__(++i,(int (*)[i])a)){&a}; return \
+     *p!=&a || i!=1;}",
+    "int a[1]; int main(void){int i=0; (__typeof__(++i,(int (*)[i])a)){&a}++; return i!=1;}",
+    "int a[1]; int main(void){int i=0; --(__typeof__(++i,(int (*)[i])a)){&a+1}; return i!=1;}",
+    "int a[2][3]; int main(void){int n=3; int (*p)[n]=(int (*)[n++]){a}+1; return p!=a+1 || n!=4;}",
+    "int b[2][3]; int (*g(void))[3]{return b;} int f(int n,int (*a(void))[n++]){return n!=4 || \
+     sizeof *a()!=12 || a()+1!=b+1;} int main(void){return f(3,g);}",
+    "int b[2][3]; int (*g(void))[3]{return b;} int f(int n,int (*(*h)(void))[n]){return sizeof \
+     *(*h)()!=12 || (*h)()+1!=b+1;} int main(void){return f(3,&g);}",
+];
+
+#[test]
+fn compound_literal_and_function_result_bounds_execute() {
+    for source in WRITTEN_SITE_BOUNDS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    assert_eq!(interpret(module, target).0, 0, "{source}");
+                });
+            }
+        }
+    }
+}
+
 #[test]
 fn vla_restore_releases_newer_alloca_storage() {
     let source = "int main(void){int n=3,*p; {int a[n]; a[0]=11; p=__builtin_alloca(sizeof(int)); \
