@@ -2689,3 +2689,35 @@ read it through `float_parsing::bits::binary128_bits`. A folded invalid
 operation gives the run-time result, the negative default NaN; the pinned
 Clang folds `0.0q/0.0q` through LLVM's `APFloat` to a positive NaN, so the
 sign of such a statically folded NaN differs from Clang's.
+
+## Half-precision folding (2026-10-27)
+
+`Scalar::Float16` is `_Float16`, IEEE binary16 (2 bytes, alignment 2), a
+distinct type ranked below `float`, so `h + 1` is a `_Float16` and `h + f`
+a `float`; default argument promotions leave it alone, as GCC and Clang do.
+`_Complex _Float16` is refused (`UnsupportedComplexHalf`). `crate::half_precision`
+converts every format to binary16 rounding once, and an `f16` constant reads
+its spelling rounded to odd at binary128's precision, so both its binary16
+value and its value rounded once to `float` are exact (`HalfConstant`).
+
+Neither compiler computes in binary16 on x86-64, and they keep the excess
+`float` precision in different places, so folding follows the identity
+(`Analyzer::half_in_float`, `CompilerConfiguration::half_in_float`):
+
+- GCC (`-fexcess-precision=standard`, its only behaviour for `_Float16`):
+  every `_Float16` value is folded at `float` precision, constants
+  included, and only a conversion to `_Float16` rounds it. An integer
+  operand converts to `float`; `?:` and the comma operator keep the
+  excess; a conversion to `float`, `double` or an integer converts the
+  excess value.
+- Clang: a `_Float16` operation's folded value is its constant evaluator's,
+  rounded to binary16 after each operation, which `static_assert`, enum
+  constants and static initializers read; `(int)(60000.0f16 * 2 / 4)` is
+  `INT_MAX` there. Its function code keeps a chain of `+`, `-`, `*`, `/`
+  and unary `+`/`-` in `float` and rounds at the chain's root, so such an
+  operator is a `runtime_query` and lowering evaluates it. Every other use
+  reads the rounded value (`floating_value`).
+
+`half_operand` gives the value an operand contributes to an operator, and
+`half_result` the operator's folded value. Lowering's `half.rs` applies the
+same rules to the values it computes.
