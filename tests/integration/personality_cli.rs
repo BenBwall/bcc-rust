@@ -690,15 +690,174 @@ mod tests {
         assert!(stderr(&clang).contains("unknown warning option '-Wbogus'"));
         // TCC ignores the -W, -f and -m options it does not know.
         succeeds(&directory.bcc("--tcc-mode", &["-c", "-Wbogus", "-fbogus", "x.c"]));
-        // cl warns (D9002) and goes on.
-        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "/bogus", "x.c"]);
+        // cl warns (D9002) and goes on. Off Windows, `/bogus` would be a
+        // path, as in clang-cl.
+        let bogus = if cfg!(windows) { "/bogus" } else { "-bogus" };
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", bogus, "x.c"]);
         succeeds(&cl);
         assert!(
-            stderr(&cl).contains("Command line warning D9002 : ignoring unknown option '/bogus'"),
+            stderr(&cl).contains(&format!(
+                "Command line warning D9002 : ignoring unknown option '{bogus}'"
+            )),
             "{}",
             stderr(&cl)
         );
         assert!(directory.path("x.obj").is_file());
+    }
+
+    /// Where paths start with `/`, the `cl` and clang-cl personalities read
+    /// an argument that names no option clang-cl knows as an input, as
+    /// clang-cl's option parser does: absolute sources, `/Fo` and `/I` with
+    /// absolute paths, and `--` before a path clang-cl would read as an
+    /// option. A missing one draws each compiler's missing-input error, and
+    /// clang-cl suggests the option one edit away.
+    #[test]
+    fn cl_reads_absolute_unix_paths_as_clang_cl_does() {
+        if cfg!(windows) {
+            eprintln!("skipping: Windows paths do not start with '/'");
+            return;
+        }
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("include")).unwrap();
+        std::fs::create_dir(directory.path("objects")).unwrap();
+        std::fs::create_dir(directory.path("work")).unwrap();
+        directory.write("include/value.h", "#define VALUE 3\n");
+        directory.write(
+            "t.c",
+            "#include \"value.h\"\nint f(void) { return VALUE; }\n",
+        );
+        directory.write("plain.c", "int g(void) { return 0; }\n");
+        // A file named like an option stays an option.
+        directory.write("nologo", "");
+        let absolute = |name: &str| directory.path(name).to_str().unwrap().to_owned();
+        let (source, include) = (absolute("t.c"), absolute("include"));
+        assert!(source.starts_with('/'), "{source}");
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            for (args, object) in [
+                // Joined and separate `/I`, and `/Fo` naming a file, a
+                // directory, and with `/Fo:` a file in the next argument.
+                (
+                    vec![
+                        "/c".to_owned(),
+                        source.clone(),
+                        format!("/I{include}"),
+                        format!("/Fo{}", absolute("objects/joined.obj")),
+                    ],
+                    "objects/joined.obj",
+                ),
+                (
+                    vec![
+                        "/c".to_owned(),
+                        "/I".to_owned(),
+                        include.clone(),
+                        source.clone(),
+                        format!("/Fo{}/", absolute("objects")),
+                    ],
+                    "objects/t.obj",
+                ),
+                (
+                    vec![
+                        "/c".to_owned(),
+                        format!("-I{include}"),
+                        "/Fo:".to_owned(),
+                        absolute("objects/separate.obj"),
+                        "--".to_owned(),
+                        source.clone(),
+                    ],
+                    "objects/separate.obj",
+                ),
+                // Without `/Fo`, the object lands in the working directory.
+                (
+                    vec!["/c".to_owned(), format!("/I{include}"), source.clone()],
+                    "t.obj",
+                ),
+            ] {
+                let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
+                args.insert(0, "/nologo");
+                let output = directory.bcc(mode, &args);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {args:?}");
+                let object = directory.path(object);
+                assert!(object.is_file(), "{mode} {args:?}");
+                std::fs::remove_file(object).unwrap();
+            }
+            // The same command with relative paths, from another directory.
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([
+                    mode,
+                    "/nologo",
+                    "/c",
+                    "../t.c",
+                    "/I../include",
+                    "/Fo../objects/",
+                ])
+                .current_dir(directory.path("work"))
+                .env_remove("INCLUDE")
+                .output()
+                .unwrap();
+            succeeds(&output);
+            std::fs::remove_file(directory.path("objects/t.obj")).unwrap();
+            // After `--`, a source named like an option is a source (`cl`'s
+            // C1083 names it `./-W4.c`, as bcc's command line reads it).
+            let output = directory.bcc(mode, &["/nologo", "/c", "--", "-W4.c"]);
+            assert!(!output.status.success());
+            assert!(stderr(&output).contains("-W4.c'"), "{}", stderr(&output));
+            directory.write("-W4.c", "int w;\n");
+            succeeds(&directory.bcc(mode, &["/nologo", "/c", "--", "-W4.c"]));
+            std::fs::remove_file(directory.path("-W4.c")).unwrap();
+            std::fs::remove_file(directory.path("-W4.obj")).unwrap();
+        }
+        let (missing, plain) = (absolute("missing.c"), absolute("plain.c"));
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", &missing, &plain]);
+        assert_eq!(cl.status.code(), Some(2));
+        assert_eq!(
+            stderr(&cl),
+            format!(
+                "c1: fatal error C1083: Cannot open source file: '{missing}': No such file or \
+                 directory\n"
+            )
+        );
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/c", &missing]);
+        assert_eq!(clang_cl.status.code(), Some(1));
+        assert_eq!(
+            stderr(&clang_cl),
+            format!(
+                "clang-cl: error: no such file or directory: '{missing}'\nclang-cl: error: no \
+                 input files\n"
+            )
+        );
+        // clang-cl refuses a missing input starting with `/` even when it
+        // is for the linker, and suggests an option one edit away.
+        for (argument, message) in [
+            ("/bogus", "no such file or directory: '/bogus'"),
+            (
+                "/Brepo",
+                "no such file or directory: '/Brepo'; did you mean '/Brepro'?",
+            ),
+        ] {
+            let clang_cl = directory.bcc("--clang-cl-mode", &["/c", argument, &plain]);
+            assert_eq!(clang_cl.status.code(), Some(1));
+            assert_eq!(stderr(&clang_cl), format!("clang-cl: error: {message}\n"));
+        }
+        // `cl` takes it for an object, as any input it does not know.
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "/bogus", &plain]);
+        succeeds(&cl);
+        assert_eq!(
+            stderr(&cl),
+            "cl : Command line warning D9024 : unrecognized source file type '/bogus', object \
+             file assumed\ncl : Command line warning D9027 : source file '/bogus' ignored\n"
+        );
+        // The value of an option clang-cl knows and bcc does not is no input.
+        let clang_cl = directory.bcc(
+            "--clang-cl-mode",
+            &["/c", "/imsvc", "/nonexistent/include", &plain],
+        );
+        succeeds(&clang_cl);
+        assert_eq!(
+            stderr(&clang_cl),
+            "clang-cl: warning: unknown argument ignored in clang-cl: '/imsvc \
+             /nonexistent/include'\n"
+        );
     }
 
     #[test]

@@ -16,6 +16,14 @@
 //! refuses the rest with a `Command line error`; `/Zp`, `/Za`, the runtime
 //! options and `/Zc:trigraphs` map onto bcc's packing, Microsoft extension,
 //! macro and trigraph options.
+//!
+//! An argument that starts with `/` is an option only if clang-cl knows it
+//! (`known::clang_cl_option`): clang-cl reads any other as a path, on every
+//! host, so `/tmp/a.c` is a source. `cl` on Windows, where paths do not
+//! start with `/`, warns about it as an unknown option; elsewhere the `cl`
+//! personality reads it as clang-cl does. Both read every argument after
+//! `--` as an input there, for a path that clang-cl would read as an option
+//! (`/Users/a.c` is `/U`).
 
 use std::{
     ffi::{
@@ -35,6 +43,10 @@ use super::{
     Plan,
     Step,
     host_target,
+    known::{
+        self,
+        ClOption,
+    },
     version,
 };
 use crate::backend::llvm::operand;
@@ -51,6 +63,11 @@ const CLANG_ONLY_OPTIONS: [&str; 4] = [
 /// Translates a `cl.exe` or clang-cl command line.
 pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let clang_cl = invocation.personality == Personality::ClangCl;
+    // Whether an argument that starts with `/` and names no option is a
+    // path: always in clang-cl, and in `cl` off Windows.
+    let slash_paths = clang_cl || !cfg!(windows);
+    // After `--`, every argument is an input.
+    let mut inputs_only = false;
     let mut state = State::default();
     // clang-cl reads its `/clang:` options after the others, wherever they
     // stand, so they win over `cl`'s (`/clang:-fsigned-char` over `/J`).
@@ -61,10 +78,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.link.push(link_option(argument));
             continue;
         }
-        let Some(text) = argument.to_str() else {
+        let Some(text) = argument.to_str().filter(|_| !inputs_only) else {
             state.sources.push(Source::new(argument, false));
             continue;
         };
+        if slash_paths && text == "--" {
+            inputs_only = true;
+            continue;
+        }
         // clang-cl reads `-` as standard input.
         let Some(option) = text
             .strip_prefix('/')
@@ -83,21 +104,38 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             continue;
         }
         if !state.option(invocation, option, &mut arguments) {
-            if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
+            let known = known::clang_cl_option(option);
+            if known.is_none() && slash_paths && text.starts_with('/') {
+                // clang-cl's option parser reads an argument that starts
+                // with `/` and matches no option as an input file.
+                state.sources.push(Source::new(argument, false));
+            } else if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
                 // clang-cl also takes Clang's options; bcc reads most of them.
                 state.bcc.push(argument.into());
-            } else if clang_cl {
-                invocation.warning(format_args!(
-                    "unknown argument ignored in clang-cl: '{text}'"
-                ));
             } else {
-                super::print(
-                    &format!(
-                        "{} : Command line warning D9002 : ignoring unknown option '{text}'\n",
-                        invocation.name
-                    ),
-                    true,
-                );
+                // An option clang-cl knows takes its value from the next
+                // argument after its bare name (`/imsvc /usr/include`), which
+                // is then no input.
+                let mut text = text.to_owned();
+                if known == Some(ClOption::TakesNext)
+                    && let Some(value) = arguments.next()
+                {
+                    text.push(' ');
+                    text.push_str(&value.to_string_lossy());
+                }
+                if clang_cl {
+                    invocation.warning(format_args!(
+                        "unknown argument ignored in clang-cl: '{text}'"
+                    ));
+                } else {
+                    super::print(
+                        &format!(
+                            "{} : Command line warning D9002 : ignoring unknown option '{text}'\n",
+                            invocation.name
+                        ),
+                        true,
+                    );
+                }
             }
         }
     }
@@ -318,7 +356,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             .sources
             .iter()
             .filter(|source| !source.is_c())
-            .map(|source| source.path.clone()),
+            .map(|source| operand(Path::new(&source.path)).into_owned().into()),
     );
     link.append(&mut state.link);
     link.push("-o".into());
@@ -417,9 +455,15 @@ impl Source {
         self.c
     }
 
-    /// The source on bcc's command line, as C.
+    /// The source on bcc's command line, as C; a name after `--` that
+    /// starts with `-` gets `./` before it, but standard input stays `-`.
     fn arguments(&self) -> [OsString; 4] {
-        ["-x".into(), "c".into(), self.path.clone(), "-xnone".into()]
+        let path = if self.path == "-" {
+            self.path.clone()
+        } else {
+            operand(Path::new(&self.path)).into_owned().into()
+        };
+        ["-x".into(), "c".into(), path, "-xnone".into()]
     }
 }
 
@@ -720,6 +764,21 @@ impl State {
                 option,
                 "bcc has only the conforming preprocessor",
             ),
+            // `/Fe:`, `/Fo:` and `/Fi:` alone take the name from the next
+            // argument.
+            | "Fe:" | "Fo:" | "Fi:" => {
+                let Some(value) = rest.next() else {
+                    invocation.error(format_args!("missing argument to '/{option}'"));
+                    self.errors += 1;
+                    return true;
+                };
+                let value = Some(PathBuf::from(value));
+                match option {
+                    | "Fe:" => self.executable = value,
+                    | "Fo:" => self.object = value,
+                    | _ => self.preprocessed = value,
+                }
+            },
             | _ =>
                 if let Some(value) = option.strip_prefix("Fe") {
                     self.executable = path(value);
@@ -821,7 +880,10 @@ impl State {
     /// does not know is assumed to be an object (warning D9024), and both
     /// say that `/c` leaves the linker's inputs unused (`cl`'s warning
     /// D9027). clang-cl preprocesses standard input (`-`) as C, but
-    /// compiles it only as `/Tc` or `/Tp` names its language.
+    /// compiles it only as `/Tc` or `/Tp` names its language. It leaves a
+    /// missing input for the linker to the linker, unless its name starts
+    /// with `/`, as a mistyped option's does, and suggests the option one
+    /// edit away from a missing input's name.
     fn check_inputs(&mut self, invocation: &Invocation) {
         let clang_cl = invocation.personality == Personality::ClangCl;
         let links = !self.compile_only && self.preprocess.is_none() && !self.syntax_only;
@@ -842,12 +904,18 @@ impl State {
                 return false;
             }
             let compiled = source.is_c() || source.cpp;
+            let slash = source.path.to_string_lossy().starts_with('/');
             if clang_cl
-                && compiled
+                && (compiled || slash)
                 && source.path != "-"
                 && std::fs::metadata(&source.path).is_err()
             {
-                invocation.error(format_args!("no such file or directory: '{path}'"));
+                match known::nearest_clang_cl_option(&source.path.to_string_lossy()) {
+                    | Some(option) => invocation.error(format_args!(
+                        "no such file or directory: '{path}'; did you mean '{option}'?"
+                    )),
+                    | None => invocation.error(format_args!("no such file or directory: '{path}'")),
+                }
                 missing += 1;
                 return false;
             }
